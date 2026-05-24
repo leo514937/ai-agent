@@ -1,0 +1,7 @@
+INFO:     127.0.0.1:55092 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50909 - "POST /internal/v1/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59289 - "POST /internal/v1/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:53445 - "POST /internal/v1/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63236 - "POST /internal/v1/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:61972 - "POST /internal/v1/chat/stream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60323 - "POST /internal/v1/chat/stream HTTP/1.1" 200 OK

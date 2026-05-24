@@ -1,0 +1,497 @@
+﻿[2026-05-21 20:34:48] [ERROR] 未找到可用的 Python 解释器或项目虚拟环境。
+[2026-05-21 20:35:00] [ERROR] 未找到可用的 Python 解释器或项目虚拟环境。
+[2026-05-21 20:35:12] [ERROR] 未找到可用的 Python 解释器或项目虚拟环境。
+[2026-05-21 20:35:17] [ERROR] 未找到可用的 Python 解释器或项目虚拟环境。
+[2026-05-21 20:36:10] 使用启动器: py -3.11
+[2026-05-21 20:36:10] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-21 20:36:10] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-21 20:39:54] 使用启动器: py -3.11
+[2026-05-21 20:39:54] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-21 20:39:54] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-21 20:40:35] 使用启动器: py -3.11
+[2026-05-21 20:40:35] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-21 20:40:35] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-21 20:41:57] 使用启动器: py -3.11
+[2026-05-21 20:41:57] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-21 20:41:57] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-21 20:43:42] 使用启动器: py -3.11
+[2026-05-21 20:43:42] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-21 20:43:42] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-21 20:44:50] 使用启动器: py -3.11
+[2026-05-21 20:44:50] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-21 20:44:50] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-21 20:45:00] 启动进程仍在运行，等待后续健康检查。
+[2026-05-21 20:48:48] 使用启动器: py -3.11
+[2026-05-21 20:48:48] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-21 20:48:48] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-21 20:48:59] 启动进程仍在运行，等待后续健康检查。
+[2026-05-21 22:05:53] 使用启动器: py -3.11
+[2026-05-21 22:05:53] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-21 22:05:53] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-21 22:06:02] 启动进程仍在运行，等待后续健康检查。
+[2026-05-21 22:07:29] 使用启动器: py -3.11
+[2026-05-21 22:07:29] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-21 22:07:29] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-21 22:07:39] 启动进程仍在运行，等待后续健康检查。
+[2026-05-21 22:09:05] 使用启动器: py -3.11
+[2026-05-21 22:09:05] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-21 22:09:05] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-21 22:09:15] 启动进程仍在运行，等待后续健康检查。
+[2026-05-21 22:18:56] 使用启动器: py -3.11
+[2026-05-21 22:18:56] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-21 22:18:56] 启动前检查本地生活 Qdrant 集合。
+[2026-05-21 22:39:00] 使用启动器: py -3.11
+[2026-05-21 22:39:00] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-21 22:39:00] 启动前检查本地生活 Qdrant 集合。
+[2026-05-21 22:45:14] 使用启动器: py -3.11
+[2026-05-21 22:45:14] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-21 22:45:14] 启动前检查本地生活 Qdrant 集合。
+[2026-05-21 22:49:56] 使用启动器: py -3.11
+[2026-05-21 22:49:56] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-21 22:49:56] 启动前检查本地生活 Qdrant 集合。
+[2026-05-21 22:50:35] 使用启动器: py -3.11
+[2026-05-21 22:50:35] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-21 22:50:35] 启动前检查本地生活 Qdrant 集合。
+py.exe : D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:51: User
+Warning: Api key is used with an insecure connection.
+At D:\javacode\hm-dianping\learning-agent-service\start_python.ps1:80 char:1
++ & $launcher.Command @bootstrapArgumentList 2>&1 | Out-File -FilePath  ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (D:\javacode\hm-...ure connection.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  client = QdrantClient(
+HTTP Request: GET http://localhost:6333/collections/user_semantic_memory/exists "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333/collections/local_life_hybrid_chunks/exists "HTTP/1.1 200 OK"
+HTTP Request: POST http://localhost:6333/collections/local_life_hybrid_chunks/points/count "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333/collections/local_life_hybrid_chunks "HTTP/1.1 200 OK"
+local_life_bootstrap_collection_ready collection=local_life_hybrid_chunks
+HTTP Request: GET http://localhost:6333/collections/local_life_parent_child_chunks/exists "HTTP/1.1 200 OK"
+HTTP Request: POST http://localhost:6333/collections/local_life_parent_child_chunks/points/count "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333/collections/local_life_parent_child_chunks "HTTP/1.1 200 OK"
+local_life_bootstrap_collection_ready collection=local_life_parent_child_chunks
+local_life_bootstrap_no_seed_needed
+[2026-05-21 22:50:56] 本地生活 Qdrant 集合预热完成。
+[2026-05-21 22:50:56] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-21 22:52:19] 使用启动器: py -3.11
+[2026-05-21 22:52:19] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-21 22:52:19] 启动前检查本地生活 Qdrant 集合。
+py.exe : D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:51: User
+Warning: Api key is used with an insecure connection.
+At D:\javacode\hm-dianping\learning-agent-service\start_python.ps1:80 char:1
++ & $launcher.Command @bootstrapArgumentList 2>&1 | Out-File -FilePath  ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (D:\javacode\hm-...ure connection.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  client = QdrantClient(
+HTTP Request: GET http://localhost:6333/collections/user_semantic_memory/exists "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333/collections/local_life_hybrid_chunks/exists "HTTP/1.1 200 OK"
+HTTP Request: POST http://localhost:6333/collections/local_life_hybrid_chunks/points/count "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333/collections/local_life_hybrid_chunks "HTTP/1.1 200 OK"
+local_life_bootstrap_collection_ready collection=local_life_hybrid_chunks
+HTTP Request: GET http://localhost:6333/collections/local_life_parent_child_chunks/exists "HTTP/1.1 200 OK"
+HTTP Request: POST http://localhost:6333/collections/local_life_parent_child_chunks/points/count "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333/collections/local_life_parent_child_chunks "HTTP/1.1 200 OK"
+local_life_bootstrap_collection_ready collection=local_life_parent_child_chunks
+local_life_bootstrap_no_seed_needed
+[2026-05-21 22:52:39] 本地生活 Qdrant 集合预热完成。
+[2026-05-21 22:52:39] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-21 22:55:41] 使用启动器: py -3.11
+[2026-05-21 22:55:41] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-21 22:55:41] 启动前检查本地生活 Qdrant 集合。
+py.exe : D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:51: User
+Warning: Api key is used with an insecure connection.
+At D:\javacode\hm-dianping\learning-agent-service\start_python.ps1:80 char:1
++ & $launcher.Command @bootstrapArgumentList 2>&1 | Out-File -FilePath  ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (D:\javacode\hm-...ure connection.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  client = QdrantClient(
+HTTP Request: GET http://localhost:6333/collections/user_semantic_memory/exists "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333/collections/local_life_hybrid_chunks/exists "HTTP/1.1 200 OK"
+HTTP Request: POST http://localhost:6333/collections/local_life_hybrid_chunks/points/count "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333/collections/local_life_hybrid_chunks "HTTP/1.1 200 OK"
+local_life_bootstrap_collection_ready collection=local_life_hybrid_chunks
+HTTP Request: GET http://localhost:6333/collections/local_life_parent_child_chunks/exists "HTTP/1.1 200 OK"
+HTTP Request: POST http://localhost:6333/collections/local_life_parent_child_chunks/points/count "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333/collections/local_life_parent_child_chunks "HTTP/1.1 200 OK"
+local_life_bootstrap_collection_ready collection=local_life_parent_child_chunks
+local_life_bootstrap_no_seed_needed
+[2026-05-21 22:56:01] 本地生活 Qdrant 集合预热完成。
+[2026-05-21 22:56:01] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-21 22:56:46] 使用启动器: py -3.11
+[2026-05-21 22:56:46] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-21 22:56:46] 启动前检查本地生活 Qdrant 集合。
+py.exe : D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:51: User
+Warning: Api key is used with an insecure connection.
+At D:\javacode\hm-dianping\learning-agent-service\start_python.ps1:80 char:1
++ & $launcher.Command @bootstrapArgumentList 2>&1 | Out-File -FilePath  ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (D:\javacode\hm-...ure connection.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  client = QdrantClient(
+HTTP Request: GET http://localhost:6333/collections/user_semantic_memory/exists "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333/collections/local_life_hybrid_chunks/exists "HTTP/1.1 200 OK"
+HTTP Request: POST http://localhost:6333/collections/local_life_hybrid_chunks/points/count "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333/collections/local_life_hybrid_chunks "HTTP/1.1 200 OK"
+local_life_bootstrap_collection_ready collection=local_life_hybrid_chunks
+HTTP Request: GET http://localhost:6333/collections/local_life_parent_child_chunks/exists "HTTP/1.1 200 OK"
+HTTP Request: POST http://localhost:6333/collections/local_life_parent_child_chunks/points/count "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333/collections/local_life_parent_child_chunks "HTTP/1.1 200 OK"
+local_life_bootstrap_collection_ready collection=local_life_parent_child_chunks
+local_life_bootstrap_no_seed_needed
+[2026-05-21 22:57:06] 本地生活 Qdrant 集合预热完成。
+[2026-05-21 22:57:06] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-21 22:57:17] 启动进程仍在运行，等待后续健康检查。
+[2026-05-21 22:59:36] 使用启动器: py -3.11
+[2026-05-21 22:59:36] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-21 22:59:36] 启动前检查本地生活 Qdrant 集合。
+D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:51: UserWarning: Api key is used with an insecure connection.
+  client = QdrantClient(
+HTTP Request: GET http://localhost:6333/collections/user_semantic_memory/exists "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333/collections/local_life_hybrid_chunks/exists "HTTP/1.1 200 OK"
+HTTP Request: POST http://localhost:6333/collections/local_life_hybrid_chunks/points/count "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333/collections/local_life_hybrid_chunks "HTTP/1.1 200 OK"
+local_life_bootstrap_collection_ready collection=local_life_hybrid_chunks
+HTTP Request: GET http://localhost:6333/collections/local_life_parent_child_chunks/exists "HTTP/1.1 200 OK"
+HTTP Request: POST http://localhost:6333/collections/local_life_parent_child_chunks/points/count "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333/collections/local_life_parent_child_chunks "HTTP/1.1 200 OK"
+local_life_bootstrap_collection_ready collection=local_life_parent_child_chunks
+local_life_bootstrap_no_seed_needed
+[2026-05-21 22:59:56] 本地生活 Qdrant 集合预热完成。
+[2026-05-21 22:59:56] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-21 23:00:06] 启动进程仍在运行，等待后续健康检查。
+[2026-05-21 23:07:14] 使用启动器: py -3.11
+[2026-05-21 23:07:14] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-21 23:07:14] 启动前检查本地生活 Qdrant 集合。
+D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:51: UserWarning: Api key is used with an insecure connection.
+  client = QdrantClient(
+HTTP Request: GET http://localhost:6333/collections/user_semantic_memory/exists "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333/collections/local_life_hybrid_chunks/exists "HTTP/1.1 200 OK"
+HTTP Request: POST http://localhost:6333/collections/local_life_hybrid_chunks/points/count "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333/collections/local_life_hybrid_chunks "HTTP/1.1 200 OK"
+local_life_bootstrap_collection_ready collection=local_life_hybrid_chunks
+HTTP Request: GET http://localhost:6333/collections/local_life_parent_child_chunks/exists "HTTP/1.1 200 OK"
+HTTP Request: POST http://localhost:6333/collections/local_life_parent_child_chunks/points/count "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333/collections/local_life_parent_child_chunks "HTTP/1.1 200 OK"
+local_life_bootstrap_collection_ready collection=local_life_parent_child_chunks
+local_life_bootstrap_no_seed_needed
+[2026-05-21 23:07:34] 本地生活 Qdrant 集合预热完成。
+[2026-05-21 23:07:34] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-21 23:07:43] 启动进程仍在运行，等待后续健康检查。
+[2026-05-21 23:12:06] 使用启动器: py -3.11
+[2026-05-21 23:12:06] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-21 23:12:06] 启动前检查本地生活 Qdrant 集合。
+D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:51: UserWarning: Api key is used with an insecure connection.
+  client = QdrantClient(
+HTTP Request: GET http://localhost:6333/collections/user_semantic_memory/exists "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333 "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333/collections/local_life_hybrid_chunks/exists "HTTP/1.1 200 OK"
+HTTP Request: POST http://localhost:6333/collections/local_life_hybrid_chunks/points/count "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333/collections/local_life_hybrid_chunks "HTTP/1.1 200 OK"
+local_life_bootstrap_collection_ready collection=local_life_hybrid_chunks
+HTTP Request: GET http://localhost:6333/collections/local_life_parent_child_chunks/exists "HTTP/1.1 200 OK"
+HTTP Request: POST http://localhost:6333/collections/local_life_parent_child_chunks/points/count "HTTP/1.1 200 OK"
+HTTP Request: GET http://localhost:6333/collections/local_life_parent_child_chunks "HTTP/1.1 200 OK"
+local_life_bootstrap_collection_ready collection=local_life_parent_child_chunks
+local_life_bootstrap_no_seed_needed
+[2026-05-21 23:12:25] 本地生活 Qdrant 集合预热完成。
+[2026-05-21 23:12:25] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-21 23:12:35] 启动进程仍在运行，等待后续健康检查。
+[2026-05-21 23:23:08] 使用启动器: py -3.11
+[2026-05-21 23:23:08] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-21 23:23:08] 启动前检查本地生活 Qdrant 集合。
+D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:51: UserWarning: Api key is used with an insecure connection.
+  client = QdrantClient(
+Traceback (most recent call last):
+  File "C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\site-packages\httpx\_transports\default.py", line 101, in map_httpcore_exceptions
+    yield
+  File "C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\site-packages\httpx\_transports\default.py", line 250, in handle_request
+    resp = self._pool.handle_request(req)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\site-packages\httpcore\_sync\connection_pool.py", line 256, in handle_request
+    raise exc from None
+  File "C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\site-packages\httpcore\_sync\connection_pool.py", line 236, in handle_request
+    response = connection.handle_request(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\site-packages\httpcore\_sync\connection.py", line 101, in handle_request
+    raise exc
+  File "C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\site-packages\httpcore\_sync\connection.py", line 78, in handle_request
+    stream = self._connect(request)
+             ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\site-packages\httpcore\_sync\connection.py", line 124, in _connect
+    stream = self._network_backend.connect_tcp(**kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\site-packages\httpcore\_backends\sync.py", line 207, in connect_tcp
+    with map_exceptions(exc_map):
+  File "C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\contextlib.py", line 158, in __exit__
+    self.gen.throw(typ, value, traceback)
+  File "C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\site-packages\httpcore\_exceptions.py", line 14, in map_exceptions
+    raise to_exc(exc) from exc
+httpcore.ConnectError: [WinError 10061] 由于目标计算机积极拒绝，无法连接。
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\site-packages\qdrant_client\http\api_client.py", line 134, in send_inner
+    response = self._client.send(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\site-packages\httpx\_client.py", line 914, in send
+    response = self._send_handling_auth(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\site-packages\httpx\_client.py", line 942, in _send_handling_auth
+    response = self._send_handling_redirects(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\site-packages\httpx\_client.py", line 979, in _send_handling_redirects
+    response = self._send_single_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\site-packages\httpx\_client.py", line 1014, in _send_single_request
+    response = transport.handle_request(request)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\site-packages\httpx\_transports\default.py", line 249, in handle_request
+    with map_httpcore_exceptions():
+  File "C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\contextlib.py", line 158, in __exit__
+    self.gen.throw(typ, value, traceback)
+  File "C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\site-packages\httpx\_transports\default.py", line 118, in map_httpcore_exceptions
+    raise mapped_exc(message) from exc
+httpx.ConnectError: [WinError 10061] 由于目标计算机积极拒绝，无法连接。
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py", line 60, in build_qdrant_runtime
+    probe(settings.user_memory_collection)
+  File "C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\site-packages\qdrant_client\qdrant_client.py", line 1603, in collection_exists
+    return self._client.collection_exists(collection_name=collection_name, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\site-packages\qdrant_client\qdrant_remote.py", line 1895, in collection_exists
+    result: models.CollectionExistence | None = self.http.collections_api.collection_exists(
+                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\site-packages\qdrant_client\http\api\collections_api.py", line 325, in collection_exists
+    return self._build_for_collection_exists(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\site-packages\qdrant_client\http\api\collections_api.py", line 67, in _build_for_collection_exists
+    return self.api_client.request(
+           ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\site-packages\qdrant_client\http\api_client.py", line 95, in request
+    return self.send(request, type_)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\site-packages\qdrant_client\http\api_client.py", line 112, in send
+    response = self.middleware(request, self.send_inner)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\site-packages\qdrant_client\http\api_client.py", line 250, in __call__
+    return call_next(request)
+           ^^^^^^^^^^^^^^^^^^
+  File "C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\site-packages\qdrant_client\http\api_client.py", line 136, in send_inner
+    raise ResponseHandlingException(e)
+qdrant_client.http.exceptions.ResponseHandlingException: [WinError 10061] 由于目标计算机积极拒绝，无法连接。
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "<frozen runpy>", line 198, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\bootstrap\local_life.py", line 138, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\bootstrap\local_life.py", line 129, in main
+    ensured = ensure_local_life_collections()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\bootstrap\local_life.py", line 73, in ensure_local_life_collections
+    qdrant_runtime = build_qdrant_runtime(settings.qdrant)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py", line 62, in build_qdrant_runtime
+    raise InfrastructureConfigurationError(
+learning_agent_service.infrastructure.db.errors.InfrastructureConfigurationError: Qdrant runtime is unavailable at http://localhost:6333
+[2026-05-21 23:27:08] 使用启动器: py -3.11
+[2026-05-21 23:27:08] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-21 23:27:08] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-21 23:27:18] 启动进程仍在运行，等待后续健康检查。
+[2026-05-21 23:31:16] 使用启动器: py -3.11
+[2026-05-21 23:31:16] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-21 23:31:16] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-21 23:31:24] 端口 8000 已监听。
+[2026-05-21 23:36:54] 使用启动器: py -3.11
+[2026-05-21 23:36:54] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-21 23:36:54] 启动前检查本地生活 Qdrant 集合。
+D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:51: UserWarning: Api key is used with an insecure connection.
+  client = QdrantClient(
+HTTP Request: GET http://127.0.0.1:6333/collections/user_semantic_memory/exists "HTTP/1.1 200 OK"
+HTTP Request: GET http://127.0.0.1:6333/collections/local_life_hybrid_chunks/exists "HTTP/1.1 200 OK"
+HTTP Request: POST http://127.0.0.1:6333/collections/local_life_hybrid_chunks/points/count "HTTP/1.1 200 OK"
+HTTP Request: GET http://127.0.0.1:6333/collections/local_life_hybrid_chunks "HTTP/1.1 200 OK"
+local_life_bootstrap_collection_ready collection=local_life_hybrid_chunks
+HTTP Request: GET http://127.0.0.1:6333/collections/local_life_parent_child_chunks/exists "HTTP/1.1 200 OK"
+HTTP Request: POST http://127.0.0.1:6333/collections/local_life_parent_child_chunks/points/count "HTTP/1.1 200 OK"
+HTTP Request: GET http://127.0.0.1:6333/collections/local_life_parent_child_chunks "HTTP/1.1 200 OK"
+local_life_bootstrap_collection_ready collection=local_life_parent_child_chunks
+local_life_bootstrap_no_seed_needed
+[2026-05-21 23:37:00] 本地生活 Qdrant 集合预热完成。
+[2026-05-21 23:37:00] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-21 23:37:08] 端口 8000 已监听。
+[2026-05-21 23:57:45] 使用启动器: py -3.11
+[2026-05-21 23:57:45] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-21 23:57:45] 启动前检查本地生活 Qdrant 集合。
+D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:51: UserWarning: Api key is used with an insecure connection.
+  client = QdrantClient(
+HTTP Request: GET http://127.0.0.1:6333/collections/user_semantic_memory/exists "HTTP/1.1 200 OK"
+HTTP Request: GET http://127.0.0.1:6333/collections/local_life_hybrid_chunks/exists "HTTP/1.1 200 OK"
+HTTP Request: POST http://127.0.0.1:6333/collections/local_life_hybrid_chunks/points/count "HTTP/1.1 200 OK"
+HTTP Request: GET http://127.0.0.1:6333/collections/local_life_hybrid_chunks "HTTP/1.1 200 OK"
+local_life_bootstrap_collection_ready collection=local_life_hybrid_chunks
+HTTP Request: GET http://127.0.0.1:6333/collections/local_life_parent_child_chunks/exists "HTTP/1.1 200 OK"
+HTTP Request: POST http://127.0.0.1:6333/collections/local_life_parent_child_chunks/points/count "HTTP/1.1 200 OK"
+HTTP Request: GET http://127.0.0.1:6333/collections/local_life_parent_child_chunks "HTTP/1.1 200 OK"
+local_life_bootstrap_collection_ready collection=local_life_parent_child_chunks
+local_life_bootstrap_no_seed_needed
+[2026-05-21 23:58:00] 本地生活 Qdrant 集合预热完成。
+[2026-05-21 23:58:00] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-21 23:58:15] 端口 8000 已监听。
+[2026-05-22 11:52:45] 使用启动器: py -3.11
+[2026-05-22 11:52:45] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-22 11:52:45] 启动前检查本地生活 Qdrant 集合。
+D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:51: UserWarning: Api key is used with an insecure connection.
+  client = QdrantClient(
+HTTP Request: GET http://127.0.0.1:6333/collections/user_semantic_memory/exists "HTTP/1.1 200 OK"
+HTTP Request: GET http://127.0.0.1:6333/collections/local_life_hybrid_chunks/exists "HTTP/1.1 200 OK"
+HTTP Request: POST http://127.0.0.1:6333/collections/local_life_hybrid_chunks/points/count "HTTP/1.1 200 OK"
+HTTP Request: GET http://127.0.0.1:6333/collections/local_life_hybrid_chunks "HTTP/1.1 200 OK"
+local_life_bootstrap_collection_ready collection=local_life_hybrid_chunks
+HTTP Request: GET http://127.0.0.1:6333/collections/local_life_parent_child_chunks/exists "HTTP/1.1 200 OK"
+HTTP Request: POST http://127.0.0.1:6333/collections/local_life_parent_child_chunks/points/count "HTTP/1.1 200 OK"
+HTTP Request: GET http://127.0.0.1:6333/collections/local_life_parent_child_chunks "HTTP/1.1 200 OK"
+local_life_bootstrap_collection_ready collection=local_life_parent_child_chunks
+local_life_bootstrap_no_seed_needed
+[2026-05-22 11:52:51] 本地生活 Qdrant 集合预热完成。
+[2026-05-22 11:52:51] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-22 11:53:01] 端口 8000 已监听。
+[2026-05-22 11:57:26] 使用启动器: py -3.11
+[2026-05-22 11:57:26] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-22 11:57:26] 启动前检查本地生活 Qdrant 集合。
+D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:51: UserWarning: Api key is used with an insecure connection.
+  client = QdrantClient(
+local_life_bootstrap_collection_ready collection=local_life_hybrid_chunks
+local_life_bootstrap_collection_ready collection=local_life_parent_child_chunks
+local_life_bootstrap_no_seed_needed
+[2026-05-22 11:57:32] 本地生活 Qdrant 集合预热完成。
+[2026-05-22 11:57:32] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-22 11:57:41] 端口 8000 已监听。
+[2026-05-22 12:01:20] 使用启动器: py -3.11
+[2026-05-22 12:01:20] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-22 12:01:20] 启动前检查本地生活 Qdrant 集合。
+D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:51: UserWarning: Api key is used with an insecure connection.
+  client = QdrantClient(
+local_life_bootstrap_collection_ready collection=local_life_hybrid_chunks
+local_life_bootstrap_collection_ready collection=local_life_parent_child_chunks
+local_life_bootstrap_no_seed_needed
+[2026-05-22 12:01:25] 本地生活 Qdrant 集合预热完成。
+[2026-05-22 12:01:25] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-22 12:01:33] 端口 8000 已监听。
+[2026-05-22 13:04:41] 使用启动器: py -3.11
+[2026-05-22 13:04:41] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-22 13:04:41] 启动前检查本地生活 Qdrant 集合。
+D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:51: UserWarning: Api key is used with an insecure connection.
+  client = QdrantClient(
+local_life_bootstrap_collection_ready collection=local_life_hybrid_chunks
+local_life_bootstrap_collection_ready collection=local_life_parent_child_chunks
+local_life_bootstrap_no_seed_needed
+[2026-05-22 13:04:50] 本地生活 Qdrant 集合预热完成。
+[2026-05-22 13:04:50] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-22 13:04:59] 端口 8000 已监听。
+[2026-05-22 13:49:45] 使用启动器: py -3.11
+[2026-05-22 13:49:45] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-22 13:49:45] 启动前检查本地生活 Qdrant 集合。
+D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:51: UserWarning: Api key is used with an insecure connection.
+  client = QdrantClient(
+local_life_bootstrap_collection_ready collection=local_life_hybrid_chunks
+local_life_bootstrap_collection_ready collection=local_life_parent_child_chunks
+local_life_bootstrap_no_seed_needed
+[2026-05-22 13:49:51] 本地生活 Qdrant 集合预热完成。
+[2026-05-22 13:49:51] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-22 13:50:00] 端口 8000 已监听。
+[2026-05-22 14:30:37] 使用启动器: py -3.11
+[2026-05-22 14:30:37] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-22 14:30:37] 启动前检查本地生活 Qdrant 集合。
+D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:51: UserWarning: Api key is used with an insecure connection.
+  client = QdrantClient(
+local_life_bootstrap_collection_ready collection=local_life_hybrid_chunks
+local_life_bootstrap_collection_ready collection=local_life_parent_child_chunks
+local_life_bootstrap_no_seed_needed
+[2026-05-22 14:30:42] 本地生活 Qdrant 集合预热完成。
+[2026-05-22 14:30:42] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-22 14:30:51] 端口 8000 已监听。
+[2026-05-22 17:53:51] 使用启动器: py -3.11
+[2026-05-22 17:53:51] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-22 17:53:51] 启动前检查本地生活 Qdrant 集合。
+D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:51: UserWarning: Api key is used with an insecure connection.
+  client = QdrantClient(
+local_life_bootstrap_collection_ready collection=local_life_hybrid_chunks
+local_life_bootstrap_collection_ready collection=local_life_parent_child_chunks
+local_life_bootstrap_no_seed_needed
+[2026-05-22 17:53:57] 本地生活 Qdrant 集合预热完成。
+[2026-05-22 17:53:57] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-22 17:54:07] 端口 8000 已监听。
+[2026-05-22 23:55:41] 使用启动器: py -3.11
+[2026-05-22 23:55:41] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-22 23:55:41] 启动前检查本地生活 Qdrant 集合。
+D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:51: UserWarning: Api key is used with an insecure connection.
+  client = QdrantClient(
+local_life_bootstrap_collection_ready collection=local_life_hybrid_chunks
+local_life_bootstrap_collection_ready collection=local_life_parent_child_chunks
+local_life_bootstrap_no_seed_needed
+[2026-05-22 23:55:49] 本地生活 Qdrant 集合预热完成。
+[2026-05-22 23:55:49] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-22 23:55:59] 端口 8000 已监听。
+[2026-05-23 00:03:35] 使用启动器: py -3.11
+[2026-05-23 00:03:35] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-23 00:03:35] 启动前检查本地生活 Qdrant 集合。
+D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:51: UserWarning: Api key is used with an insecure connection.
+  client = QdrantClient(
+local_life_bootstrap_collection_ready collection=local_life_hybrid_chunks
+local_life_bootstrap_collection_ready collection=local_life_parent_child_chunks
+local_life_bootstrap_no_seed_needed
+[2026-05-23 00:03:40] 本地生活 Qdrant 集合预热完成。
+[2026-05-23 00:03:40] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-23 00:03:48] 端口 8000 已监听。
+[2026-05-23 00:13:50] 使用启动器: py -3.11
+[2026-05-23 00:13:50] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-23 00:13:50] 启动前检查本地生活 Qdrant 集合。
+D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:51: UserWarning: Api key is used with an insecure connection.
+  client = QdrantClient(
+local_life_bootstrap_collection_ready collection=local_life_hybrid_chunks
+local_life_bootstrap_collection_ready collection=local_life_parent_child_chunks
+local_life_bootstrap_no_seed_needed
+[2026-05-23 00:13:55] 本地生活 Qdrant 集合预热完成。
+[2026-05-23 00:13:55] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-23 00:14:03] 端口 8000 已监听。
+[2026-05-23 00:27:16] 使用启动器: py -3.11
+[2026-05-23 00:27:16] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-23 00:27:16] 启动前检查本地生活 Qdrant 集合。
+D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:51: UserWarning: Api key is used with an insecure connection.
+  client = QdrantClient(
+local_life_bootstrap_collection_ready collection=local_life_hybrid_chunks
+local_life_bootstrap_collection_ready collection=local_life_parent_child_chunks
+local_life_bootstrap_no_seed_needed
+[2026-05-23 00:27:21] 本地生活 Qdrant 集合预热完成。
+[2026-05-23 00:27:21] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-23 00:27:30] 端口 8000 已监听。
+[2026-05-23 00:42:16] 使用启动器: py -3.11
+[2026-05-23 00:42:16] 工作目录: D:\javacode\hm-dianping\learning-agent-service
+[2026-05-23 00:42:16] 启动前检查本地生活 Qdrant 集合。
+D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:51: UserWarning: Api key is used with an insecure connection.
+  client = QdrantClient(
+local_life_bootstrap_collection_ready collection=local_life_hybrid_chunks
+local_life_bootstrap_collection_ready collection=local_life_parent_child_chunks
+local_life_bootstrap_no_seed_needed
+[2026-05-23 00:42:21] 本地生活 Qdrant 集合预热完成。
+[2026-05-23 00:42:21] 启动命令: C:\Windows\py.exe -3.11 -m uvicorn app:app --host 127.0.0.1 --port 8000
+[2026-05-23 00:42:30] 端口 8000 已监听。

@@ -1,0 +1,52 @@
+           _                 _    
+  __ _  __| |_ __ __ _ _ __ | |_  
+ / _` |/ _` | '__/ _` | '_ \| __| 
+| (_| | (_| | | | (_| | | | | |_  
+ \__, |\__,_|_|  \__,_|_| |_|\__| 
+    |_|                           
+
+Version: 1.17.1, build: eabee371
+Access web UI at http://localhost:6333/dashboard
+
+2026-05-22T16:42:10.021369Z  WARN qdrant::settings: Config file not found: config/config
+2026-05-22T16:42:10.021415Z  WARN qdrant::settings: Config file not found: config/development
+2026-05-22T16:42:10.039294Z  WARN qdrant: There is a potential issue with the filesystem for storage path ./storage. Details: Filesystem type check is not supported on this platform
+2026-05-22T16:42:10.040089Z  INFO storage::content_manager::consensus::persistent: Loading raft state from ./storage\raft_state.json
+2026-05-22T16:42:10.044843Z  INFO storage::content_manager::toc: Loading collection: local_life_hybrid_chunks
+2026-05-22T16:42:12.312564Z  INFO collection::shards::local_shard: Recovering shard ./storage\collections\local_life_hybrid_chunks\0: 0/1 (0%)
+2026-05-22T16:42:12.617051Z  INFO collection::shards::local_shard: Recovered collection local_life_hybrid_chunks: 1/1 (100%)
+2026-05-22T16:42:12.617658Z  INFO storage::content_manager::toc: Loading collection: local_life_parent_child_chunks
+2026-05-22T16:42:14.592746Z  INFO collection::shards::local_shard: Recovering shard ./storage\collections\local_life_parent_child_chunks\0: 0/1 (0%)
+2026-05-22T16:42:14.826577Z  INFO collection::shards::local_shard: Recovered collection local_life_parent_child_chunks: 1/1 (100%)
+2026-05-22T16:42:14.829764Z  INFO qdrant: Distributed mode disabled
+2026-05-22T16:42:14.829855Z  INFO qdrant: Telemetry reporting enabled, id: e50d0f30-4c6c-4b64-9774-b3976cb27c36
+2026-05-22T16:42:14.832471Z  INFO qdrant::actix: REST transport settings: keep_alive=5s, client_request_timeout=5s, client_disconnect_timeout=5s
+2026-05-22T16:42:14.832516Z  INFO qdrant::actix: TLS disabled for REST API
+2026-05-22T16:42:14.834843Z  INFO qdrant::actix: Qdrant HTTP listening on 6333
+2026-05-22T16:42:14.834907Z  INFO actix_server::builder: starting 13 workers
+2026-05-22T16:42:14.834937Z  INFO actix_server::server: Actix runtime found; starting in Actix runtime
+2026-05-22T16:42:14.834959Z  INFO actix_server::server: starting service: "actix-web-service-0.0.0.0:6333", workers: 13, listening on: 0.0.0.0:6333
+2026-05-22T16:42:14.840085Z  INFO qdrant::tonic: Qdrant gRPC listening on 6334
+2026-05-22T16:42:14.840141Z  INFO qdrant::tonic: TLS disabled for gRPC API
+2026-05-22T16:42:21.046945Z  INFO actix_web::middleware::logger: 127.0.0.1 "GET /collections/user_semantic_memory/exists HTTP/1.1" 200 67 "-" "python-client/1.17.1 python/3.11.9" 0.000659
+2026-05-22T16:42:21.062433Z  INFO actix_web::middleware::logger: 127.0.0.1 "GET /collections/local_life_hybrid_chunks/exists HTTP/1.1" 200 66 "-" "python-client/1.17.1 python/3.11.9" 0.000716
+2026-05-22T16:42:21.085330Z  INFO actix_web::middleware::logger: 127.0.0.1 "POST /collections/local_life_hybrid_chunks/points/count HTTP/1.1" 200 64 "-" "python-client/1.17.1 python/3.11.9" 0.002314
+2026-05-22T16:42:21.100882Z  INFO actix_web::middleware::logger: 127.0.0.1 "GET /collections/local_life_hybrid_chunks HTTP/1.1" 200 818 "-" "python-client/1.17.1 python/3.11.9" 0.001853
+2026-05-22T16:42:21.115029Z  INFO actix_web::middleware::logger: 127.0.0.1 "GET /collections/local_life_parent_child_chunks/exists HTTP/1.1" 200 66 "-" "python-client/1.17.1 python/3.11.9" 0.000698
+2026-05-22T16:42:21.131705Z  INFO actix_web::middleware::logger: 127.0.0.1 "POST /collections/local_life_parent_child_chunks/points/count HTTP/1.1" 200 63 "-" "python-client/1.17.1 python/3.11.9" 0.001139
+2026-05-22T16:42:21.137579Z  INFO actix_web::middleware::logger: 127.0.0.1 "GET /collections/local_life_parent_child_chunks HTTP/1.1" 200 816 "-" "python-client/1.17.1 python/3.11.9" 0.002712
+2026-05-22T16:42:27.448021Z  INFO actix_web::middleware::logger: 127.0.0.1 "GET /collections/user_semantic_memory/exists HTTP/1.1" 200 67 "-" "python-client/1.17.1 python/3.11.9" 0.000633
+2026-05-22T16:42:27.808237Z  INFO actix_web::middleware::logger: 127.0.0.1 "POST /collections/local_life_hybrid_chunks/points/scroll HTTP/1.1" 200 42774 "-" "python-client/1.17.1 python/3.11.9" 0.011445
+2026-05-22T16:42:27.826644Z  INFO actix_web::middleware::logger: 127.0.0.1 "POST /collections/local_life_hybrid_chunks/points/scroll HTTP/1.1" 200 42946 "-" "python-client/1.17.1 python/3.11.9" 0.005826
+2026-05-22T16:42:27.875801Z  INFO actix_web::middleware::logger: 127.0.0.1 "POST /collections/local_life_hybrid_chunks/points/scroll HTTP/1.1" 200 33459 "-" "python-client/1.17.1 python/3.11.9" 0.009220
+2026-05-22T16:42:27.902305Z  INFO actix_web::middleware::logger: 127.0.0.1 "GET /collections/local_life_hybrid_chunks HTTP/1.1" 200 819 "-" "python-client/1.17.1 python/3.11.9" 0.002631
+2026-05-22T16:42:27.952019Z  INFO actix_web::middleware::logger: 127.0.0.1 "GET /collections/local_life_hybrid_chunks HTTP/1.1" 200 823 "-" "python-client/1.17.1 python/3.11.9" 0.002342
+2026-05-22T16:42:28.733597Z  INFO actix_web::middleware::logger: 127.0.0.1 "GET /collections/local_life_parent_child_chunks HTTP/1.1" 200 819 "-" "python-client/1.17.1 python/3.11.9" 0.002206
+2026-05-22T16:44:16.103821Z  INFO actix_web::middleware::logger: 127.0.0.1 "POST /collections/local_life_hybrid_chunks/points/query HTTP/1.1" 200 5583 "-" "python-client/1.17.1 python/3.11.9" 0.019765
+2026-05-22T16:44:16.400163Z  INFO actix_web::middleware::logger: 127.0.0.1 "POST /collections/local_life_hybrid_chunks/points/query HTTP/1.1" 200 4877 "-" "python-client/1.17.1 python/3.11.9" 0.028540
+2026-05-22T16:44:52.570715Z  INFO actix_web::middleware::logger: 127.0.0.1 "POST /collections/local_life_hybrid_chunks/points/query HTTP/1.1" 200 4915 "-" "python-client/1.17.1 python/3.11.9" 0.008348
+2026-05-22T16:44:52.672655Z  INFO actix_web::middleware::logger: 127.0.0.1 "POST /collections/local_life_hybrid_chunks/points/query HTTP/1.1" 200 5583 "-" "python-client/1.17.1 python/3.11.9" 0.006029
+2026-05-22T16:45:25.925493Z  INFO actix_web::middleware::logger: 127.0.0.1 "POST /collections/local_life_hybrid_chunks/points/query HTTP/1.1" 200 4168 "-" "python-client/1.17.1 python/3.11.9" 0.022536
+2026-05-22T16:45:27.493688Z  INFO actix_web::middleware::logger: 127.0.0.1 "POST /collections/local_life_hybrid_chunks/points/query HTTP/1.1" 200 3540 "-" "python-client/1.17.1 python/3.11.9" 0.050737
+2026-05-22T16:46:26.201878Z  INFO actix_web::middleware::logger: 127.0.0.1 "POST /collections/local_life_hybrid_chunks/points/query HTTP/1.1" 200 4582 "-" "python-client/1.17.1 python/3.11.9" 0.024946
+2026-05-22T16:46:26.839276Z  INFO actix_web::middleware::logger: 127.0.0.1 "POST /collections/local_life_hybrid_chunks/points/query HTTP/1.1" 200 3517 "-" "python-client/1.17.1 python/3.11.9" 0.007026

@@ -1,0 +1,679 @@
+2026-05-21 20:05:48.044 CST [22024] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-21 20:05:48.054 CST [22024] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-21 20:05:48.055 CST [22024] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-21 20:05:48.228 CST [24968] LOG:  database system was interrupted; last known up at 2026-05-21 20:03:28 CST
+2026-05-21 20:05:49.024 CST [24968] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-05-21 20:05:49.031 CST [24968] LOG:  invalid record length at 0/1D2C3D0: expected at least 24, got 0
+2026-05-21 20:05:49.031 CST [24968] LOG:  redo is not required
+2026-05-21 20:05:49.049 CST [9704] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-05-21 20:05:49.068 CST [9704] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.005 s, sync=0.003 s, total=0.031 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/1D2C3D0, redo lsn=0/1D2C3D0
+2026-05-21 20:05:49.113 CST [22024] LOG:  database system is ready to accept connections
+2026-05-21 20:08:41.107 CST [14876] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-21 20:08:41.114 CST [14876] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-21 20:08:41.115 CST [14876] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-21 20:08:41.279 CST [13876] LOG:  database system was interrupted; last known up at 2026-05-21 20:05:49 CST
+2026-05-21 20:08:42.112 CST [13876] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-05-21 20:08:42.119 CST [13876] LOG:  redo starts at 0/1D2C448
+2026-05-21 20:08:42.120 CST [13876] LOG:  invalid record length at 0/1D2C480: expected at least 24, got 0
+2026-05-21 20:08:42.120 CST [13876] LOG:  redo done at 0/1D2C448 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+2026-05-21 20:08:42.138 CST [15428] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-05-21 20:08:42.158 CST [15428] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.005 s, sync=0.003 s, total=0.028 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/1D2C480, redo lsn=0/1D2C480
+2026-05-21 20:08:42.202 CST [14876] LOG:  database system is ready to accept connections
+2026-05-21 20:09:44.823 CST [6784] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-21 20:09:44.831 CST [6784] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-21 20:09:44.831 CST [6784] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-21 20:09:45.034 CST [23296] LOG:  database system was interrupted; last known up at 2026-05-21 20:08:42 CST
+2026-05-21 20:09:45.796 CST [23296] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-05-21 20:09:45.801 CST [23296] LOG:  redo starts at 0/1D2C4F8
+2026-05-21 20:09:45.801 CST [23296] LOG:  invalid record length at 0/1D2C530: expected at least 24, got 0
+2026-05-21 20:09:45.801 CST [23296] LOG:  redo done at 0/1D2C4F8 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+2026-05-21 20:09:45.818 CST [25544] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-05-21 20:09:45.838 CST [25544] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.005 s, sync=0.004 s, total=0.026 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/1D2C530, redo lsn=0/1D2C530
+2026-05-21 20:09:45.884 CST [6784] LOG:  database system is ready to accept connections
+2026-05-21 20:11:21.932 CST [22024] ERROR:  canceling statement due to user request
+2026-05-21 20:11:21.932 CST [6784] LOG:  received fast shutdown request
+2026-05-21 20:11:21.932 CST [14292] ERROR:  canceling statement due to user request
+2026-05-21 20:11:21.988 CST [6784] LOG:  aborting any active transactions
+2026-05-21 20:11:21.988 CST [6784] LOG:  background worker "logical replication launcher" (PID 14292) exited with exit code 1
+2026-05-21 20:11:21.995 CST [25544] LOG:  shutting down
+2026-05-21 20:11:21.997 CST [25544] LOG:  checkpoint starting: shutdown immediate
+2026-05-21 20:11:22.014 CST [25544] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.002 s, sync=0.001 s, total=0.019 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=0 kB; lsn=0/1D2C5E0, redo lsn=0/1D2C5E0
+2026-05-21 20:11:22.028 CST [6784] LOG:  database system is shut down
+2026-05-21 20:11:35.870 CST [13888] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-21 20:11:35.878 CST [13888] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-21 20:11:35.878 CST [13888] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-21 20:11:36.125 CST [10140] LOG:  database system was shut down at 2026-05-21 20:11:22 CST
+2026-05-21 20:11:36.174 CST [13888] LOG:  database system is ready to accept connections
+2026-05-21 20:26:24.043 CST [7956] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-21 20:26:24.047 CST [7956] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-21 20:26:24.047 CST [7956] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-21 20:26:24.141 CST [2652] LOG:  database system was interrupted; last known up at 2026-05-21 20:11:36 CST
+2026-05-21 20:26:26.741 CST [2652] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-05-21 20:26:26.746 CST [2652] LOG:  redo starts at 0/1D2C658
+2026-05-21 20:26:26.746 CST [2652] LOG:  invalid record length at 0/1D2C690: expected at least 24, got 0
+2026-05-21 20:26:26.746 CST [2652] LOG:  redo done at 0/1D2C658 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+2026-05-21 20:26:26.753 CST [26268] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-05-21 20:26:26.765 CST [26268] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.004 s, sync=0.002 s, total=0.014 s; sync files=2, longest=0.001 s, average=0.001 s; distance=0 kB, estimate=0 kB; lsn=0/1D2C690, redo lsn=0/1D2C690
+2026-05-21 20:26:26.792 CST [7956] LOG:  database system is ready to accept connections
+2026-05-21 20:29:11.284 CST [10456] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-21 20:29:11.284 CST [10456] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-21 20:31:26.781 CST [26268] LOG:  checkpoint starting: time
+2026-05-21 20:31:27.572 CST [26268] LOG:  checkpoint complete: wrote 8 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.766 s, sync=0.003 s, total=0.791 s; sync files=7, longest=0.001 s, average=0.001 s; distance=31 kB, estimate=31 kB; lsn=0/1D34398, redo lsn=0/1D34360
+2026-05-21 20:33:59.760 CST [10456] LOG:  could not receive data from client: An existing connection was forcibly closed by the remote host.
+	
+2026-05-21 20:46:38.393 CST [20052] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-21 20:46:38.393 CST [20052] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-21 20:46:38.420 CST [20052] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-21 20:46:38.420 CST [20052] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.preference_key = $2::VARCHAR AND user_profile_preference.is_active IS true
+2026-05-21 20:48:47.095 CST [20052] LOG:  could not receive data from client: An existing connection was forcibly closed by the remote host.
+	
+2026-05-21 20:49:48.888 CST [24728] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-21 20:49:48.888 CST [24728] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-21 20:51:26.598 CST [26268] LOG:  checkpoint starting: time
+2026-05-21 20:51:27.821 CST [26268] LOG:  checkpoint complete: wrote 12 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=1.173 s, sync=0.023 s, total=1.224 s; sync files=7, longest=0.018 s, average=0.004 s; distance=46 kB, estimate=46 kB; lsn=0/1D3FE00, redo lsn=0/1D3FDC8
+2026-05-21 22:05:27.671 CST [7956] LOG:  received fast shutdown request
+2026-05-21 22:05:27.672 CST [24668] ERROR:  canceling statement due to user request
+2026-05-21 22:05:27.674 CST [7956] LOG:  aborting any active transactions
+2026-05-21 22:05:27.674 CST [24728] FATAL:  terminating connection due to administrator command
+2026-05-21 22:05:27.682 CST [7956] LOG:  background worker "logical replication launcher" (PID 24668) exited with exit code 1
+2026-05-21 22:05:27.689 CST [26268] LOG:  shutting down
+2026-05-21 22:05:27.691 CST [26268] LOG:  checkpoint starting: shutdown immediate
+2026-05-21 22:05:27.698 CST [26268] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.009 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=41 kB; lsn=0/1D3FEB0, redo lsn=0/1D3FEB0
+2026-05-21 22:05:27.706 CST [7956] LOG:  database system is shut down
+2026-05-21 22:05:38.604 CST [4044] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-21 22:05:38.610 CST [4044] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-21 22:05:38.610 CST [4044] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-21 22:05:38.735 CST [15604] LOG:  database system was shut down at 2026-05-21 22:05:27 CST
+2026-05-21 22:05:38.759 CST [4044] LOG:  database system is ready to accept connections
+2026-05-21 22:07:11.756 CST [4044] LOG:  received fast shutdown request
+2026-05-21 22:07:11.756 CST [21592] ERROR:  canceling statement due to user request
+2026-05-21 22:07:11.795 CST [4044] LOG:  aborting any active transactions
+2026-05-21 22:07:11.796 CST [4044] LOG:  background worker "logical replication launcher" (PID 21592) exited with exit code 1
+2026-05-21 22:07:11.807 CST [19540] LOG:  shutting down
+2026-05-21 22:07:11.809 CST [19540] LOG:  checkpoint starting: shutdown immediate
+2026-05-21 22:07:11.829 CST [19540] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.006 s, sync=0.003 s, total=0.022 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/1D3FF60, redo lsn=0/1D3FF60
+2026-05-21 22:07:11.845 CST [4044] LOG:  database system is shut down
+2026-05-21 22:07:22.037 CST [20340] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-21 22:07:22.045 CST [20340] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-21 22:07:22.045 CST [20340] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-21 22:07:22.146 CST [4140] LOG:  database system was shut down at 2026-05-21 22:07:11 CST
+2026-05-21 22:07:22.169 CST [20340] LOG:  database system is ready to accept connections
+2026-05-21 22:08:40.990 CST [20340] LOG:  received fast shutdown request
+2026-05-21 22:08:40.990 CST [23276] ERROR:  canceling statement due to user request
+2026-05-21 22:08:40.993 CST [20340] LOG:  aborting any active transactions
+2026-05-21 22:08:40.998 CST [20340] LOG:  background worker "logical replication launcher" (PID 23276) exited with exit code 1
+2026-05-21 22:08:41.006 CST [19824] LOG:  shutting down
+2026-05-21 22:08:41.007 CST [19824] LOG:  checkpoint starting: shutdown immediate
+2026-05-21 22:08:41.022 CST [19824] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.004 s, sync=0.003 s, total=0.016 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/1D40028, redo lsn=0/1D40028
+2026-05-21 22:08:41.029 CST [20340] LOG:  database system is shut down
+2026-05-21 22:08:58.713 CST [22480] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-21 22:08:58.717 CST [22480] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-21 22:08:58.717 CST [22480] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-21 22:08:58.821 CST [14608] LOG:  database system was shut down at 2026-05-21 22:08:41 CST
+2026-05-21 22:08:58.847 CST [22480] LOG:  database system is ready to accept connections
+2026-05-21 22:12:03.923 CST [22480] LOG:  received fast shutdown request
+2026-05-21 22:12:03.924 CST [7596] ERROR:  canceling statement due to user request
+2026-05-21 22:12:03.961 CST [22480] LOG:  aborting any active transactions
+2026-05-21 22:12:03.962 CST [22480] LOG:  background worker "logical replication launcher" (PID 7596) exited with exit code 1
+2026-05-21 22:12:03.973 CST [7120] LOG:  shutting down
+2026-05-21 22:12:03.975 CST [7120] LOG:  checkpoint starting: shutdown immediate
+2026-05-21 22:12:03.995 CST [7120] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.007 s, sync=0.003 s, total=0.022 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/1D400D8, redo lsn=0/1D400D8
+2026-05-21 22:12:04.008 CST [22480] LOG:  database system is shut down
+2026-05-21 22:18:49.491 CST [11372] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-21 22:18:49.495 CST [11372] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-21 22:18:49.495 CST [11372] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-21 22:18:49.586 CST [5660] LOG:  database system was shut down at 2026-05-21 22:12:03 CST
+2026-05-21 22:18:49.608 CST [11372] LOG:  database system is ready to accept connections
+2026-05-21 22:23:49.582 CST [12284] LOG:  checkpoint starting: time
+2026-05-21 22:23:49.600 CST [12284] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.005 s, sync=0.002 s, total=0.019 s; sync files=2, longest=0.001 s, average=0.001 s; distance=0 kB, estimate=0 kB; lsn=0/1D401C0, redo lsn=0/1D40188
+2026-05-21 23:01:14.250 CST [21384] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-21 23:01:14.250 CST [21384] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-21 23:03:49.649 CST [12284] LOG:  checkpoint starting: time
+2026-05-21 23:03:50.315 CST [12284] LOG:  checkpoint complete: wrote 7 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.646 s, sync=0.004 s, total=0.666 s; sync files=6, longest=0.002 s, average=0.001 s; distance=32 kB, estimate=32 kB; lsn=0/1D48348, redo lsn=0/1D48310
+2026-05-21 23:07:13.364 CST [21384] LOG:  could not receive data from client: An existing connection was forcibly closed by the remote host.
+	
+2026-05-21 23:15:32.790 CST [11372] LOG:  received fast shutdown request
+2026-05-21 23:15:32.792 CST [11372] LOG:  aborting any active transactions
+2026-05-21 23:15:32.792 CST [25380] ERROR:  canceling statement due to user request
+2026-05-21 23:15:32.804 CST [11372] LOG:  background worker "logical replication launcher" (PID 25380) exited with exit code 1
+2026-05-21 23:15:32.804 CST [12284] LOG:  shutting down
+2026-05-21 23:15:32.806 CST [12284] LOG:  checkpoint starting: shutdown immediate
+2026-05-21 23:15:32.816 CST [12284] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.002 s, sync=0.001 s, total=0.012 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=29 kB; lsn=0/1D483F8, redo lsn=0/1D483F8
+2026-05-21 23:15:32.829 CST [11372] LOG:  database system is shut down
+2026-05-21 23:27:02.119 CST [2044] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-21 23:27:02.124 CST [2044] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-21 23:27:02.124 CST [2044] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-21 23:27:02.246 CST [2156] LOG:  database system was shut down at 2026-05-21 23:15:32 CST
+2026-05-21 23:27:02.272 CST [2044] LOG:  database system is ready to accept connections
+2026-05-21 23:30:56.438 CST [2044] LOG:  received fast shutdown request
+2026-05-21 23:30:56.438 CST [5940] ERROR:  canceling statement due to user request
+2026-05-21 23:30:56.476 CST [2044] LOG:  aborting any active transactions
+2026-05-21 23:30:56.477 CST [2044] LOG:  background worker "logical replication launcher" (PID 5940) exited with exit code 1
+2026-05-21 23:30:56.487 CST [14940] LOG:  shutting down
+2026-05-21 23:30:56.489 CST [14940] LOG:  checkpoint starting: shutdown immediate
+2026-05-21 23:30:56.510 CST [14940] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.008 s, sync=0.003 s, total=0.023 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/1D484A8, redo lsn=0/1D484A8
+2026-05-21 23:30:56.529 CST [2044] LOG:  database system is shut down
+2026-05-21 23:31:07.476 CST [14188] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-21 23:31:07.482 CST [14188] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-21 23:31:07.482 CST [14188] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-21 23:31:07.604 CST [3936] LOG:  database system was shut down at 2026-05-21 23:30:56 CST
+2026-05-21 23:31:07.627 CST [14188] LOG:  database system is ready to accept connections
+2026-05-21 23:36:07.592 CST [18836] LOG:  checkpoint starting: time
+2026-05-21 23:36:07.617 CST [18836] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.006 s, sync=0.002 s, total=0.026 s; sync files=2, longest=0.002 s, average=0.001 s; distance=0 kB, estimate=0 kB; lsn=0/1D48590, redo lsn=0/1D48558
+2026-05-21 23:36:32.689 CST [14188] LOG:  received fast shutdown request
+2026-05-21 23:36:32.689 CST [14644] ERROR:  canceling statement due to user request
+2026-05-21 23:36:32.728 CST [14188] LOG:  aborting any active transactions
+2026-05-21 23:36:32.728 CST [14188] LOG:  background worker "logical replication launcher" (PID 14644) exited with exit code 1
+2026-05-21 23:36:32.738 CST [18836] LOG:  shutting down
+2026-05-21 23:36:32.739 CST [18836] LOG:  checkpoint starting: shutdown immediate
+2026-05-21 23:36:32.759 CST [18836] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.002 s, sync=0.001 s, total=0.022 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=0 kB; lsn=0/1D48640, redo lsn=0/1D48640
+2026-05-21 23:36:32.777 CST [14188] LOG:  database system is shut down
+2026-05-21 23:36:45.368 CST [16104] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-21 23:36:45.378 CST [16104] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-21 23:36:45.378 CST [16104] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-21 23:36:45.487 CST [16664] LOG:  database system was shut down at 2026-05-21 23:36:32 CST
+2026-05-21 23:36:45.513 CST [16104] LOG:  database system is ready to accept connections
+2026-05-21 23:38:07.549 CST [25124] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-21 23:38:07.549 CST [25124] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-21 23:57:16.202 CST [4204] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-21 23:57:16.210 CST [4204] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-21 23:57:16.210 CST [4204] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-21 23:57:16.379 CST [15928] LOG:  database system was interrupted; last known up at 2026-05-21 23:36:45 CST
+2026-05-21 23:57:22.018 CST [15928] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-05-21 23:57:22.024 CST [15928] LOG:  redo starts at 0/1D486B8
+2026-05-21 23:57:22.032 CST [15928] LOG:  invalid record length at 0/1D516B8: expected at least 24, got 0
+2026-05-21 23:57:22.032 CST [15928] LOG:  redo done at 0/1D51680 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+2026-05-21 23:57:22.040 CST [9008] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-05-21 23:57:22.062 CST [9008] LOG:  checkpoint complete: wrote 10 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.007 s, sync=0.006 s, total=0.024 s; sync files=7, longest=0.003 s, average=0.001 s; distance=36 kB, estimate=36 kB; lsn=0/1D516B8, redo lsn=0/1D516B8
+2026-05-21 23:57:22.113 CST [4204] LOG:  database system is ready to accept connections
+2026-05-22 00:15:03.034 CST [4204] LOG:  background worker "logical replication launcher" (PID 3416) was terminated by exception 0x40010004
+2026-05-22 00:15:03.034 CST [4204] HINT:  See C include file "ntstatus.h" for a description of the hexadecimal value.
+2026-05-22 00:15:03.034 CST [4204] LOG:  terminating any other active server processes
+2026-05-22 00:15:03.071 CST [4204] LOG:  all server processes terminated; reinitializing
+2026-05-22 00:15:03.195 CST [4204] LOG:  startup process (PID 11980) was terminated by exception 0xC000026B
+2026-05-22 00:15:03.195 CST [4204] HINT:  See C include file "ntstatus.h" for a description of the hexadecimal value.
+2026-05-22 00:15:03.195 CST [4204] LOG:  aborting startup due to startup process failure
+2026-05-22 00:15:03.197 CST [4204] LOG:  database system is shut down
+2026-05-22 11:52:26.639 CST [26132] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-22 11:52:26.645 CST [26132] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-22 11:52:26.645 CST [26132] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-22 11:52:26.748 CST [16912] LOG:  database system was interrupted; last known up at 2026-05-21 23:57:22 CST
+2026-05-22 11:52:30.484 CST [16912] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-05-22 11:52:30.491 CST [16912] LOG:  redo starts at 0/1D51730
+2026-05-22 11:52:30.492 CST [16912] LOG:  invalid record length at 0/1D51768: expected at least 24, got 0
+2026-05-22 11:52:30.492 CST [16912] LOG:  redo done at 0/1D51730 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+2026-05-22 11:52:30.505 CST [2324] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-05-22 11:52:30.526 CST [2324] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.008 s, sync=0.003 s, total=0.026 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/1D51768, redo lsn=0/1D51768
+2026-05-22 11:52:30.581 CST [26132] LOG:  database system is ready to accept connections
+2026-05-22 11:57:06.570 CST [26132] LOG:  received fast shutdown request
+2026-05-22 11:57:06.572 CST [28192] ERROR:  canceling statement due to user request
+2026-05-22 11:57:06.572 CST [19780] ERROR:  canceling statement due to user request
+2026-05-22 11:57:06.573 CST [26132] LOG:  aborting any active transactions
+2026-05-22 11:57:06.582 CST [26132] LOG:  background worker "logical replication launcher" (PID 19780) exited with exit code 1
+2026-05-22 11:57:06.586 CST [2324] LOG:  shutting down
+2026-05-22 11:57:06.588 CST [2324] LOG:  checkpoint starting: shutdown immediate
+2026-05-22 11:57:06.609 CST [2324] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.023 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=0 kB; lsn=0/1D51818, redo lsn=0/1D51818
+2026-05-22 11:57:06.624 CST [26132] LOG:  database system is shut down
+2026-05-22 11:57:17.847 CST [28552] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-22 11:57:17.858 CST [28552] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-22 11:57:17.859 CST [28552] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-22 11:57:17.983 CST [25568] LOG:  database system was shut down at 2026-05-22 11:57:06 CST
+2026-05-22 11:57:18.007 CST [28552] LOG:  database system is ready to accept connections
+2026-05-22 11:58:34.777 CST [8748] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 11:58:34.777 CST [8748] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 11:59:12.429 CST [8748] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 11:59:12.429 CST [8748] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 12:01:17.627 CST [8748] LOG:  could not receive data from client: An existing connection was forcibly closed by the remote host.
+	
+2026-05-22 12:02:17.982 CST [4380] LOG:  checkpoint starting: time
+2026-05-22 12:02:18.797 CST [4380] LOG:  checkpoint complete: wrote 10 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.789 s, sync=0.008 s, total=0.816 s; sync files=7, longest=0.003 s, average=0.001 s; distance=29 kB, estimate=29 kB; lsn=0/1D58DF0, redo lsn=0/1D58DB8
+2026-05-22 12:11:43.558 CST [8784] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 12:11:43.558 CST [8784] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 12:12:17.827 CST [4380] LOG:  checkpoint starting: time
+2026-05-22 12:12:18.504 CST [4380] LOG:  checkpoint complete: wrote 7 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.658 s, sync=0.006 s, total=0.677 s; sync files=6, longest=0.002 s, average=0.001 s; distance=31 kB, estimate=31 kB; lsn=0/1D60B88, redo lsn=0/1D60B50
+2026-05-22 12:17:13.596 CST [8784] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 12:17:13.596 CST [8784] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 12:17:17.507 CST [4380] LOG:  checkpoint starting: time
+2026-05-22 12:17:18.190 CST [4380] LOG:  checkpoint complete: wrote 7 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.653 s, sync=0.005 s, total=0.684 s; sync files=6, longest=0.002 s, average=0.001 s; distance=23 kB, estimate=30 kB; lsn=0/1D66A68, redo lsn=0/1D66A30
+2026-05-22 12:20:08.968 CST [8784] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 12:20:08.968 CST [8784] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 12:20:39.029 CST [8784] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 12:20:39.029 CST [8784] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 12:22:17.204 CST [4380] LOG:  checkpoint starting: time
+2026-05-22 12:22:17.796 CST [4380] LOG:  checkpoint complete: wrote 6 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.556 s, sync=0.006 s, total=0.592 s; sync files=5, longest=0.003 s, average=0.002 s; distance=29 kB, estimate=30 kB; lsn=0/1D6DE68, redo lsn=0/1D6DE30
+2026-05-22 12:55:09.402 CST [8784] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 12:55:09.402 CST [8784] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 12:55:20.549 CST [8784] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 12:55:20.549 CST [8784] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 12:57:17.868 CST [4380] LOG:  checkpoint starting: time
+2026-05-22 12:57:18.916 CST [4380] LOG:  checkpoint complete: wrote 10 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=1.017 s, sync=0.010 s, total=1.048 s; sync files=6, longest=0.003 s, average=0.002 s; distance=42 kB, estimate=42 kB; lsn=0/1D788A0, redo lsn=0/1D78868
+2026-05-22 12:57:56.424 CST [8784] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 12:57:56.424 CST [8784] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 12:59:16.275 CST [8784] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 12:59:16.275 CST [8784] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 13:02:17.922 CST [4380] LOG:  checkpoint starting: time
+2026-05-22 13:02:18.496 CST [4380] LOG:  checkpoint complete: wrote 6 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.538 s, sync=0.006 s, total=0.575 s; sync files=5, longest=0.002 s, average=0.002 s; distance=30 kB, estimate=41 kB; lsn=0/1D80108, redo lsn=0/1D800D0
+2026-05-22 13:04:15.491 CST [28552] LOG:  received fast shutdown request
+2026-05-22 13:04:15.492 CST [4748] ERROR:  canceling statement due to user request
+2026-05-22 13:04:15.495 CST [28552] LOG:  aborting any active transactions
+2026-05-22 13:04:15.496 CST [8784] FATAL:  terminating connection due to administrator command
+2026-05-22 13:04:15.503 CST [28552] LOG:  background worker "logical replication launcher" (PID 4748) exited with exit code 1
+2026-05-22 13:04:15.511 CST [4380] LOG:  shutting down
+2026-05-22 13:04:15.512 CST [4380] LOG:  checkpoint starting: shutdown immediate
+2026-05-22 13:04:15.529 CST [4380] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.002 s, sync=0.001 s, total=0.019 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=37 kB; lsn=0/1D801B8, redo lsn=0/1D801B8
+2026-05-22 13:04:15.540 CST [28552] LOG:  database system is shut down
+2026-05-22 13:04:28.614 CST [26980] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-22 13:04:28.619 CST [26980] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-22 13:04:28.619 CST [26980] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-22 13:04:28.736 CST [9056] LOG:  database system was shut down at 2026-05-22 13:04:15 CST
+2026-05-22 13:04:28.760 CST [26980] LOG:  database system is ready to accept connections
+2026-05-22 13:05:44.970 CST [11664] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 13:05:44.970 CST [11664] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 13:06:24.296 CST [26980] LOG:  received fast shutdown request
+2026-05-22 13:06:24.297 CST [28136] ERROR:  canceling statement due to user request
+2026-05-22 13:06:24.340 CST [26980] LOG:  aborting any active transactions
+2026-05-22 13:06:24.340 CST [11664] FATAL:  terminating connection due to administrator command
+2026-05-22 13:06:24.341 CST [26980] LOG:  background worker "logical replication launcher" (PID 28136) exited with exit code 1
+2026-05-22 13:06:24.355 CST [28228] LOG:  shutting down
+2026-05-22 13:06:24.356 CST [28228] LOG:  checkpoint starting: shutdown immediate
+2026-05-22 13:06:24.379 CST [28228] LOG:  checkpoint complete: wrote 10 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.008 s, sync=0.005 s, total=0.024 s; sync files=7, longest=0.002 s, average=0.001 s; distance=31 kB, estimate=31 kB; lsn=0/1D88178, redo lsn=0/1D88178
+2026-05-22 13:06:24.416 CST [26980] LOG:  database system is shut down
+2026-05-22 13:06:36.026 CST [16912] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-22 13:06:36.030 CST [16912] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-22 13:06:36.030 CST [16912] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-22 13:06:36.112 CST [16084] LOG:  database system was shut down at 2026-05-22 13:06:24 CST
+2026-05-22 13:06:36.129 CST [16912] LOG:  database system is ready to accept connections
+2026-05-22 13:11:36.120 CST [1144] LOG:  checkpoint starting: time
+2026-05-22 13:11:36.180 CST [1144] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.007 s, sync=0.003 s, total=0.062 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/1D88260, redo lsn=0/1D88228
+2026-05-22 13:51:20.035 CST [22856] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 13:51:20.035 CST [22856] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 13:51:36.240 CST [1144] LOG:  checkpoint starting: time
+2026-05-22 13:51:36.834 CST [1144] LOG:  checkpoint complete: wrote 6 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.560 s, sync=0.007 s, total=0.595 s; sync files=5, longest=0.004 s, average=0.002 s; distance=26 kB, estimate=26 kB; lsn=0/1D8EC58, redo lsn=0/1D8EC20
+2026-05-22 13:56:19.689 CST [22856] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 13:56:19.689 CST [22856] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 13:56:26.477 CST [22856] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 13:56:26.477 CST [22856] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 13:56:29.364 CST [22856] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 13:56:29.364 CST [22856] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 13:56:36.842 CST [1144] LOG:  checkpoint starting: time
+2026-05-22 13:56:37.669 CST [1144] LOG:  checkpoint complete: wrote 8 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.766 s, sync=0.042 s, total=0.828 s; sync files=6, longest=0.039 s, average=0.007 s; distance=34 kB, estimate=34 kB; lsn=0/1D97478, redo lsn=0/1D97440
+2026-05-22 13:57:33.498 CST [22856] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 13:57:33.498 CST [22856] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 13:59:06.840 CST [22856] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 13:59:06.840 CST [22856] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 13:59:57.296 CST [22856] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 13:59:57.296 CST [22856] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 14:01:36.673 CST [1144] LOG:  checkpoint starting: time
+2026-05-22 14:01:37.351 CST [1144] LOG:  checkpoint complete: wrote 7 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.652 s, sync=0.006 s, total=0.679 s; sync files=5, longest=0.003 s, average=0.002 s; distance=34 kB, estimate=34 kB; lsn=0/1D9FFA0, redo lsn=0/1D9FF68
+2026-05-22 14:15:19.596 CST [22856] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 14:15:19.596 CST [22856] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 14:15:19.604 CST [22856] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 14:15:19.604 CST [22856] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.preference_key = $2::VARCHAR AND user_profile_preference.is_active IS true
+2026-05-22 14:16:36.374 CST [1144] LOG:  checkpoint starting: time
+2026-05-22 14:16:37.064 CST [1144] LOG:  checkpoint complete: wrote 7 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.671 s, sync=0.005 s, total=0.691 s; sync files=6, longest=0.002 s, average=0.001 s; distance=28 kB, estimate=34 kB; lsn=0/1DA7028, redo lsn=0/1DA6FF0
+2026-05-22 14:17:38.502 CST [22856] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 14:17:38.502 CST [22856] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 14:21:36.073 CST [1144] LOG:  checkpoint starting: time
+2026-05-22 14:21:36.532 CST [1144] LOG:  checkpoint complete: wrote 5 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.438 s, sync=0.006 s, total=0.459 s; sync files=5, longest=0.003 s, average=0.002 s; distance=22 kB, estimate=32 kB; lsn=0/1DAC9C8, redo lsn=0/1DAC990
+2026-05-22 14:25:24.876 CST [22856] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 14:25:24.876 CST [22856] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 14:25:42.243 CST [22856] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 14:25:42.243 CST [22856] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 14:25:42.250 CST [22856] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 14:25:42.250 CST [22856] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.preference_key = $2::VARCHAR AND user_profile_preference.is_active IS true
+2026-05-22 14:26:36.535 CST [1144] LOG:  checkpoint starting: time
+2026-05-22 14:26:37.131 CST [1144] LOG:  checkpoint complete: wrote 6 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.549 s, sync=0.023 s, total=0.597 s; sync files=5, longest=0.019 s, average=0.005 s; distance=34 kB, estimate=34 kB; lsn=0/1DB5258, redo lsn=0/1DB5220
+2026-05-22 14:27:12.299 CST [22856] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 14:27:12.299 CST [22856] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 14:27:12.310 CST [22856] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 14:27:12.310 CST [22856] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.preference_key = $2::VARCHAR AND user_profile_preference.is_active IS true
+2026-05-22 14:28:02.155 CST [22856] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 14:28:02.155 CST [22856] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 14:28:35.330 CST [16912] LOG:  received fast shutdown request
+2026-05-22 14:28:35.333 CST [16248] ERROR:  canceling statement due to user request
+2026-05-22 14:28:35.335 CST [16912] LOG:  aborting any active transactions
+2026-05-22 14:28:35.335 CST [22856] FATAL:  terminating connection due to administrator command
+2026-05-22 14:28:35.344 CST [16912] LOG:  background worker "logical replication launcher" (PID 16248) exited with exit code 1
+2026-05-22 14:28:35.350 CST [1144] LOG:  shutting down
+2026-05-22 14:28:35.351 CST [1144] LOG:  checkpoint starting: shutdown immediate
+2026-05-22 14:28:35.369 CST [1144] LOG:  checkpoint complete: wrote 11 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.004 s, sync=0.004 s, total=0.019 s; sync files=6, longest=0.001 s, average=0.001 s; distance=34 kB, estimate=34 kB; lsn=0/1DBDAD0, redo lsn=0/1DBDAD0
+2026-05-22 14:28:35.395 CST [16912] LOG:  database system is shut down
+2026-05-22 14:28:46.846 CST [26512] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-22 14:28:46.854 CST [26512] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-22 14:28:46.854 CST [26512] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-22 14:28:46.956 CST [7236] LOG:  database system was shut down at 2026-05-22 14:28:35 CST
+2026-05-22 14:28:46.978 CST [26512] LOG:  database system is ready to accept connections
+2026-05-22 14:30:17.014 CST [26512] LOG:  received fast shutdown request
+2026-05-22 14:30:17.015 CST [14872] ERROR:  canceling statement due to user request
+2026-05-22 14:30:17.053 CST [26512] LOG:  aborting any active transactions
+2026-05-22 14:30:17.054 CST [26512] LOG:  background worker "logical replication launcher" (PID 14872) exited with exit code 1
+2026-05-22 14:30:17.063 CST [3732] LOG:  shutting down
+2026-05-22 14:30:17.064 CST [3732] LOG:  checkpoint starting: shutdown immediate
+2026-05-22 14:30:17.088 CST [3732] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.007 s, sync=0.003 s, total=0.026 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/1DBDB80, redo lsn=0/1DBDB80
+2026-05-22 14:30:17.106 CST [26512] LOG:  database system is shut down
+2026-05-22 14:30:28.379 CST [6856] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-22 14:30:28.384 CST [6856] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-22 14:30:28.385 CST [6856] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-22 14:30:28.494 CST [19368] LOG:  database system was shut down at 2026-05-22 14:30:17 CST
+2026-05-22 14:30:28.523 CST [6856] LOG:  database system is ready to accept connections
+2026-05-22 14:31:36.011 CST [26756] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 14:31:36.011 CST [26756] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 14:31:54.416 CST [26756] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 14:31:54.416 CST [26756] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 14:35:26.195 CST [26756] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 14:35:26.195 CST [26756] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 14:35:28.490 CST [26244] LOG:  checkpoint starting: time
+2026-05-22 14:35:29.407 CST [26244] LOG:  checkpoint complete: wrote 11 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.887 s, sync=0.013 s, total=0.919 s; sync files=7, longest=0.004 s, average=0.002 s; distance=33 kB, estimate=33 kB; lsn=0/1DC61E0, redo lsn=0/1DC61A8
+2026-05-22 14:39:16.584 CST [26756] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 14:39:16.584 CST [26756] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 14:40:28.423 CST [26244] LOG:  checkpoint starting: time
+2026-05-22 14:40:29.015 CST [26244] LOG:  checkpoint complete: wrote 6 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.546 s, sync=0.005 s, total=0.593 s; sync files=5, longest=0.002 s, average=0.001 s; distance=25 kB, estimate=32 kB; lsn=0/1DCC9A0, redo lsn=0/1DCC968
+2026-05-22 14:54:36.007 CST [26756] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 14:54:36.007 CST [26756] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 14:55:28.039 CST [26244] LOG:  checkpoint starting: time
+2026-05-22 14:55:28.617 CST [26244] LOG:  checkpoint complete: wrote 6 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.537 s, sync=0.020 s, total=0.578 s; sync files=5, longest=0.007 s, average=0.004 s; distance=28 kB, estimate=32 kB; lsn=0/1DD3A20, redo lsn=0/1DD39E8
+2026-05-22 15:11:50.481 CST [26756] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 15:11:50.481 CST [26756] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 15:15:28.639 CST [26244] LOG:  checkpoint starting: time
+2026-05-22 15:15:29.315 CST [26244] LOG:  checkpoint complete: wrote 7 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.654 s, sync=0.008 s, total=0.676 s; sync files=6, longest=0.003 s, average=0.002 s; distance=18 kB, estimate=30 kB; lsn=0/1DD85C0, redo lsn=0/1DD8588
+2026-05-22 17:53:25.144 CST [6856] LOG:  received fast shutdown request
+2026-05-22 17:53:25.147 CST [14872] ERROR:  canceling statement due to user request
+2026-05-22 17:53:25.182 CST [6856] LOG:  aborting any active transactions
+2026-05-22 17:53:25.183 CST [26756] FATAL:  terminating connection due to administrator command
+2026-05-22 17:53:25.183 CST [6856] LOG:  background worker "logical replication launcher" (PID 14872) exited with exit code 1
+2026-05-22 17:53:25.193 CST [26244] LOG:  shutting down
+2026-05-22 17:53:25.196 CST [26244] LOG:  checkpoint starting: shutdown immediate
+2026-05-22 17:53:25.215 CST [26244] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.022 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=27 kB; lsn=0/1DD8670, redo lsn=0/1DD8670
+2026-05-22 17:53:25.231 CST [6856] LOG:  database system is shut down
+2026-05-22 17:53:39.262 CST [15232] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-22 17:53:39.270 CST [15232] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-22 17:53:39.270 CST [15232] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-22 17:53:39.409 CST [28284] LOG:  database system was shut down at 2026-05-22 17:53:25 CST
+2026-05-22 17:53:39.432 CST [15232] LOG:  database system is ready to accept connections
+2026-05-22 17:56:59.441 CST [20668] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 17:56:59.441 CST [20668] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 17:57:09.072 CST [20668] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 17:57:09.072 CST [20668] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 17:57:33.049 CST [20668] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 17:57:33.049 CST [20668] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 17:57:46.817 CST [20668] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 17:57:46.817 CST [20668] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 17:58:08.726 CST [20668] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 17:58:08.726 CST [20668] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 17:58:08.735 CST [20668] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 17:58:08.735 CST [20668] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.preference_key = $2::VARCHAR AND user_profile_preference.is_active IS true
+2026-05-22 17:58:38.036 CST [20668] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 17:58:38.036 CST [20668] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 17:58:40.206 CST [28864] LOG:  checkpoint starting: time
+2026-05-22 17:58:41.282 CST [28864] LOG:  checkpoint complete: wrote 12 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=1.021 s, sync=0.024 s, total=1.079 s; sync files=7, longest=0.012 s, average=0.004 s; distance=48 kB, estimate=48 kB; lsn=0/1DE4798, redo lsn=0/1DE4760
+2026-05-22 17:59:23.051 CST [20668] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 17:59:23.051 CST [20668] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 17:59:43.480 CST [20668] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 17:59:43.480 CST [20668] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-22 18:03:40.291 CST [28864] LOG:  checkpoint starting: time
+2026-05-22 18:03:43.761 CST [28864] LOG:  checkpoint complete: wrote 32 buffers (0.2%); 0 WAL file(s) added, 0 removed, 0 recycled; write=3.401 s, sync=0.015 s, total=3.470 s; sync files=12, longest=0.003 s, average=0.002 s; distance=79 kB, estimate=79 kB; lsn=0/1DF83A8, redo lsn=0/1DF8370
+2026-05-22 23:55:11.361 CST [15232] LOG:  received fast shutdown request
+2026-05-22 23:55:11.362 CST [28984] ERROR:  canceling statement due to user request
+2026-05-22 23:55:11.364 CST [15232] LOG:  aborting any active transactions
+2026-05-22 23:55:11.365 CST [20668] FATAL:  terminating connection due to administrator command
+2026-05-22 23:55:11.374 CST [15232] LOG:  background worker "logical replication launcher" (PID 28984) exited with exit code 1
+2026-05-22 23:55:11.382 CST [28864] LOG:  shutting down
+2026-05-22 23:55:11.383 CST [28864] LOG:  checkpoint starting: shutdown immediate
+2026-05-22 23:55:11.408 CST [28864] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.026 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=71 kB; lsn=0/1DF8458, redo lsn=0/1DF8458
+2026-05-22 23:55:11.419 CST [15232] LOG:  database system is shut down
+2026-05-22 23:55:27.244 CST [25116] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-22 23:55:27.250 CST [25116] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-22 23:55:27.250 CST [25116] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-22 23:55:27.396 CST [30600] LOG:  database system was shut down at 2026-05-22 23:55:11 CST
+2026-05-22 23:55:27.424 CST [25116] LOG:  database system is ready to accept connections
+2026-05-22 23:57:15.529 CST [23764] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-22 23:57:15.529 CST [23764] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-23 00:00:27.402 CST [24880] LOG:  checkpoint starting: time
+2026-05-23 00:00:28.645 CST [24880] LOG:  checkpoint complete: wrote 14 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=1.206 s, sync=0.011 s, total=1.244 s; sync files=8, longest=0.003 s, average=0.002 s; distance=40 kB, estimate=40 kB; lsn=0/1E02630, redo lsn=0/1E025F8
+2026-05-23 00:03:08.996 CST [25116] LOG:  received fast shutdown request
+2026-05-23 00:03:08.997 CST [29432] ERROR:  canceling statement due to user request
+2026-05-23 00:03:08.999 CST [25116] LOG:  aborting any active transactions
+2026-05-23 00:03:09.000 CST [23764] FATAL:  terminating connection due to administrator command
+2026-05-23 00:03:09.009 CST [25116] LOG:  background worker "logical replication launcher" (PID 29432) exited with exit code 1
+2026-05-23 00:03:09.014 CST [24880] LOG:  shutting down
+2026-05-23 00:03:09.016 CST [24880] LOG:  checkpoint starting: shutdown immediate
+2026-05-23 00:03:09.036 CST [24880] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.002 s, sync=0.001 s, total=0.022 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=36 kB; lsn=0/1E026E0, redo lsn=0/1E026E0
+2026-05-23 00:03:09.055 CST [25116] LOG:  database system is shut down
+2026-05-23 00:03:20.191 CST [7856] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-23 00:03:20.204 CST [7856] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-23 00:03:20.204 CST [7856] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-23 00:03:20.321 CST [22844] LOG:  database system was shut down at 2026-05-23 00:03:09 CST
+2026-05-23 00:03:20.352 CST [7856] LOG:  database system is ready to accept connections
+2026-05-23 00:04:07.449 CST [32596] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-23 00:04:07.449 CST [32596] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-23 00:04:16.383 CST [32596] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-23 00:04:16.383 CST [32596] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-23 00:04:23.848 CST [32596] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-23 00:04:23.848 CST [32596] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-23 00:08:20.318 CST [28616] LOG:  checkpoint starting: time
+2026-05-23 00:08:20.354 CST [28616] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.012 s, sync=0.004 s, total=0.038 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/1E027C8, redo lsn=0/1E02790
+2026-05-23 00:13:28.805 CST [7856] LOG:  received fast shutdown request
+2026-05-23 00:13:28.806 CST [15344] ERROR:  canceling statement due to user request
+2026-05-23 00:13:28.808 CST [7856] LOG:  aborting any active transactions
+2026-05-23 00:13:28.809 CST [32596] FATAL:  terminating connection due to administrator command
+2026-05-23 00:13:28.817 CST [7856] LOG:  background worker "logical replication launcher" (PID 15344) exited with exit code 1
+2026-05-23 00:13:28.823 CST [28616] LOG:  shutting down
+2026-05-23 00:13:28.825 CST [28616] LOG:  checkpoint starting: shutdown immediate
+2026-05-23 00:13:28.844 CST [28616] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.002 s, sync=0.001 s, total=0.021 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=0 kB; lsn=0/1E02878, redo lsn=0/1E02878
+2026-05-23 00:13:28.856 CST [7856] LOG:  database system is shut down
+2026-05-23 00:13:41.273 CST [25380] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-23 00:13:41.285 CST [25380] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-23 00:13:41.285 CST [25380] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-23 00:13:41.431 CST [32900] LOG:  database system was shut down at 2026-05-23 00:13:28 CST
+2026-05-23 00:13:41.461 CST [25380] LOG:  database system is ready to accept connections
+2026-05-23 00:14:43.390 CST [23376] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-23 00:14:43.390 CST [23376] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-23 00:14:48.669 CST [23376] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-23 00:14:48.669 CST [23376] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-23 00:18:41.441 CST [25104] LOG:  checkpoint starting: time
+2026-05-23 00:18:41.476 CST [25104] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.009 s, sync=0.005 s, total=0.037 s; sync files=2, longest=0.003 s, average=0.003 s; distance=0 kB, estimate=0 kB; lsn=0/1E02960, redo lsn=0/1E02928
+2026-05-23 00:26:46.219 CST [25380] LOG:  received fast shutdown request
+2026-05-23 00:26:46.219 CST [33112] ERROR:  canceling statement due to user request
+2026-05-23 00:26:46.221 CST [25380] LOG:  aborting any active transactions
+2026-05-23 00:26:46.221 CST [23376] FATAL:  terminating connection due to administrator command
+2026-05-23 00:26:46.225 CST [25380] LOG:  background worker "logical replication launcher" (PID 33112) exited with exit code 1
+2026-05-23 00:26:46.228 CST [25104] LOG:  shutting down
+2026-05-23 00:26:46.229 CST [25104] LOG:  checkpoint starting: shutdown immediate
+2026-05-23 00:26:46.237 CST [25104] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.010 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=0 kB; lsn=0/1E02A10, redo lsn=0/1E02A10
+2026-05-23 00:26:46.244 CST [25380] LOG:  database system is shut down
+2026-05-23 00:27:07.123 CST [20832] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-23 00:27:07.129 CST [20832] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-23 00:27:07.130 CST [20832] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-23 00:27:07.223 CST [21348] LOG:  database system was shut down at 2026-05-23 00:26:46 CST
+2026-05-23 00:27:07.249 CST [20832] LOG:  database system is ready to accept connections
+2026-05-23 00:28:21.890 CST [10808] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-23 00:28:21.890 CST [10808] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-23 00:28:37.120 CST [10808] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-23 00:28:37.120 CST [10808] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-23 00:28:48.322 CST [10808] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-23 00:28:48.322 CST [10808] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-23 00:28:57.874 CST [10808] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-23 00:28:57.874 CST [10808] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-23 00:32:07.219 CST [12212] LOG:  checkpoint starting: time
+2026-05-23 00:32:07.239 CST [12212] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.007 s, sync=0.004 s, total=0.022 s; sync files=2, longest=0.003 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/1E02AF8, redo lsn=0/1E02AC0
+2026-05-23 00:41:55.936 CST [20832] LOG:  received fast shutdown request
+2026-05-23 00:41:55.938 CST [1636] ERROR:  canceling statement due to user request
+2026-05-23 00:41:55.939 CST [20832] LOG:  aborting any active transactions
+2026-05-23 00:41:55.940 CST [10808] FATAL:  terminating connection due to administrator command
+2026-05-23 00:41:55.945 CST [20832] LOG:  background worker "logical replication launcher" (PID 1636) exited with exit code 1
+2026-05-23 00:41:55.949 CST [12212] LOG:  shutting down
+2026-05-23 00:41:55.951 CST [12212] LOG:  checkpoint starting: shutdown immediate
+2026-05-23 00:41:55.971 CST [12212] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.022 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=0 kB; lsn=0/1E02BA8, redo lsn=0/1E02BA8
+2026-05-23 00:41:55.984 CST [20832] LOG:  database system is shut down
+2026-05-23 00:42:07.287 CST [32076] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-23 00:42:07.296 CST [32076] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-23 00:42:07.297 CST [32076] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-23 00:42:07.414 CST [8440] LOG:  database system was shut down at 2026-05-23 00:41:55 CST
+2026-05-23 00:42:07.439 CST [32076] LOG:  database system is ready to accept connections
+2026-05-23 00:44:17.681 CST [24736] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-23 00:44:17.681 CST [24736] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-23 00:44:53.833 CST [24736] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-23 00:44:53.833 CST [24736] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-23 00:44:53.845 CST [24736] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-23 00:44:53.845 CST [24736] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.preference_key = $2::VARCHAR AND user_profile_preference.is_active IS true
+2026-05-23 00:45:27.813 CST [24736] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-23 00:45:27.813 CST [24736] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-23 00:45:51.193 CST [24736] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-23 00:45:51.193 CST [24736] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-23 00:45:51.204 CST [24736] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-23 00:45:51.204 CST [24736] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.preference_key = $2::VARCHAR AND user_profile_preference.is_active IS true
+2026-05-23 00:46:00.601 CST [24736] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-23 00:46:00.601 CST [24736] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-23 00:46:00.613 CST [24736] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-23 00:46:00.613 CST [24736] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.preference_key = $2::VARCHAR AND user_profile_preference.is_active IS true
+2026-05-23 00:46:27.279 CST [24736] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-23 00:46:27.279 CST [24736] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.is_active IS true AND user_profile_preference.effective_from <= $2::TIMESTAMP WITH TIME ZONE AND (user_profile_preference.effective_to IS NULL OR user_profile_preference.effective_to > $3::TIMESTAMP WITH TIME ZONE) ORDER BY user_profile_preference.updated_at DESC
+2026-05-23 00:46:27.288 CST [24736] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-23 00:46:27.288 CST [24736] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.preference_key = $2::VARCHAR AND user_profile_preference.is_active IS true
+2026-05-23 00:47:07.416 CST [31104] LOG:  checkpoint starting: time
+2026-05-23 00:47:08.428 CST [31104] LOG:  checkpoint complete: wrote 12 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.981 s, sync=0.013 s, total=1.015 s; sync files=7, longest=0.007 s, average=0.002 s; distance=47 kB, estimate=47 kB; lsn=0/1E0EA38, redo lsn=0/1E0EA00
+2026-05-23 00:48:03.034 CST [32076] LOG:  server process (PID 24736) was terminated by exception 0x40010004
+2026-05-23 00:48:03.034 CST [32076] DETAIL:  Failed process was running: COMMIT
+2026-05-23 00:48:03.034 CST [32076] HINT:  See C include file "ntstatus.h" for a description of the hexadecimal value.
+2026-05-23 00:48:03.035 CST [32076] LOG:  terminating any other active server processes
+2026-05-23 00:48:03.043 CST [32076] LOG:  all server processes terminated; reinitializing
+2026-05-23 00:48:03.238 CST [32076] LOG:  startup process (PID 32524) was terminated by exception 0xC000026B
+2026-05-23 00:48:03.238 CST [32076] HINT:  See C include file "ntstatus.h" for a description of the hexadecimal value.
+2026-05-23 00:48:03.238 CST [32076] LOG:  aborting startup due to startup process failure
+2026-05-23 00:48:03.241 CST [32076] LOG:  database system is shut down

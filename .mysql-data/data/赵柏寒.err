@@ -1,0 +1,14 @@
+2026-05-14T01:46:58.070695Z 0 [Warning] [MY-010918] [Server] 'default_authentication_plugin' is deprecated and will be removed in a future release. Please use authentication_policy instead.
+2026-05-14T01:46:58.070722Z 0 [System] [MY-013169] [Server] D:\software\MySQL\bin\mysqld.exe (mysqld 8.0.45) initializing of server in progress as process 28220
+2026-05-14T01:46:58.139974Z 1 [System] [MY-013576] [InnoDB] InnoDB initialization has started.
+2026-05-14T01:46:58.660901Z 1 [System] [MY-013577] [InnoDB] InnoDB initialization has ended.
+2026-05-14T01:47:01.089524Z 6 [Warning] [MY-010453] [Server] root@localhost is created with an empty password ! Please consider switching off the --initialize-insecure option.
+2026-05-14T01:47:01.459637Z 6 [Warning] [MY-013360] [Server] Plugin mysql_native_password reported: ''mysql_native_password' is deprecated and will be removed in a future release. Please use caching_sha2_password instead'
+2026-05-14T01:47:17.173015Z 0 [Warning] [MY-010918] [Server] 'default_authentication_plugin' is deprecated and will be removed in a future release. Please use authentication_policy instead.
+2026-05-14T01:47:17.173040Z 0 [System] [MY-010116] [Server] D:\software\MySQL\bin\mysqld.exe (mysqld 8.0.45) starting as process 8744
+2026-05-14T01:47:17.217799Z 1 [System] [MY-013576] [InnoDB] InnoDB initialization has started.
+2026-05-14T01:47:17.698259Z 1 [System] [MY-013577] [InnoDB] InnoDB initialization has ended.
+2026-05-14T01:47:18.093741Z 0 [Warning] [MY-010068] [Server] CA certificate ca.pem is self signed.
+2026-05-14T01:47:18.097536Z 0 [System] [MY-013602] [Server] Channel mysql_main configured to support TLS. Encrypted connections are now supported for this channel.
+2026-05-14T01:47:18.169818Z 0 [System] [MY-011323] [Server] X Plugin ready for connections. Bind-address: '::' port: 33060
+2026-05-14T01:47:18.169941Z 0 [System] [MY-010931] [Server] D:\software\MySQL\bin\mysqld.exe: ready for connections. Version: '8.0.45'  socket: ''  port: 3306  MySQL Community Server - GPL.

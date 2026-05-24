@@ -1,0 +1,192 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from typing import Any, Dict, Mapping, Sequence
+
+from learning_agent_service.infrastructure.db.openai_client import OpenAIRuntime
+
+
+def _as_mapping(value: Any) -> Dict[str, Any]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    if hasattr(value, "model_dump"):
+        dumped = value.model_dump(mode="json")
+        if isinstance(dumped, Mapping):
+            return dict(dumped)
+    return {}
+
+
+def _as_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return list(value)
+    return [value]
+
+
+def _extract_response_text(response: Any) -> str:
+    output_text = getattr(response, "output_text", None)
+    if isinstance(output_text, str) and output_text.strip():
+        return output_text.strip()
+
+    def walk(value: Any) -> str | None:
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if isinstance(value, Mapping):
+            for key in ("output_text", "text", "content"):
+                candidate = value.get(key)
+                result = walk(candidate)
+                if result:
+                    return result
+            for child in value.values():
+                result = walk(child)
+                if result:
+                    return result
+        elif isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+            for child in value:
+                result = walk(child)
+                if result:
+                    return result
+        return None
+
+    if hasattr(response, "model_dump"):
+        dumped = response.model_dump()
+        text = walk(dumped)
+        if text:
+            return text
+    text = walk(response)
+    return text or ""
+
+
+def _extract_json_payload(text: str) -> Dict[str, Any]:
+    cleaned = (text or "").strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.removeprefix("```json").removeprefix("```").strip()
+        if cleaned.endswith("```"):
+            cleaned = cleaned[:-3].strip()
+    try:
+        payload = json.loads(cleaned)
+    except Exception:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                payload = json.loads(cleaned[start : end + 1])
+            except Exception:
+                return {}
+        else:
+            return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+@dataclass
+class LocalLifeModelAssistant:
+    runtime: OpenAIRuntime | None = None
+    model: str = ""
+    temperature: float = 0.0
+
+    @property
+    def enabled(self) -> bool:
+        return self.runtime is not None
+
+    def suggest_understanding(
+        self,
+        *,
+        raw_query: str,
+        client_context: Mapping[str, Any] | None = None,
+        session_context: Mapping[str, Any] | None = None,
+        heuristic_summary: Mapping[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        prompt = {
+            "stage": "understanding",
+            "raw_query": raw_query,
+            "client_context": _as_mapping(client_context),
+            "session_context": _as_mapping(session_context),
+            "heuristic_summary": _as_mapping(heuristic_summary),
+        }
+        system_text = (
+            "你是本地生活助手的理解层。"
+            "请返回严格 JSON，字段必须优先覆盖 normalized_query、semantic_query、keyword_query、intent、decision、confidence、requested_output_style、slots。"
+            "如果是本地生活问法，slots 里要尽量包含 domain、local_life_intent、tool_name、tool_input、city、category、shop_query、scene、preferences、avoid、companions、price、time、location。"
+            "当信息不足时，再补 clarification_question 和 clarification_options。"
+            "tool_input 必须是可直接传给工具的 JSON 对象，不要只给泛化描述。"
+            "尽量给出便于检索和路由的结构化结果。"
+        )
+        return self._call_json(system_text=system_text, prompt=prompt, max_output_tokens=320)
+
+    def suggest_response(
+        self,
+        *,
+        raw_query: str,
+        slots: Mapping[str, Any] | None = None,
+        ranked_candidates: Sequence[Mapping[str, Any]] | None = None,
+        evidence_claims: Sequence[Mapping[str, Any]] | None = None,
+        clarification: Mapping[str, Any] | None = None,
+        source_mode: str | None = None,
+        degraded_reason: str | None = None,
+        knowledge_freshness: Mapping[str, Any] | None = None,
+        route_decision: str | None = None,
+        route_reason: str | None = None,
+        safety_result: Mapping[str, Any] | None = None,
+        approval_required: bool = False,
+    ) -> Dict[str, Any]:
+        prompt = {
+            "stage": "response",
+            "raw_query": raw_query,
+            "slots": _as_mapping(slots),
+            "ranked_candidates": [
+                _as_mapping(item) for item in ranked_candidates or []
+            ],
+            "evidence_claims": [
+                _as_mapping(item) for item in evidence_claims or []
+            ],
+            "clarification": _as_mapping(clarification),
+            "source_mode": source_mode,
+            "degraded_reason": degraded_reason,
+            "knowledge_freshness": _as_mapping(knowledge_freshness),
+            "route_decision": route_decision,
+            "route_reason": route_reason,
+            "safety_result": _as_mapping(safety_result),
+            "approval_required": approval_required,
+        }
+        system_text = (
+            "你是本地生活助手的回复层。"
+            "请返回严格 JSON，字段可以包括 answer_text、suggested_replies、route_reason、source_mode、degraded_reason、knowledge_freshness。"
+            "如果信息不足，请用普通文本自然地说明缺少什么，而不要输出卡片或结构化澄清。"
+            "回复要简洁、可解释，并且与给定候选、证据和澄清提示保持一致。"
+        )
+        return self._call_json(system_text=system_text, prompt=prompt, max_output_tokens=360)
+
+    def _call_json(self, *, system_text: str, prompt: Mapping[str, Any], max_output_tokens: int) -> Dict[str, Any]:
+        if self.runtime is None:
+            return {}
+        client = self.runtime.client
+        responses = getattr(client, "responses", None)
+        if responses is None or not hasattr(responses, "create"):
+            return {}
+        try:
+            response = responses.create(
+                model=self.model or self.runtime.default_model,
+                input=[
+                    {
+                        "role": "system",
+                        "content": [
+                            {
+                                "type": "input_text",
+                                "text": system_text,
+                            }
+                        ],
+                    },
+                    {
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": json.dumps(prompt, ensure_ascii=False)}],
+                    },
+                ],
+                temperature=self.temperature,
+                max_output_tokens=max_output_tokens,
+            )
+        except Exception:
+            return {}
+        payload = _extract_json_payload(_extract_response_text(response))
+        return payload if isinstance(payload, dict) else {}

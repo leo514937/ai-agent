@@ -1,0 +1,567 @@
+from __future__ import annotations
+
+import logging
+import queue
+import time
+import threading
+from datetime import datetime, timezone
+from typing import Iterable, Optional, Protocol
+
+from ...domain.contracts import (
+    ChatTurnCommand,
+    PersistentSessionContext,
+    SseEnvelope,
+)
+from ...domain.errors import TerminalEvent, WorkflowErrorCode, build_error
+from ...domain.state import GraphState, build_initial_state, clone_graph_state
+from .services import WorkflowServices
+from .subgraphs import (
+    run_plan_execute_subgraph,
+    run_rag_subgraph,
+    run_tool_subgraph,
+    run_understand_turn,
+    route_after_rag,
+    route_after_understand,
+)
+
+_LOGGER = logging.getLogger(__name__)
+_STREAM_STOP = object()
+
+
+class WorkflowRunner(Protocol):
+    def run(
+        self,
+        command: ChatTurnCommand,
+        persistent_context: Optional[PersistentSessionContext] = None,
+    ) -> GraphState:
+        ...
+
+    def run_stream(
+        self,
+        command: ChatTurnCommand,
+        persistent_context: Optional[PersistentSessionContext] = None,
+    ) -> Iterable[SseEnvelope]:
+        ...
+
+
+class SequentialWorkflowRunner:
+    def __init__(self, services: WorkflowServices, workflow_version: str = "learn-agent/v1") -> None:
+        self.services = services
+        self.workflow_version = workflow_version
+
+    def run(
+        self,
+        command: ChatTurnCommand,
+        persistent_context: Optional[PersistentSessionContext] = None,
+    ) -> GraphState:
+        initial = build_initial_state(
+            command=command,
+            workflow_version=self.workflow_version,
+            persistent=persistent_context,
+        )
+        return self.run_state(initial)
+
+    def run_state(self, state: GraphState) -> GraphState:
+        state = clone_graph_state(state)
+        state = self._invoke_stage("load_context", self.services.load_context, state)
+        if self._is_terminal(state):
+            return self._finalize_terminal(state)
+        routing = state["turn"].routing_decision
+        if routing is not None and routing.blocked:
+            state = self._invoke_stage("compose_answer", self.services.compose_answer, state)
+            if self._is_terminal(state):
+                return self._finalize_terminal(state)
+            state = self._invoke_stage("persist_session", self.services.persist_session, state)
+            if self._is_terminal(state):
+                return self._finalize_terminal(state)
+            return self._finalize_terminal(state, default_terminal=TerminalEvent.FINAL)
+
+        state = self._invoke_stage(
+            "understand_turn",
+            lambda current: run_understand_turn(current, self.services.understand_turn),
+            state,
+        )
+        next_stage = route_after_understand(state)
+        if next_stage == "emit_final":
+            return self._finalize_terminal(state, default_terminal=TerminalEvent.FINAL)
+
+        if next_stage == "plan_execute_subgraph":
+            state = self._invoke_stage(
+                "plan_execute_subgraph",
+                lambda current: run_plan_execute_subgraph(current, self.services.plan_execute_subgraph),
+                state,
+            )
+            if self._is_terminal(state):
+                return self._finalize_terminal(state)
+        elif next_stage == "rag_subgraph":
+            state = self._invoke_stage(
+                "rag_subgraph",
+                lambda current: run_rag_subgraph(current, self.services.rag_subgraph),
+                state,
+            )
+            if self._is_terminal(state):
+                return self._finalize_terminal(state)
+            next_stage = route_after_rag(state)
+            if next_stage == "tool_subgraph":
+                state = self._invoke_stage(
+                    "tool_subgraph",
+                    lambda current: run_tool_subgraph(current, self.services.tool_subgraph),
+                    state,
+                )
+                if self._is_terminal(state):
+                    return self._finalize_terminal(state)
+        elif next_stage == "tool_subgraph":
+            state = self._invoke_stage(
+                "tool_subgraph",
+                lambda current: run_tool_subgraph(current, self.services.tool_subgraph),
+                state,
+            )
+            if self._is_terminal(state):
+                return self._finalize_terminal(state)
+
+        state = self._invoke_stage("compose_answer", self.services.compose_answer, state)
+        if self._is_terminal(state):
+            return self._finalize_terminal(state)
+
+        state = self._invoke_stage("persist_session", self.services.persist_session, state)
+        if self._is_terminal(state):
+            return self._finalize_terminal(state)
+
+        return self._finalize_terminal(state, default_terminal=TerminalEvent.FINAL)
+
+    def run_stream(
+        self,
+        command: ChatTurnCommand,
+        persistent_context: Optional[PersistentSessionContext] = None,
+    ) -> Iterable[SseEnvelope]:
+        state = build_initial_state(
+            command=command,
+            workflow_version=self.workflow_version,
+            persistent=persistent_context,
+        )
+        state = clone_graph_state(state)
+        emitted_count = 0
+
+        def drain_emitted_events():
+            nonlocal emitted_count
+            events = list(state["runtime"].emitted_events)
+            for event in events[emitted_count:]:
+                yield event
+            emitted_count = len(events)
+
+        # 1) load_context
+        self._emit_stage_event(state, "load_context_started", "load_context", "started", elapsed_ms=0.0)
+        state = yield from self._invoke_stage_with_heartbeat_streaming(
+            "load_context",
+            self.services.load_context,
+            state,
+            heartbeat_stage="load_context",
+        )
+        load_context_elapsed = float(state["runtime"].metrics.get("load_context_elapsed_ms", 0.0) or 0.0)
+        self._emit_stage_event(state, "load_context_done", "load_context", "done", elapsed_ms=load_context_elapsed)
+        yield from drain_emitted_events()
+        if self._is_terminal(state):
+            state = self._finalize_terminal(state)
+            yield from drain_emitted_events()
+            return
+        routing = state["turn"].routing_decision
+        if routing is not None and routing.blocked:
+            self._emit_stage_event(state, "answer_stream_started", "compose_answer", "started", elapsed_ms=0.0)
+            yield from drain_emitted_events()
+            gen = self._invoke_stage_streaming("compose_answer", self.services.compose_answer, state)
+            while True:
+                try:
+                    item = next(gen)
+                    if isinstance(item, SseEnvelope) and item.event_type == "answer_delta":
+                        item = item.model_copy(update={"event_type": "delta"})
+                    yield item
+                except StopIteration as e:
+                    state = e.value
+                    break
+            yield from drain_emitted_events()
+            if self._is_terminal(state):
+                state = self._finalize_terminal(state)
+                yield from drain_emitted_events()
+                return
+            state = yield from self._invoke_stage_with_heartbeat_streaming(
+                "persist_session",
+                self.services.persist_session,
+                state,
+                heartbeat_stage="persist_session",
+            )
+            yield from drain_emitted_events()
+            if self._is_terminal(state):
+                state = self._finalize_terminal(state)
+                yield from drain_emitted_events()
+                return
+            state = self._finalize_terminal(state, default_terminal=TerminalEvent.FINAL)
+            yield from drain_emitted_events()
+            return
+
+        # 2) intent_analysis
+        self._emit_stage_event(state, "intent_analysis_started", "intent_analysis", "started", elapsed_ms=0.0)
+        state = yield from self._invoke_stage_with_heartbeat_streaming(
+            "understand_turn",
+            lambda current: run_understand_turn(current, self.services.understand_turn),
+            state,
+            heartbeat_stage="intent_analysis",
+        )
+        intent_elapsed = float(state["runtime"].metrics.get("intent_analysis_elapsed_ms", 0.0) or 0.0)
+        self._emit_stage_event(state, "intent_analysis_done", "intent_analysis", "done", elapsed_ms=intent_elapsed)
+        yield from drain_emitted_events()
+        next_stage = route_after_understand(state)
+        if next_stage == "emit_final":
+            state = self._finalize_terminal(state, default_terminal=TerminalEvent.FINAL)
+            yield from drain_emitted_events()
+            return
+
+        # 3) 分支阶段
+        if next_stage == "plan_execute_subgraph":
+            state = yield from self._invoke_stage_with_heartbeat_streaming(
+                "plan_execute_subgraph",
+                lambda current: run_plan_execute_subgraph(current, self.services.plan_execute_subgraph),
+                state,
+                heartbeat_stage="plan_execute",
+            )
+            yield from drain_emitted_events()
+            if self._is_terminal(state):
+                state = self._finalize_terminal(state)
+                yield from drain_emitted_events()
+                return
+        elif next_stage == "rag_subgraph":
+            self._emit_stage_event(state, "retrieval_started", "retrieval", "started", elapsed_ms=0.0)
+            state = yield from self._invoke_stage_with_heartbeat_streaming(
+                "rag_subgraph",
+                lambda current: run_rag_subgraph(current, self.services.rag_subgraph),
+                state,
+                heartbeat_stage="retrieval",
+            )
+            yield from drain_emitted_events()
+            if self._is_terminal(state):
+                state = self._finalize_terminal(state)
+                yield from drain_emitted_events()
+                return
+            next_stage = route_after_rag(state)
+            if next_stage == "tool_subgraph":
+                state = yield from self._invoke_stage_with_heartbeat_streaming(
+                    "tool_subgraph",
+                    lambda current: run_tool_subgraph(current, self.services.tool_subgraph),
+                    state,
+                    heartbeat_stage="tool",
+                )
+                yield from drain_emitted_events()
+                if self._is_terminal(state):
+                    state = self._finalize_terminal(state)
+                    yield from drain_emitted_events()
+                    return
+        elif next_stage == "tool_subgraph":
+            state = yield from self._invoke_stage_with_heartbeat_streaming(
+                "tool_subgraph",
+                lambda current: run_tool_subgraph(current, self.services.tool_subgraph),
+                state,
+                heartbeat_stage="tool",
+            )
+            yield from drain_emitted_events()
+            if self._is_terminal(state):
+                state = self._finalize_terminal(state)
+                yield from drain_emitted_events()
+                return
+
+        # 4) answer stream
+        self._emit_stage_event(state, "answer_stream_started", "compose_answer", "started", elapsed_ms=0.0)
+        yield from drain_emitted_events()
+        gen = self._invoke_stage_streaming("compose_answer", self.services.compose_answer, state)
+        while True:
+            try:
+                item = next(gen)
+                if isinstance(item, SseEnvelope) and item.event_type == "answer_delta":
+                    item = item.model_copy(update={"event_type": "delta"})
+                yield item
+            except StopIteration as e:
+                state = e.value
+                break
+
+        yield from drain_emitted_events()
+        if self._is_terminal(state):
+            state = self._finalize_terminal(state)
+            yield from drain_emitted_events()
+            return
+
+        state = yield from self._invoke_stage_with_heartbeat_streaming(
+            "persist_session",
+            self.services.persist_session,
+            state,
+            heartbeat_stage="persist_session",
+        )
+        yield from drain_emitted_events()
+        if self._is_terminal(state):
+            state = self._finalize_terminal(state)
+            yield from drain_emitted_events()
+            return
+
+        state = self._finalize_terminal(state, default_terminal=TerminalEvent.FINAL)
+        yield from drain_emitted_events()
+
+    def _emit_stage_event(
+        self,
+        state: GraphState,
+        event_type: str,
+        stage: str,
+        status: str,
+        *,
+        elapsed_ms: float | None = None,
+        degrade_to: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        runtime = state["runtime"]
+        turn = state["turn"]
+        routing = getattr(turn, "routing_decision", None)
+        events = list(runtime.emitted_events)
+        payload = {
+            "stage": stage,
+            "status": status,
+            "elapsed_ms": elapsed_ms,
+            "degrade_to": degrade_to,
+            "error": error,
+            "metrics": {},
+            "current_stage": getattr(turn, "current_stage", stage),
+            "stage_status": getattr(turn, "stage_status", status),
+            "route_decision": routing.required_action if routing is not None else None,
+            "route_reason": routing.route_reason if routing is not None else None,
+            "message": None,
+            "details": {},
+        }
+        events.append(
+            SseEnvelope(
+                event_type=event_type,
+                trace_id=runtime.trace_id,
+                session_id=runtime.session_id,
+                turn_id=runtime.turn_id,
+                timestamp=datetime.now(timezone.utc),
+                workflow_version=runtime.workflow_version,
+                payload=payload,
+            )
+        )
+        state["runtime"] = runtime.model_copy(update={"emitted_events": events})
+        _LOGGER.info(
+            "workflow_stage_event trace_id=%s session_id=%s turn_id=%s stage=%s status=%s elapsed_ms=%s degrade_to=%s error=%s",
+            runtime.trace_id,
+            runtime.session_id,
+            runtime.turn_id,
+            stage,
+            status,
+            elapsed_ms,
+            degrade_to,
+            error or "",
+        )
+
+    def _invoke_stage_with_heartbeat(
+        self,
+        stage_name: str,
+        handler,
+        state: GraphState,
+        *,
+        heartbeat_stage: str,
+        heartbeat_interval_ms: int = 800,
+    ) -> GraphState:
+        result_holder: dict[str, GraphState] = {}
+        started_at = time.perf_counter()
+
+        def _run_stage() -> None:
+            result_holder["state"] = self._invoke_stage(stage_name, handler, state)
+
+        worker = threading.Thread(target=_run_stage, name=f"workflow-{stage_name}-sync", daemon=True)
+        worker.start()
+        while worker.is_alive():
+            worker.join(timeout=max(0.05, heartbeat_interval_ms / 1000.0))
+            if worker.is_alive():
+                elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+                self._emit_stage_event(
+                    state,
+                    "heartbeat",
+                    heartbeat_stage,
+                    "running",
+                    elapsed_ms=elapsed_ms,
+                )
+        worker.join()
+        return result_holder.get("state", state)
+
+    def _invoke_stage_with_heartbeat_streaming(
+        self,
+        stage_name: str,
+        handler,
+        state: GraphState,
+        *,
+        heartbeat_stage: str,
+        heartbeat_interval_ms: int = 800,
+    ):
+        result_holder: dict[str, GraphState] = {}
+        started_at = time.perf_counter()
+
+        def _run_stage() -> None:
+            result_holder["state"] = self._invoke_stage(stage_name, handler, state)
+
+        worker = threading.Thread(target=_run_stage, name=f"workflow-{stage_name}-sync", daemon=True)
+        worker.start()
+        while worker.is_alive():
+            worker.join(timeout=max(0.05, heartbeat_interval_ms / 1000.0))
+            if not worker.is_alive():
+                break
+            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+            runtime = state["runtime"]
+            turn = state["turn"]
+            routing = getattr(turn, "routing_decision", None)
+            payload = {
+                "stage": heartbeat_stage,
+                "status": "running",
+                "elapsed_ms": elapsed_ms,
+                "degrade_to": None,
+                "error": None,
+                "metrics": {},
+                "current_stage": getattr(turn, "current_stage", heartbeat_stage),
+                "stage_status": getattr(turn, "stage_status", "running"),
+                "route_decision": routing.required_action if routing is not None else None,
+                "route_reason": routing.route_reason if routing is not None else None,
+                "message": None,
+                "details": {},
+            }
+            _LOGGER.info(
+                "workflow_stage_event trace_id=%s session_id=%s turn_id=%s stage=%s status=%s elapsed_ms=%.1f degrade_to=%s error=%s",
+                runtime.trace_id,
+                runtime.session_id,
+                runtime.turn_id,
+                heartbeat_stage,
+                "heartbeat",
+                elapsed_ms,
+                None,
+                "",
+            )
+            yield SseEnvelope(
+                event_type="heartbeat",
+                trace_id=runtime.trace_id,
+                session_id=runtime.session_id,
+                turn_id=runtime.turn_id,
+                timestamp=datetime.now(timezone.utc),
+                workflow_version=runtime.workflow_version,
+                payload=payload,
+            )
+        worker.join()
+        return result_holder.get("state", state)
+
+    def _invoke_stage(self, stage_name: str, handler, state: GraphState) -> GraphState:
+        metric_stage = {
+            "understand_turn": "intent_analysis",
+            "rag_subgraph": "retrieval",
+        }.get(stage_name, stage_name)
+        started_at = time.perf_counter()
+        try:
+            result = handler(state)
+        except Exception as exc:  # pragma: no cover - defensive safeguard
+            elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+            runtime = state["runtime"]
+            _LOGGER.exception(
+                "workflow_stage_event trace_id=%s session_id=%s turn_id=%s stage=%s status=failed elapsed_ms=%.1f error=%s",
+                runtime.trace_id,
+                runtime.session_id,
+                runtime.turn_id,
+                metric_stage,
+                elapsed_ms,
+                str(exc),
+            )
+            return self._record_unexpected_error(state, stage_name, exc)
+        elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+        runtime = result["runtime"]
+        metrics = dict(runtime.metrics)
+        stage_timings = dict(metrics.get("stage_elapsed_ms", {}) or {})
+        stage_timings[metric_stage] = round(elapsed_ms, 3)
+        metrics["stage_elapsed_ms"] = stage_timings
+        metrics[f"{metric_stage}_elapsed_ms"] = round(elapsed_ms, 3)
+        if stage_name == "understand_turn":
+            metrics["understand_bundle_ms"] = round(elapsed_ms, 3)
+        elif stage_name == "rag_subgraph":
+            metrics["retrieval_bundle_ms"] = round(elapsed_ms, 3)
+        result["runtime"] = runtime.model_copy(update={"metrics": metrics})
+        _LOGGER.info(
+            "workflow_stage_event trace_id=%s session_id=%s turn_id=%s stage=%s status=done elapsed_ms=%.1f degrade_to=%s error=",
+            runtime.trace_id,
+            runtime.session_id,
+            runtime.turn_id,
+            metric_stage,
+            elapsed_ms,
+            runtime.degrade_to,
+        )
+        return result
+
+    def _invoke_stage_streaming(self, stage_name: str, handler, state: GraphState):
+        event_queue: "queue.Queue[object]" = queue.Queue()
+        runtime = state["runtime"]
+        runtime_extra = dict(runtime.extra)
+        runtime_extra["stream_event_sink"] = event_queue
+        state["runtime"] = runtime.model_copy(update={"extra": runtime_extra})
+        started_at = time.perf_counter()
+
+        result_holder: dict[str, GraphState] = {}
+
+        def _run_stage() -> None:
+            try:
+                result_holder["state"] = self._invoke_stage(stage_name, handler, state)
+            finally:
+                event_queue.put(_STREAM_STOP)
+
+        worker = threading.Thread(target=_run_stage, name=f"workflow-{stage_name}-stream", daemon=True)
+        worker.start()
+
+        while True:
+            try:
+                item = event_queue.get(timeout=0.8)
+            except queue.Empty:
+                elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+                self._emit_stage_event(state, "heartbeat", stage_name, "running", elapsed_ms=elapsed_ms)
+                continue
+            if item is _STREAM_STOP:
+                break
+            if isinstance(item, SseEnvelope):
+                if item.event_type == "answer_delta":
+                    item = item.model_copy(update={"event_type": "delta"})
+                yield item
+
+        worker.join()
+        state = result_holder.get("state", state)
+        runtime = state["runtime"]
+        runtime_extra = dict(runtime.extra)
+        runtime_extra.pop("stream_event_sink", None)
+        state["runtime"] = runtime.model_copy(update={"extra": runtime_extra})
+        return state
+
+    def _record_unexpected_error(self, state: GraphState, stage_name: str, exc: Exception) -> GraphState:
+        runtime = state["runtime"]
+        errors = list(runtime.errors)
+        errors.append(
+            build_error(
+                WorkflowErrorCode.INTERNAL_ERROR,
+                stage=stage_name,
+                message=str(exc),
+                is_terminal=True,
+            )
+        )
+        state["runtime"] = runtime.model_copy(update={"errors": errors, "terminal_event": TerminalEvent.ERROR})
+        return state
+
+    @staticmethod
+    def _is_terminal(state: GraphState) -> bool:
+        return state["runtime"].terminal_event == TerminalEvent.ERROR
+
+    def _finalize_terminal(
+        self,
+        state: GraphState,
+        default_terminal: Optional[TerminalEvent] = None,
+    ) -> GraphState:
+        runtime = state["runtime"]
+        if runtime.terminal_event is None and default_terminal is not None:
+            state["runtime"] = runtime.model_copy(update={"terminal_event": default_terminal})
+
+        state = self._invoke_stage("emit_final", self.services.emit_final, state)
+        runtime = state["runtime"]
+        if runtime.terminal_event is None:
+            state["runtime"] = runtime.model_copy(update={"terminal_event": default_terminal or TerminalEvent.FINAL})
+        return state

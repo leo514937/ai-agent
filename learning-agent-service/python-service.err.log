@@ -1,0 +1,10 @@
+D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:38: UserWarning: Api key is used with an insecure connection.
+  client = QdrantClient(
+{"ts": "2026-05-17T15:59:53.857054+00:00", "level": "INFO", "logger": "httpx", "message": "HTTP Request: POST http://localhost:6333/collections/knowledge_chunks/points/scroll \"HTTP/1.1 502 Bad Gateway\""}
+INFO:     Started server process [32088]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+{"ts": "2026-05-17T15:59:54.596867+00:00", "level": "INFO", "logger": "httpx", "message": "HTTP Request: GET http://localhost:6333 \"HTTP/1.1 502 Bad Gateway\""}
+C:\Users\14011\AppData\Local\Programs\Python\Python311\Lib\site-packages\qdrant_client\qdrant_remote.py:273: UserWarning: Failed to obtain server version. Unable to check client-server compatibility. Set check_compatibility=False to skip version check.
+  show_warning(
