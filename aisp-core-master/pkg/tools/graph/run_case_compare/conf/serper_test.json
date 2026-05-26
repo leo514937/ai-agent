@@ -1,0 +1,128 @@
+[
+  {
+    "exp_name": "110b-zhihu召回",
+    "config_map": {
+      "KbBingRecall": {
+        "json_config": "{\"OrderGroup\":1,\"RecallSize\":8}",
+        "base_config_skip": "true"
+      },
+      "KbSerperRecall": {
+        "json_config": "{\"OrderGroup\":4,\"RecallSize\":8}",
+        "base_config_skip": "true"
+      },
+      "KbOutSiteRumRecall": {
+        "base_config_skip": "true"
+      },
+      "KbOutSiteRuceneRecall": {
+        "base_config_skip": "true"
+      }
+    }
+  },
+  {
+    "exp_name": "110b-zhihu-bing召回",
+    "config_map": {
+      "KbBingRecall": {
+        "json_config": "{\"OrderGroup\":1,\"RecallSize\":8}",
+        "base_config_skip": "false"
+      },
+      "KbSerperRecall": {
+        "json_config": "{\"OrderGroup\":4,\"RecallSize\":8}",
+        "base_config_skip": "true"
+      },
+      "KbOutSiteRumRecall": {
+        "base_config_skip": "true"
+      },
+      "KbOutSiteRuceneRecall": {
+        "base_config_skip": "true"
+      }
+    }
+  },
+  {
+    "exp_name": "110b-zhihu-serper召回",
+    "config_map": {
+      "KbBingRecall": {
+        "json_config": "{\"OrderGroup\":1,\"RecallSize\":8}",
+        "base_config_skip": "true"
+      },
+      "KbSerperRecall": {
+        "json_config": "{\"OrderGroup\":4,\"RecallSize\":8}",
+        "base_config_skip": "false"
+      },
+      "KbOutSiteRumRecall": {
+        "base_config_skip": "true"
+      },
+      "KbOutSiteRuceneRecall": {
+        "base_config_skip": "true"
+      }
+    }
+  },
+  {
+    "exp_name": "r1-zhihu召回",
+    "config_map": {
+      "KbBingRecall": {
+        "json_config": "{\"OrderGroup\":1,\"RecallSize\":8}",
+        "base_config_skip": "true"
+      },
+      "KbSerperRecall": {
+        "json_config": "{\"OrderGroup\":4,\"RecallSize\":8}",
+        "base_config_skip": "true"
+      },
+      "KbOutSiteRumRecall": {
+        "base_config_skip": "true"
+      },
+      "KbOutSiteRuceneRecall": {
+        "base_config_skip": "true"
+      },
+      "StreamChatLogic": {
+        "json_config": "{\"model_name\":\"ds-r1-full-awq-online\", \"is_references\": false, \"cite_max_count\": 5, \"max_tokens\": 8192, \"temperature\": 0.7, \"top_p\": 0.8, \"stage\": 3, \"security_config\": {\"source_id\": 90031, \"chat_mapping_type\": 7, \"scene\": \"ZHIDA_TAB\"}}",
+        "chat_message_json_config": "{\"system_prompt_id\": \"zhida_summary_system_reasoning\",\"msg_config_arr\": [{\"handler_type\": \"chat_history\", \"history_limit\":6}, {\"handler_type\": \"knowledge_context\", \"prompt_id\": \"zhida_summary_user_reasoning\", \"prompt_tag\": \"\", \"default_prompt_template\": \"\"}]}"
+      }
+    }
+  },
+  {
+    "exp_name": "r1-zhihu-bing召回",
+    "config_map": {
+      "KbBingRecall": {
+        "json_config": "{\"OrderGroup\":1,\"RecallSize\":8}",
+        "base_config_skip": "false"
+      },
+      "KbSerperRecall": {
+        "json_config": "{\"OrderGroup\":4,\"RecallSize\":8}",
+        "base_config_skip": "true"
+      },
+      "KbOutSiteRumRecall": {
+        "base_config_skip": "true"
+      },
+      "KbOutSiteRuceneRecall": {
+        "base_config_skip": "true"
+      },
+      "StreamChatLogic": {
+        "json_config": "{\"model_name\":\"ds-r1-full-awq-online\", \"is_references\": false, \"cite_max_count\": 5, \"max_tokens\": 8192, \"temperature\": 0.7, \"top_p\": 0.8, \"stage\": 3, \"security_config\": {\"source_id\": 90031, \"chat_mapping_type\": 7, \"scene\": \"ZHIDA_TAB\"}}",
+        "chat_message_json_config": "{\"system_prompt_id\": \"zhida_summary_system_reasoning\",\"msg_config_arr\": [{\"handler_type\": \"chat_history\", \"history_limit\":6}, {\"handler_type\": \"knowledge_context\", \"prompt_id\": \"zhida_summary_user_reasoning\", \"prompt_tag\": \"\", \"default_prompt_template\": \"\"}]}"
+      }
+    }
+  },
+  {
+    "exp_name": "r1-zhihu-serper召回",
+    "config_map": {
+      "KbBingRecall": {
+        "json_config": "{\"OrderGroup\":1,\"RecallSize\":8}",
+        "base_config_skip": "true"
+      },
+      "KbSerperRecall": {
+        "json_config": "{\"OrderGroup\":3,\"RecallSize\":8}",
+        "base_config_skip": "false"
+      },
+      "KbOutSiteRumRecall": {
+        "base_config_skip": "true"
+      },
+      "KbOutSiteRuceneRecall": {
+        "base_config_skip": "true"
+      },
+      "StreamChatLogic": {
+        "json_config": "{\"model_name\":\"ds-r1-full-awq-online\", \"is_references\": false, \"cite_max_count\": 5, \"max_tokens\": 8192, \"temperature\": 0.7, \"top_p\": 0.8, \"stage\": 3, \"security_config\": {\"source_id\": 90031, \"chat_mapping_type\": 7, \"scene\": \"ZHIDA_TAB\"}}",
+        "chat_message_json_config": "{\"system_prompt_id\": \"zhida_summary_system_reasoning\",\"msg_config_arr\": [{\"handler_type\": \"chat_history\", \"history_limit\":6}, {\"handler_type\": \"knowledge_context\", \"prompt_id\": \"zhida_summary_user_reasoning\", \"prompt_tag\": \"\", \"default_prompt_template\": \"\"}]}"
+      }
+    }
+  }
+]

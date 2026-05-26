@@ -416,6 +416,7 @@ def build_response_bundle(
     page: str | None,
     current_topic: str | None,
     selected_shop_id: int | None,
+    current_shop: str | None = None,
     source: str = "local-life-agent",
     fallback: bool = False,
     mode: str = "recommend",
@@ -439,6 +440,7 @@ def build_response_bundle(
     transaction_draft = dict(transaction_draft or {})
     safety_result = dict(safety_result or {})
     model_hint = _as_mapping(model_hint)
+    current_shop = _clean_text(current_shop) or _clean_text(model_hint.get("current_shop"))
     source_mode = source_mode or _clean_text(model_hint.get("source_mode"))
     degraded_reason = degraded_reason or _clean_text(model_hint.get("degraded_reason"))
     route_reason = route_reason or _clean_text(model_hint.get("route_reason"))
@@ -654,6 +656,10 @@ def build_response_bundle(
         metrics=metrics,
         context={
             "raw_query": raw_query,
+            "current_topic": current_topic,
+            "current_shop": current_shop,
+            "selected_shop_id": selected_shop_id,
+            "selected_shop_name": current_shop or (ranked_candidates[0].name if ranked_candidates else None),
             "slots": slots.model_dump(mode="json"),
             "client_context": client_context,
             "approval_request": approval_request,

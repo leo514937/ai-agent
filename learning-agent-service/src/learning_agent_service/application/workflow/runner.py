@@ -5,10 +5,11 @@ import queue
 import time
 import threading
 from datetime import datetime, timezone
-from typing import Iterable, Optional, Protocol
+from typing import Any, Iterable, Mapping, Optional, Protocol
 
 from ...domain.contracts import (
     ChatTurnCommand,
+    ClarificationCard,
     PersistentSessionContext,
     SseEnvelope,
 )
@@ -23,9 +24,29 @@ from .subgraphs import (
     route_after_rag,
     route_after_understand,
 )
+from ..routing import _looks_like_unserviceable_location, _pending_clarification_matches_query
 
 _LOGGER = logging.getLogger(__name__)
 _STREAM_STOP = object()
+_PHASE5_TRACE_KEY = "phase5_trace"
+
+
+def _update_phase5_trace(state: GraphState, **updates: Any) -> GraphState:
+    turn = state["turn"]
+    runtime = state["runtime"]
+
+    turn_extra = dict(getattr(turn, "extra", {}) or {})
+    phase5_trace = dict(turn_extra.get(_PHASE5_TRACE_KEY, {}) or {})
+    phase5_trace.update(updates)
+    turn_extra[_PHASE5_TRACE_KEY] = phase5_trace
+    state["turn"] = turn.model_copy(update={"extra": turn_extra})
+
+    runtime_metrics = dict(getattr(runtime, "metrics", {}) or {})
+    runtime_phase5_trace = dict(runtime_metrics.get(_PHASE5_TRACE_KEY, {}) or {})
+    runtime_phase5_trace.update(updates)
+    runtime_metrics[_PHASE5_TRACE_KEY] = runtime_phase5_trace
+    state["runtime"] = runtime.model_copy(update={"metrics": runtime_metrics})
+    return state
 
 
 class WorkflowRunner(Protocol):
@@ -45,9 +66,16 @@ class WorkflowRunner(Protocol):
 
 
 class SequentialWorkflowRunner:
-    def __init__(self, services: WorkflowServices, workflow_version: str = "learn-agent/v1") -> None:
+    def __init__(
+        self,
+        services: WorkflowServices,
+        workflow_version: str = "learn-agent/v1",
+        *,
+        runner_kind: str = "sequential",
+    ) -> None:
         self.services = services
         self.workflow_version = workflow_version
+        self.runner_kind = runner_kind
 
     def run(
         self,
@@ -59,17 +87,50 @@ class SequentialWorkflowRunner:
             workflow_version=self.workflow_version,
             persistent=persistent_context,
         )
+        initial = self._annotate_runner_context(initial)
         return self.run_state(initial)
 
     def run_state(self, state: GraphState) -> GraphState:
         state = clone_graph_state(state)
+        state = self._annotate_runner_context(state)
         state = self._invoke_stage("load_context", self.services.load_context, state)
         if self._is_terminal(state):
             return self._finalize_terminal(state)
+        if self._should_consume_pending_clarification(state):
+            state = self._invoke_stage("consume_pending_clarification", self.services.consume_pending_clarification, state)
+            if self._is_terminal(state):
+                return self._finalize_terminal(state)
         routing = state["turn"].routing_decision
+        if self._is_conversation_recap_route(state):
+            state = self._invoke_stage(
+                "conversation_recap_direct_response",
+                self.services.conversation_recap_direct_response,
+                state,
+            )
+            if self._is_terminal(state):
+                return self._finalize_terminal(state)
+            state = self._invoke_stage("compose_answer", self.services.compose_answer, state)
+            state = self._materialize_pending_clarification_from_answer(state)
+            if self._is_terminal(state):
+                persistent = state["persistent"]
+                if getattr(persistent, "pending_clarification", None) is not None:
+                    state = self._invoke_stage("persist_session", self.services.persist_session, state)
+                    if self._is_terminal(state):
+                        return self._finalize_terminal(state)
+                return self._finalize_terminal(state)
+            state = self._invoke_stage("persist_session", self.services.persist_session, state)
+            if self._is_terminal(state):
+                return self._finalize_terminal(state)
+            return self._finalize_terminal(state, default_terminal=TerminalEvent.FINAL)
         if routing is not None and routing.blocked:
             state = self._invoke_stage("compose_answer", self.services.compose_answer, state)
+            state = self._materialize_pending_clarification_from_answer(state)
             if self._is_terminal(state):
+                persistent = state["persistent"]
+                if getattr(persistent, "pending_clarification", None) is not None:
+                    state = self._invoke_stage("persist_session", self.services.persist_session, state)
+                    if self._is_terminal(state):
+                        return self._finalize_terminal(state)
                 return self._finalize_terminal(state)
             state = self._invoke_stage("persist_session", self.services.persist_session, state)
             if self._is_terminal(state):
@@ -83,6 +144,11 @@ class SequentialWorkflowRunner:
         )
         next_stage = route_after_understand(state)
         if next_stage == "emit_final":
+            persistent = state["persistent"]
+            if getattr(persistent, "pending_clarification", None) is not None:
+                state = self._invoke_stage("persist_session", self.services.persist_session, state)
+                if self._is_terminal(state):
+                    return self._finalize_terminal(state)
             return self._finalize_terminal(state, default_terminal=TerminalEvent.FINAL)
 
         if next_stage == "plan_execute_subgraph":
@@ -120,7 +186,13 @@ class SequentialWorkflowRunner:
                 return self._finalize_terminal(state)
 
         state = self._invoke_stage("compose_answer", self.services.compose_answer, state)
+        state = self._materialize_pending_clarification_from_answer(state)
         if self._is_terminal(state):
+            persistent = state["persistent"]
+            if getattr(persistent, "pending_clarification", None) is not None:
+                state = self._invoke_stage("persist_session", self.services.persist_session, state)
+                if self._is_terminal(state):
+                    return self._finalize_terminal(state)
             return self._finalize_terminal(state)
 
         state = self._invoke_stage("persist_session", self.services.persist_session, state)
@@ -139,6 +211,7 @@ class SequentialWorkflowRunner:
             workflow_version=self.workflow_version,
             persistent=persistent_context,
         )
+        state = self._annotate_runner_context(state)
         state = clone_graph_state(state)
         emitted_count = 0
 
@@ -164,7 +237,115 @@ class SequentialWorkflowRunner:
             state = self._finalize_terminal(state)
             yield from drain_emitted_events()
             return
+        if self._should_consume_pending_clarification(state):
+            self._emit_stage_event(
+                state,
+                "heartbeat",
+                "consume_pending_clarification",
+                "started",
+                elapsed_ms=0.0,
+            )
+            yield from drain_emitted_events()
+            state = yield from self._invoke_stage_with_heartbeat_streaming(
+                "consume_pending_clarification",
+                self.services.consume_pending_clarification,
+                state,
+                heartbeat_stage="consume_pending_clarification",
+            )
+            consume_elapsed = float(state["runtime"].metrics.get("consume_pending_clarification_elapsed_ms", 0.0) or 0.0)
+            self._emit_stage_event(
+                state,
+                "heartbeat",
+                "consume_pending_clarification",
+                "done",
+                elapsed_ms=consume_elapsed,
+            )
+            yield from drain_emitted_events()
+            if self._is_terminal(state):
+                state = self._finalize_terminal(state)
+                yield from drain_emitted_events()
+                return
         routing = state["turn"].routing_decision
+        if self._is_conversation_recap_route(state):
+            self._emit_stage_event(
+                state,
+                "heartbeat",
+                "conversation_recap_direct_response",
+                "started",
+                elapsed_ms=0.0,
+            )
+            yield from drain_emitted_events()
+            state = yield from self._invoke_stage_with_heartbeat_streaming(
+                "conversation_recap_direct_response",
+                self.services.conversation_recap_direct_response,
+                state,
+                heartbeat_stage="conversation_recap_direct_response",
+            )
+            recap_elapsed = float(
+                state["runtime"].metrics.get("conversation_recap_direct_response_elapsed_ms", 0.0) or 0.0
+            )
+            self._emit_stage_event(
+                state,
+                "heartbeat",
+                "conversation_recap_direct_response",
+                "done",
+                elapsed_ms=recap_elapsed,
+            )
+            yield from drain_emitted_events()
+            if self._is_terminal(state):
+                state = self._finalize_terminal(state)
+                yield from drain_emitted_events()
+                return
+            self._emit_stage_event(state, "answer_stream_started", "compose_answer", "started", elapsed_ms=0.0)
+            yield from drain_emitted_events()
+            gen = self._invoke_stage_streaming("compose_answer", self.services.compose_answer, state)
+            while True:
+                try:
+                    item = next(gen)
+                    if isinstance(item, SseEnvelope) and item.event_type == "answer_delta":
+                        item = item.model_copy(update={"event_type": "delta"})
+                    yield item
+                except StopIteration as e:
+                    state = e.value
+                    break
+
+            yield from drain_emitted_events()
+            state = self._materialize_pending_clarification_from_answer(state)
+            if self._is_terminal(state):
+                persistent = state["persistent"]
+                if getattr(persistent, "pending_clarification", None) is not None:
+                    state = self._mark_streaming_fast_persist(state)
+                    state = yield from self._invoke_stage_with_heartbeat_streaming(
+                        "persist_session",
+                        self.services.persist_session,
+                        state,
+                        heartbeat_stage="persist_session",
+                    )
+                    yield from drain_emitted_events()
+                    if self._is_terminal(state):
+                        state = self._finalize_terminal(state)
+                        yield from drain_emitted_events()
+                        return
+                state = self._finalize_terminal(state)
+                yield from drain_emitted_events()
+                return
+
+            state = self._mark_streaming_fast_persist(state)
+            state = yield from self._invoke_stage_with_heartbeat_streaming(
+                "persist_session",
+                self.services.persist_session,
+                state,
+                heartbeat_stage="persist_session",
+            )
+            yield from drain_emitted_events()
+            if self._is_terminal(state):
+                state = self._finalize_terminal(state)
+                yield from drain_emitted_events()
+                return
+
+            state = self._finalize_terminal(state, default_terminal=TerminalEvent.FINAL)
+            yield from drain_emitted_events()
+            return
         if routing is not None and routing.blocked:
             self._emit_stage_event(state, "answer_stream_started", "compose_answer", "started", elapsed_ms=0.0)
             yield from drain_emitted_events()
@@ -179,10 +360,26 @@ class SequentialWorkflowRunner:
                     state = e.value
                     break
             yield from drain_emitted_events()
+            state = self._materialize_pending_clarification_from_answer(state)
             if self._is_terminal(state):
+                persistent = state["persistent"]
+                if getattr(persistent, "pending_clarification", None) is not None:
+                    state = self._mark_streaming_fast_persist(state)
+                    state = yield from self._invoke_stage_with_heartbeat_streaming(
+                        "persist_session",
+                        self.services.persist_session,
+                        state,
+                        heartbeat_stage="persist_session",
+                    )
+                    yield from drain_emitted_events()
+                    if self._is_terminal(state):
+                        state = self._finalize_terminal(state)
+                        yield from drain_emitted_events()
+                        return
                 state = self._finalize_terminal(state)
                 yield from drain_emitted_events()
                 return
+            state = self._mark_streaming_fast_persist(state)
             state = yield from self._invoke_stage_with_heartbeat_streaming(
                 "persist_session",
                 self.services.persist_session,
@@ -211,6 +408,20 @@ class SequentialWorkflowRunner:
         yield from drain_emitted_events()
         next_stage = route_after_understand(state)
         if next_stage == "emit_final":
+            persistent = state["persistent"]
+            if getattr(persistent, "pending_clarification", None) is not None:
+                state = self._mark_streaming_fast_persist(state)
+                state = yield from self._invoke_stage_with_heartbeat_streaming(
+                    "persist_session",
+                    self.services.persist_session,
+                    state,
+                    heartbeat_stage="persist_session",
+                )
+                yield from drain_emitted_events()
+                if self._is_terminal(state):
+                    state = self._finalize_terminal(state)
+                    yield from drain_emitted_events()
+                    return
             state = self._finalize_terminal(state, default_terminal=TerminalEvent.FINAL)
             yield from drain_emitted_events()
             return
@@ -282,10 +493,26 @@ class SequentialWorkflowRunner:
                 break
 
         yield from drain_emitted_events()
+        state = self._materialize_pending_clarification_from_answer(state)
         if self._is_terminal(state):
-            state = self._finalize_terminal(state)
-            yield from drain_emitted_events()
-            return
+            persistent = state["persistent"]
+            if getattr(persistent, "pending_clarification", None) is not None:
+                state = self._mark_streaming_fast_persist(state)
+                state = yield from self._invoke_stage_with_heartbeat_streaming(
+                    "persist_session",
+                    self.services.persist_session,
+                    state,
+                    heartbeat_stage="persist_session",
+                )
+                yield from drain_emitted_events()
+                if self._is_terminal(state):
+                    state = self._finalize_terminal(state)
+                    yield from drain_emitted_events()
+                    return
+                state = self._finalize_terminal(state)
+                yield from drain_emitted_events()
+                return
+            state = self._mark_streaming_fast_persist(state)
 
         state = yield from self._invoke_stage_with_heartbeat_streaming(
             "persist_session",
@@ -301,6 +528,73 @@ class SequentialWorkflowRunner:
 
         state = self._finalize_terminal(state, default_terminal=TerminalEvent.FINAL)
         yield from drain_emitted_events()
+
+    @staticmethod
+    def _materialize_pending_clarification_from_answer(state: GraphState) -> GraphState:
+        persistent = state["persistent"]
+        if getattr(persistent, "pending_clarification", None) is not None:
+            return state
+        turn = state["turn"]
+        answer_text = str(getattr(turn, "final_answer", "") or "").strip()
+        if not answer_text:
+            return state
+        if "?" not in answer_text and "？" not in answer_text:
+            return state
+        if not any(token in answer_text for token in ("城市", "位置", "附近", "场景", "哪类", "哪里", "哪种")):
+            return state
+
+        ambiguity_type = "location" if any(token in answer_text for token in ("城市", "位置", "附近")) else "general"
+        clarification_result = {
+            "original_query": str(turn.raw_query or "").strip(),
+            "original_intent": "local_life_recommend",
+            "original_route": "rag_retrieval",
+            "question": answer_text,
+            "ambiguity_type": ambiguity_type,
+        }
+        pending_clarification = ClarificationCard(
+            card_id=f"{state['runtime'].session_id}:{state['runtime'].turn_id}:clarification",
+            question=answer_text,
+            options=[],
+            ambiguity_type=ambiguity_type,
+            source_turn_id=state["runtime"].turn_id,
+            expires_at=None,
+        )
+        state["persistent"] = persistent.model_copy(
+            update={
+                "clarification_result": clarification_result,
+                "pending_clarification": pending_clarification,
+            }
+        )
+        turn_extra = dict(turn.extra)
+        turn_extra["clarification_result"] = clarification_result
+        turn_extra["pending_clarification"] = pending_clarification.model_dump(mode="json")
+        state["turn"] = turn.model_copy(update={"extra": turn_extra})
+        return state
+
+    @staticmethod
+    def _mark_streaming_fast_persist(state: GraphState) -> GraphState:
+        runtime = state["runtime"]
+        turn = state["turn"]
+        persistent = state["persistent"]
+        runtime_extra = dict(getattr(runtime, "extra", {}) or {})
+        runtime_extra["streaming_fast_persist"] = True
+        state["runtime"] = runtime.model_copy(update={"extra": runtime_extra})
+        turn_extra = dict(getattr(turn, "extra", {}) or {})
+        turn_extra["streaming_fast_persist"] = True
+        state["turn"] = turn.model_copy(update={"extra": turn_extra})
+        persistent_extra = dict(getattr(persistent, "extra", {}) or {})
+        persistent_extra["streaming_fast_persist"] = True
+        state["persistent"] = persistent.model_copy(update={"extra": persistent_extra})
+        return state
+
+    def _annotate_runner_context(self, state: GraphState) -> GraphState:
+        return _update_phase5_trace(
+            state,
+            runner_kind=self.runner_kind,
+            runner_backend="sequential",
+            runner_class=self.__class__.__name__,
+            compare_ready=True,
+        )
 
     def _emit_stage_event(
         self,
@@ -532,6 +826,35 @@ class SequentialWorkflowRunner:
         runtime_extra.pop("stream_event_sink", None)
         state["runtime"] = runtime.model_copy(update={"extra": runtime_extra})
         return state
+
+    @staticmethod
+    def _should_consume_pending_clarification(state: GraphState) -> bool:
+        persistent = state["persistent"]
+        turn = state["turn"]
+        pending = getattr(persistent, "pending_clarification", None)
+        if pending is None:
+            pending_payload = dict(getattr(turn, "extra", {}) or {}).get("pending_clarification")
+            if isinstance(pending_payload, Mapping):
+                try:
+                    pending = ClarificationCard.model_validate(dict(pending_payload))
+                except Exception:
+                    pending = None
+        if pending is None:
+            return False
+        raw_query = str(state["turn"].raw_query or "").strip()
+        if not raw_query or _looks_like_unserviceable_location(raw_query):
+            return False
+        if getattr(persistent, "pending_clarification", None) is not pending:
+            persistent = persistent.model_copy(update={"pending_clarification": pending})
+        return _pending_clarification_matches_query(raw_query, persistent)
+
+    @staticmethod
+    def _is_conversation_recap_route(state: GraphState) -> bool:
+        routing = state["turn"].routing_decision
+        if routing is None:
+            return False
+        route_candidate = str(routing.route_candidate).strip().lower()
+        return route_candidate in {"conversation_recap", "continue_previous_topic"}
 
     def _record_unexpected_error(self, state: GraphState, stage_name: str, exc: Exception) -> GraphState:
         runtime = state["runtime"]

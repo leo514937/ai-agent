@@ -1,0 +1,40 @@
+package conf
+
+const Stage = "stage"
+const (
+	StagePrepare          = "prepare"
+	StageQueryPlaylist    = "query_playlist"
+	StageParsePlaylist    = "parse_playlist"
+	StageGetData          = "getData"
+	StageGenerateSnapshot = "generate_snapshot"
+	StageFilter           = "filter"
+	StageResponse         = "response"
+)
+
+const (
+	LogicPrepare                   = "prepare_logic"
+	LogicGetPlaylist               = "get_playlist_logic"
+	LogicParseBegin                = "parse_begin_logic"
+	LogicParsePlaylist             = "parse_playlist_logic"
+	LogicGetUserInfo               = "get_user_info_logic"
+	LogicGetTheme                  = "get_theme_logic"
+	LogicGetQuestionByTheme        = "get_question_by_theme"
+	LogicGetMostLikeQuestion       = "get_most_like_question"
+	LogicGetViewedQuestion         = "get_viewed_question"
+	LogicGetQuestionByHighLabels   = "getQuestionByHighLabels"
+	LogicGetQuestionDetail         = "get_question_detail"
+	LogicCalcQuestionSim           = "calc_question_sim"
+	LogicCalcThemeSim              = "calc_theme_sim"
+	LogicContentRegulate           = "content_regulate"
+	LogicSecurityRegulate          = "security_regulate"
+	LogicGetDataAfterFilter        = "get_data_after_filter"
+	LogicSelectData                = "select_data"
+	LogicGetAuthorName             = "get_author_name"
+	LogicGetAuthorInfoName         = "get_author_info_name"
+	LogicContentRegulateAfterParse = "content_regulate_after_parse"
+	LogicSecurityAfterParse        = "security_regulate_after_parse"
+	LogicSavePlaylist              = "save_playlist_logic"
+	LogicSaveTiDB                  = "save_tidb_logic"
+	LogicSaveRucene                = "save_rucene_logic"
+	LogicPackageResponse           = "package_response_logic"
+)

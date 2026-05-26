@@ -248,6 +248,21 @@ class Settings(BaseSettings):
     allow_in_memory_fallback: bool = True
     workflow_checkpoint_enabled: bool = True
     workflow_checkpoint_sqlite_path: str = "var/langgraph/checkpoints.sqlite"
+    enable_route_review: bool = True
+    enable_required_facets: bool = True
+    enable_required_facets_to_plans: bool = True
+    enable_min_entity_consistency_check: bool = True
+    enable_trace_harness: bool = False
+    enable_replay_harness: bool = False
+    enable_tool_mock_harness: bool = False
+    enable_rag_golden_evidence_harness: bool = False
+    enable_evaluation_harness: bool = False
+    enable_partial_grounded: bool = True
+    enable_slot_clarify: bool = True
+    enable_rag_plus_tool_partial_answer: bool = True
+    enable_task_plan_for_local_life: bool = True
+    enable_answer_verifier: bool = True
+    answer_verifier_mode: str = "warn_only"
     enable_online_dense_retrieval: bool = True
     enable_online_sparse_retrieval: bool = True
     enable_bm25_sparse_retrieval: bool = True
@@ -406,6 +421,66 @@ class Settings(BaseSettings):
             )
             or "var/langgraph/checkpoints.sqlite"
         )
+        enable_route_review = bool(
+            data.pop("enable_route_review", _env_bool("LEARNING_AGENT_ENABLE_ROUTE_REVIEW", True))
+        )
+        enable_required_facets = bool(
+            data.pop("enable_required_facets", _env_bool("LEARNING_AGENT_ENABLE_REQUIRED_FACETS", True))
+        )
+        enable_required_facets_to_plans = bool(
+            data.pop(
+                "enable_required_facets_to_plans",
+                _env_bool("LEARNING_AGENT_ENABLE_REQUIRED_FACETS_TO_PLANS", True),
+            )
+        )
+        enable_min_entity_consistency_check = bool(
+            data.pop(
+                "enable_min_entity_consistency_check",
+                _env_bool("LEARNING_AGENT_ENABLE_MIN_ENTITY_CONSISTENCY_CHECK", True),
+            )
+        )
+        enable_trace_harness = bool(
+            data.pop("enable_trace_harness", _env_bool("LEARNING_AGENT_ENABLE_TRACE_HARNESS", False))
+        )
+        enable_replay_harness = bool(
+            data.pop("enable_replay_harness", _env_bool("LEARNING_AGENT_ENABLE_REPLAY_HARNESS", False))
+        )
+        enable_tool_mock_harness = bool(
+            data.pop("enable_tool_mock_harness", _env_bool("LEARNING_AGENT_ENABLE_TOOL_MOCK_HARNESS", False))
+        )
+        enable_rag_golden_evidence_harness = bool(
+            data.pop(
+                "enable_rag_golden_evidence_harness",
+                _env_bool("LEARNING_AGENT_ENABLE_RAG_GOLDEN_EVIDENCE_HARNESS", False),
+            )
+        )
+        enable_evaluation_harness = bool(
+            data.pop("enable_evaluation_harness", _env_bool("LEARNING_AGENT_ENABLE_EVALUATION_HARNESS", False))
+        )
+        enable_partial_grounded = bool(
+            data.pop("enable_partial_grounded", _env_bool("LEARNING_AGENT_ENABLE_PARTIAL_GROUNDED", True))
+        )
+        enable_slot_clarify = bool(
+            data.pop("enable_slot_clarify", _env_bool("LEARNING_AGENT_ENABLE_SLOT_CLARIFY", True))
+        )
+        enable_rag_plus_tool_partial_answer = bool(
+            data.pop(
+                "enable_rag_plus_tool_partial_answer",
+                _env_bool("LEARNING_AGENT_ENABLE_RAG_PLUS_TOOL_PARTIAL_ANSWER", True),
+            )
+        )
+        enable_task_plan_for_local_life = bool(
+            data.pop(
+                "enable_task_plan_for_local_life",
+                _env_bool("LEARNING_AGENT_ENABLE_TASK_PLAN_FOR_LOCAL_LIFE", True),
+            )
+        )
+        enable_answer_verifier = bool(
+            data.pop("enable_answer_verifier", _env_bool("LEARNING_AGENT_ENABLE_ANSWER_VERIFIER", True))
+        )
+        answer_verifier_mode = str(
+            data.pop("answer_verifier_mode", _env("LEARNING_AGENT_ANSWER_VERIFIER_MODE", "warn_only"))
+        ).strip().lower() or "warn_only"
         enable_online_dense_retrieval = bool(
             data.pop("enable_online_dense_retrieval", _env_bool("LEARNING_AGENT_ENABLE_ONLINE_DENSE_RETRIEVAL", True))
         )
@@ -1034,6 +1109,21 @@ class Settings(BaseSettings):
         data.setdefault("allow_in_memory_fallback", data["app"].allow_in_memory_fallback)
         data.setdefault("workflow_checkpoint_enabled", workflow_checkpoint_enabled)
         data.setdefault("workflow_checkpoint_sqlite_path", workflow_checkpoint_sqlite_path)
+        data.setdefault("enable_route_review", enable_route_review)
+        data.setdefault("enable_required_facets", enable_required_facets)
+        data.setdefault("enable_required_facets_to_plans", enable_required_facets_to_plans)
+        data.setdefault("enable_min_entity_consistency_check", enable_min_entity_consistency_check)
+        data.setdefault("enable_trace_harness", enable_trace_harness)
+        data.setdefault("enable_replay_harness", enable_replay_harness)
+        data.setdefault("enable_tool_mock_harness", enable_tool_mock_harness)
+        data.setdefault("enable_rag_golden_evidence_harness", enable_rag_golden_evidence_harness)
+        data.setdefault("enable_evaluation_harness", enable_evaluation_harness)
+        data.setdefault("enable_partial_grounded", enable_partial_grounded)
+        data.setdefault("enable_slot_clarify", enable_slot_clarify)
+        data.setdefault("enable_rag_plus_tool_partial_answer", enable_rag_plus_tool_partial_answer)
+        data.setdefault("enable_task_plan_for_local_life", enable_task_plan_for_local_life)
+        data.setdefault("enable_answer_verifier", enable_answer_verifier)
+        data.setdefault("answer_verifier_mode", answer_verifier_mode)
         data.setdefault("enable_online_dense_retrieval", enable_online_dense_retrieval)
         data.setdefault("enable_online_sparse_retrieval", enable_online_sparse_retrieval)
         data.setdefault("enable_bm25_sparse_retrieval", enable_bm25_sparse_retrieval)

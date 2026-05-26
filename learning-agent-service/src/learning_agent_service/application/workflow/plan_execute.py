@@ -36,6 +36,9 @@ class ReactStepExecutor:
     def plan_planner(self, state: GraphState) -> GraphState:
         turn = state["turn"]
         plan = self._normalize_plan(turn.plan)
+        task_plan = getattr(turn, "task_plan", None)
+        if not plan and task_plan is not None and getattr(task_plan, "steps", None):
+            plan = self._normalize_plan(list(task_plan.steps))
         if not plan:
             plan = self._build_default_plan(state)
         turn_extra = dict(turn.extra)
@@ -157,6 +160,7 @@ class ReactStepExecutor:
                 "plan_step_result",
                 {
                     "step_result": approval_result.model_dump(mode="json"),
+                    "step_input": dict(getattr(step, "input_payload", {}) or {}),
                     "current_step_index": start_index,
                     "total_steps": len(plan),
                 },
@@ -189,6 +193,7 @@ class ReactStepExecutor:
                 "plan_step_result",
                 {
                     "step_result": result.model_dump(mode="json"),
+                    "step_input": dict(getattr(step, "input_payload", {}) or {}),
                     "current_step_index": index,
                     "total_steps": len(plan),
                 },
@@ -402,6 +407,8 @@ class ReactStepExecutor:
         turn = state["turn"]
         topic = self._topic_from_state(state)
         payload = self._tool_input_for_name(state, tool_name, step, topic)
+        if isinstance(getattr(step, "input_payload", None), dict) and step.input_payload:
+            payload = {**payload, **dict(step.input_payload)}
         if not payload:
             payload = {"topic": topic}
         return self.container.tool_planner.plan_from_name(tool_name, payload)

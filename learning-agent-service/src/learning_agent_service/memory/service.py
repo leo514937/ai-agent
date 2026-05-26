@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import logging
+import queue
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
 from learning_agent_service.config import Settings
 from learning_agent_service.domain import (
+    ClarificationCard,
     MasteryUpdateCommand,
     MasteryUpdateResult,
     MemoryUpdateSummary,
@@ -41,6 +46,9 @@ from .protocols import (
 )
 
 
+_LOGGER = logging.getLogger(__name__)
+
+
 @dataclass
 class MemoryService:
     session_store: SessionStore
@@ -64,7 +72,10 @@ class MemoryService:
             persistent.current_topic,
             command.raw_query,
         )
-        current_preferences = self._preference_profile(command.user_id, persistent.user_preferences)
+        current_preferences = UserPreferenceProfile(
+            user_id=command.user_id,
+            extra=dict(persistent.user_preferences),
+        )
 
         promotion_input = MemoryPromotionInput(
             session_id=command.session_id,
@@ -103,6 +114,30 @@ class MemoryService:
                     )
                 }
             )
+        if not updated_context.current_shop and updated_context.selected_shop_name:
+            updated_context = updated_context.model_copy(update={"current_shop": updated_context.selected_shop_name})
+        if updated_context.current_shop and not updated_context.selected_shop_name:
+            updated_context = updated_context.model_copy(update={"selected_shop_name": updated_context.current_shop})
+        if not updated_context.current_topic and updated_context.current_shop:
+            updated_context = updated_context.model_copy(update={"current_topic": updated_context.current_shop})
+        preserved_updates: Dict[str, Any] = {}
+        if persistent.pending_clarification is not None and updated_context.pending_clarification is None:
+            # 短期澄清态必须跟随 session 一起落盘，否则下一轮无法消费“北京”这类短答。
+            preserved_updates["pending_clarification"] = persistent.pending_clarification
+        if persistent.clarification_result:
+            merged_clarification = dict(updated_context.clarification_result)
+            for key, value in dict(persistent.clarification_result).items():
+                if key not in merged_clarification or merged_clarification.get(key) in (None, "", [], {}):
+                    merged_clarification[key] = value
+            if bool(dict(persistent.clarification_result).get("consumed")):
+                merged_clarification["consumed"] = True
+            preserved_updates["clarification_result"] = merged_clarification
+        if persistent.current_city and not updated_context.current_city:
+            preserved_updates["current_city"] = persistent.current_city
+        if persistent.current_location and not updated_context.current_location:
+            preserved_updates["current_location"] = dict(persistent.current_location)
+        if preserved_updates:
+            updated_context = updated_context.model_copy(update=preserved_updates)
         fallback_topic = self._resolve_topic(
             command.resolved_topic,
             persistent.current_topic,
@@ -118,7 +153,7 @@ class MemoryService:
                 self.topic_resolver.canonicalize(persistent.history_summary)
                 if persistent.history_summary
                 else "general"
-            )
+        )
         fallback_history_summary = persistent.history_summary or command.raw_query
         if not updated_context.current_topic and fallback_topic:
             updated_context = updated_context.model_copy(update={"current_topic": fallback_topic})
@@ -126,12 +161,25 @@ class MemoryService:
             updated_context = updated_context.model_copy(update={"history_summary": fallback_history_summary})
 
         runtime_context = self._session_runtime_context(command)
+        _LOGGER.info(
+            "memory_persist_trace start trace_id=%s session_id=%s turn_id=%s allow_memory_promotion=%s allow_semantic_memory_write=%s pending_clarification=%s clarification_consumed=%s current_city=%s current_shop=%s",
+            runtime_context.trace_id,
+            runtime_context.session_id,
+            runtime_context.turn_id,
+            bool(command.allow_memory_promotion),
+            bool(command.allow_semantic_memory_write),
+            bool(getattr(persistent, "pending_clarification", None) is not None),
+            bool(dict(getattr(persistent, "clarification_result", {}) or {}).get("consumed")),
+            getattr(updated_context, "current_city", None) if "updated_context" in locals() else getattr(persistent, "current_city", None),
+            getattr(updated_context, "current_shop", None) if "updated_context" in locals() else getattr(persistent, "current_shop", None),
+        )
         self._validate_memory_boundary(
             code=WorkflowErrorCode.SESSION_PERSIST_FAILED,
             operation="persist_session",
             user_id=command.user_id,
             runtime=runtime_context,
         )
+        persist_started_at = time.perf_counter()
         try:
             self.session_store.save(updated_context, runtime_context)
         except Exception as exc:  # pragma: no cover - delegated to workflow integration
@@ -142,6 +190,13 @@ class MemoryService:
                 retryable=True,
                 degraded_to="session_not_persisted",
             ) from exc
+        _LOGGER.info(
+            "memory_persist_trace session_store_saved trace_id=%s session_id=%s turn_id=%s elapsed_ms=%.1f",
+            runtime_context.trace_id,
+            runtime_context.session_id,
+            runtime_context.turn_id,
+            (time.perf_counter() - persist_started_at) * 1000.0,
+        )
 
         if not command.allow_memory_promotion:
             memory_write = self._build_memory_write_result(
@@ -232,6 +287,14 @@ class MemoryService:
             updated_context,
             write_plan.preference_patch,
         )
+        _LOGGER.info(
+            "memory_persist_trace preference_done trace_id=%s session_id=%s turn_id=%s status=%s elapsed_ms=%.1f",
+            runtime_context.trace_id,
+            runtime_context.session_id,
+            runtime_context.turn_id,
+            preference_diagnostics.get("status") if preference_diagnostics else "skipped",
+            (time.perf_counter() - persist_started_at) * 1000.0,
+        )
         if preference_diagnostics:
             diagnostics["preference_store"] = preference_diagnostics
             target_summaries.append(preference_diagnostics)
@@ -240,6 +303,14 @@ class MemoryService:
             user_id=command.user_id,
             updates=write_plan.profile_updates,
             runtime=runtime_context,
+        )
+        _LOGGER.info(
+            "memory_persist_trace profile_done trace_id=%s session_id=%s turn_id=%s status=%s elapsed_ms=%.1f",
+            runtime_context.trace_id,
+            runtime_context.session_id,
+            runtime_context.turn_id,
+            profile_diagnostics.get("status") if profile_diagnostics else "skipped",
+            (time.perf_counter() - persist_started_at) * 1000.0,
         )
         if profile_diagnostics:
             diagnostics["profile_projection"] = profile_diagnostics
@@ -250,6 +321,15 @@ class MemoryService:
             facts=write_plan.semantic_facts,
             runtime=runtime_context,
         )
+        _LOGGER.info(
+            "memory_persist_trace semantic_done trace_id=%s session_id=%s turn_id=%s status=%s elapsed_ms=%.1f facts=%s",
+            runtime_context.trace_id,
+            runtime_context.session_id,
+            runtime_context.turn_id,
+            semantic_summary.get("status"),
+            (time.perf_counter() - persist_started_at) * 1000.0,
+            len(write_plan.semantic_facts),
+        )
         target_summaries.append(semantic_summary)
         if semantic_summary.get("failures"):
             diagnostics["semantic_memory"] = {
@@ -258,6 +338,15 @@ class MemoryService:
             }
 
         outbox_diagnostics = self._emit_persist_outbox(runtime_context, write_plan)
+        _LOGGER.info(
+            "memory_persist_trace outbox_done trace_id=%s session_id=%s turn_id=%s status=%s elapsed_ms=%.1f events=%s",
+            runtime_context.trace_id,
+            runtime_context.session_id,
+            runtime_context.turn_id,
+            outbox_diagnostics.get("status") if outbox_diagnostics else "skipped",
+            (time.perf_counter() - persist_started_at) * 1000.0,
+            len(write_plan.durable_fact_requests) + len(write_plan.outbox_events) + 1,
+        )
         if outbox_diagnostics:
             diagnostics["outbox"] = outbox_diagnostics
             target_summaries.append(outbox_diagnostics)
@@ -529,7 +618,7 @@ class MemoryService:
         return ExplicitUserSignals(
             preferred_output_style=command.requested_output_style.value if command.requested_output_style else None,
             confirmed_output_style=self._is_confirmed_preference_query(query, normalized_query),
-            focus_topics=tuple(entity for entity in command.persistent.recent_entities if entity),
+            focus_topics=tuple(entity for entity in (command.persistent.current_shop, *command.persistent.recent_entities) if entity),
         )
 
     def _persist_preference_patch(
@@ -951,7 +1040,11 @@ class MemoryService:
         stored_preferences: Dict[str, Any] = {}
         if self.profile_projection_store is not None and hasattr(self.profile_projection_store, "list_active"):
             try:
-                for row in self.profile_projection_store.list_active(user_id):
+                rows = self._call_with_timeout(
+                    lambda: list(self.profile_projection_store.list_active(user_id)),
+                    timeout_seconds=0.5,
+                )
+                for row in rows or []:
                     key = getattr(row, "preference_key", None)
                     value = getattr(row, "current_value", None)
                     if key and value is not None:
@@ -959,7 +1052,11 @@ class MemoryService:
             except Exception:
                 pass
         if self.preference_store is not None:
-            model = self.preference_store.get(user_id)
+            try:
+                model = self._call_with_timeout(lambda: self.preference_store.get(user_id), timeout_seconds=0.5)
+            except Exception:
+                # 偏好画像失败不应阻塞 session 落盘，直接退化为当前会话偏好。
+                model = None
             if model is not None:
                 stored_preferences.update(
                     {
@@ -988,6 +1085,26 @@ class MemoryService:
         )
 
     @staticmethod
+    def _call_with_timeout(handler, *, timeout_seconds: float):
+        result_queue: "queue.Queue[tuple[str, Any]]" = queue.Queue(maxsize=1)
+
+        def _run() -> None:
+            try:
+                result_queue.put(("ok", handler()))
+            except Exception as exc:  # pragma: no cover - best-effort fallback
+                result_queue.put(("error", exc))
+
+        worker = threading.Thread(target=_run, name="preference-profile-lookup", daemon=True)
+        worker.start()
+        try:
+            status, value = result_queue.get(timeout=timeout_seconds)
+        except queue.Empty:
+            return None
+        if status != "ok":
+            return None
+        return value
+
+    @staticmethod
     def _merge_user_preferences(
         current: Mapping[str, Any],
         projected: Mapping[str, Any],
@@ -1000,6 +1117,7 @@ class MemoryService:
         pending = context.pending_clarification.model_dump(mode="json") if context.pending_clarification else None
         return MemoryPersistentSessionContext(
             current_topic=context.current_topic,
+            current_shop=context.current_shop,
             recent_entities=tuple(context.recent_entities),
             clarification_result=dict(context.clarification_result),
             user_preferences=dict(context.user_preferences),
@@ -1019,9 +1137,16 @@ class MemoryService:
         context: MemoryPersistentSessionContext,
         current: DomainPersistentSessionContext,
     ) -> DomainPersistentSessionContext:
+        pending_clarification = None
+        if context.pending_clarification:
+            try:
+                pending_clarification = ClarificationCard.model_validate(context.pending_clarification)
+            except Exception:
+                pending_clarification = None
         return current.model_copy(
             update={
                 "current_topic": context.current_topic,
+                "current_shop": context.current_shop,
                 "recent_entities": list(context.recent_entities),
                 "clarification_result": dict(context.clarification_result),
                 "user_preferences": dict(context.user_preferences),
@@ -1032,7 +1157,7 @@ class MemoryService:
                 "next_steps": list(context.next_steps),
                 "summary_version": context.summary_version,
                 "summary_updated_at": context.summary_updated_at,
-                "pending_clarification": None,
+                "pending_clarification": pending_clarification,
                 "extra": dict(context.extra),
             }
         )

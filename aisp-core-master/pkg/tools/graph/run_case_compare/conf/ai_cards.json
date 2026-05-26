@@ -1,0 +1,10 @@
+[
+  {
+    "exp_name": "doubao-seed-16&prompt",
+    "ab_param_value": {
+      "ai_rec_domain": {
+        "ac_search_entity": "1"
+      }
+    }
+  }
+]

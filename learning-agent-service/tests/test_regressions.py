@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import _bootstrap  # noqa: F401
 
 from learning_agent_service.application.workflow.adapters import WorkflowNodeAdapter
+from learning_agent_service.api.contracts import ChatStreamRequest
 from learning_agent_service.domain import (
     ChatTurnCommand,
     EvidencePack,
@@ -19,6 +20,7 @@ from learning_agent_service.domain import (
     build_initial_state,
     build_error,
 )
+from learning_agent_service.domain.contracts import AnswerComposeResult
 from learning_agent_service.domain.errors import WorkflowErrorCode
 from learning_agent_service.infrastructure.repositories.records import UserPreferenceProfileRecord
 from learning_agent_service.infrastructure.repositories.runtime_adapters import DurablePreferenceStore
@@ -77,6 +79,27 @@ class _CapturingTopicSignalsMemoryService:
     def update_mastery(self, command):
         self.last_update_command = command
         return MasteryUpdateResult()
+
+
+class _StreamingPersistCaptureMemoryService:
+    def __init__(self) -> None:
+        self.last_persist_command = None
+
+    def persist_session(self, command):
+        self.last_persist_command = command
+        return PersistSessionResult(
+            updated_context=command.persistent,
+            memory_updates=MemoryUpdateSummary(),
+        )
+
+
+class _CapturingAnswerComposer:
+    def __init__(self) -> None:
+        self.last_request = None
+
+    def compose(self, request):
+        self.last_request = request
+        return AnswerComposeResult(answer_text="ok", confidence=0.9)
 
 
 class _PreferenceRepository:
@@ -204,6 +227,70 @@ class RegressionFixesTestCase(unittest.TestCase):
         self.assertEqual(memory_service.last_update_command.memory_updates.extra["evidence_count"], 0)
         self.assertFalse(memory_service.last_update_command.memory_updates.extra["was_resolved"])
         self.assertTrue(memory_service.last_update_command.memory_updates.extra["was_confused"])
+
+    def test_streaming_fast_persist_hint_survives_runtime_extra_reset(self) -> None:
+        memory_service = _StreamingPersistCaptureMemoryService()
+        adapter = WorkflowNodeAdapter(SimpleNamespace(memory_service=memory_service))
+        state = self._build_state(current_topic="Redis")
+        state["runtime"] = state["runtime"].model_copy(update={"extra": {}})
+        state["turn"] = state["turn"].model_copy(update={"extra": {"streaming_fast_persist": True}})
+        state["persistent"] = state["persistent"].model_copy(update={"extra": {"streaming_fast_persist": True}})
+
+        adapter.persist_session(state)
+
+        self.assertIsNotNone(memory_service.last_persist_command)
+        self.assertFalse(memory_service.last_persist_command.allow_memory_promotion)
+        self.assertFalse(memory_service.last_persist_command.allow_semantic_memory_write)
+
+    def test_chat_stream_request_accepts_context_alias(self) -> None:
+        request = ChatStreamRequest.model_validate(
+            {
+                "user_id": "u1",
+                "session_id": "s1",
+                "trace_id": "t1",
+                "message": "你记得我们说过什么吗",
+                "context": {"page": "assistant", "shopName": "山城一锅"},
+            }
+        )
+
+        self.assertEqual(request.client_context.get("shopName"), "山城一锅")
+
+        request2 = ChatStreamRequest.model_validate(
+            {
+                "user_id": "u1",
+                "session_id": "s1",
+                "trace_id": "t1",
+                "message": "你记得我们说过什么吗",
+                "client_context": {"page": "assistant", "shopName": "山城一锅"},
+            }
+        )
+
+        self.assertEqual(request2.client_context.get("shopName"), "山城一锅")
+
+    def test_compose_answer_preserves_shop_anchor_from_runtime_client_context(self) -> None:
+        composer = _CapturingAnswerComposer()
+        adapter = WorkflowNodeAdapter(SimpleNamespace(answer_composer=composer))
+        state = build_initial_state(
+            ChatTurnCommand(
+                trace_id="trace-1",
+                session_id="session-1",
+                turn_id="turn-1",
+                user_id="user-1",
+                message="你记得我们说过什么吗",
+                client_context={"page": "assistant", "shopName": "山城一锅"},
+            ),
+            persistent=PersistentSessionContext(),
+        )
+
+        state = adapter.load_context(state)
+        state = adapter.conversation_recap_direct_response(state)
+        updated = adapter.compose_answer(state)
+
+        self.assertIsNotNone(composer.last_request)
+        self.assertEqual(composer.last_request.stream_event_meta.get("current_shop"), "山城一锅")
+        self.assertEqual(updated["persistent"].current_shop, "山城一锅")
+        self.assertEqual(updated["persistent"].selected_shop_name, "山城一锅")
+        self.assertEqual(updated["turn"].final_answer, "ok")
 
 
 if __name__ == "__main__":

@@ -866,8 +866,9 @@ class ToolsTestCase(unittest.TestCase):
             )
         )
 
-        self.assertIn("Memory context:", output.answer_text)
-        self.assertIn("请优先用中文回答", output.answer_text)
+        self.assertNotIn("Memory context:", output.answer_text)
+        self.assertNotIn("Tool result:", output.answer_text)
+        self.assertNotIn("请优先用中文回答", output.answer_text)
         self.assertIn("根据知识库中的证据", output.answer_text)
         self.assertIn("RAG 通过检索证据来约束回答。", output.answer_text)
 
@@ -946,6 +947,71 @@ class ToolsTestCase(unittest.TestCase):
         self.assertIn("店名", output.answer_text)
         self.assertNotIn("知识库", output.answer_text)
 
+    def test_tool_result_normalizer_renames_coupon_alias_fields(self) -> None:
+        normalized = RuntimeToolResultNormalizer().normalize(
+            ToolNormalizationRequest(
+                result=DomainToolExecutionResult(
+                    status=ToolExecutionStatus.SUCCESS,
+                    tool_name="get_coupon_list",
+                    output_payload={
+                        "data": {
+                            "shop_name": "某某家常菜",
+                            "count": 0,
+                            "couponsns": [],
+                            "source": "java",
+                        }
+                    },
+                )
+            )
+        )
+
+        data = normalized.normalized_output["data"]
+        self.assertIn("coupons", data)
+        self.assertNotIn("couponsns", data)
+        self.assertEqual(data["count"], 0)
+        self.assertEqual(normalized.extra["failure_category"], "no_result")
+
+    def test_answer_composer_does_not_append_auxiliary_debug_sections(self) -> None:
+        from learning_agent_service.tools.service import AnswerComposer
+
+        pack = EvidencePack(
+            evidence_status="OK",
+            items=[
+                EvidenceItem(
+                    chunk_id="rag-1",
+                    content="RAG 通过检索证据来约束回答。",
+                    score=0.92,
+                    document_id="doc-1",
+                    chunk_type="concept",
+                    citation_chunk_id="rag-1",
+                    metadata={"title": "RAG 基础"},
+                )
+            ],
+        )
+        tool_result = RuntimeToolResultNormalizer().normalize(
+            ToolNormalizationRequest(
+                result=DomainToolExecutionResult(
+                    status=ToolExecutionStatus.SUCCESS,
+                    tool_name="get_coupon_list",
+                    output_payload={"data": {}},
+                )
+            )
+        )
+
+        output = AnswerComposer().compose(
+            AnswerComposeRequest(
+                raw_query="这家店有券吗",
+                rag_result=RagResult(status=RagStatus.OK, evidence_pack=pack, evidence_status="OK"),
+                tool_result=tool_result,
+            )
+        )
+
+        self.assertNotIn("Tool result:", output.answer_text)
+        self.assertNotIn("Memory context:", output.answer_text)
+        self.assertNotIn("Episodic context:", output.answer_text)
+        self.assertNotIn("Procedural context:", output.answer_text)
+        self.assertIn("RAG 通过检索证据来约束回答。", output.answer_text)
+
     def test_answer_composer_returns_capability_summary_for_profile_turns(self) -> None:
         from learning_agent_service.tools.service import AnswerComposer
 
@@ -960,6 +1026,40 @@ class ToolsTestCase(unittest.TestCase):
         self.assertIn("通用问答", output.answer_text)
         self.assertIn("本地生活", output.answer_text)
         self.assertIn("代码解释", output.answer_text)
+
+    def test_answer_composer_returns_history_summary_for_conversation_recap(self) -> None:
+        from learning_agent_service.tools.service import AnswerComposer
+
+        output = AnswerComposer().compose(
+            AnswerComposeRequest(
+                raw_query="你记得我们说过什么吗",
+                allow_direct_response=True,
+                direct_response_kind="conversation_recap",
+                history_summary="刚才在聊山城一锅的券和环境评价。",
+            )
+        )
+
+        self.assertIn("刚才在聊山城一锅的券和环境评价", output.answer_text)
+        self.assertNotIn("Tool result:", output.answer_text)
+        self.assertNotIn("Memory context:", output.answer_text)
+
+    def test_answer_composer_recap_uses_current_shop_context_when_available(self) -> None:
+        from learning_agent_service.tools.service import AnswerComposer
+
+        output = AnswerComposer().compose(
+            AnswerComposeRequest(
+                raw_query="你记得我们说过什么吗",
+                allow_direct_response=True,
+                direct_response_kind="conversation_recap",
+                history_summary="刚才在聊上一轮的券和环境评价。",
+                stream_event_meta={"current_shop": "山城一锅"},
+            )
+        )
+
+        self.assertIn("山城一锅", output.answer_text)
+        self.assertIn("刚才在聊上一轮的券和环境评价", output.answer_text)
+        self.assertNotIn("Tool result:", output.answer_text)
+        self.assertNotIn("Memory context:", output.answer_text)
 
     def test_answer_composer_streams_direct_response_deltas_even_with_llm_present(self) -> None:
         emitted_events = []

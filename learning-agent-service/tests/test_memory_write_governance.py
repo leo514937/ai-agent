@@ -9,6 +9,7 @@ import _bootstrap  # noqa: F401
 from learning_agent_service.application.dependencies import _build_semantic_memory_store
 from learning_agent_service.config import Settings
 from learning_agent_service.domain import (
+    ClarificationCard,
     MasteryUpdateCommand,
     MemoryUpdateSummary,
     PersistSessionCommand,
@@ -19,6 +20,7 @@ from learning_agent_service.infrastructure.repositories.in_memory import (
     InMemorySessionContextStore,
     InMemoryTopicMasteryStore,
 )
+from learning_agent_service.memory.models import PersistSessionPlan
 from learning_agent_service.memory.protocols import NoOpSemanticMemoryStore
 from learning_agent_service.memory.service import MemoryService
 
@@ -32,6 +34,154 @@ class MemoryWriteGovernanceTestCase(unittest.TestCase):
             settings=Settings(environment="development", debug=True, allow_in_memory_fallback=True),
             semantic_memory_store=NoOpSemanticMemoryStore(),
         )
+
+    def test_session_persist_preserves_consumed_clarification_flag(self) -> None:
+        class _ClarificationOverwritePolicy:
+            def __init__(self) -> None:
+                self.config = SimpleNamespace(preference_promote_count=3)
+
+            def evaluate(self, payload):
+                return SimpleNamespace(reasons=())
+
+            def build_write_plan(self, current, result):
+                return PersistSessionPlan(
+                    updated_context=PersistentSessionContext(
+                        current_topic=current.current_topic,
+                        current_shop=current.current_shop,
+                        recent_entities=list(current.recent_entities),
+                        clarification_result={
+                            "original_query": "附近有什么推荐菜",
+                            "original_intent": "local_life_recommend",
+                            "original_route": "rag_retrieval",
+                            "question": "你更想找哪个城市、哪类场景的店？",
+                            "ambiguity_type": "location",
+                            "follow_up_query": "北京",
+                            "consumed": False,
+                        },
+                        user_preferences=dict(current.user_preferences),
+                        last_retrieval_topic=current.last_retrieval_topic,
+                        history_summary=current.history_summary,
+                        open_questions=list(current.open_questions),
+                        confirmed_facts=list(current.confirmed_facts),
+                        next_steps=list(current.next_steps),
+                        summary_version=current.summary_version,
+                        summary_updated_at=current.summary_updated_at,
+                        pending_clarification=None,
+                        current_city="北京",
+                        current_location={"city": "北京"},
+                        extra=dict(current.extra),
+                    )
+                )
+
+        session_store = InMemorySessionContextStore()
+        service = MemoryService(
+            session_store=session_store,
+            mastery_store=InMemoryTopicMasteryStore(),
+            async_log_store=InMemoryAsyncLogStore(),
+            settings=Settings(environment="development", debug=True, allow_in_memory_fallback=True),
+            semantic_memory_store=NoOpSemanticMemoryStore(),
+        )
+        service.promotion_policy = _ClarificationOverwritePolicy()
+
+        command = PersistSessionCommand(
+            trace_id="trace-clarification",
+            session_id="session-clarification",
+            turn_id="turn-clarification",
+            user_id="user-clarification",
+            workflow_version="workflow/v1",
+            raw_query="北京",
+            answer_text="好的，继续帮你找。",
+            request_ts=datetime(2026, 4, 26, 10, 0, 0, tzinfo=timezone.utc),
+            persistent=PersistentSessionContext(
+                current_topic="附近有什么推荐菜",
+                recent_entities=["附近有什么推荐菜"],
+                clarification_result={
+                    "original_query": "附近有什么推荐菜",
+                    "original_intent": "local_life_recommend",
+                    "original_route": "rag_retrieval",
+                    "question": "你更想找哪个城市、哪类场景的店？",
+                    "ambiguity_type": "location",
+                    "consumed": True,
+                },
+                pending_clarification=None,
+                current_city="北京",
+                current_location={"city": "北京"},
+            ),
+        )
+
+        result = service.persist_session(command)
+        persisted = session_store.load("session-clarification", "user-clarification")
+
+        self.assertTrue(result.updated_context.clarification_result["consumed"])
+        self.assertTrue(persisted.clarification_result["consumed"])
+        self.assertEqual(persisted.clarification_result["follow_up_query"], "北京")
+        self.assertEqual(persisted.current_city, "北京")
+
+    def test_session_persist_does_not_fail_when_preference_profile_times_out(self) -> None:
+        class _FailingPreferenceStore:
+            def get(self, user_id: str):
+                raise TimeoutError("preference store timeout")
+
+        session_store = InMemorySessionContextStore()
+        service = MemoryService(
+            session_store=session_store,
+            mastery_store=InMemoryTopicMasteryStore(),
+            async_log_store=InMemoryAsyncLogStore(),
+            settings=Settings(environment="development", debug=True, allow_in_memory_fallback=True),
+            semantic_memory_store=NoOpSemanticMemoryStore(),
+            preference_store=_FailingPreferenceStore(),
+        )
+
+        result = service.persist_session(self._build_session_write_command())
+
+        self.assertIsNotNone(result.memory_write)
+        persisted = session_store.load("session-1", "user-1")
+        self.assertTrue(persisted.current_topic)
+        self.assertEqual(persisted.current_topic, result.updated_context.current_topic)
+        self.assertEqual(result.memory_updates.current_topic, result.updated_context.current_topic)
+
+    def test_session_persist_keeps_pending_clarification(self) -> None:
+        session_store = InMemorySessionContextStore()
+        service = MemoryService(
+            session_store=session_store,
+            mastery_store=InMemoryTopicMasteryStore(),
+            async_log_store=InMemoryAsyncLogStore(),
+            settings=Settings(environment="development", debug=True, allow_in_memory_fallback=True),
+            semantic_memory_store=NoOpSemanticMemoryStore(),
+        )
+        pending = ClarificationCard(
+            card_id="session-1:turn-1:clarification",
+            question="你更想找哪个城市、哪类场景的店？",
+            options=[],
+            ambiguity_type="location",
+            source_turn_id="turn-1",
+            expires_at=None,
+        )
+        command = self._build_session_write_command().model_copy(
+            update={
+                "persistent": PersistentSessionContext(
+                    current_topic="附近有什么推荐菜",
+                    recent_entities=["附近有什么推荐菜"],
+                    history_summary="附近有什么推荐菜",
+                    clarification_result={
+                        "original_query": "附近有什么推荐菜",
+                        "original_intent": "local_life_recommend",
+                        "original_route": "rag_retrieval",
+                        "question": "你更想找哪个城市、哪类场景的店？",
+                        "ambiguity_type": "location",
+                    },
+                    pending_clarification=pending,
+                )
+            }
+        )
+
+        result = service.persist_session(command)
+        persisted = session_store.load("session-1", "user-1")
+
+        self.assertIsNotNone(result.updated_context.pending_clarification)
+        self.assertIsNotNone(persisted.pending_clarification)
+        self.assertEqual(persisted.pending_clarification.question, pending.question)
+        self.assertEqual(persisted.clarification_result["original_query"], "附近有什么推荐菜")
 
     def _build_session_write_command(self) -> PersistSessionCommand:
         return PersistSessionCommand(

@@ -422,7 +422,7 @@ if ! netstat -ano | grep -q -E ":8000[[:space:]]"; then
     powershell.exe -NoProfile -Command "Start-Process cmd -ArgumentList '/c start_python.bat' -WorkingDirectory '$AI_SERVICE_DIR' -WindowStyle Hidden"
     sleep 2
 fi
-if ! wait_for_health "AI 服务 (8000)" "http://127.0.0.1:8000/health" 30; then
+if ! wait_for_health "AI 服务 (8000)" "http://127.0.0.1:8000/health" 60; then
     echo -e "    ${YELLOW}[Warn] AI 服务日志请查看：${AI_SERVICE_LOG} 和 ${AI_SERVICE_LOG_DIR}/python-service-bootstrap.log${NC}"
 fi
 

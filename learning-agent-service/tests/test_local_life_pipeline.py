@@ -100,6 +100,47 @@ class _FakeJavaBusinessClient:
             )
         ]
 
+    def get_shop_detail(self, shop_id: int):
+        return ShopRecord(
+            id=shop_id,
+            name="示例粤菜馆",
+            type_id=1,
+            type_name="粤菜",
+            area="朝阳",
+            address="朝阳区示例路1号",
+            x=116.4,
+            y=39.9,
+            avg_price=148.0,
+            sold=128,
+            comments=256,
+            score=4.8,
+            open_hours="10:00-22:00",
+            distance_km=1.2,
+            parking=True,
+            quiet_score=0.92,
+            family_friendly=True,
+            elder_friendly=True,
+            tags=["quiet", "parking_available"],
+            review_summary="环境安静，适合家庭聚餐。",
+            evidence_texts=["评论摘要中多次提到环境安静。"],
+            source="java",
+        )
+
+    def check_open_status(self, shop):
+        return {
+            "status": "open",
+            "is_open": True,
+            "open_hours": getattr(shop, "open_hours", None) if not isinstance(shop, dict) else shop.get("open_hours"),
+        }
+
+    def get_distance_eta(self, shop, *, lat, lng):
+        return {
+            "distance_km": getattr(shop, "distance_km", 1.2) if not isinstance(shop, dict) else shop.get("distance_km", 1.2),
+            "eta_minutes": 12,
+            "lat": lat,
+            "lng": lng,
+        }
+
     def get_blog_hot(self, current: int = 1):
         self.blog_hot_calls += 1
         return [
@@ -114,6 +155,16 @@ class _FakeJavaBusinessClient:
                 source="java",
             )
         ][: max(0, int(current))]
+
+
+class _RecordingSessionContextStore:
+    def __init__(self) -> None:
+        self.saved_context = None
+        self.saved_runtime = None
+
+    def save(self, context, runtime) -> None:
+        self.saved_context = context
+        self.saved_runtime = runtime
 
 
 class _FakeLocalLifeRetriever:
@@ -361,6 +412,42 @@ class LocalLifePipelineTestCase(unittest.TestCase):
         self.assertEqual(payload["next_steps"][0], "查看第一家详情")
         self.assertEqual(payload["task_chain"][0]["step"], "search")
         self.assertEqual(payload["suggested_replies"][0]["label"], "看第二家")
+
+    def test_subgraph_persists_current_shop_for_follow_up_turns(self) -> None:
+        session_store = _RecordingSessionContextStore()
+        subgraph = LocalLifeSubgraph(
+            business_client=_FakeJavaBusinessClient(),
+            model_assistant=_FakeLocalLifeAssistant(),
+            session_context_store=session_store,
+        )
+
+        events = list(
+            subgraph.run_stream(
+                ChatTurnCommand(
+                    trace_id="trace-current-shop",
+                    session_id="session-current-shop",
+                    turn_id="turn-current-shop",
+                    user_id="user-current-shop",
+                    message="这家店推荐菜",
+                    page="meituan_search_box",
+                    client_context={
+                        "city": "北京",
+                        "location": {"lat": 39.9, "lng": 116.4},
+                        "entry": "meituan_search_box",
+                    },
+                )
+            )
+        )
+
+        final_event = next(event for event in events if event.event_type == "final")
+        payload = final_event.payload
+
+        self.assertEqual(payload["context"]["current_shop"], "示例粤菜馆")
+        self.assertEqual(payload["context"]["selected_shop_name"], "示例粤菜馆")
+        self.assertIsNotNone(session_store.saved_context)
+        self.assertEqual(session_store.saved_context.current_shop, "示例粤菜馆")
+        self.assertEqual(session_store.saved_context.selected_shop_name, "示例粤菜馆")
+        self.assertEqual(session_store.saved_context.selected_shop_id, 1001)
 
     def test_subgraph_routes_structured_queries_through_business_candidates_then_qdrant(self) -> None:
         business_client = _FakeJavaBusinessClient()

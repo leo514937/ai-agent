@@ -152,6 +152,7 @@ class WorkflowLearningAgentService:
         return SessionStateResponse(
             session_id=session_id,
             current_topic=context.current_topic,
+            current_shop=getattr(context, "current_shop", None),
             recent_entities=list(context.recent_entities),
             clarification_result=dict(context.clarification_result),
             user_preferences=dict(context.user_preferences),

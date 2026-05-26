@@ -21,7 +21,7 @@ public class AiRemoteClient {
     private static final String HEALTH_PATH = "/health";
     private static final String STREAM_PATH = "/internal/v1/chat/stream";
     private static final int DEFAULT_CONNECT_TIMEOUT_MS = 3000;
-    private static final int DEFAULT_READ_TIMEOUT_MS = 8000;
+    private static final int DEFAULT_READ_TIMEOUT_MS = 30000;
     private static final int HEALTH_CONNECT_TIMEOUT_MS = 3000;
     private static final int HEALTH_READ_TIMEOUT_MS = 3000;
     private static final long HEALTH_CACHE_TTL_MS = 5000L;

@@ -877,3 +877,29 @@ pip install -e .[dev]
 cp .env.example .env
 uvicorn learning_agent_service.app:app --reload --port 9000
 ```
+
+### 启动开关
+
+`.env.example` 已经补齐本次架构改造涉及的开关，建议在本地启动前先复制一份 `.env` 再按需调整：
+
+- `LEARNING_AGENT_ENABLE_ROUTE_REVIEW=true`
+- `LEARNING_AGENT_ENABLE_REQUIRED_FACETS=true`
+- `LEARNING_AGENT_ENABLE_REQUIRED_FACETS_TO_PLANS=true`
+- `LEARNING_AGENT_ENABLE_MIN_ENTITY_CONSISTENCY_CHECK=true`
+- `LEARNING_AGENT_ENABLE_TRACE_HARNESS=false`
+- `LEARNING_AGENT_ENABLE_REPLAY_HARNESS=false`
+- `LEARNING_AGENT_ENABLE_TOOL_MOCK_HARNESS=false`
+- `LEARNING_AGENT_ENABLE_RAG_GOLDEN_EVIDENCE_HARNESS=false`
+- `LEARNING_AGENT_ENABLE_EVALUATION_HARNESS=false`
+- `LEARNING_AGENT_ENABLE_PARTIAL_GROUNDED=true`
+- `LEARNING_AGENT_ENABLE_SLOT_CLARIFY=true`
+- `LEARNING_AGENT_ENABLE_RAG_PLUS_TOOL_PARTIAL_ANSWER=true`
+- `LEARNING_AGENT_ENABLE_TASK_PLAN_FOR_LOCAL_LIFE=true`
+- `LEARNING_AGENT_ENABLE_ANSWER_VERIFIER=true`
+- `LEARNING_AGENT_ANSWER_VERIFIER_MODE=warn_only`
+
+默认建议：
+
+- 开发调试时可以先保持 `route_review / required_facets / partial_grounded / slot_clarify / task_plan / answer_verifier` 打开。
+- `trace / replay / tool mock / rag golden evidence / evaluation` 这些 harness 开关默认关闭，需要做回放或评估时再打开。
+- `answer_verifier_mode=enforce` 会让 verifier 的建议更强地影响最终回答；如果只想看告警，保留 `warn_only` 即可。

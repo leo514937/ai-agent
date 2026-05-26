@@ -57,6 +57,8 @@ class ChatWorkflowService:
                 rag_gate=adapter.rag_gate,
                 rewrite_query=adapter.rewrite_query,
             ),
+            consume_pending_clarification=adapter.consume_pending_clarification,
+            conversation_recap_direct_response=adapter.conversation_recap_direct_response,
             rag_subgraph=RagSubgraphServices(
                 hybrid_retrieve=adapter.hybrid_retrieve,
                 evaluate_evidence=adapter.evaluate_evidence,

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from ...domain.contracts import NormalizedToolResult, PlanExecutionSummary, RagResult, ToolExecutionResult
 from ...domain.enums import RagStatus, ToolExecutionStatus
 from ...domain.state import GraphState
-from ..routing import can_enter_retrieval, can_enter_tool, should_run_tool as routing_should_run_tool
+from ..routing import can_enter_retrieval, can_enter_tool, should_run_tool as routing_should_run_tool, _update_phase3_trace
 from .services import PlanExecuteSubgraphServices, RagSubgraphServices, ToolSubgraphServices, UnderstandTurnServices
 
 
@@ -259,7 +259,7 @@ def run_tool_subgraph(state: GraphState, services: ToolSubgraphServices) -> Grap
 
 def run_plan_execute_subgraph(state: GraphState, services: PlanExecuteSubgraphServices) -> GraphState:
     turn = state["turn"]
-    if turn.execution_mode != "plan_execute" and not (
+    if turn.task_plan is None and turn.execution_mode != "plan_execute" and not (
         turn.execution_mode == "auto"
         and (
             turn.task_complexity == "complex"
@@ -281,6 +281,15 @@ def run_plan_execute_subgraph(state: GraphState, services: PlanExecuteSubgraphSe
     if state["turn"].need_human_approval:
         state = services.human_approval_stub(state)
         state = _mark_stage(state, "plan_execute", "blocked", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].replan_reason or state["turn"].approval_request.get("reason") or "need_human_approval"))
+        summary = state["turn"].final_task_summary
+        state = _update_phase3_trace(
+            state,
+            task_plan_execution_status="blocked",
+            task_plan_completed_steps=getattr(summary, "completed_steps", 0) if summary is not None else 0,
+            task_plan_total_steps=getattr(summary, "total_steps", 0) if summary is not None else len(state["turn"].plan),
+            task_plan_final_decision=getattr(summary, "final_decision", None) if summary is not None else None,
+            task_plan_step_results=len(state["turn"].step_results),
+        )
         return _ensure_plan_summary(state)
 
     if state["turn"].need_replan:
@@ -289,6 +298,15 @@ def run_plan_execute_subgraph(state: GraphState, services: PlanExecuteSubgraphSe
         if state["turn"].need_replan:
             state = services.plan_reviewer(state)
             state = _mark_stage(state, "plan_execute", "blocked", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].replan_reason or "need_replan"))
+            summary = state["turn"].final_task_summary
+            state = _update_phase3_trace(
+                state,
+                task_plan_execution_status="blocked",
+                task_plan_completed_steps=getattr(summary, "completed_steps", 0) if summary is not None else 0,
+                task_plan_total_steps=getattr(summary, "total_steps", 0) if summary is not None else len(state["turn"].plan),
+                task_plan_final_decision=getattr(summary, "final_decision", None) if summary is not None else None,
+                task_plan_step_results=len(state["turn"].step_results),
+            )
             return _ensure_plan_summary(state)
         state = services.step_executor(state)
         state = _ensure_plan_progress_state(state)
@@ -297,9 +315,27 @@ def run_plan_execute_subgraph(state: GraphState, services: PlanExecuteSubgraphSe
         if state["turn"].need_human_approval:
             state = services.human_approval_stub(state)
             state = _mark_stage(state, "plan_execute", "blocked", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].replan_reason or state["turn"].approval_request.get("reason") or "need_human_approval"))
+            summary = state["turn"].final_task_summary
+            state = _update_phase3_trace(
+                state,
+                task_plan_execution_status="blocked",
+                task_plan_completed_steps=getattr(summary, "completed_steps", 0) if summary is not None else 0,
+                task_plan_total_steps=getattr(summary, "total_steps", 0) if summary is not None else len(state["turn"].plan),
+                task_plan_final_decision=getattr(summary, "final_decision", None) if summary is not None else None,
+                task_plan_step_results=len(state["turn"].step_results),
+            )
             return _ensure_plan_summary(state)
 
     state = _mark_stage(state, "plan_execute", "completed", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])))
+    summary = state["turn"].final_task_summary
+    state = _update_phase3_trace(
+        state,
+        task_plan_execution_status=getattr(summary, "status", "completed") if summary is not None else "completed",
+        task_plan_completed_steps=getattr(summary, "completed_steps", 0) if summary is not None else len([result for result in state["turn"].step_results if result.status == "success"]),
+        task_plan_total_steps=getattr(summary, "total_steps", 0) if summary is not None else len(state["turn"].plan),
+        task_plan_final_decision=getattr(summary, "final_decision", None) if summary is not None else state["turn"].final_answer,
+        task_plan_step_results=len(state["turn"].step_results),
+    )
     return _ensure_plan_summary(state)
 
 
@@ -324,7 +360,7 @@ def should_run_tools(state: GraphState) -> bool:
 
 def should_run_plan_execute(state: GraphState) -> bool:
     turn = state["turn"]
-    return turn.execution_mode == "plan_execute" or (
+    return turn.task_plan is not None or turn.execution_mode == "plan_execute" or (
         turn.execution_mode == "auto"
         and (
             turn.task_complexity == "complex"

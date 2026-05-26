@@ -110,6 +110,7 @@ class RagGateRequest:
     current_topic: Optional[str] = None
     recent_entities: Sequence[str] = field(default_factory=tuple)
     history_summary: Optional[str] = None
+    pending_clarification: Optional[Mapping[str, Any]] = None
     reference_confidence: Optional[float] = None
     reference_resolved: Optional[bool] = None
     client_context: Mapping[str, Any] = field(default_factory=dict)
@@ -161,10 +162,21 @@ def normalize_rag_gate_request(request: RagGateRequest) -> str:
     return " ".join((request.raw_query or "").strip().split())
 
 
+def _as_mapping(value: Any) -> Mapping[str, Any] | None:
+    if isinstance(value, Mapping):
+        return dict(value)
+    if hasattr(value, "model_dump"):
+        dumped = value.model_dump(mode="json")
+        if isinstance(dumped, Mapping):
+            return dict(dumped)
+    return None
+
+
 def classify_rag_rule(request: RagGateRequest) -> RagGateVote:
     text = normalize_rag_gate_request(request)
     lowered = text.lower()
     content_tokens = _content_tokens(text)
+    pending_clarification = _as_mapping(request.pending_clarification)
 
     if not text or _PUNCTUATION_RE.fullmatch(text) or not content_tokens:
         return RagGateVote(
@@ -232,6 +244,13 @@ def classify_rag_rule(request: RagGateRequest) -> RagGateVote:
             confidence=min(max(request.intent_confidence, 0.72), 0.95),
         )
 
+    if pending_clarification is not None and _matches_pending_clarification(text, pending_clarification):
+        return RagGateVote(
+            vote=ALLOW,
+            reason="pending_clarification",
+            confidence=0.9,
+        )
+
     if len(content_tokens) <= 1 or len(text) <= 6:
         return RagGateVote(
             vote=DENY,
@@ -267,6 +286,10 @@ def compose_direct_response_text(raw_query: str, response_kind: Optional[str], r
         return "我可以帮你做通用问答、代码解释和调试、文本润色与翻译，也能结合本地生活信息帮你筛店、看券、做对比和推荐。"
     if kind == "memory_update":
         return "我记住了，这个偏好我会尽量沿用到后续对话里。"
+    if kind == "conversation_recap":
+        return "我记得我们刚才主要在聊上一轮的上下文。你可以继续问我刚才那家店、那张券，或者让我接着往下说。"
+    if kind == "location_unavailable":
+        return "这个位置不太适合本地生活推荐。你可以换成具体城市、商圈或地标，我再继续帮你找。"
     if kind == "empty":
         text = normalize_rag_gate_request(RagGateRequest(raw_query=raw_query))
         if text:
@@ -286,6 +309,31 @@ def compose_direct_response_text(raw_query: str, response_kind: Optional[str], r
     if reason:
         return "我需要更具体的信息才能继续。你可以补充对象、范围或目标。"
     return "我需要更具体的信息才能继续。你可以补充对象、范围或目标。"
+
+
+def _matches_pending_clarification(text: str, pending_clarification: Mapping[str, Any]) -> bool:
+    normalized = normalize_rag_gate_request(RagGateRequest(raw_query=text))
+    if not normalized:
+        return False
+
+    options = pending_clarification.get("options")
+    if isinstance(options, (list, tuple)):
+        for option in options:
+            if not isinstance(option, Mapping):
+                continue
+            for key in ("value", "label", "description"):
+                candidate = normalize_rag_gate_request(RagGateRequest(raw_query=str(option.get(key) or "")))
+                if candidate and candidate in normalized:
+                    return True
+
+    ambiguity_type = str(pending_clarification.get("ambiguity_type") or "").strip().lower()
+    if ambiguity_type in {"location", "city", "area", "district", "region"}:
+        if any(city in normalized for city in ("北京", "上海", "广州", "深圳", "杭州", "成都", "重庆", "天津")):
+            return True
+        if len(normalized) <= 6 and any("\u4e00" <= char <= "\u9fff" for char in normalized):
+            return True
+
+    return False
 
 
 def _combine_votes(rule_vote: RagVoteValue, llm_vote: Optional[RagVoteValue]) -> RagVoteValue:

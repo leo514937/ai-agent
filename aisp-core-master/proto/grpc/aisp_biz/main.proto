@@ -1,0 +1,121 @@
+// const string __VERSION__ = '0.0.130'
+syntax = "proto3";
+
+option java_package = "com.zhihu.aisp.core.translate";
+option java_multiple_files = true;
+option java_outer_classname = "AispCoreTranslateProto";
+option go_package = "./aisp_core_translate";
+
+package aisp.core;
+import "google/protobuf/wrappers.proto";
+
+enum Language {
+  UNDEFINED_LANGUAGE = 0;
+  // 常见语言
+  af = 1;  // 南非语
+  ar = 2;  // 阿拉伯语
+  az = 3;  // 阿塞拜疆语
+  bg = 4;  // 保加利亚语
+  bn = 5;  // 孟加拉语
+  ca = 6;  // 加泰罗尼亚语
+  cs = 7;  // 捷克语
+  da = 8;  // 丹麦语
+  de = 9;  // 德语
+  el = 10; // 希腊语
+  en = 11; // 英语
+  es = 12; // 西班牙语
+  et = 13; // 爱沙尼亚语
+  fa = 14; // 波斯语
+  fi = 15; // 芬兰语
+  fr = 16; // 法语
+  he = 17; // 希伯来语
+  hi = 18; // 印地语
+  hr = 19; // 克罗地亚语
+  hu = 20; // 匈牙利语
+  hy = 21; // 亚美尼亚语
+  id = 22; // 印度尼西亚语
+  it = 23; // 意大利语
+  ja = 24; // 日语
+  ka = 25; // 格鲁吉亚语
+  kk = 26; // 哈萨克语
+  ko = 27; // 韩语
+  lt = 28; // 立陶宛语
+  lv = 29; // 拉脱维亚语
+  mk = 30; // 马其顿语
+  mn = 31; // 蒙古语
+  ms = 32; // 马来语
+  nl = 33; // 荷兰语
+  no = 34; // 挪威语
+  pl = 35; // 波兰语
+  pt = 36; // 葡萄牙语
+  ro = 37; // 罗马尼亚语
+  ru = 38; // 俄语
+  sk = 39; // 斯洛伐克语
+  sl = 40; // 斯洛文尼亚语
+  sr = 41; // 塞尔维亚语
+  sv = 42; // 瑞典语
+  th = 43; // 泰语
+  tr = 44; // 土耳其语
+  uk = 45; // 乌克兰语
+  uz = 46; // 乌兹别克语
+  vi = 47; // 越南语
+  zh = 48; // 中文（简体）
+  zh_tw = 49; // 中文（繁体）
+
+  // 其他语言（扩展）
+  am = 50;  // 阿姆哈拉语
+  be = 51;  // 白俄罗斯语
+  bs = 52;  // 波斯尼亚语
+  eu = 53;  // 巴斯克语
+  gl = 54;  // 加利西亚语
+  gu = 55;  // 古吉拉特语
+  is = 56;  // 冰岛语
+  kn = 57;  // 卡纳达语
+  ky = 58;  // 吉尔吉斯语
+  lo = 59;  // 老挝语
+  ml = 60;  // 马拉雅拉姆语
+  mr = 61;  // 马拉地语
+  ne = 62;  // 尼泊尔语
+  pa = 63;  // 旁遮普语
+  si = 64;  // 僧伽罗语
+  ta = 65;  // 泰米尔语
+  te = 66;  // 泰卢固语
+  ur = 67;  // 乌尔都语
+  yo = 68;  // 约鲁巴语
+  zu = 69;  // 祖鲁语
+}
+
+// ===================================================
+
+
+message TranslateHTMLRequest{
+  string content = 1;                           // HTML内容
+  Language source_language = 2;                 // 源语言
+  Language target_language = 3;                 // 目标语言
+  // 示例：不需要翻译的内容（selection 表达式）
+  // class选择器:  .not-translate
+  // 标签选择器:    h2
+  // ID选择器:     #not-translate
+  // 选择器组合:    h2, .not-translate, #not-translate
+  // 级联选择：     h2 > span
+  repeated string not_translate_selections = 4;             // 不需要翻译的内容（selection 表达式）
+  ExtraInfo extra_info = 5; // 额外附加信息
+}
+
+message ExtraInfo {
+  int64 doc_id = 1;             // 文档ID
+  string doc_type = 2;          // 文档类型(ContentType)
+}
+
+message TranslateHTMLResponse{
+  int64 status = 1;             // 状态码，0表示成功，非0表示失败
+  string message = 2;           // 错误信息
+  string translate_content = 3;  // 翻译后HTML内容
+}
+
+// ===================== service =====================
+
+service AispTranslateService {
+  // 翻译HTML
+  rpc TranslateHTML(TranslateHTMLRequest) returns (TranslateHTMLResponse);
+}

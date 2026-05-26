@@ -181,13 +181,60 @@ class AnswerPlan(CoreModel):
     extra: Dict[str, Any] = Field(default_factory=dict)
 
 
+class EntityJoinResult(CoreModel):
+    candidate_entities: List[str] = Field(default_factory=list)
+    evidence_bindings: Dict[str, List[str]] = Field(default_factory=dict)
+    tool_bindings: Dict[str, List[str]] = Field(default_factory=dict)
+    selected_entity: Optional[str] = None
+    cross_entity_detected: bool = False
+    issues: List[str] = Field(default_factory=list)
+    extra: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AnswerContract(CoreModel):
+    original_query: str = ""
+    required_facets: List[Dict[str, Any]] = Field(default_factory=list)
+    evidence_requirements: Dict[str, Any] = Field(default_factory=dict)
+    tool_requirements: Dict[str, Any] = Field(default_factory=dict)
+    forbidden_without_evidence: List[str] = Field(default_factory=list)
+    candidate_entities: List[str] = Field(default_factory=list)
+    selected_entity: Optional[str] = None
+    missing_slots: List[str] = Field(default_factory=list)
+    clarification_slot: Optional[str] = None
+    extra: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AnswerVerifierResult(CoreModel):
+    passed: bool = False
+    issues: List[str] = Field(default_factory=list)
+    suggested_response_mode: str = "grounded"
+    repair_hint: str = ""
+    extra: Dict[str, Any] = Field(default_factory=dict)
+
+
 class PlanStep(CoreModel):
     step_id: str = ""
     goal: str = ""
     expected_output: Optional[str]
     allowed_tools: List[str] = Field(default_factory=list)
+    input_payload: Dict[str, Any] = Field(default_factory=dict)
     risk_level: Literal['low', 'medium', 'high'] = "low"
     requires_approval: bool = False
+
+
+class TaskPlan(CoreModel):
+    enabled: bool = False
+    trigger_reason: str = ""
+    summary: str = ""
+    route_candidate: Optional[str] = None
+    task_complexity: Literal['simple', 'complex'] = "complex"
+    execution_mode: Literal['auto', 'simple', 'plan_execute'] = "plan_execute"
+    can_fallback_to_legacy: bool = True
+    required_facets: List[Dict[str, Any]] = Field(default_factory=list)
+    optional_facets: List[Dict[str, Any]] = Field(default_factory=list)
+    steps: List[PlanStep] = Field(default_factory=list)
+    failure_reason: Optional[str] = None
+    extra: Dict[str, Any] = Field(default_factory=dict)
 
 
 class StepResult(CoreModel):
@@ -308,6 +355,11 @@ class EvidenceQualityDecision(CoreModel):
     is_valid: bool = True
     reason: str = ""
     fallback_reason: Optional[str] = None
+    missing_slots: List[str] = Field(default_factory=list)
+    clarification_slot: Optional[str] = None
+    covered_facets: List[str] = Field(default_factory=list)
+    missing_facets: List[str] = Field(default_factory=list)
+    tool_candidates: List[str] = Field(default_factory=list)
     details: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -584,9 +636,13 @@ class AnswerComposeRequest(CoreModel):
     tool_result: Optional[NormalizedToolResult]
     plan_summary: Optional[PlanExecutionSummary]
     memory_injection_plan: Optional[MemoryInjectionPlan]
+    entity_join_result: Optional[EntityJoinResult] = None
+    answer_contract: Optional[AnswerContract] = None
     routing_decision: Optional['RoutingDecision'] = None
     evidence_quality: Optional[EvidenceQualityDecision] = None
     final_response_mode: Optional[str] = None
+    missing_slots: List[str] = Field(default_factory=list)
+    clarification_slot: Optional[str] = None
     allow_direct_response: bool = False
     direct_response_kind: Optional[str]
     history_summary: Optional[str] = None
@@ -601,6 +657,7 @@ class AnswerComposeResult(CoreModel):
 
 class PersistentSessionContext(CoreModel):
     current_topic: Optional[str] = None
+    current_shop: Optional[str] = None
     recent_entities: List[str] = Field(default_factory=list)
     clarification_result: Dict[str, Any] = Field(default_factory=dict)
     user_preferences: Dict[str, Any] = Field(default_factory=dict)
@@ -656,7 +713,11 @@ class TurnRuntimeState(CoreModel):
     evidence_pack: Optional[EvidencePack] = None
     citations: List[Citation] = Field(default_factory=list)
     answer_plan: Optional[AnswerPlan] = None
+    entity_join_result: Optional[EntityJoinResult] = None
+    answer_contract: Optional[AnswerContract] = None
+    answer_verifier_result: Optional[AnswerVerifierResult] = None
     tool_plan: Optional[ToolSelection] = None
+    task_plan: Optional[TaskPlan] = None
     raw_tool_result: Optional[ToolExecutionResult] = None
     tool_result: Optional[NormalizedToolResult] = None
     plan: List[PlanStep] = Field(default_factory=list)

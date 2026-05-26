@@ -634,6 +634,7 @@ class LocalLifeSubgraph:
             evidence_claims=evidence_claims,
             page=command.page,
             current_topic=top_shop.name if top_shop else slots.category or slots.scene,
+            current_shop=top_shop.name if top_shop else persistent.current_shop or persistent.selected_shop_name,
             selected_shop_id=top_shop.shop_id if top_shop else None,
             source="local-life-agent",
             fallback=source_summary["source_mode"] != "java_business" or bool(source_summary["degraded_reason"]),
@@ -947,11 +948,17 @@ class LocalLifeSubgraph:
         current_action = bundle_data.get("mode") or (
             slots.action.value if hasattr(slots.action, "value") else slots.action
         )
+        current_shop = (
+            bundle_data.get("current_shop")
+            or bundle_data.get("selected_shop_name")
+            or (ranked_candidates[0].name if ranked_candidates else persistent.current_shop)
+        )
         next_steps = list(bundle_data.get("next_steps") or persistent.next_steps or ())
         task_chain = list(bundle_data.get("task_chain") or ())
         updated = persistent.model_copy(
             update={
                 "current_topic": bundle_data.get("current_topic") or state.current_topic or slots.category or slots.scene,
+                "current_shop": current_shop or persistent.current_shop,
                 "page": command.page or state.page,
                 "current_city": slots.city or state.client_context.get("city") or persistent.current_city,
                 "current_location": {
@@ -962,7 +969,7 @@ class LocalLifeSubgraph:
                 "current_constraints": slots.model_dump(mode="json"),
                 "last_candidates": [candidate.model_dump(mode="json") if hasattr(candidate, "model_dump") else dict(candidate) for candidate in ranked_candidates],
                 "selected_shop_id": bundle_data.get("selected_shop_id") or (ranked_candidates[0].shop_id if ranked_candidates else persistent.selected_shop_id),
-                "selected_shop_name": bundle_data.get("current_topic") or (ranked_candidates[0].name if ranked_candidates else persistent.selected_shop_name),
+                "selected_shop_name": current_shop or (ranked_candidates[0].name if ranked_candidates else persistent.selected_shop_name),
                 "local_life_preferences": list(slots.preferences),
                 "local_life_avoid": list(slots.avoid),
                 "current_scene": slots.scene,

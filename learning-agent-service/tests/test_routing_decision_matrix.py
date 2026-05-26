@@ -6,6 +6,7 @@ import _bootstrap  # noqa: F401
 
 from learning_agent_service.application.routing import (
     apply_fast_decision_to_routing,
+    build_clarification_question,
     build_evidence_quality,
     build_initial_routing_decision,
     can_enter_retrieval,
@@ -246,6 +247,15 @@ class RoutingDecisionMatrixTestCase(unittest.TestCase):
         self.assertTrue(routing.should_retrieve)
         self.assertIsNotNone(state["turn"].retrieval_plan)
         self.assertEqual(route_after_understand(state), "rag_subgraph")
+
+    def test_shop_detail_is_not_exposed_as_user_clarification_slot(self) -> None:
+        self.assertEqual(
+            build_clarification_question(
+                clarification_slot="shop_detail",
+                query_text="山城一锅这家店有券吗，环境评价怎么样",
+            ),
+            "你是想看这家店的具体信息，还是想重新选一家店？",
+        )
 
     def test_coupon_and_environment_query_routes_to_rag_plus_tool(self) -> None:
         container = _FakeContainer()

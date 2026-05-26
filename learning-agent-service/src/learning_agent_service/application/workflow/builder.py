@@ -1,7 +1,12 @@
 from __future__ import annotations
 
-from .runner import SequentialWorkflowRunner
+from copy import deepcopy
+from dataclasses import dataclass
+from typing import Any
+
+from .runner import SequentialWorkflowRunner, _update_phase5_trace
 from .services import WorkflowServices
+from ...domain.errors import TerminalEvent
 from .subgraphs import (
     run_plan_execute_subgraph,
     run_rag_subgraph,
@@ -20,6 +25,63 @@ except ImportError:  # pragma: no cover - optional dependency
 
 
 LANGGRAPH_AVAILABLE = StateGraph is not None
+_CHECKPOINT_FALLBACKS: dict[str, dict[str, Any]] = {}
+
+
+@dataclass
+class _CheckpointSnapshot:
+    values: dict[str, Any]
+
+
+class _CheckpointAwareGraphProxy:
+    def __init__(self, graph) -> None:
+        self._graph = graph
+
+    def invoke(self, state, config=None):
+        thread_id = _thread_id_from_config(config) or _thread_id_from_state(state)
+        if thread_id:
+            _CHECKPOINT_FALLBACKS[thread_id] = deepcopy(state)
+        result = self._graph.invoke(state, config=config)
+        if thread_id:
+            _CHECKPOINT_FALLBACKS[thread_id] = deepcopy(result)
+        return result
+
+    def get_state(self, config=None):
+        thread_id = _thread_id_from_config(config)
+        if thread_id and thread_id in _CHECKPOINT_FALLBACKS:
+            return _CheckpointSnapshot(values=deepcopy(_CHECKPOINT_FALLBACKS[thread_id]))
+        getter = getattr(self._graph, "get_state", None)
+        if callable(getter):
+            try:
+                snapshot = getter(config)
+            except Exception:
+                snapshot = None
+            if snapshot is not None and getattr(snapshot, "values", None):
+                return snapshot
+        return _CheckpointSnapshot(values={})
+
+    def __getattr__(self, item):
+        return getattr(self._graph, item)
+
+
+def _thread_id_from_config(config: Any) -> str | None:
+    if not isinstance(config, dict):
+        return None
+    configurable = config.get("configurable")
+    if not isinstance(configurable, dict):
+        return None
+    thread_id = configurable.get("thread_id")
+    text = str(thread_id or "").strip()
+    return text or None
+
+
+def _thread_id_from_state(state: Any) -> str | None:
+    if not isinstance(state, dict):
+        return None
+    runtime = state.get("runtime")
+    session_id = getattr(runtime, "session_id", None) if runtime is not None else None
+    text = str(session_id or "").strip()
+    return text or None
 
 
 class LangGraphWorkflowRunner(SequentialWorkflowRunner):
@@ -29,28 +91,56 @@ class LangGraphWorkflowRunner(SequentialWorkflowRunner):
         workflow_version: str = "learn-agent/v1",
         checkpointer: object | None = None,
     ) -> None:
-        super().__init__(services=services, workflow_version=workflow_version)
-        self._graph = _build_langgraph_runner(services, checkpointer=checkpointer)
+        super().__init__(services=services, workflow_version=workflow_version, runner_kind="langgraph")
+        self._checkpointer = checkpointer
+        self._graph = _CheckpointAwareGraphProxy(_build_langgraph_runner(services, checkpointer=checkpointer))
 
     def run_state(self, state):
+        annotate_result = self._checkpointer is None
         if self._is_terminal(state):
-            return self._finalize_terminal(state)
+            result = self._finalize_terminal(state)
+            self._record_checkpoint_fallback(result)
+            return self._annotate_runner_context(result) if annotate_result else result
 
         try:
             result = self._graph.invoke(state, config=_build_graph_config(state))
         except Exception as exc:
             result = self._record_unexpected_error(state, "langgraph.invoke", exc)
+            result = self._finalize_terminal(result)
+            self._record_checkpoint_fallback(result)
+            return self._annotate_runner_context(result) if annotate_result else result
 
         runtime = result["runtime"]
         if runtime.emitted_events:
             if runtime.terminal_event is None:
                 default_terminal = TerminalEvent.ERROR if runtime.errors else TerminalEvent.FINAL
                 result["runtime"] = runtime.model_copy(update={"terminal_event": default_terminal})
-            return result
+            self._record_checkpoint_fallback(result)
+            return self._annotate_runner_context(result) if annotate_result else result
 
         if result["runtime"].terminal_event == TerminalEvent.ERROR:
-            return self._finalize_terminal(result)
-        return self._finalize_terminal(result, default_terminal=TerminalEvent.FINAL)
+            result = self._finalize_terminal(result)
+            self._record_checkpoint_fallback(result)
+            return self._annotate_runner_context(result) if annotate_result else result
+        result = self._finalize_terminal(result, default_terminal=TerminalEvent.FINAL)
+        self._record_checkpoint_fallback(result)
+        return self._annotate_runner_context(result) if annotate_result else result
+
+    def _annotate_runner_context(self, state):
+        return _update_phase5_trace(
+            state,
+            runner_kind=self.runner_kind,
+            runner_backend="langgraph",
+            runner_class=self.__class__.__name__,
+            compare_ready=True,
+        )
+
+    def _record_checkpoint_fallback(self, state):
+        if self._checkpointer is None:
+            return
+        thread_id = _thread_id_from_state(state)
+        if thread_id:
+            _CHECKPOINT_FALLBACKS[thread_id] = deepcopy(state)
 
 
 def _build_graph_config(state):

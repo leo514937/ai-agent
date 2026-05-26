@@ -53,6 +53,8 @@ class PlanExecuteSubgraphServices:
 @dataclass
 class WorkflowServices:
     load_context: StateHandler = passthrough_handler
+    consume_pending_clarification: StateHandler = passthrough_handler
+    conversation_recap_direct_response: StateHandler = passthrough_handler
     understand_turn: UnderstandTurnServices = field(default_factory=UnderstandTurnServices)
     rag_subgraph: RagSubgraphServices = field(default_factory=RagSubgraphServices)
     tool_subgraph: ToolSubgraphServices = field(default_factory=ToolSubgraphServices)

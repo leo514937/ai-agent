@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, Type
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 from learning_agent_service.domain.contracts import (
     PlanExecutionSummary,
@@ -277,12 +277,13 @@ class ChatStreamRequest(BaseModel):
     response_mode: Optional[str] = None
     topic_hint: Optional[str] = None
     history_summary: Optional[str] = None
-    client_context: Dict[str, Any] = Field(default_factory=dict)
+    client_context: Dict[str, Any] = Field(default_factory=dict, validation_alias=AliasChoices("context", "client_context"))
 
 
 class SessionStateResponse(BaseModel):
     session_id: str
     current_topic: Optional[str] = None
+    current_shop: Optional[str] = None
     recent_entities: List[str] = Field(default_factory=list)
     clarification_result: Optional[Dict[str, Any]] = None
     user_preferences: Dict[str, Any] = Field(default_factory=dict)

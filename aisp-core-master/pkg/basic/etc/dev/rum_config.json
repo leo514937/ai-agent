@@ -1,0 +1,12 @@
+{
+  "scheme": "http",
+  "search_host": "merger-rum-search.s4.svc.bceapp01.zhihu.com:8080",
+  "update_host": "merger-rum-write.s4.svc.bceapp01.zhihu.com:8080",
+  "get_host": "merger-rum-get.s4.svc.bceapp01.zhihu.com:8080",
+  "search_path": "search",
+  "upsert_path": "upsert",
+  "delete_path": "delete",
+  "get_path": "get",
+  "infos_path": "infos",
+  "timeout": 2000
+}

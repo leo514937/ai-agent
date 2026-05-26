@@ -68,6 +68,7 @@ class TopicMasteryRecord:
 @dataclass(frozen=True)
 class PersistentSessionContext:
     current_topic: Optional[str] = None
+    current_shop: Optional[str] = None
     recent_entities: Tuple[str, ...] = ()
     clarification_result: Mapping[str, Any] = field(default_factory=dict)
     user_preferences: Mapping[str, Any] = field(default_factory=dict)
@@ -108,6 +109,7 @@ class MemoryRecallSignals:
     intent: Optional[str] = None
     raw_query: str = ""
     current_topic: Optional[str] = None
+    current_shop: Optional[str] = None
     history_summary: Optional[str] = None
     recent_entities: Tuple[str, ...] = ()
     active_plan_id: Optional[str] = None
@@ -141,6 +143,7 @@ class MemoryRecallPlan:
 @dataclass(frozen=True)
 class SessionUpdate:
     current_topic: Optional[str] = None
+    current_shop: Optional[str] = None
     recent_entities: Tuple[str, ...] = ()
     clarification_result: Mapping[str, Any] = field(default_factory=dict)
     last_retrieval_topic: Optional[str] = None

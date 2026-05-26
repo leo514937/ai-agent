@@ -108,6 +108,15 @@ _PROFILE_PATTERNS = (
     "怎么使用你",
     "怎么用你",
 )
+_CONVERSATION_RECAP_PATTERNS = (
+    "你记得我们说过什么吗",
+    "刚才说到哪了",
+    "上一个问题是什么",
+    "我们刚才说什么",
+    "继续刚才的话题",
+    "前面我们聊到哪了",
+    "回顾一下我们刚才聊了什么",
+)
 _APPROVE_TOKENS = ("确认", "继续执行", "同意", "可以执行", "确认继续", "继续吧")
 _REJECT_TOKENS = ("先不执行", "拒绝", "取消执行", "不用执行", "先别", "不执行")
 
@@ -197,6 +206,33 @@ class HeuristicIntentGate:
         local_life = _classify_local_life_turn(command, message, lowered, style or OutputStyle.DETAILED, persistent)
         if local_life is not None:
             return _turn_result_to_fast_decision(local_life)
+
+        conversation_recap = _looks_like_conversation_recap(message, lowered)
+        if conversation_recap:
+            return FastDecision(
+                intent=IntentType.SUMMARY,
+                needs_rag=False,
+                needs_tool=False,
+                needs_clarify=False,
+                needs_query_rewrite=False,
+                confidence=0.9,
+                key_slots={
+                    "topic_hint": command.topic_hint,
+                    "question_type": "conversation_recap",
+                    "requested_style": style.value if style else None,
+                },
+                extra={
+                    "route_candidate": "conversation_recap",
+                    "route_candidates": _route_candidates_metadata(
+                        chosen="conversation_recap",
+                        profile_matched=False,
+                        local_life_matched=False,
+                        chosen_reason="history_recap_request",
+                        chosen_decision=TurnDecision.DIRECT_ANSWER,
+                        chosen_intent=IntentType.SUMMARY,
+                    ),
+                },
+            )
 
         compare = _looks_like_compare_query(message, lowered)
         if compare:
@@ -396,6 +432,15 @@ def _looks_like_profile_query(message: str, lowered: str) -> bool:
     return any(token in lowered for token in ("what can you do", "what are your capabilities", "what can you help with"))
 
 
+def _looks_like_conversation_recap(message: str, lowered: str) -> bool:
+    compact = message.replace(" ", "")
+    if _contains_any(compact, _CONVERSATION_RECAP_PATTERNS) or _contains_any(lowered, tuple(pattern.lower() for pattern in _CONVERSATION_RECAP_PATTERNS)):
+        return True
+    return any(token in compact for token in ("记得", "刚才", "上一个问题", "继续刚才", "前面我们")) and any(
+        token in compact for token in ("说过", "聊过", "说到", "话题", "内容", "什么")
+    )
+
+
 def _contains_any(text: str, tokens: tuple[str, ...]) -> bool:
     return any(token in text for token in tokens)
 
@@ -452,6 +497,9 @@ def _turn_result_to_fast_decision(result) -> FastDecision:
     approval_resume = bool(slots.get("approval_resume") or extra.get("approval_resume"))
     if approval_resume:
         needs_rag = False
+        needs_tool = True
+    elif local_life_action in {"booking", "coupon"}:
+        needs_rag = True
         needs_tool = True
     elif local_life_action in _LOCAL_LIFE_TOOL_ACTIONS:
         needs_rag = False

@@ -5,7 +5,7 @@ spring:
     name: hmdp
   mvc:
     async:
-      request-timeout: 5m
+      request-timeout: 15m
   datasource:
     driver-class-name: com.mysql.jdbc.Driver
     url: jdbc:mysql://localhost:3306/hmdp?allowPublicKeyRetrieval=true&useSSL=false&serverTimezone=UTC&characterEncoding=utf8

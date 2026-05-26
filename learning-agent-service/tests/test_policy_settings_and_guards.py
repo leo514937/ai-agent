@@ -132,6 +132,37 @@ class PolicySettingsAndGuardsTestCase(unittest.TestCase):
         self.assertEqual(policy.hybrid_retriever.fusion_top_k, 15)
         self.assertEqual(policy.hybrid_retriever.rerank_top_k, 8)
 
+    def test_settings_exposes_architecture_flags(self) -> None:
+        env = {
+            "LEARNING_AGENT_ENABLE_TRACE_HARNESS": "true",
+            "LEARNING_AGENT_ENABLE_REPLAY_HARNESS": "true",
+            "LEARNING_AGENT_ENABLE_TOOL_MOCK_HARNESS": "true",
+            "LEARNING_AGENT_ENABLE_RAG_GOLDEN_EVIDENCE_HARNESS": "true",
+            "LEARNING_AGENT_ENABLE_EVALUATION_HARNESS": "true",
+            "LEARNING_AGENT_ENABLE_REQUIRED_FACETS_TO_PLANS": "false",
+            "LEARNING_AGENT_ENABLE_PARTIAL_GROUNDED": "false",
+            "LEARNING_AGENT_ENABLE_SLOT_CLARIFY": "false",
+            "LEARNING_AGENT_ENABLE_RAG_PLUS_TOOL_PARTIAL_ANSWER": "false",
+            "LEARNING_AGENT_ENABLE_TASK_PLAN_FOR_LOCAL_LIFE": "false",
+            "LEARNING_AGENT_ENABLE_ANSWER_VERIFIER": "false",
+            "LEARNING_AGENT_ANSWER_VERIFIER_MODE": "enforce",
+        }
+        with patch.dict(os.environ, env, clear=False):
+            settings = Settings()
+
+        self.assertTrue(settings.enable_trace_harness)
+        self.assertTrue(settings.enable_replay_harness)
+        self.assertTrue(settings.enable_tool_mock_harness)
+        self.assertTrue(settings.enable_rag_golden_evidence_harness)
+        self.assertTrue(settings.enable_evaluation_harness)
+        self.assertFalse(settings.enable_required_facets_to_plans)
+        self.assertFalse(settings.enable_partial_grounded)
+        self.assertFalse(settings.enable_slot_clarify)
+        self.assertFalse(settings.enable_rag_plus_tool_partial_answer)
+        self.assertFalse(settings.enable_task_plan_for_local_life)
+        self.assertFalse(settings.enable_answer_verifier)
+        self.assertEqual(settings.answer_verifier_mode, "enforce")
+
     def test_clarification_guard_uses_configured_thresholds(self) -> None:
         decision = evaluate_clarification(
             intent_confidence=0.61,

@@ -390,3 +390,48 @@
   - 在 `start_python.ps1` 的两处 `Start-Process` 调用（正常启动 + 降级回退）中，均显式注入 `-RedirectStandardOutput $stdoutLogFile` 和 `-RedirectStandardError $logFile`。
   - 现在执行 `bash start_all.sh` 后，终端可以实时看到 Python AI 服务的完整运行日志（包括 uvicorn 请求日志、业务日志和错误堆栈）。
 
+
+## 2026-05-25 任务进展
+
+### 1. 架构设计图美化与修正
+- **优化内容**：重新设计了 langgraph_architecture.txt 中的架构图。提供了结构更为清晰的 ASCII 纯文本架构图，并新增了可通过 Markdown 预览直接渲染的高颜值 Mermaid 代码块版本。修正了节点间断开的连接关系，明确了从“理解意图”分发到不同处理子图（知识检索、工具调用、直接回答），最后统一汇聚到“组装最终回答”和“持久化”的闭环流向。
+
+## 2026-05-26 任务进展
+
+### 1. AI服务启动超时与请求响应慢深度全链路诊断 (100% 成功实施)
+- **启动超时原因分析**：
+  1. **Qdrant 数据库冷启动分片恢复缓慢**：Qdrant 服务在刚刚被拉起时，需要从磁盘物理载入并恢复已有的 `local_life_hybrid_chunks` 和 `local_life_parent_child_chunks` 两大知识向量集合的数据。该磁盘 IO 恢复过程在系统高负荷或冷启动下通常耗时 **6 ~ 10 秒**。
+  2. **预热脚本阻塞等待**：Python 服务的启动脚本 `start_python.ps1` 在拉起 `uvicorn` 服务之前，会强制串行运行预热脚本 `local_life.py`。该脚本负责探测和校验上述两大集合的结构。在 Qdrant 尚未完成冷启动数据加载的极早期，预热脚本在连接 Qdrant 时会发生阻塞甚至暂时连接拒绝，导致预热耗时拉长至 **6 ~ 21秒** 不等。
+  3. **端口健康检查阈值过低**：`start_all.sh` 中的 `wait_for_health` 检测端口 8000 是否开启，其硬编码的轮询超时检测为 **30 次（每次1秒）**。当【Qdrant 恢复 + Python 预热 21s + uvicorn 引导 3s】的总时长逼近或超过 30s 边界时，便会误报 `[Warn] 等待 AI 服务 (8000) 超时`。事实上，后台 Python 进程并未挂掉，不久后即能正常拉起并开始监听 8000 端口。
+- **请求响应慢（哪里慢）与 Java 掉线瓶颈诊断**：
+  1. **外部 Embedding 接口响应极慢**：在多路 RAG 知识检索中，系统向 OpenRouter 远程网关发起 `qwen/qwen3-embedding-8b` 向量化生成请求，由于网络环境不稳定及跨国传输开销，单次 Embedding 网络交互耗时高达 **2.2 秒至 7.17 秒** 之间。
+  2. **同步大模型决策/改写阻塞**：工作流中的“意图识别”与“查询改写”节点属于**同步、非流式**的 JSON 生成调用（`deepseek/deepseek-v4-flash`）。大模型必须输出完整 JSON 数据包后流程才能放行，单次同步请求常耗时 **5.2 秒** 左右。
+  3. **多级串行延迟累加**：一条标准的 RAG 检索流水线为：【加载上下文 -> Heuristic意图判断 -> LLM分类(5s) -> 槽位提取 -> 串行/并发 Query改写(5s) -> Embedding向量化(7s) -> Qdrant三路检索 -> 重排 -> 组装回答 -> SSE流式响应】。在没有缓存或冷启动网络抖动下，累加延迟极易冲破 10~20 秒。
+  4. **Java 默认读超时配置偏低（致命）**：Java 后端的 `AiRemoteClient.java` 中，同步 `chat` 客户端的读超时硬编码为 `DEFAULT_READ_TIMEOUT_MS = 8000`（8秒）。当大模型分类、查询改写和向量计算等前期准备工作整体耗时超过 8 秒时，Java 端因超时主动断开 Socket 连接。这导致 Python 后端遭遇 Broken Pipe 异常（如 `Premature EOF` 错误），前端呈现死锁无响应，大模型交互完全崩溃。
+- **RAG 运行时模型重调用原理解释**：
+  1. **静态知识向量 vs. 动态查询向量**：阐明了已预先灌装在 Qdrant 中的商家/优惠券数据（静态数据）与用户动态输入查询（如“卷卷烤肉怎么样”）的本质区别。Qdrant 进行向量相似度匹配的前提是“两端都是向量”，因此用户的实时输入必须在运行时在线调用 Embedding 接口生成临时向量，才能进入 Qdrant 进行距离计算。
+  2. **上下文相关的动态决策与改写**：解释了“意图识别”与“查询改写”无法离线静态存储的原因。由于用户提问形式千变万化，且多轮对话中存在大量的代词指代（如“它”、“附近”等）和信息省略，系统必须在线读取实时上下文，动态将模糊的 Query 改写为“卷卷烤肉的环境怎么样”等完整检索句，并动态判定业务意图，这是无法通过静态存储代替的。
+  3. **启动预热时无 API 调用**：明确指出了在正常重新启动时，只要 Qdrant 中已有知识集合数据且点数大于 0，启动预热脚本 `local_life.py` 就会**自动跳过所有的模型和 Embedding API 向量计算**（即控制台日志输出 `local_life_bootstrap_no_seed_needed`）。启动时之所以耗时几秒，纯粹是 Python 脚本在**本地轮询等待 Qdrant 服务程序本身初始化并开启监听**，绝无任何高时延的外部网络大模型接口开销。
+- **超时配置调优与误报修复 (100% 成功实施)**：
+  1. **Java 后端超时容差提升**：修改 [AiRemoteClient.java](file:///d:/javacode/hm-dianping/src/main/java/com/hmdp/ai/remote/AiRemoteClient.java#L24)，将普通问答的默认读超时 `DEFAULT_READ_TIMEOUT_MS` 由原先的 `8000` 提升至 `30000`（30秒）。完美容忍高时延 RAG 网络和复杂意图改写的极端长耗时，彻底解决了 Java 端提前切断连接导致的 Python 报错及前端假死。
+  2. **一键启动健康检测自愈阈值调优**：修改 [start_all.sh](file:///d:/javacode/hm-dianping/start_all.sh#L425)，将等待 AI 服务 (8000) 就绪的超时检测次数从 `30` 提升至 `60`（每次间隔 1 秒）。给 Qdrant 冷启动后的向量数据页面加载与 Python 静态检查留出了充足的等待冗余度，彻底根治了高频出现的伪超时报错警示。
+
+### 2. 澄清 LangGraph / Sequential 编排与前端交互关系
+- **架构澄清**：明确了尽管目前活跃执行路径走的是轻量级的 `SequentialWorkflowRunner`，而并非 LangGraph 的原生 `StateGraph` / `compile` 对象，但内部**最复杂的业务执行子图（RAG 知识检索、Tool 工具调用、PlanExecute 复杂计划拆解）完全深度介入了前端交互**。
+- **全链路交互打通**：
+  - **澄清交互**：大模型/分类器发现多意图或槽位缺失时，输出 `clarification_card`，前端 Vue 响应并渲染出交互式选择面板。
+  - **审批交互**：`PlanExecute` 阶段需要人工确认时，输出 `approval_required`，前端 Vue 渲染审批提示框，点击确认后发起 POST 请求以推进下一步流程。
+  - **思考状态与计时**：各执行阶段会实时推送 `heartbeat` 及启动/完成事件（`ack` / `intent_analysis` / `retrieval` / `tool` / `plan_execute`），前端将其无缝聚合于极简流光时间线内进行动态计时和步骤渲染。
+
+### 3. 本地 AI 智能体与成熟企业级项目 zhida_pro 深度对比评估
+- **全方位架构剖析**：对 Go 语言实现的高并发、企业级多阶段图编排系统 `zhida_pro` 源码架构进行了全面梳理。对比并分析了底层引擎、安全合规、RAG 检索深度、配置管理、高并发吞吐以及前端 UX 交互等 6 大核心维度的水平差异，输出高保真对比分析报告：[zhida_pro_comparison_report.md](file:///C:/Users/14011/.gemini/antigravity-ide/brain/b9b41bdd-5b3c-4728-8e32-4261669f1d18/zhida_pro_comparison_report.md)。
+- **核心差距诊断**：
+  1. **多重安全防护（最核心差距）**：`zhida_pro` 拥有前置四重输入合规审查 + 模型生成后置“句级（Word）流式安全阻断与马赛克覆盖”，可完全杜绝有害信息输出，而本地项目此处为桩函数。
+  2. **企业级多源 RAG 与过滤**：`zhida_pro` 支持 Wiki、Arxiv、知乎等多路召回及 Simhash 海量重叠度去重与 Reranker 精细重排，本地生活检索源较单一。
+  3. **高并发与 Apollo 热重载**：`zhida_pro` 基于 gRPC 协议传输，并在 Apollo 配置中心托管图和策略白名单，支持热变更与 A/B 灰度测试。
+- **本地项目亮点确认**：本地生活 AI 助手在前端微动效及用户触感交互层面（如自左向右金属灰色流光计时思考、打字机 finishers 优雅渐进收尾、无气泡 ChatGPT/Claude 式极简对齐骨架）全面反超，体验更具现代审美。
+
+### 4. 梳理系统物理拓扑、端到端接口调用细节并输出排障指南
+- **端到端调用流重构梳理**：系统化解构了前端（3001）-> Java 网关（8081）-> Python 引擎（8000）-> Qdrant/Postgre/Redis/MySQL 数据库在流式对话（RAG）和业务 Tool Call 下的实际物理端口地图、数据 Payload 交互格式和 SQL 执行细节。
+- **编写极速排障手册**：输出全链路物理调用与排障自愈指南：[local_life_execution_plumbing_guide.md](file:///C:/Users/14011/.gemini/antigravity-ide/brain/b9b41bdd-5b3c-4728-8e32-4261669f1d18/local_life_execution_plumbing_guide.md)。重点针对 Windows 下的高频卡顿超时（如 Java 读超时 8s 瓶颈已升至 30s）、Qdrant 磁盘恢复时预热脚本伪超时、僵尸进程后台死锁残留以及 IPv6 解析带来的网络重连时延等 4 大高频隐性障碍提供了实战自愈手段，助力本地项目秒开无阻跑通。
+

@@ -1,0 +1,170 @@
+syntax = "proto3";
+
+package luca.aisp.core;
+
+option java_package = "aisp.core.grpc";
+option go_package = "./aisp_core_grpc";
+
+// const string __VERSION__ = '0.0.130'
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
+import "google/api/annotations.proto";
+
+
+message Conversation {
+  enum State {
+    DELETED = 0;
+    NORMAL = 1;
+  }
+
+  int64 id = 1;
+  int64 creator_id = 2;
+  State state = 3;
+}
+
+message Dialogue {
+  enum State {
+    PROCESSING = 0;
+    SUCCESS = 1;
+    FAIL = 2;
+  }
+
+  enum AuditState {
+    UNSET = 0;
+    PASS = 1;
+    USER_MESSAGE_NOT_PASS = 2;
+    AI_MESSAGE_NOT_PASS = 3;
+  }
+
+  int64 id = 1;
+  int64 conversation_id = 2;
+  State state = 3;
+  AuditState audit_state = 4;
+  string user_message = 5;
+  string ai_message = 6;
+}
+
+message CreateConversationRequest {
+  int64 tenant_id = 1;
+  int64 task_id = 2;
+  int64 creator_id = 3;
+  map<string, google.protobuf.Value> system = 4;
+}
+
+message GetConversationRequest {
+  int64 tenant_id = 1;
+  int64 task_id = 2;
+  int64 conversation_id = 3;
+  int64 member_id = 4;
+}
+
+message DeleteConversationRequest {
+  int64 tenant_id = 1;
+  int64 task_id = 2;
+  int64 conversation_id = 3;
+  int64 member_id = 4;
+}
+
+message CreateDialogueRequest {
+  message RequestEnv {
+    message HeaderEntry {
+      string key = 1;
+      repeated string value = 2;
+    }
+
+    map<string, HeaderEntry> headers = 1;
+  }
+
+  int64 tenant_id = 1;
+  int64 task_id = 2;
+  int64 conversation_id = 3;  // 多轮对话 ID. 当 task_id 对应的任务为「任务型对话」时, 该字段可为 0. 为 0 时, 会自动创建多轮对话.
+  string user_message = 4;
+  int64 member_id = 5;
+  map<string, google.protobuf.Value> custom = 6;
+  RequestEnv request_env = 7;
+}
+
+message GetDialogueRequest {
+  int64 tenant_id = 1;
+  int64 task_id = 2;
+  int64 dialogue_id = 3;
+  int64 member_id = 4;
+}
+
+service AispCoreService {
+  rpc CreateConversation(CreateConversationRequest) returns (Conversation) {
+    option (google.api.http) = {
+      post: "/v1/tenants/{tenant_id}/tasks/{task_id}/conversations"
+      body: "*"
+    };
+  }
+  rpc GetConversation(GetConversationRequest) returns (Conversation);
+  rpc DeleteConversation(DeleteConversationRequest) returns (google.protobuf.Empty);
+
+  rpc CreateDialogue(CreateDialogueRequest) returns (Dialogue) {
+    option (google.api.http) = {
+      post: "/v1/tenants/{tenant_id}/tasks/{task_id}/conversations/{conversation_id}/dialogues"
+      body: "*"
+    };
+  };
+  rpc CreateDialogueStream(CreateDialogueRequest) returns (stream Dialogue);
+  rpc GetDialogue(GetDialogueRequest) returns (Dialogue);
+}
+
+message CreateTenantRequest {
+  int64 owner = 1;
+  string name = 2;
+  string description = 3;
+}
+
+message GetTenantRequest {
+  int64 id = 1;
+}
+
+message Tenant {
+  int64 id = 1;
+  int64 creator = 2;
+  string name = 3;
+  string description = 4;
+  string state = 5;
+  int64 created_at = 6;
+  int64 updated_at = 7;
+}
+
+message SearchRequest {
+  string knowledge_base_name = 1; // 知识库名称
+  string description = 2;         // 图片描述
+  repeated string tags = 3;       // 图片标签
+}
+
+message Image {
+  string image_token = 1;       // 图片 token
+  string description = 2;       // 图片描述
+  repeated string tags = 3;     // 图片标签
+}
+
+message SearchResponse {
+  int64 total = 1;              // 总数
+  repeated Image images = 2;    // 检索结果列表
+}
+
+
+message AddImagesRequest {
+  string knowledge_base_name = 1; // 知识库名称
+  string description = 2;         // 图片描述
+  repeated string tags = 3;       // 图片标签
+  string image_token = 4;         // 图片 token
+}
+
+message AddImagesResponse {
+  bool is_success = 1;
+}
+
+service AdminService {
+  rpc CreateTenant(CreateTenantRequest) returns (Tenant);
+  rpc GetTenant(GetTenantRequest) returns (Tenant);
+//  不需要提供 rpc 了，先注释掉
+//  rpc Search(SearchRequest) returns (SearchResponse);         // 检索知识库
+//  rpc AddImages(AddImagesRequest) returns(AddImagesResponse); // 向知识库中添加图片
+}

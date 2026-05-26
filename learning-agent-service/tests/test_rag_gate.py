@@ -46,6 +46,22 @@ class RagGateTestCase(unittest.TestCase):
         self.assertEqual(vote.response_kind, "profile")
         self.assertEqual(vote.reason, "profile_query")
 
+    def test_rule_allows_short_location_answer_when_pending_clarification_exists(self) -> None:
+        vote = classify_rag_rule(
+            RagGateRequest(
+                raw_query="北京",
+                pending_clarification={
+                    "ambiguity_type": "location",
+                    "options": [
+                        {"id": "opt-1", "label": "北京", "value": "北京", "description": "北京"},
+                    ],
+                },
+            )
+        )
+
+        self.assertEqual(vote.vote, ALLOW)
+        self.assertEqual(vote.reason, "pending_clarification")
+
     def test_vote_combination_is_conservative(self) -> None:
         allow_gate = RagRouteGate(
             llm_judge=lambda request: RagGateVote(vote=ALLOW, reason="llm_allow", confidence=0.7)
@@ -81,6 +97,12 @@ class RagGateTestCase(unittest.TestCase):
         self.assertIn("通用问答", text)
         self.assertIn("本地生活", text)
         self.assertIn("推荐", text)
+
+    def test_direct_response_text_handles_unserviceable_location(self) -> None:
+        text = compose_direct_response_text("北极", "location_unavailable")
+
+        self.assertIn("不太适合本地生活推荐", text)
+        self.assertIn("具体城市", text)
 
 
 if __name__ == "__main__":

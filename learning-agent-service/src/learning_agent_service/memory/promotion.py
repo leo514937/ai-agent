@@ -75,6 +75,7 @@ class SessionMemoryUpdater:
         summary_changed = bool(topic or open_questions or confirmed_facts or next_steps or clarification_result)
         return SessionUpdate(
             current_topic=topic,
+            current_shop=current.current_shop,
             recent_entities=deduped_entities,
             clarification_result=_mapping_dict(clarification_result),
             last_retrieval_topic=topic or current.last_retrieval_topic,
@@ -98,6 +99,7 @@ class SessionMemoryUpdater:
         extra.update(dict(update.extra))
         return PersistentSessionContext(
             current_topic=update.current_topic or current.current_topic,
+            current_shop=update.current_shop or current.current_shop,
             recent_entities=update.recent_entities or current.recent_entities,
             clarification_result=update.clarification_result or current.clarification_result,
             user_preferences=current.user_preferences,

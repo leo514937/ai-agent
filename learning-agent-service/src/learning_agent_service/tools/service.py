@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
 from learning_agent_service.config import Settings
 from learning_agent_service.application.rag_gate import compose_direct_response_text
+from learning_agent_service.application.routing import build_clarification_question
 from learning_agent_service.domain import (
     AnswerComposeRequest,
     AnswerComposeResult,
@@ -838,6 +839,20 @@ class ToolResultNormalizer:
             approval_request=dict(extra.get("approval_request") or {}),
         )
         normalized = self.normalizer.normalize(payload)
+        normalized_payload = dict(normalized.payload or {})
+        if normalized.tool_name == "get_coupon_list":
+            data = normalized_payload.get("data")
+            if isinstance(data, Mapping):
+                data_dict = dict(data)
+                couponsns = data_dict.pop("couponsns", None)
+                if "coupons" not in data_dict and couponsns is not None:
+                    data_dict["coupons"] = couponsns
+                if "count" not in data_dict:
+                    coupons_value = data_dict.get("coupons")
+                    if isinstance(coupons_value, list):
+                        data_dict["count"] = len(coupons_value)
+                normalized_payload["data"] = data_dict
+        normalized = normalized.model_copy(update={"payload": normalized_payload})
         normalized_status = result.status if result.status in {
             ToolExecutionStatus.PENDING_APPROVAL,
             ToolExecutionStatus.REJECTED,
@@ -886,6 +901,8 @@ class AnswerComposer:
             routing = request.routing_decision
             if routing is not None and str(routing.required_action).strip().lower() == "clarify":
                 answer_text = self._compose_clarify_response(request, routing)
+            elif str(request.direct_response_kind or "").strip().lower() == "conversation_recap":
+                answer_text = self._compose_conversation_recap_response(request)
             else:
                 answer_text = compose_direct_response_text(
                     request.raw_query,
@@ -893,6 +910,26 @@ class AnswerComposer:
                 )
             confidence = 0.24 if (routing is not None and routing.required_action == "clarify") else 0.82
             return self._build_result(request, answer_text, confidence, already_streamed=False)
+
+        routing = request.routing_decision
+        rag_result = request.rag_result
+        evidence_status = self._evidence_status(rag_result)
+        evidence_quality = request.evidence_quality
+        response_mode = str(
+            request.final_response_mode
+            or getattr(evidence_quality, "response_mode", "")
+            or ""
+        ).strip().lower()
+        if response_mode == "ask_clarification":
+            answer_text = self._compose_clarify_response(request, routing)
+            if request.plan_summary is not None or request.tool_result is not None or request.memory_injection_plan is not None:
+                answer_text = self._append_auxiliary_sections(request, answer_text, include_auxiliary=True)
+            return self._build_result(request, answer_text, 0.2, already_streamed=False)
+        if response_mode == "partial_grounded" and request.tool_result is None and rag_result is not None:
+            answer_text = self._compose_partial_grounded_answer(request)
+            if request.plan_summary is not None or request.tool_result is not None or request.memory_injection_plan is not None:
+                answer_text = self._append_auxiliary_sections(request, answer_text, include_auxiliary=True)
+            return self._build_result(request, answer_text, 0.55, already_streamed=False)
 
         mixed_answer = self._compose_rag_plus_tool_answer(request)
         if mixed_answer is not None:
@@ -904,14 +941,6 @@ class AnswerComposer:
             confidence = 0.86 if request.tool_result and request.tool_result.extra.get("grounding_source") == "business_evidence" else 0.42
             return self._build_result(request, tool_answer, confidence, already_streamed=False)
 
-        rag_result = request.rag_result
-        evidence_status = self._evidence_status(rag_result)
-        evidence_quality = request.evidence_quality
-        response_mode = str(
-            request.final_response_mode
-            or getattr(evidence_quality, "response_mode", "")
-            or ""
-        ).strip().lower()
         if response_mode == "no_answer":
             answer_text = self._compose_no_answer(request, evidence_quality)
             if request.plan_summary is not None or request.tool_result is not None or request.memory_injection_plan is not None:
@@ -1003,13 +1032,7 @@ class AnswerComposer:
         already_streamed: bool = False,
     ) -> AnswerComposeResult:
         normalized = str(answer_text or "").strip()
-        
-        # 兜底防御：如果是非流式直接返回的兜底/直接回复，需要闭合 runner.py 中打开的前置步骤折叠框
-        if not already_streamed:
-            # 只有在非流式输出时，或者如果正文并没有闭合标签时才安全补齐
-            if "</details>" not in normalized:
-                normalized = "</details>\n" + normalized
-                
+
         if normalized and not already_streamed:
             self._emit_fallback_answer_stream(request, normalized)
         return AnswerComposeResult(answer_text=normalized, confidence=confidence)
@@ -1167,10 +1190,52 @@ class AnswerComposer:
         question = str(getattr(routing, "clarification_question", "") or "").strip()
         if question:
             return question
+        clarification_slot = str(getattr(routing, "clarification_slot", "") or getattr(request.evidence_quality, "clarification_slot", "") or request.clarification_slot or "").strip()
+        missing_slots = list(getattr(routing, "missing_slots", None) or request.missing_slots or getattr(request.evidence_quality, "missing_slots", None) or [])
+        slot_question = build_clarification_question(
+            missing_slots,
+            clarification_slot=clarification_slot or None,
+            query_text=request.raw_query,
+        )
+        if slot_question:
+            return slot_question
         kind = str(request.direct_response_kind or "").strip().lower()
         if kind:
             return compose_direct_response_text(request.raw_query, kind)
         return compose_direct_response_text(request.raw_query, "low_info")
+
+    def _compose_conversation_recap_response(self, request: AnswerComposeRequest) -> str:
+        summary = str(request.history_summary or "").strip()
+        meta = dict(request.stream_event_meta or {})
+        current_shop = str(meta.get("current_shop") or "").strip()
+        if not current_shop and request.answer_contract is not None:
+            current_shop = str(request.answer_contract.selected_entity or "").strip()
+        if not current_shop and request.entity_join_result is not None:
+            current_shop = str(request.entity_join_result.selected_entity or "").strip()
+        if current_shop and summary:
+            return f"我们刚才主要在聊{current_shop}：{summary}。如果你愿意，我可以继续接着这个话题说。"
+        if current_shop:
+            return f"我们刚才主要在聊{current_shop}。如果你愿意，我可以继续接着这个话题说。"
+        if summary:
+            return f"我们刚才主要在聊：{summary}。如果你愿意，我可以继续接着这个话题说。"
+        return "我能记住我们刚才的上下文，但这一轮还没沉淀出可回顾的摘要。你可以再问我刚才那家店、刚才的券，或者让我继续接着说。"
+
+    def _compose_partial_grounded_answer(self, request: AnswerComposeRequest) -> str:
+        evidence_quality = request.evidence_quality
+        covered_facets = list(getattr(evidence_quality, "covered_facets", None) or [])
+        missing_facets = list(getattr(evidence_quality, "missing_facets", None) or [])
+        slot_notes: list[str] = []
+        if covered_facets:
+            slot_notes.append(f"已确认：{'、'.join(covered_facets[:3])}")
+        if missing_facets:
+            slot_notes.append(f"暂未确认：{'、'.join(missing_facets[:3])}")
+        intro = "目前只能先给你一个部分判断。"
+        if slot_notes:
+            intro = f"{intro} {'；'.join(slot_notes)}。"
+        body = self._grounded_fallback(request)
+        if body.startswith("噢，系统服务出现了一点小状况呢"):
+            return body
+        return self._append_auxiliary_sections(request, f"{intro}\n{body}", include_auxiliary=True)
 
     def _compose_no_result_answer(self, tool_name: str, payload: Mapping[str, Any]) -> str:
         data = _tool_data(payload)
@@ -1212,6 +1277,9 @@ class AnswerComposer:
         if tool_name == "get_coupon_list":
             shop_name = str(data.get("shop_name") or "这家店").strip() or "这家店"
             coupons = list(data.get("coupons") or [])
+            count = int(data.get("count") or len(coupons) or 0)
+            if count <= 0 or not coupons:
+                return f"{shop_name} 目前还没有可用券。你可以换一家店，或者告诉我想看的店名和区域。"
             summaries: list[str] = []
             for coupon in coupons[:3]:
                 if not isinstance(coupon, Mapping):
@@ -1286,53 +1354,7 @@ class AnswerComposer:
         return "\n".join([lead, *bullets])
 
     def _append_auxiliary_sections(self, request: AnswerComposeRequest, answer: str, *, include_auxiliary: bool) -> str:
-        sections = [answer]
-        if include_auxiliary:
-            plan_summary = request.plan_summary
-            if plan_summary is not None:
-                sections.append(
-                    "Plan execution: {status} ({completed}/{total})".format(
-                        status=plan_summary.status,
-                        completed=plan_summary.completed_steps,
-                        total=plan_summary.total_steps,
-                    )
-                )
-                if plan_summary.key_findings:
-                    sections.extend(plan_summary.key_findings[:2])
-                if plan_summary.final_decision:
-                    sections.append("Final decision: {decision}".format(decision=plan_summary.final_decision))
-            if request.tool_result and request.tool_result.normalized_output:
-                sections.append(
-                    "Tool result: {payload}".format(
-                        payload=request.tool_result.normalized_output.get("data", request.tool_result.normalized_output)
-                    )
-                )
-            memory_plan = request.memory_injection_plan
-            if memory_plan:
-                memory_context = self._format_memory_section(
-                    "Memory context",
-                    list(memory_plan.prompt_memories) + list(memory_plan.state_memories),
-                    limit=3,
-                )
-                episodic_context = self._format_memory_section(
-                    "Episodic context",
-                    list(memory_plan.episodic_memories),
-                    limit=3,
-                )
-                procedural_context = self._format_memory_section(
-                    "Procedural context",
-                    list(memory_plan.procedural_memories or memory_plan.tool_memories),
-                    limit=3,
-                )
-                rag_evidence = self._format_memory_section(
-                    "RAG evidence",
-                    list(memory_plan.semantic_memories or memory_plan.rag_memories),
-                    limit=3,
-                )
-                for item in (memory_context, episodic_context, procedural_context, rag_evidence):
-                    if item:
-                        sections.append(item)
-        return "\n\n".join(part for part in sections if part)
+        return answer
 
     @staticmethod
     def _format_memory_section(title: str, memories: Sequence[Any], *, limit: int) -> str:

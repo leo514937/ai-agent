@@ -13,6 +13,8 @@ from learning_agent_service.application.workflow.services import ToolSubgraphSer
 from learning_agent_service.application.workflow.subgraphs import route_after_understand, run_tool_subgraph, run_understand_turn
 from learning_agent_service.domain import (
     ChatTurnCommand,
+    ClarificationCard,
+    ClarificationOption,
     PersistentSessionContext,
     ReferenceResolutionResult,
     RetrievalPlan,
@@ -22,6 +24,7 @@ from learning_agent_service.domain import (
 )
 from learning_agent_service.domain.enums import IntentType, OutputStyle, TurnDecision
 from learning_agent_service.infrastructure.repositories.in_memory import InMemorySessionContextStore
+from learning_agent_service.rag.rewrite import QueryRewriteContext, QueryRewriteService
 
 
 class WorkflowRagGateTestCase(unittest.TestCase):
@@ -212,6 +215,321 @@ class WorkflowRagGateTestCase(unittest.TestCase):
         persisted = session_store.load("session-1", "user-1")
         self.assertIsNone(persisted.pending_clarification)
 
+    def test_load_context_resumes_pending_location_clarification_follow_up(self) -> None:
+        pending = ClarificationCard(
+            card_id="clarify-1",
+            question="你现在在哪个城市或位置附近？",
+            options=[
+                ClarificationOption(
+                    id="opt-1",
+                    label="北京",
+                    value="北京",
+                    description="北京",
+                )
+            ],
+            ambiguity_type="location",
+            source_turn_id="turn-old",
+            expires_at=None,
+        )
+        container = SimpleNamespace(rag_route_gate=RagRouteGate())
+        adapter = WorkflowNodeAdapter(container)
+
+        state = self._build_state("北京", pending_clarification=pending)
+        loaded = adapter.load_context(state)
+
+        self.assertEqual(loaded["turn"].routing_decision.required_action, "rag_retrieval")
+        self.assertTrue(loaded["turn"].routing_decision.should_retrieve)
+        self.assertEqual(loaded["turn"].extra["rag_gate"]["precheck_vote"], "allow")
+        self.assertEqual(loaded["turn"].extra["rag_gate"]["precheck_reason"], "pending_clarification")
+        self.assertEqual(loaded["turn"].extra["pending_clarification_restore"]["original_query"], "你现在在哪个城市或位置附近？")
+        self.assertEqual(loaded["turn"].extra["pending_clarification_restore"]["original_intent"], "local_life_recommend")
+        self.assertEqual(loaded["turn"].extra["pending_clarification_restore"]["original_route"], "rag_retrieval")
+
+    def test_load_context_restores_pending_location_clarification_from_result_only(self) -> None:
+        session_store = SimpleNamespace(load=MagicMock(return_value=PersistentSessionContext()))
+        memory_orchestrator = SimpleNamespace(
+            retrieve_for_state=MagicMock(),
+            build_injection_plan=MagicMock(),
+            attach_to_state=MagicMock(side_effect=lambda state, *_: state),
+        )
+        container = SimpleNamespace(
+            session_context_store=session_store,
+            memory_orchestrator=memory_orchestrator,
+            rag_route_gate=RagRouteGate(),
+        )
+        adapter = WorkflowNodeAdapter(container)
+
+        state = self._build_state(
+            "北京",
+            clarification_result={
+                "original_query": "附近有什么推荐菜",
+                "original_intent": "local_life_recommend",
+                "original_route": "rag_retrieval",
+                "question": "你现在在哪个城市或位置附近？",
+                "ambiguity_type": "location",
+            },
+        )
+
+        loaded = adapter.load_context(state)
+
+        self.assertIsNotNone(loaded["persistent"].pending_clarification)
+        self.assertEqual(loaded["persistent"].pending_clarification.question, "你现在在哪个城市或位置附近？")
+        self.assertEqual(loaded["turn"].routing_decision.required_action, "rag_retrieval")
+        self.assertEqual(loaded["turn"].extra["pending_clarification"]["question"], "你现在在哪个城市或位置附近？")
+        self.assertEqual(loaded["turn"].extra["pending_clarification_restore"]["original_query"], "附近有什么推荐菜")
+        self.assertEqual(loaded["turn"].extra["pending_clarification_restore"]["original_intent"], "local_life_recommend")
+        self.assertEqual(loaded["turn"].extra["pending_clarification_restore"]["original_route"], "rag_retrieval")
+
+    def test_beijing_pending_clarification_consumes_before_low_information_gate(self) -> None:
+        pending = ClarificationCard(
+            card_id="clarify-2",
+            question="你现在在哪个城市或位置附近？",
+            options=[
+                ClarificationOption(
+                    id="opt-2",
+                    label="北京",
+                    value="北京",
+                    description="北京",
+                )
+            ],
+            ambiguity_type="location",
+            source_turn_id="turn-old",
+            expires_at=None,
+        )
+        adapter = WorkflowNodeAdapter(SimpleNamespace(rag_route_gate=RagRouteGate()))
+
+        state = self._build_state("北京", pending_clarification=pending)
+        loaded = adapter.load_context(state)
+
+        self.assertEqual(loaded["turn"].routing_decision.required_action, "rag_retrieval")
+        self.assertEqual(loaded["turn"].extra["pending_clarification_restore"]["original_query"], "你现在在哪个城市或位置附近？")
+        self.assertEqual(loaded["turn"].extra["pending_clarification_restore"]["original_intent"], "local_life_recommend")
+        self.assertEqual(loaded["turn"].extra["pending_clarification_restore"]["original_route"], "rag_retrieval")
+        self.assertTrue(loaded["turn"].extra["rag_gate"]["precheck_vote"], "allow")
+
+    def test_parse_intent_slots_preserves_restored_pending_location_follow_up(self) -> None:
+        model_gateway = SimpleNamespace(classify_turn=MagicMock())
+        adapter = WorkflowNodeAdapter(
+            SimpleNamespace(
+                model_gateway=model_gateway,
+                rag_route_gate=RagRouteGate(),
+            )
+        )
+
+        state = self._build_state(
+            "北京",
+            clarification_result={
+                "original_query": "附近有什么推荐菜",
+                "original_intent": "local_life_recommend",
+                "original_route": "rag_retrieval",
+                "question": "你现在在哪个城市或位置附近？",
+                "ambiguity_type": "location",
+            },
+        )
+
+        loaded = adapter.load_context(state)
+        parsed = adapter.parse_intent_slots(loaded)
+
+        self.assertFalse(model_gateway.classify_turn.called)
+        self.assertEqual(parsed["turn"].routing_decision.required_action, "rag_retrieval")
+        self.assertTrue(parsed["turn"].extra["cached_rag_gate_vote"]["allowed"])
+        self.assertEqual(parsed["turn"].extra["pending_clarification_restore"]["original_query"], "附近有什么推荐菜")
+        self.assertIsNotNone(parsed["persistent"].pending_clarification)
+
+    def test_rewrite_query_preserves_follow_up_query_and_restores_original_topic(self) -> None:
+        captured: dict[str, object] = {}
+
+        class _RagOrchestrator:
+            def rewrite_query(self, request):  # noqa: ANN001
+                captured["request"] = request
+                return RetrievalPlan(
+                    semantic_query=request.current_topic or request.raw_query,
+                    keyword_query=request.current_topic or request.raw_query,
+                )
+
+        model_gateway = SimpleNamespace(classify_turn=MagicMock())
+        adapter = WorkflowNodeAdapter(
+            SimpleNamespace(
+                model_gateway=model_gateway,
+                rag_orchestrator=_RagOrchestrator(),
+                rag_route_gate=RagRouteGate(),
+            )
+        )
+
+        state = self._build_state(
+            "北京",
+            clarification_result={
+                "original_query": "附近有什么推荐菜",
+                "original_intent": "local_life_recommend",
+                "original_route": "rag_retrieval",
+                "question": "你现在在哪个城市或位置附近？",
+                "ambiguity_type": "location",
+            },
+        )
+
+        loaded = adapter.load_context(state)
+        parsed = adapter.parse_intent_slots(loaded)
+        rewritten = adapter.rewrite_query(parsed)
+
+        self.assertFalse(model_gateway.classify_turn.called)
+        self.assertEqual(parsed["persistent"].current_topic, "附近有什么推荐菜")
+        self.assertEqual(parsed["persistent"].last_retrieval_topic, "附近有什么推荐菜")
+        self.assertEqual(captured["request"].raw_query, "北京")
+        self.assertEqual(captured["request"].current_topic, "附近有什么推荐菜")
+        self.assertEqual(rewritten["turn"].retrieval_plan.semantic_query, "附近有什么推荐菜")
+
+    def test_rewrite_query_restores_topic_hint_from_pending_clarification_restore_when_current_topic_is_blank(self) -> None:
+        captured: dict[str, object] = {}
+
+        class _RagOrchestrator:
+            def rewrite_query(self, request):  # noqa: ANN001
+                captured["request"] = request
+                combined = f"{request.current_topic or ''} {request.raw_query or ''}".strip()
+                return RetrievalPlan(
+                    semantic_query=combined,
+                    keyword_query=combined,
+                )
+
+        model_gateway = SimpleNamespace(classify_turn=MagicMock())
+        adapter = WorkflowNodeAdapter(
+            SimpleNamespace(
+                model_gateway=model_gateway,
+                rag_orchestrator=_RagOrchestrator(),
+                rag_route_gate=RagRouteGate(),
+            )
+        )
+
+        state = self._build_state(
+            "北京",
+            clarification_result={
+                "original_query": "附近有什么推荐菜",
+                "original_intent": "local_life_recommend",
+                "original_route": "rag_retrieval",
+                "question": "你现在在哪个城市或位置附近？",
+                "ambiguity_type": "location",
+            },
+        )
+
+        loaded = adapter.load_context(state)
+        loaded["persistent"] = loaded["persistent"].model_copy(update={"current_topic": "", "last_retrieval_topic": ""})
+        rewritten = adapter.rewrite_query(loaded)
+
+        self.assertFalse(model_gateway.classify_turn.called)
+        self.assertEqual(captured["request"].raw_query, "北京")
+        self.assertEqual(captured["request"].current_topic, "附近有什么推荐菜")
+        self.assertEqual(captured["request"].topic_hint, "附近有什么推荐菜")
+        self.assertEqual(rewritten["turn"].retrieval_plan.semantic_query, "附近有什么推荐菜 北京")
+
+    def test_persist_session_preserves_clarification_state_from_turn_payload(self) -> None:
+        captured: dict[str, object] = {}
+
+        def persist_session(command):  # noqa: ANN001
+            captured["command"] = command
+            return SimpleNamespace(updated_context=command.persistent, memory_updates={})
+
+        container = SimpleNamespace(memory_service=SimpleNamespace(persist_session=persist_session))
+        adapter = WorkflowNodeAdapter(container)
+
+        pending = ClarificationCard(
+            card_id="clarify-3",
+            question="你现在在哪个城市或位置附近？",
+            options=[
+                ClarificationOption(
+                    id="opt-3",
+                    label="北京",
+                    value="北京",
+                    description="北京",
+                )
+            ],
+            ambiguity_type="location",
+            source_turn_id="turn-old",
+            expires_at=None,
+        )
+        state = self._build_state("北京")
+        state["persistent"] = PersistentSessionContext()
+        state["turn"] = state["turn"].model_copy(
+            update={
+                "clarification_card": pending,
+                "extra": {
+                    "clarification_result": {
+                        "original_query": "附近有什么推荐菜",
+                        "original_intent": "local_life_recommend",
+                        "original_route": "rag_retrieval",
+                        "question": "你现在在哪个城市或位置附近？",
+                        "ambiguity_type": "location",
+                    },
+                    "pending_clarification": pending.model_dump(mode="json"),
+                    "pending_clarification_restore": {
+                        "original_query": "附近有什么推荐菜",
+                        "original_intent": "local_life_recommend",
+                        "original_route": "rag_retrieval",
+                    },
+                },
+            }
+        )
+
+        updated = adapter.persist_session(state)
+        command = captured["command"]
+
+        self.assertEqual(command.persistent.current_topic, "附近有什么推荐菜")
+        self.assertEqual(command.persistent.last_retrieval_topic, "附近有什么推荐菜")
+        self.assertIsNotNone(command.persistent.pending_clarification)
+        self.assertEqual(command.persistent.clarification_result["original_query"], "附近有什么推荐菜")
+        self.assertEqual(updated["persistent"].current_topic, "附近有什么推荐菜")
+
+    def test_persist_session_reconstructs_clarification_state_from_routing_restore(self) -> None:
+        captured: dict[str, object] = {}
+
+        def persist_session(command):  # noqa: ANN001
+            captured["command"] = command
+            return SimpleNamespace(updated_context=command.persistent, memory_updates={})
+
+        container = SimpleNamespace(memory_service=SimpleNamespace(persist_session=persist_session))
+        adapter = WorkflowNodeAdapter(container)
+
+        routing = build_initial_routing_decision("北京", PersistentSessionContext()).model_copy(
+            update={
+                "required_action": "clarify",
+                "clarification_question": "你现在在哪个城市或位置附近？",
+                "route_reason": "pending_clarification_location",
+                "extra": {
+                    "pending_clarification_restore": {
+                        "original_query": "附近有什么推荐菜",
+                        "original_intent": "local_life_recommend",
+                        "original_route": "rag_retrieval",
+                        "question": "你现在在哪个城市或位置附近？",
+                        "ambiguity_type": "location",
+                    }
+                },
+            }
+        )
+        state = self._build_state("北京")
+        state["persistent"] = PersistentSessionContext()
+        state["turn"] = state["turn"].model_copy(update={"routing_decision": routing, "extra": {}})
+
+        updated = adapter.persist_session(state)
+        command = captured["command"]
+
+        self.assertEqual(command.persistent.current_topic, "附近有什么推荐菜")
+        self.assertEqual(command.persistent.last_retrieval_topic, "附近有什么推荐菜")
+        self.assertIsNotNone(command.persistent.pending_clarification)
+        self.assertEqual(command.persistent.pending_clarification.question, "你现在在哪个城市或位置附近？")
+        self.assertEqual(updated["persistent"].current_topic, "附近有什么推荐菜")
+
+    def test_query_rewriter_combines_follow_up_location_with_restored_topic(self) -> None:
+        service = QueryRewriteService()
+
+        plan = service.build_plan(
+            QueryRewriteContext(
+                raw_query="北京",
+                session_topic="附近有什么推荐菜",
+            )
+        )
+
+        self.assertIn("附近有什么推荐菜", plan.semantic_query)
+        self.assertIn("北京", plan.semantic_query)
+        self.assertIn("北京", plan.keyword_query)
+
     def test_compose_answer_uses_profile_direct_response_when_routed(self) -> None:
         captured = {}
 
@@ -249,6 +567,34 @@ class WorkflowRagGateTestCase(unittest.TestCase):
         self.assertEqual(request.stream_event_meta["route_candidate"], "profile")
         self.assertEqual(request.stream_event_meta["direct_response_kind"], "profile")
         self.assertEqual(updated["turn"].final_answer, "我可以帮你做很多事情。")
+
+    def test_conversation_recap_has_priority_over_low_information(self) -> None:
+        routing = build_initial_routing_decision(
+            "你记得我们说过什么吗",
+            PersistentSessionContext(
+                history_summary="刚才聊的是山城一锅的券和环境评价。",
+                current_topic="山城一锅",
+                recent_entities=["山城一锅"],
+            ),
+        )
+
+        self.assertEqual(routing.required_action, "direct_answer")
+        self.assertEqual(routing.route_candidate, "conversation_recap")
+        self.assertEqual(routing.route_reason, "conversation_recap_request")
+        self.assertFalse(routing.blocked)
+        self.assertIsNone(routing.clarification_question)
+
+    def test_arctic_unserviceable_location_returns_location_unavailable_direct_response(self) -> None:
+        routing = build_initial_routing_decision(
+            "附近有什么推荐菜，北极",
+            PersistentSessionContext(current_city="北京"),
+        )
+
+        self.assertEqual(routing.required_action, "direct_answer")
+        self.assertEqual(routing.route_candidate, "location_unavailable")
+        self.assertEqual(routing.route_reason, "unserviceable_location")
+        self.assertFalse(routing.blocked)
+        self.assertIn("unserviceable_location", routing.safeguards_triggered)
 
     def test_run_tool_subgraph_records_no_tool_mapping_state(self) -> None:
         services = ToolSubgraphServices(

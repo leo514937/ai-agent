@@ -5,6 +5,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
+from ..config import get_settings
 from ..domain.contracts import PersistentSessionContext, RetrievalPlan, RoutingDecision, ToolSelection, TurnRuntimeState
 from ..local_life.query_rewriter import _CITY_NAMES as _LOCAL_LIFE_CITY_NAMES
 
@@ -243,6 +244,7 @@ class DomainSignalRegistry:
         recent_entities = [str(item).strip() for item in (persistent.recent_entities or []) if str(item).strip()]
         anchors = [
             str(persistent.current_topic or "").strip(),
+            str(persistent.current_shop or "").strip(),
             str(persistent.selected_shop_name or "").strip(),
             str(persistent.current_city or "").strip(),
             str(context.get("shopName") or context.get("shop_name") or "").strip(),
@@ -326,6 +328,7 @@ def _extract_slots(
     shop_name = (
         context.get("shopName")
         or context.get("shop_name")
+        or persistent.current_shop
         or persistent.selected_shop_name
         or persistent.current_topic
         or _extract_shop_name(normalized, compact)
@@ -383,6 +386,7 @@ def _has_shop_context(persistent: PersistentSessionContext, context: Mapping[str
     return bool(
         persistent.selected_shop_id
         or persistent.selected_shop_name
+        or persistent.current_shop
         or context.get("shop_id")
         or context.get("shopId")
         or context.get("shop_name")
@@ -434,6 +438,22 @@ def _merge_candidate_slots(*candidates: DomainSignalCandidate) -> dict[str, Any]
     for candidate in candidates:
         merged.update(dict(candidate.slots))
     return merged
+
+
+def _phase1_routing_extra(routing: RoutingDecision) -> dict[str, Any]:
+    routing_extra = dict(getattr(routing, "extra", {}) or {})
+    settings = get_settings()
+    phase1_keys = ["route_review_decision"]
+    if bool(getattr(settings, "enable_required_facets_to_plans", True)):
+        phase1_keys.extend(
+            [
+                "required_facets",
+                "optional_facets",
+                "required_facets_source_constraints",
+                "user_need",
+            ]
+        )
+    return {key: routing_extra[key] for key in phase1_keys if key in routing_extra}
 
 
 def route_semantic_query(
@@ -861,7 +881,7 @@ def synthesize_retrieval_plan(
         "is_active": True,
         "is_latest": True,
     }
-    shop_name = str(slots.get("shop_name") or persistent.selected_shop_name or "").strip()
+    shop_name = str(slots.get("shop_name") or persistent.current_shop or persistent.selected_shop_name or "").strip()
     if shop_name:
         retrieval_filters["shop_name"] = shop_name
     shop_id = slots.get("shop_id") or persistent.selected_shop_id
@@ -886,6 +906,7 @@ def synthesize_retrieval_plan(
             "strategy": strategy,
             "preferred_chunk_roles": list(preferred_chunk_roles),
             "semantic_slots": slots,
+            **_phase1_routing_extra(routing),
         },
     )
 
@@ -920,6 +941,7 @@ def synthesize_tool_selection(
             "planning_state": "synthesized",
             "route_reason": routing.route_reason,
             "resolved_intent": routing.intent.name if routing.intent else None,
+            **_phase1_routing_extra(routing),
         },
     )
 
@@ -962,7 +984,7 @@ def _choose_tool_name(
     normalized = _normalize_text(turn.raw_query or routing.normalized_query)
     compact = _compact_text(normalized)
     shop_id = slots.get("shop_id") or persistent.selected_shop_id
-    shop_name = slots.get("shop_name") or persistent.selected_shop_name or persistent.current_topic
+    shop_name = slots.get("shop_name") or persistent.current_shop or persistent.selected_shop_name or persistent.current_topic
     voucher_id = slots.get("voucher_id") or slots.get("coupon_id")
     location = slots.get("location") or persistent.current_location
     if any(token in compact for token in ("营业", "开门", "开业", "还能去", "排队", "库存")):
@@ -1007,18 +1029,18 @@ def _build_tool_input(
     if tool_name == "get_coupon_list":
         return {
             "shop_id": slots.get("shop_id") or persistent.selected_shop_id,
-            "shop_name": slots.get("shop_name") or persistent.selected_shop_name or persistent.current_topic,
+            "shop_name": slots.get("shop_name") or persistent.current_shop or persistent.selected_shop_name or persistent.current_topic,
             "voucher_id": slots.get("voucher_id"),
             "query": normalized,
         }
     if tool_name == "get_order_status":
         return {
             "shop_id": slots.get("shop_id") or persistent.selected_shop_id,
-            "shop_name": slots.get("shop_name") or persistent.selected_shop_name or persistent.current_topic,
+            "shop_name": slots.get("shop_name") or persistent.current_shop or persistent.selected_shop_name or persistent.current_topic,
             "query": normalized,
         }
     return {
         "shop_id": slots.get("shop_id") or persistent.selected_shop_id,
-        "shop_name": slots.get("shop_name") or persistent.selected_shop_name or persistent.current_topic,
+        "shop_name": slots.get("shop_name") or persistent.current_shop or persistent.selected_shop_name or persistent.current_topic,
         "query": normalized,
     }

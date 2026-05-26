@@ -1,0 +1,58 @@
+version: 2.0
+base_image: bionic
+components:
+  python: "3.9"
+  golang: "1.22"
+
+deps:
+  - protobuf-compiler
+  - python3.7-venv
+  - libprotobuf-dev
+  - unzip
+#  - graphviz
+
+build:
+  - export GOPROXY=https://goproxy.in.zhihu.com,https://goproxy.cn,direct GOPRIVATE=git.in.zhihu.com
+  - go install golang.org/x/tools/cmd/goimports@v0.10.0
+  - git config --global url."git@git.in.zhihu.com:".insteadOf "https://git.in.zhihu.com/"
+  - go mod download || go mod download || go mod download || go mod download
+  - bash ci_build.sh
+
+cache:
+  directories:
+    - /go/pkg/mod
+
+test:
+  unittest:
+    - "true"
+
+  coverage_test:
+    report_fpath: coverage.out
+
+artifacts:
+  targets:
+    - docker
+
+runtime:
+  # （required）多阶段构建开关 https://wiki.in.zhihu.com/pages/viewpage.action?pageId=117707501
+  enabled: true
+
+  deps:
+    - graphviz
+
+  commands:
+    # （optional）运行容器命令列表
+    # 可执行必要的准备工作，如创建目录等
+    - echo "export GOPROXY=https://goproxy.in.zhihu.com,https://goproxy.cn,direct GOPRIVATE=git.in.zhihu.com"  >> /root/.bashrc
+    - export GOPROXY=https://goproxy.in.zhihu.com,https://goproxy.cn,direct GOPRIVATE=git.in.zhihu.com    # 为了顺利安装 goimports
+    - go install golang.org/x/tools/cmd/goimports@v0.10.0
+    - git config --global url."git@git.in.zhihu.com:".insteadOf "https://git.in.zhihu.com/"
+    - echo 0
+  paths:
+    # （optional）运行时依赖的文件/目录列表
+    #  默认为 /data/apps/{app_name} 整个目录
+    #  相对路径是相对于 /data/apps/{app_name}
+    # - target/app-name-version.jar       # 文件
+    # - bin/                              # 目录
+    # - '*.py'                            # 利用通配符配置多文件，加引号
+    - /data/apps/                         # 只保留应用目录

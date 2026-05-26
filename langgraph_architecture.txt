@@ -1,0 +1,87 @@
+# LangGraph / AI 服务架构图
+
+> 说明：
+> - 这份图按“现网链路图 + 内部模块图”两段式整理。
+> - 现网真实执行链路以 `SequentialWorkflowRunner` 为主。
+> - `LangGraph` 的 `StateGraph / compile / checkpointer` 相关实现目前存在于代码库中，但不在当前 `/api/ai/chat/stream` 的活跃执行路径上。
+
+## 1. 现网链路图
+
+```mermaid
+flowchart LR
+  U[用户 / 浏览器前端] --> V[前端开发服务器\n/api/ai/chat/stream]
+  V --> J[Java AI 网关层\nAiAssistantController\nAiAssistantStreamService]
+  J --> P[Python learning-agent-service\n/internal/v1/chat/stream]
+
+  subgraph PY[Python AI 服务]
+    direction TB
+    C[ChatWorkflowService]
+    R[SequentialWorkflowRunner\n当前线上实际执行]
+    G[LangGraph Builder / Compiled Graph\n代码中存在，但当前未走活跃路径]
+    S[(会话与状态存储\nRedis / Postgres)]
+
+    C --> R
+    C -. 对照实现 .-> G
+    R --> S
+    S --> R
+  end
+
+  P --> C
+```
+
+这条链路可以理解为：
+
+1. 前端发起 `/api/ai/chat/stream`
+2. 请求先到 Java AI 网关层
+3. Java 再转发到 Python `learning-agent-service`
+4. Python 侧由 `ChatWorkflowService` 进入 `SequentialWorkflowRunner`
+5. 运行结果再通过会话存储做持久化和续跑
+
+## 2. 内部模块图
+
+```mermaid
+flowchart TD
+  L[load_context\n加载上下文] --> Q[澄清回收 / 记忆回收\npending_clarification / recap]
+  Q --> T[understand_turn\n理解当前轮输入]
+  T --> O[路由与规划\nroute / plan / clarify]
+
+  O --> RG[RAG 子图\n检索计划 / 证据包]
+  O --> TK[Tool 子图\n工具计划 / 工具结果]
+  O --> PL[TaskPlan / plan_execute 子图\n复杂任务拆解]
+
+  RG --> JN[Entity Join / 证据聚合]
+  TK --> JN
+  PL --> JN
+
+  JN --> A[AnswerComposer\n组装草稿答案]
+  A --> W[AnswerVerifier\n规则校验 / 最终校验]
+  W --> F[最终回答 / stream events]
+  F --> S[(persist_session\nmemory_promotion)]
+  S --> L
+```
+
+### 2.1 模块职责
+
+- `load_context`：加载当前会话上下文、历史状态和必要的缓存信息。
+- `pending_clarification / recap`：优先处理澄清答复和回顾答复，避免把跟进句误当新问题。
+- `understand_turn`：把用户输入转换成结构化意图、槽位、约束和任务需求。
+- 路由与规划：决定是直接回答、走 RAG、走工具调用，还是需要进入澄清/计划分支。
+- `RAG 子图`：负责检索计划、证据收集和证据包输出。
+- `Tool 子图`：负责工具计划、工具执行和结果归一化。
+- `TaskPlan / plan_execute 子图`：用于更复杂的任务拆解和多步骤执行。
+- `Entity Join / 证据聚合`：把 RAG 证据、工具结果和实体信息对齐。
+- `AnswerComposer`：把中间结果组装成草稿答案。
+- `AnswerVerifier`：做最终规则校验，必要时回退到澄清、部分回答或拒答。
+- `persist_session / memory_promotion`：持久化本轮状态，并把可复用信息写回会话记忆。
+
+## 3. 设计要点
+
+- 当前线上链路不是自由多 Agent 聊天，而是受控的 workflow 编排。
+- 所有关键模块都应读写统一 State，避免各自维护上下文。
+- RAG、Tool、TaskPlan 这类能力适合沉淀成 subgraph。
+- 简单问题保持轻链路，复杂本地生活问题再进入更完整的规划与聚合流程。
+- `AnswerVerifier` 建议先从规则校验开始，不必一开始就引入复杂的 LLM judge。
+
+## 4. 一句话总结
+
+这套 AI 服务的核心不是“单一问答函数”，而是一个以 `ChatWorkflowService` 为入口、以 `SequentialWorkflowRunner` 为当前线上执行器、以 RAG / Tool / Plan / Compose / Verify 为内部能力节点的受控编排系统。

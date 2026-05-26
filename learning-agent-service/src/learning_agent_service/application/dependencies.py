@@ -400,7 +400,7 @@ class OpenAIAnswerComposeAdapter:
         stream_meta = dict(request.stream_event_meta or {})
         started_at = time.perf_counter()
         answer_parts: list[str] = []
-        thinking_parts: list[str] = []
+        thinking_parts: list[str] = ["<details><summary>思考</summary>\n"]
         details_closed = False
         with responses.stream(
             model=self.model or self.runtime.default_model,
@@ -442,9 +442,11 @@ class OpenAIAnswerComposeAdapter:
                 if event_type == "response.reasoning_text.delta":
                     thinking_parts.append(delta)
                     
-                    # 组合实时内容：当前的思考文本（带有临时闭合 details 标签，保证前端渲染完美） + 已经产生的回答（若有）
+                    # 组合实时内容：当前思考块（已打开 details） + 已经产生的回答（若有）
                     current_thinking = "".join(thinking_parts)
-                    current_answer = current_thinking + "\n</details>\n\n"
+                    current_answer = current_thinking
+                    if answer_parts and not details_closed:
+                        current_answer += "\n</details>\n\n"
                     if answer_parts:
                         current_answer += "".join(answer_parts)
                     
