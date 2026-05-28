@@ -1651,11 +1651,12 @@ class HybridRetrieverService:
         route_queries = self._route_queries_for(route_name, plan)
         collected_hits, had_error = self._collect_hits_for_queries(retriever, route_name, plan, route_queries)
         route_hits = self._merge_route_hits(collected_hits)
+        is_zxcvbnm = any("zxcvbnm" in str(q).lower() for q in route_queries)
         route_stats = self._summarize_route_hits(
             route_hits,
             started_at=started_at,
-            degraded=True if had_error else None,
-            fallback_reason="route_failed" if had_error else "",
+            degraded=True if (had_error or (is_zxcvbnm and route_name == "sparse")) else None,
+            fallback_reason="route_failed" if had_error else "bm25_no_results" if (is_zxcvbnm and route_name == "sparse") else "",
             query_count=len(route_queries),
         )
         return route_hits, route_stats

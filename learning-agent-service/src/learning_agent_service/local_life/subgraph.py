@@ -1733,11 +1733,11 @@ class LocalLifeSubgraph:
         intent = execution_contract.get("intent") or "local_life_recommend"
 
         context_data = bundle_data.get("context") or {}
-        current_shop = bundle_data.get("current_shop")
-        current_shop_id = bundle_data.get("selected_shop_id")
+        current_shop = bundle_data.get("current_shop") or context_data.get("current_shop") or context_data.get("selected_shop_name") or persistent.current_shop or persistent.selected_shop_name
+        current_shop_id = bundle_data.get("selected_shop_id") or context_data.get("selected_shop_id") or context_data.get("shop_id") or persistent.selected_shop_id
 
         if intent in ("local_life_recommend", "local_life_search"):
-            if not ranked_candidates and not execution_contract.get("resolved_shop_id"):
+            if not ranked_candidates and not execution_contract.get("resolved_shop_id") and not context_data.get("current_shop") and not context_data.get("selected_shop_name"):
                 current_shop = None
                 current_shop_id = None
 

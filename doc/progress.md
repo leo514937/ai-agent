@@ -520,3 +520,25 @@
 - **自定义回归测试用例合规通关**：
   - 新增定制专属回归测试集 `tests/test_context_engineering_fixes.py`，编写了 5 大核心场景的极限单元与集成测试用例，**5 个高级用例 100% 完美全绿通过**！
   - 运行全盘 15 个 Chat Workflow 工作流测试，**15 PASSED 100% 全量绿灯通关**！无任何历史老业务逻辑回归！
+
+
+### 5. 彻底解决 LangGraph 工作流运行器中 TypedDict 签名导致的 `KeyError: 'turn'` 冲突，并完成全套 Mock 自动化测试
+- **问题描述**: 
+  - 在运行 `tests/test_plan_execution_runtime.py` 时，`test_fallback_runner_matches_langgraph_when_available` 用例在 `prefer_langgraph=True`（使用 LangGraph 工作流运行器）时，报错 `KeyError: 'turn'`，导致 LangGraph 返回 `error` 状态，无法与 Fallback 顺序运行器达成一致。
+- **根因分析**: 
+  - **LangGraph 类型注解智能传参机制冲突**：在 `builder.py` 中，`load_context`、`compose_answer`、`persist_session`、`emit_final` 这四个节点是直接绑定注册的 `WorkflowNodeAdapter` 成员方法。这些方法的参数带有显式类型注解，例如 `def load_context(self, state: GraphState)`，其中 `GraphState` 是一个 `TypedDict` 字典。
+  - LangGraph Pregel 引擎在运行节点时会使用 `inspect.signature` 来智能解析并推断节点函数的入参。当它看到参数类型是被标注为特定的 `TypedDict`（即 `GraphState`）时，其内部传参和合并机制会尝试解包、提取或进行智能过滤，由于我们初始传入给 Pregel 的根 State 的类型注册与此发生微妙的分层字典通道冲突，导致了输入 dict 的 `"turn"` 键被智能过滤剥离，最终在解包 `state["turn"]` 时抛出 `KeyError`。
+  - 为什么 lambdas 没有问题？而像 `understand_turn` 等节点是用 lambda 表达式注册的（`lambda state: ...`），由于 lambda 并没有显式类型注解，LangGraph 会将其视作通用无类型节点，从而将完整的 state 字典原封不动地传递过去，执行成功。
+- **修复方案部署**: 
+  - **Lambda 闭包封装（Type-Annotation Shielding）**：修改 `src/learning_agent_service/application/workflow/builder.py` 中的节点添加逻辑，对所有直接挂载的成员方法节点（`services.load_context`、`services.compose_answer`、`services.persist_session`、`services.emit_final`）统一使用 lambda 闭包进行无类型签名拦截封装：
+    ```python
+    graph.add_node("load_context", lambda state: services.load_context(state))
+    graph.add_node("compose_answer", lambda state: services.compose_answer(state))
+    graph.add_node("persist_session", lambda state: services.persist_session(state))
+    graph.add_node("emit_final", lambda state: services.emit_final(state))
+    ```
+    这样通过无注解的 lambda 阻断了 LangGraph 对底层 adapter 成员方法 `GraphState` 的特征扫描与类型过滤，保证了整个 State 字典的数据在工作流中 100% 完整路由。
+- **自动化测试机制重构**:
+  - 在 `tests/test_plan_execution_runtime.py` 中，重构了完整的 Class 级别 Mock 机制，对 `FailoverOpenAIClient._invoke` 进行拦截以模拟 LLM 分类、Embedding 生成以及 Streaming 流式输出；同时对检索器的 evidence 过滤链以及 `RagResult` 进行了 `evidence_status="OK"` 的状态注入，完美通过了空内容校验的拦截防御。
+- **效果**:
+  - 成功解决了 LangGraph 的报错拦截。`tests/test_plan_execution_runtime.py` 内的 **4 个高难度测试用例全部 100% 绿灯通过**！实现了 LangGraph 运行器与 Fallback 顺序运行器运行结果的完美等价契合。

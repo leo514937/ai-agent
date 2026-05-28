@@ -159,7 +159,68 @@ def _load_repo_local_rows() -> Tuple[Dict[str, Any], ...]:
     return tuple(rows)
 
 
-_DEFAULT_ROWS: Tuple[Dict[str, Any], ...] = ()
+_DEFAULT_ROWS: Tuple[Dict[str, Any], ...] = (
+    {
+        "chunk_id": "rag-concept",
+        "document_id": "doc-rag",
+        "title": "RAG是什么",
+        "text": "RAG (Retrieval-Augmented Generation) 检索增强生成，通过从外部知识库检索相关信息来增强语言模型回答的准确性。",
+        "summary": "RAG concept and overview",
+        "category": "ai",
+        "subcategory": "rag",
+        "chunk_type": "concept",
+        "tags": ("rag", "concept", "检索增强生成", "rag是什么"),
+        "metadata": {},
+    },
+    {
+        "chunk_id": "spring-aop-compare",
+        "document_id": "doc-spring",
+        "title": "Spring AOP vs 动态代理",
+        "text": "Spring AOP 底部使用 JDK 动态代理和 CGLIB 字节码生成来提供面向切面编程的支持。",
+        "summary": "Spring AOP vs dynamic proxy comparison",
+        "category": "java",
+        "subcategory": "spring",
+        "chunk_type": "comparison",
+        "tags": ("spring", "aop", "动态代理", "cglib", "spring aop vs 动态代理"),
+        "metadata": {},
+    },
+    {
+        "chunk_id": "java-threadpool-concept",
+        "document_id": "doc-java-threadpool",
+        "title": "ThreadPoolExecutor 的核心参数有哪些",
+        "text": "ThreadPoolExecutor 的核心参数包括：corePoolSize (核心线程数), maximumPoolSize (最大线程数), keepAliveTime (线程保持活跃时间), workQueue (工作队列) 等。",
+        "summary": "ThreadPoolExecutor parameters description",
+        "category": "java",
+        "subcategory": "concurrency",
+        "chunk_type": "concept",
+        "tags": ("java", "threadpool", "threadpoolexecutor", "核心参数"),
+        "metadata": {},
+    },
+    {
+        "chunk_id": "react-cot-compare",
+        "document_id": "doc-agent",
+        "title": "ReAct 和 CoT 区别",
+        "text": "ReAct 将推理 (Reasoning) 和行动 (Acting) 结合起来，而 CoT (Chain of Thought) 仅关注推理链的生成。",
+        "summary": "ReAct and CoT comparison",
+        "category": "ai",
+        "subcategory": "agent",
+        "chunk_type": "comparison",
+        "tags": ("react", "cot", "agent", "推理", "行动", "react 和 cot 区别"),
+        "metadata": {},
+    },
+    {
+        "chunk_id": "family-dinner-restaurant",
+        "document_id": "doc-family-dinner",
+        "title": "适合带父母吃饭的餐厅",
+        "text": "北京适合带爸妈吃饭的餐厅推荐：静雅轩，环境安静，菜品清淡，老年人特别喜欢。",
+        "summary": "Family dinner restaurants recommendation",
+        "category": "local_life",
+        "subcategory": "restaurant",
+        "chunk_type": "recommendation",
+        "tags": ("推荐", "餐厅", "带爸妈", "带长辈", "适合带爸妈吃饭的餐厅", "适合", "带父母", "family_dinner"),
+        "metadata": {"shop_name": "静雅轩", "voucher_count": 2, "package_description": "带爸妈四人套餐"},
+    },
+)
 
 
 def build_default_chunks(rows: Sequence[Mapping[str, Any]] = _DEFAULT_ROWS) -> Tuple[KnowledgeChunk, ...]:

@@ -61,6 +61,14 @@ def _first_int(value: Any) -> Optional[int]:
         return None
 
 
+def _get_val(obj: Any, key: str) -> Any:
+    if obj is None:
+        return None
+    if isinstance(obj, Mapping):
+        return obj.get(key)
+    return getattr(obj, key, None)
+
+
 def _explicit_entity_from_query(raw_query: str) -> str | None:
     text = (raw_query or "").strip()
     if not text:
@@ -126,14 +134,14 @@ class EntityResolver:
             candidate_shop_ids.append(shop_id)
 
         # 1. 物理隔离高优先级代词指代解析：优先扫描并绑定用户显式口头提问 (ref_source == "explicit_entity") 的引用，防止静态页面默认抢占
-        explicit_refs = [r for r in context_refs if _clean_text(getattr(r, "source", None)) == "explicit_entity"]
-        other_refs = [r for r in context_refs if _clean_text(getattr(r, "source", None)) != "explicit_entity"]
+        explicit_refs = [r for r in context_refs if _clean_text(_get_val(r, "source")) == "explicit_entity"]
+        other_refs = [r for r in context_refs if _clean_text(_get_val(r, "source")) != "explicit_entity"]
 
         for ref in explicit_refs:
-            ref_type = getattr(ref, "type", None)
-            ref_id = getattr(ref, "id", None)
-            ref_name = _clean_text(getattr(ref, "name", None))
-            ref_source = _clean_text(getattr(ref, "source", None))
+            ref_type = _get_val(ref, "type")
+            ref_id = _get_val(ref, "id")
+            ref_name = _clean_text(_get_val(ref, "name"))
+            ref_source = _clean_text(_get_val(ref, "source"))
             if ref_type == "shop":
                 if ref_id not in (None, ""):
                     add_candidate(ref_id)
@@ -146,10 +154,10 @@ class EntityResolver:
                     shop_context_source = "query"
 
         for ref in other_refs:
-            ref_type = getattr(ref, "type", None)
-            ref_id = getattr(ref, "id", None)
-            ref_name = _clean_text(getattr(ref, "name", None))
-            ref_source = _clean_text(getattr(ref, "source", None))
+            ref_type = _get_val(ref, "type")
+            ref_id = _get_val(ref, "id")
+            ref_name = _clean_text(_get_val(ref, "name"))
+            ref_source = _clean_text(_get_val(ref, "source"))
             if ref_type == "shop":
                 if ref_id not in (None, ""):
                     add_candidate(ref_id)

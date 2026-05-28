@@ -254,7 +254,7 @@ class RoutingDecisionMatrixTestCase(unittest.TestCase):
                 clarification_slot="shop_detail",
                 query_text="山城一锅这家店有券吗，环境评价怎么样",
             ),
-            "你是想看这家店的具体信息，还是想重新选一家店？",
+            "你是想看哪家店的详情，还是想重新选一家店？",
         )
 
     def test_coupon_and_environment_query_routes_to_rag_plus_tool(self) -> None:

@@ -149,11 +149,11 @@ class QdrantSettings(BaseModel):
     memory_collection: str = "user_semantic_memory"
     user_memory_collection: str = "user_semantic_memory"
     memory_vector_name: str = "embedding"
-    memory_vector_size: int = 4096
+    memory_vector_size: Optional[int] = 4096
     memory_distance: str = "cosine"
     knowledge_vector_name: str = "embedding"
     knowledge_sparse_vector_name: str = "sparse_embedding"
-    knowledge_vector_size: int = 4096
+    knowledge_vector_size: Optional[int] = 4096
     knowledge_distance: str = "cosine"
 
     @model_validator(mode="after")

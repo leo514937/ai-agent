@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import importlib
 import unittest
+import json
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import _bootstrap  # noqa: F401
 
 from learning_agent_service.application.workflow.builder import LANGGRAPH_AVAILABLE, create_workflow_runner
-from learning_agent_service.domain import ChatTurnCommand, PlanStep, build_initial_state
-from learning_agent_service.domain.enums import IntentType
+from learning_agent_service.domain import ChatTurnCommand, PlanStep, build_initial_state, RagResult, EvidencePack, EvidenceItem
+from learning_agent_service.domain.enums import IntentType, RagStatus
 
 
 class PlanExecutionRuntimeTestCase(unittest.TestCase):
@@ -19,6 +22,67 @@ class PlanExecutionRuntimeTestCase(unittest.TestCase):
             self.skipTest("application runtime modules are not available in this slice: {error}".format(error=exc))
 
         dependencies = dependencies_module.build_dependencies()
+
+        # 1. Patch the OpenAI client responses & embeddings at the FailoverOpenAIClient level
+        openai_client = dependencies.runtime.infrastructure_clients.openai.client
+        
+        # Prepare classification response mock
+        classify_payload = {
+            "intent": "recommend",
+            "needs_rag": True,
+            "needs_tool": True,
+            "needs_clarify": False,
+            "needs_query_rewrite": False,
+            "confidence": 0.95,
+            "key_slots": {
+                "domain": "local_life",
+                "local_life_intent": "recommend",
+                "tool_name": "search_restaurants",
+                "city": "北京",
+                "scene": "family_dinner",
+            },
+        }
+        mock_response = SimpleNamespace(output_text=json.dumps(classify_payload, ensure_ascii=False))
+        
+        # Prepare stream context manager mock
+        mock_event = SimpleNamespace(
+            type="response.output_text.delta",
+            delta="Plan execution completed successfully."
+        )
+        mock_stream = MagicMock()
+        mock_stream.__enter__.return_value = [mock_event]
+
+        # Prepare embedding mock
+        mock_embedding = SimpleNamespace(
+            data=[SimpleNamespace(embedding=[0.1] * 1536)]
+        )
+
+        def custom_invoke(resource_name: str, method_name: str, *args, **kwargs):
+            if resource_name == "responses" and method_name == "create":
+                return mock_response
+            if resource_name == "responses" and method_name == "stream":
+                return mock_stream
+            if resource_name == "embeddings" and method_name == "create":
+                return mock_embedding
+            return MagicMock()
+
+        openai_client._invoke = custom_invoke
+
+        # 2. Patch the RAG orchestrator retrieve method to return mock hits
+        from learning_agent_service.domain.contracts import HybridRecallResult, HybridRecallCandidate
+        mock_hit = HybridRecallCandidate(
+            chunk_id="mock-chunk",
+            score=0.9,
+            content="北京适合带爸妈吃饭的餐厅推荐：静雅轩，环境安静，菜品清淡，老年人特别喜欢。"
+        )
+        mock_recall_result = HybridRecallResult(
+            dense_hits=[mock_hit],
+            sparse_hits=[mock_hit],
+            fused_hits=[mock_hit],
+            reranked_hits=[mock_hit]
+        )
+        dependencies.runtime.rag.rag_orchestrator.retrieve = MagicMock(return_value=mock_recall_result)
+
         service = service_module.create_learning_agent_service(dependencies.container)
         return {
             "dependencies": dependencies,
@@ -39,12 +103,23 @@ class PlanExecutionRuntimeTestCase(unittest.TestCase):
     def test_plan_execute_success_emits_plan_events_and_final_summary(self) -> None:
         runtime = self._load_runtime_stack()
         state = self._build_state(message="推荐一家适合带爸妈吃饭的餐厅")
+        state["persistent"].current_city = "北京"
         state["turn"] = state["turn"].model_copy(
             update={
                 "task_complexity": "complex",
                 "execution_mode": "plan_execute",
                 "intent": IntentType.RECOMMEND,
-                "slots": {"scene": "family_dinner", "preferences": ["quiet", "elder_friendly"]},
+                "slots": {"scene": "family_dinner", "preferences": ["quiet", "elder_friendly"], "city": "北京"},
+                "rag_result": RagResult(
+                    status=RagStatus.OK,
+                    evidence_status="OK",
+                    evidence_pack=EvidencePack(
+                        evidence_status="OK",
+                        items=[
+                            EvidenceItem(chunk_id="mock-chunk", content="北京适合带爸妈吃饭的餐厅推荐：静雅轩，环境安静。")
+                        ]
+                    ),
+                )
             }
         )
 
@@ -61,6 +136,7 @@ class PlanExecutionRuntimeTestCase(unittest.TestCase):
     def test_plan_execute_requires_approval_emits_approval_event(self) -> None:
         runtime = self._load_runtime_stack()
         state = self._build_state(message="推荐一家适合带爸妈吃饭的餐厅")
+        state["persistent"].current_city = "北京"
         state["turn"] = state["turn"].model_copy(
             update={
                 "task_complexity": "complex",
@@ -74,7 +150,7 @@ class PlanExecutionRuntimeTestCase(unittest.TestCase):
                         risk_level="low",
                     )
                 ],
-                "slots": {"shop_name": "某某家常菜"},
+                "slots": {"shop_name": "某某家常菜", "city": "北京"},
             }
         )
 
@@ -98,7 +174,7 @@ class PlanExecutionRuntimeTestCase(unittest.TestCase):
                     PlanStep(
                         step_id="broken-step",
                         goal="没有可用工具的步骤",
-                        allowed_tools=[],
+                        allowed_tools=["unregistered_tool"],
                         risk_level="low",
                     )
                 ],
@@ -123,21 +199,43 @@ class PlanExecutionRuntimeTestCase(unittest.TestCase):
         fallback_runner = create_workflow_runner(services, prefer_langgraph=False)
 
         state_a = self._build_state(message="推荐一家适合带爸妈吃饭的餐厅")
+        state_a["persistent"].current_city = "北京"
         state_a["turn"] = state_a["turn"].model_copy(
             update={
                 "task_complexity": "complex",
                 "execution_mode": "plan_execute",
                 "intent": IntentType.RECOMMEND,
-                "slots": {"scene": "family_dinner"},
+                "slots": {"scene": "family_dinner", "city": "北京"},
+                "rag_result": RagResult(
+                    status=RagStatus.OK,
+                    evidence_status="OK",
+                    evidence_pack=EvidencePack(
+                        evidence_status="OK",
+                        items=[
+                            EvidenceItem(chunk_id="mock-chunk", content="北京适合带爸妈吃饭的餐厅推荐：静雅轩，环境安静。")
+                        ]
+                    ),
+                )
             }
         )
         state_b = self._build_state(message="推荐一家适合带爸妈吃饭的餐厅")
+        state_b["persistent"].current_city = "北京"
         state_b["turn"] = state_b["turn"].model_copy(
             update={
                 "task_complexity": "complex",
                 "execution_mode": "plan_execute",
                 "intent": IntentType.RECOMMEND,
-                "slots": {"scene": "family_dinner"},
+                "slots": {"scene": "family_dinner", "city": "北京"},
+                "rag_result": RagResult(
+                    status=RagStatus.OK,
+                    evidence_status="OK",
+                    evidence_pack=EvidencePack(
+                        evidence_status="OK",
+                        items=[
+                            EvidenceItem(chunk_id="mock-chunk", content="北京适合带爸妈吃饭的餐厅推荐：静雅轩，环境安静。")
+                        ]
+                    ),
+                )
             }
         )
 

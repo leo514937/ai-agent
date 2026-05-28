@@ -3134,10 +3134,12 @@ def _apply_route_review(
     # Check for pronoun reference failure in sequential routing
     has_pronoun = any(p in raw_query for p in ("这家", "那家", "它", "该店", "此店", "这店", "这个店", "那个店", "这间", "刚才那家", "这商家", "这个商家", "刚才那个"))
     has_resolved_ref = bool(
-        persistent.selected_shop_id
+        persistent.current_topic
+        or persistent.current_shop
+        or persistent.selected_shop_id
         or persistent.recent_entities
         or persistent.last_candidates
-        or (client_context and (client_context.get("shopId") or client_context.get("shop_id") or client_context.get("selected_shop_id")))
+        or _client_context_has_candidate_anchor(client_context)
     )
     if has_pronoun and not has_resolved_ref:
         return RoutingDecision(

@@ -213,10 +213,20 @@ class OpenAIEmbeddingAdapter:
             _LOGGER.debug("embedding_cache_set_failed key=%s", cache_key, exc_info=True)
 
 
-def _resolve_memory_vector_size(settings: Settings) -> int:
+def _resolve_memory_vector_size(settings: Settings, adapter: OpenAIEmbeddingAdapter | None = None) -> int:
     configured_size = settings.qdrant.memory_vector_size
     if configured_size is not None:
         return int(configured_size)
+    if adapter is not None:
+        try:
+            vector = adapter.embed("probe")
+            size = len(vector)
+            settings.qdrant.memory_vector_size = size
+            return size
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to resolve memory_vector_size via embedding probe: {e}"
+            ) from e
     raise RuntimeError(
         "Qdrant memory_vector_size is not configured; durable memory requires an explicit vector size"
     )
@@ -1676,8 +1686,8 @@ def _build_durable_memory_backend(
 ) -> tuple[object, object, AdapterStatus, AdapterStatus] | None:
     if not (settings.prefer_real_adapters and infra.postgres is not None and infra.qdrant is not None and infra.openai is not None):
         return None
-    memory_vector_size = _resolve_memory_vector_size(settings)
     embedding_adapter = _build_memory_embedding_adapter(settings, infra)
+    memory_vector_size = _resolve_memory_vector_size(settings, embedding_adapter)
     repository = LongTermMemoryRepository(infra.postgres.session_factory)
     index = QdrantLongTermMemoryIndex(
         client=infra.qdrant.client,

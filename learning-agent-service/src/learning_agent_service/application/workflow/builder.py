@@ -153,7 +153,7 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: object | N
         raise RuntimeError("langgraph is not installed")
 
     graph = StateGraph(dict)
-    graph.add_node("load_context", services.load_context)
+    graph.add_node("load_context", lambda state: services.load_context(state))
     graph.add_node("understand_turn", lambda state: run_understand_turn(state, services.understand_turn))
     graph.add_node(
         "plan_execute_subgraph",
@@ -161,9 +161,9 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: object | N
     )
     graph.add_node("rag_subgraph", lambda state: run_rag_subgraph(state, services.rag_subgraph))
     graph.add_node("tool_subgraph", lambda state: run_tool_subgraph(state, services.tool_subgraph))
-    graph.add_node("compose_answer", services.compose_answer)
-    graph.add_node("persist_session", services.persist_session)
-    graph.add_node("emit_final", services.emit_final)
+    graph.add_node("compose_answer", lambda state: services.compose_answer(state))
+    graph.add_node("persist_session", lambda state: services.persist_session(state))
+    graph.add_node("emit_final", lambda state: services.emit_final(state))
 
     graph.set_entry_point("load_context")
     graph.add_conditional_edges(
