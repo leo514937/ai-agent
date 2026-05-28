@@ -1,7 +1,7 @@
 import { computed } from 'vue';
 import { formatAssistantTimelineEntry, normalizeAssistantMessage } from '@/lib/assistant.js';
 
-export function useAssistantParsing(messageRef, displayedRawContentRef) {
+export function useAssistantParsing(messageRef, displayedRawContentRef, isTyping) {
   const normalizedMessage = computed(() => normalizeAssistantMessage(messageRef.value));
 
   const isThinkingActiveRaw = computed(() => {
@@ -47,7 +47,23 @@ export function useAssistantParsing(messageRef, displayedRawContentRef) {
   });
 
   const hasThinkingBlock = computed(() => {
-    return parsedMessage.value.hasThinking || timelineSteps.value.length > 0;
+    if (messageRef.value.error) return false;
+    
+    const result = parsedMessage.value.hasThinking 
+      || timelineSteps.value.length > 0 
+      || Boolean(messageRef.value.streaming) 
+      || Boolean(isTyping.value);
+
+    console.log('--- DEBUG hasThinkingBlock ---');
+    console.log('messageRef.value.streaming:', messageRef.value.streaming);
+    console.log('parsedMessage.value.hasThinking:', parsedMessage.value.hasThinking);
+    console.log('timelineSteps.value.length:', timelineSteps.value.length);
+    console.log('isTyping.value:', isTyping.value);
+    console.log('result:', result);
+    console.log('message content:', messageRef.value.content);
+    console.log('------------------------------');
+
+    return result;
   });
 
   const citationLines = computed(() => {

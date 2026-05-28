@@ -44,6 +44,8 @@ class ChatWorkflowService:
             persistent = session_context_store.load(command.session_id, command.user_id)
         else:
             persistent = PersistentSessionContext()
+        if self._should_use_local_life_subgraph(command):
+            return self._workflow.run_stream(command=command, persistent_context=persistent)
         return self._workflow_runner.run_stream(command=command, persistent_context=persistent)
 
     def _build_workflow_services(self) -> WorkflowServices:
@@ -81,4 +83,21 @@ class ChatWorkflowService:
             compose_answer=adapter.compose_answer,
             persist_session=adapter.persist_session,
             emit_final=adapter.emit_final,
+        )
+
+    @staticmethod
+    def _should_use_local_life_subgraph(command: ChatTurnCommand) -> bool:
+        message = str(getattr(command, "message", "") or "")
+        compact = message.replace(" ", "")
+        if any(k in compact for k in ("记得", "聊过", "刚才", "之前", "回忆", "历史", "上下文", "我们说过")):
+            return False
+        client_context = dict(getattr(command, "client_context", {}) or {})
+        page = str(getattr(command, "page", "") or client_context.get("page") or client_context.get("entry") or "").lower()
+        if page in {"meituan_search_box", "assistant", "ai", "shop", "shops", "detail"}:
+            return True
+        if any(key in client_context for key in ("shopId", "shopName", "typeId", "typeName", "city", "location")):
+            return True
+        return any(
+            token in compact
+            for token in ("吃饭", "火锅", "餐厅", "店", "优惠券", "团购", "订座", "预约", "订单", "对比", "哪家", "怎么样", "附近")
         )

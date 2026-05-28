@@ -69,9 +69,27 @@ public class AiRemoteStreamProxyClient {
 
             byte[] buffer = new byte[1024];
             int read;
-            while ((read = responseStream.read(buffer)) >= 0) {
-                outputStream.write(buffer, 0, read);
-                outputStream.flush();
+            boolean clientDisconnected = false;
+            while (true) {
+                try {
+                    read = responseStream.read(buffer);
+                } catch (IOException e) {
+                    log.debug("读取远端 AI stream 失败：{}", e.getMessage());
+                    throw e;
+                }
+                if (read < 0) {
+                    break;
+                }
+                if (!clientDisconnected) {
+                    try {
+                        outputStream.write(buffer, 0, read);
+                        outputStream.flush();
+                    } catch (IOException e) {
+                        // 客户端断开连接了（例如刷新页面或切换UI）！我们捕获它，并在后台把远端 stream 读完以确保后端正常执行完毕。
+                        log.debug("客户端已断开连接，后台继续读取远端流数据以确保后端执行完毕：{}", e.getMessage());
+                        clientDisconnected = true;
+                    }
+                }
             }
         } catch (IOException ex) {
             log.debug("远端 stream 代理失败：{}", ex.getMessage());

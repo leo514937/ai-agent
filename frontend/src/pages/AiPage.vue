@@ -219,6 +219,10 @@ function markStreamCancelled(latestSession, assistantMessageId) {
 async function runAssistantStream(workingSession, payload, { signal } = {}) {
   let latestSession = workingSession;
   let assistantMessageId = '';
+  const lastMessage = latestSession.messages[latestSession.messages.length - 1];
+  if (lastMessage && lastMessage.role === 'assistant' && lastMessage.streaming) {
+    assistantMessageId = lastMessage.id;
+  }
   const response = await streamAssistantPrompt(
     payload,
     {
@@ -338,6 +342,13 @@ async function runAssistantStream(workingSession, payload, { signal } = {}) {
         if (signal?.aborted) {
           return;
         }
+        if (assistantMessageId) {
+          latestSession = updateSessionMessage(latestSession, assistantMessageId, (msg) => ({
+            ...msg,
+            streaming: false,
+            error: true,
+          }));
+        }
         latestSession = appendSessionMessage(latestSession, message);
         queuePersistSession(latestSession, { immediate: true });
       },
@@ -372,6 +383,20 @@ async function handleSubmit(content) {
   try {
     const session = await ensureCurrentSession();
     let workingSession = appendSessionMessage(session, { role: 'user', content: text });
+    workingSession = appendSessionMessage(workingSession, {
+      role: 'assistant',
+      content: '',
+      answer: '',
+      answerContent: '',
+      thinkingContent: '',
+      rawContent: '',
+      mode: 'streaming',
+      source: 'learning-agent-service',
+      fallback: false,
+      eventType: 'message',
+      eventTimeline: [],
+      streaming: true,
+    });
     persistSession(workingSession);
     draft.value = '';
     await scrollToLatest({ behavior: 'auto' });
@@ -404,8 +429,17 @@ async function handleSubmit(content) {
     }
     console.error('AI 对话发送失败', error);
     if (currentSession.value) {
+      let failedSession = currentSession.value;
+      const latestMessage = failedSession.messages[failedSession.messages.length - 1];
+      if (latestMessage && latestMessage.role === 'assistant' && latestMessage.streaming) {
+        failedSession = updateSessionMessage(failedSession, latestMessage.id, (msg) => ({
+          ...msg,
+          streaming: false,
+          error: true,
+        }));
+      }
       const detail = error instanceof Error && error.message ? `：${error.message}` : '';
-      const failedSession = appendSessionMessage(currentSession.value, {
+      failedSession = appendSessionMessage(failedSession, {
         role: 'system',
         content: `抱歉，当前 AI 服务暂时不可用，请稍后再试${detail}`,
       });
@@ -443,6 +477,20 @@ async function handleApproval(payload) {
     let workingSession = appendSessionMessage(session, {
       role: 'user',
       content: payload.decision === 'approved' ? '确认继续执行' : '先不执行',
+    });
+    workingSession = appendSessionMessage(workingSession, {
+      role: 'assistant',
+      content: '',
+      answer: '',
+      answerContent: '',
+      thinkingContent: '',
+      rawContent: '',
+      mode: 'streaming',
+      source: 'learning-agent-service',
+      fallback: false,
+      eventType: 'message',
+      eventTimeline: [],
+      streaming: true,
     });
     persistSession(workingSession);
 
@@ -496,8 +544,17 @@ async function handleApproval(payload) {
     console.error('AI 审批处理失败', error);
     const session = sessions.value.find((item) => item.id === payload.sessionId);
     if (session) {
+      let failedSession = session;
+      const latestMessage = failedSession.messages[failedSession.messages.length - 1];
+      if (latestMessage && latestMessage.role === 'assistant' && latestMessage.streaming) {
+        failedSession = updateSessionMessage(failedSession, latestMessage.id, (msg) => ({
+          ...msg,
+          streaming: false,
+          error: true,
+        }));
+      }
       const detail = error instanceof Error && error.message ? `：${error.message}` : '';
-      persistSession(appendSessionMessage(session, {
+      persistSession(appendSessionMessage(failedSession, {
         role: 'system',
         content: `审批提交失败，请稍后再试${detail}`,
       }));

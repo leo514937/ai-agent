@@ -965,6 +965,17 @@ class AnswerComposer:
                 confidence = 0.74 if evidence_status == "EMPTY" else 0.62
                 return self._build_result(request, answer, confidence, already_streamed=already_streamed)
         if evidence_status == "EMPTY":
+            action = str(getattr(routing, "required_action", "") or "").strip().lower()
+            if action == "rag_plus_tool" or (request.tool_result is not None and request.tool_result.status == ToolExecutionStatus.SUCCESS):
+                mixed_answer = self._compose_rag_plus_tool_answer(request)
+                if mixed_answer is not None:
+                    return self._build_result(request, mixed_answer, 0.62, already_streamed=False)
+                tool_answer = self._compose_tool_answer(request)
+                if tool_answer is not None:
+                    return self._build_result(request, tool_answer, 0.42, already_streamed=False)
+                fallback_ans = "我这边暂时没有查到这家店的详细评价依据或可用券信息。你可以放宽筛选范围，我继续帮你找。"
+                return self._build_result(request, fallback_ans, 0.1, already_streamed=False)
+
             if self.llm_answerer is None:
                 answer_text = self._compose_weak_answer(request)
             else:
@@ -1119,9 +1130,9 @@ class AnswerComposer:
         if failure_category == "dependency_unavailable":
             return "相关服务暂时不可用，这次还查不到结果。你可以稍后再试。"
         if failure_category == "no_result":
-            return self._compose_no_result_answer(tool_result.tool_name, tool_result.normalized_output)
+            return self._compose_no_result_answer(tool_result.tool_name, tool_result.normalized_output, request)
         if tool_result.status == ToolExecutionStatus.SUCCESS and tool_result.extra.get("grounding_source") == "business_evidence":
-            return self._compose_tool_success_answer(tool_result.tool_name, tool_result.normalized_output)
+            return self._compose_tool_success_answer(tool_result.tool_name, tool_result.normalized_output, request)
         return None
 
     def _compose_rag_plus_tool_answer(self, request: AnswerComposeRequest) -> str | None:
@@ -1237,12 +1248,57 @@ class AnswerComposer:
             return body
         return self._append_auxiliary_sections(request, f"{intro}\n{body}", include_auxiliary=True)
 
-    def _compose_no_result_answer(self, tool_name: str, payload: Mapping[str, Any]) -> str:
+    def _compose_no_result_answer(self, tool_name: str, payload: Mapping[str, Any], request: AnswerComposeRequest | None = None) -> str:
         data = _tool_data(payload)
+        shop_name = str(data.get("shop_name") or "这家店").strip() or "这家店"
+        concrete_shop_name = ""
+        has_static_vouchers = False
+        static_info = ""
+        
+        if request is not None:
+            if request.answer_contract:
+                if hasattr(request.answer_contract, "extra") and isinstance(request.answer_contract.extra, dict):
+                    concrete_shop_name = request.answer_contract.extra.get("selected_shop_name") or request.answer_contract.extra.get("current_shop")
+            if not concrete_shop_name and request.entity_join_result:
+                extra_data = getattr(request.entity_join_result, "extra", {}) or {}
+                if isinstance(extra_data, dict):
+                    concrete_shop_name = extra_data.get("selected_shop_name") or extra_data.get("current_shop")
+            if not concrete_shop_name and request.stream_event_meta:
+                meta = dict(request.stream_event_meta)
+                concrete_shop_name = meta.get("current_shop") or meta.get("selected_shop_name")
+            if not concrete_shop_name and request.rag_result and request.rag_result.evidence_pack:
+                for ev_item in request.rag_result.evidence_pack.items:
+                    meta = getattr(ev_item, "metadata", {}) or {}
+                    if isinstance(meta, dict) and (meta.get("shop_name") or meta.get("shopName")):
+                        concrete_shop_name = meta.get("shop_name") or meta.get("shopName")
+                        break
+
+            if request.rag_result and request.rag_result.evidence_pack:
+                for item in request.rag_result.evidence_pack.items:
+                    content = str(item.content or "").strip()
+                    meta = getattr(item, "metadata", {}) or {}
+                    v_count = meta.get("voucher_count") if isinstance(meta, dict) else None
+                    pkg_desc = meta.get("package_description") if isinstance(meta, dict) else None
+                    if v_count or pkg_desc:
+                        has_static_vouchers = True
+                        if v_count:
+                            static_info += f"优惠券数量：{v_count}张 "
+                        if pkg_desc:
+                            static_info += f"套餐说明：{pkg_desc}"
+                        break
+                    elif "券" in content or "优惠" in content or "套餐" in content:
+                        has_static_vouchers = True
+                        static_info = "知识库中包含相关优惠或套餐描述"
+                        break
+
+        if concrete_shop_name:
+            shop_name = concrete_shop_name
+
         if tool_name == "get_order_status":
             return "我这边还没查到对应的订单信息。你可以补充订单号，或者确认一下是不是查错了门店和订单。"
         if tool_name == "get_coupon_list":
-            shop_name = str(data.get("shop_name") or "这家店").strip() or "这家店"
+            if has_static_vouchers:
+                return f"{shop_name} 实时未查到可用券，可参考券存在（{static_info}）但需以实时接口为准。"
             return f"我这边还没查到 {shop_name} 可用的券。你可以换一家店，或者告诉我想看的店名和区域。"
         if tool_name == "get_shop_detail":
             return "我这边还没定位到你要看的门店。你可以补充店名、区域，或者直接给我店铺 id。"
@@ -1250,8 +1306,49 @@ class AnswerComposer:
             return "我这边暂时没筛到符合条件的门店。你可以放宽预算、距离或口味条件，我继续帮你找。"
         return "我这边还没查到对应结果。你可以补充更具体的对象、范围或条件，我继续帮你查。"
 
-    def _compose_tool_success_answer(self, tool_name: str, payload: Mapping[str, Any]) -> str:
+    def _compose_tool_success_answer(self, tool_name: str, payload: Mapping[str, Any], request: AnswerComposeRequest | None = None) -> str:
         data = _tool_data(payload)
+        
+        concrete_shop_name = ""
+        has_static_vouchers = False
+        static_info = ""
+        
+        if request is not None:
+            if request.answer_contract:
+                if hasattr(request.answer_contract, "extra") and isinstance(request.answer_contract.extra, dict):
+                    concrete_shop_name = request.answer_contract.extra.get("selected_shop_name") or request.answer_contract.extra.get("current_shop")
+            if not concrete_shop_name and request.entity_join_result:
+                extra_data = getattr(request.entity_join_result, "extra", {}) or {}
+                if isinstance(extra_data, dict):
+                    concrete_shop_name = extra_data.get("selected_shop_name") or extra_data.get("current_shop")
+            if not concrete_shop_name and request.stream_event_meta:
+                meta = dict(request.stream_event_meta)
+                concrete_shop_name = meta.get("current_shop") or meta.get("selected_shop_name")
+            if not concrete_shop_name and request.rag_result and request.rag_result.evidence_pack:
+                for ev_item in request.rag_result.evidence_pack.items:
+                    meta = getattr(ev_item, "metadata", {}) or {}
+                    if isinstance(meta, dict) and (meta.get("shop_name") or meta.get("shopName")):
+                        concrete_shop_name = meta.get("shop_name") or meta.get("shopName")
+                        break
+
+            if request.rag_result and request.rag_result.evidence_pack:
+                for item in request.rag_result.evidence_pack.items:
+                    content = str(item.content or "").strip()
+                    meta = getattr(item, "metadata", {}) or {}
+                    v_count = meta.get("voucher_count") if isinstance(meta, dict) else None
+                    pkg_desc = meta.get("package_description") if isinstance(meta, dict) else None
+                    if v_count or pkg_desc:
+                        has_static_vouchers = True
+                        if v_count:
+                            static_info += f"优惠券数量：{v_count}张 "
+                        if pkg_desc:
+                            static_info += f"套餐说明：{pkg_desc}"
+                        break
+                    elif "券" in content or "优惠" in content or "套餐" in content:
+                        has_static_vouchers = True
+                        static_info = "知识库中包含相关优惠或套餐描述"
+                        break
+
         if tool_name == "search_restaurants":
             candidates = list(data.get("candidates") or [])
             names = [str(item.get("name") or "").strip() for item in candidates[:3] if isinstance(item, Mapping)]
@@ -1263,6 +1360,8 @@ class AnswerComposer:
         if tool_name == "get_shop_detail":
             shop = data.get("shop") if isinstance(data.get("shop"), Mapping) else {}
             shop_name = str(shop.get("name") or "这家店").strip() or "这家店"
+            if concrete_shop_name:
+                shop_name = concrete_shop_name
             score = shop.get("score")
             avg_price = shop.get("avgPrice") or shop.get("avg_price")
             parts = [f"{shop_name} 的门店信息我查到了"]
@@ -1276,9 +1375,13 @@ class AnswerComposer:
             return "，".join(parts) + "。"
         if tool_name == "get_coupon_list":
             shop_name = str(data.get("shop_name") or "这家店").strip() or "这家店"
+            if concrete_shop_name:
+                shop_name = concrete_shop_name
             coupons = list(data.get("coupons") or [])
             count = int(data.get("count") or len(coupons) or 0)
             if count <= 0 or not coupons:
+                if has_static_vouchers:
+                    return f"{shop_name} 实时未查到可用券，可参考券存在（{static_info}）但需以实时接口为准。"
                 return f"{shop_name} 目前还没有可用券。你可以换一家店，或者告诉我想看的店名和区域。"
             summaries: list[str] = []
             for coupon in coupons[:3]:

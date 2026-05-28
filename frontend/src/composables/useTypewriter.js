@@ -3,6 +3,7 @@ import { normalizeAssistantMessage } from '@/lib/assistant.js';
 
 export function useTypewriter(messageRef, emitTypewrite) {
   const displayedRawContent = ref('');
+  const isTyping = ref(false);
   let typewriterTimer = null;
   let targetText = '';
   let finishing = false; // accelerated catch-up mode after streaming ends
@@ -18,6 +19,7 @@ export function useTypewriter(messageRef, emitTypewrite) {
       if (currentLen >= targetLen) {
         typewriterTimer = null;
         finishing = false;
+        isTyping.value = false;
         return;
       }
 
@@ -77,9 +79,11 @@ export function useTypewriter(messageRef, emitTypewrite) {
       } else {
         typewriterTimer = null;
         finishing = false;
+        isTyping.value = false;
       }
     };
 
+    isTyping.value = true;
     run();
   }
 
@@ -129,10 +133,12 @@ export function useTypewriter(messageRef, emitTypewrite) {
     if (typewriterTimer) {
       clearTimeout(typewriterTimer);
       typewriterTimer = null;
+      isTyping.value = false;
     }
   });
 
   return {
-    displayedRawContent
+    displayedRawContent,
+    isTyping
   };
 }

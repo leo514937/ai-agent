@@ -1629,4 +1629,458 @@
 2026-05-26 11:00:09.758 CST [25188] DETAIL:  Failed process was running: COMMIT
 2026-05-26 11:00:09.758 CST [25188] HINT:  See C include file "ntstatus.h" for a description of the hexadecimal value.
 2026-05-26 11:00:09.758 CST [25188] LOG:  terminating any other active server processes
-^C
+^C2026-05-26 12:52:04.883 CST [13904] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-26 12:52:04.888 CST [13904] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-26 12:52:04.888 CST [13904] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-26 12:52:04.983 CST [25904] LOG:  database system was interrupted; last known up at 2026-05-26 10:45:45 CST
+2026-05-26 12:52:05.509 CST [25904] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-05-26 12:52:05.513 CST [25904] LOG:  redo starts at 0/1F241D8
+2026-05-26 12:52:05.513 CST [25904] LOG:  invalid record length at 0/1F242C0: expected at least 24, got 0
+2026-05-26 12:52:05.513 CST [25904] LOG:  redo done at 0/1F24288 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+2026-05-26 12:52:05.524 CST [14648] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-05-26 12:52:05.546 CST [14648] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.004 s, sync=0.003 s, total=0.030 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/1F242C0, redo lsn=0/1F242C0
+2026-05-26 12:52:05.595 CST [13904] LOG:  database system is ready to accept connections
+2026-05-26 13:04:53.551 CST [13904] LOG:  received fast shutdown request
+2026-05-26 13:04:53.552 CST [24512] ERROR:  canceling statement due to user request
+2026-05-26 13:04:53.552 CST [12136] ERROR:  canceling statement due to user request
+2026-05-26 13:04:53.589 CST [13904] LOG:  aborting any active transactions
+2026-05-26 13:04:53.590 CST [13904] LOG:  background worker "logical replication launcher" (PID 24512) exited with exit code 1
+2026-05-26 13:04:53.601 CST [14648] LOG:  shutting down
+2026-05-26 13:04:53.603 CST [14648] LOG:  checkpoint starting: shutdown immediate
+2026-05-26 13:04:53.630 CST [14648] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.002 s, sync=0.001 s, total=0.029 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=0 kB; lsn=0/1F24370, redo lsn=0/1F24370
+2026-05-26 13:04:53.649 CST [13904] LOG:  database system is shut down
+2026-05-26 13:05:02.383 CST [30036] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-26 13:05:02.393 CST [30036] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-26 13:05:02.393 CST [30036] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-26 13:05:02.532 CST [13416] LOG:  database system was shut down at 2026-05-26 13:04:53 CST
+2026-05-26 13:05:02.560 CST [30036] LOG:  database system is ready to accept connections
+2026-05-26 13:07:46.416 CST [3848] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-26 13:07:46.416 CST [3848] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.preference_key = $2::VARCHAR AND user_profile_preference.is_active IS true
+2026-05-26 13:09:27.511 CST [3848] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-26 13:09:27.511 CST [3848] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.preference_key = $2::VARCHAR AND user_profile_preference.is_active IS true
+2026-05-26 13:10:02.528 CST [28756] LOG:  checkpoint starting: time
+2026-05-26 13:10:03.556 CST [28756] LOG:  checkpoint complete: wrote 12 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.999 s, sync=0.010 s, total=1.030 s; sync files=7, longest=0.005 s, average=0.002 s; distance=37 kB, estimate=37 kB; lsn=0/1F2DB30, redo lsn=0/1F2DAF8
+2026-05-26 13:22:21.348 CST [30036] LOG:  received fast shutdown request
+2026-05-26 13:22:21.349 CST [26792] ERROR:  canceling statement due to user request
+2026-05-26 13:22:21.351 CST [30036] LOG:  aborting any active transactions
+2026-05-26 13:22:21.351 CST [3848] FATAL:  terminating connection due to administrator command
+2026-05-26 13:22:21.360 CST [30036] LOG:  background worker "logical replication launcher" (PID 26792) exited with exit code 1
+2026-05-26 13:22:21.367 CST [28756] LOG:  shutting down
+2026-05-26 13:22:21.368 CST [28756] LOG:  checkpoint starting: shutdown immediate
+2026-05-26 13:22:21.388 CST [28756] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.022 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=34 kB; lsn=0/1F2DBE0, redo lsn=0/1F2DBE0
+2026-05-26 13:22:21.405 CST [30036] LOG:  database system is shut down
+2026-05-26 13:22:29.443 CST [31268] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-26 13:22:29.448 CST [31268] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-26 13:22:29.448 CST [31268] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-26 13:22:29.547 CST [27344] LOG:  database system was shut down at 2026-05-26 13:22:21 CST
+2026-05-26 13:22:29.574 CST [31268] LOG:  database system is ready to accept connections
+2026-05-26 13:23:12.257 CST [29780] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-26 13:23:12.257 CST [29780] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.preference_key = $2::VARCHAR AND user_profile_preference.is_active IS true
+2026-05-26 13:25:26.786 CST [31268] LOG:  received fast shutdown request
+2026-05-26 13:25:26.787 CST [29972] ERROR:  canceling statement due to user request
+2026-05-26 13:25:26.824 CST [31268] LOG:  aborting any active transactions
+2026-05-26 13:25:26.825 CST [29780] FATAL:  terminating connection due to administrator command
+2026-05-26 13:25:26.825 CST [31268] LOG:  background worker "logical replication launcher" (PID 29972) exited with exit code 1
+2026-05-26 13:25:26.839 CST [20944] LOG:  shutting down
+2026-05-26 13:25:26.842 CST [20944] LOG:  checkpoint starting: shutdown immediate
+2026-05-26 13:25:26.869 CST [20944] LOG:  checkpoint complete: wrote 8 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.010 s, sync=0.006 s, total=0.030 s; sync files=6, longest=0.002 s, average=0.001 s; distance=23 kB, estimate=23 kB; lsn=0/1F33B18, redo lsn=0/1F33B18
+2026-05-26 13:25:26.890 CST [31268] LOG:  database system is shut down
+2026-05-26 13:25:37.005 CST [15004] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-26 13:25:37.016 CST [15004] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-26 13:25:37.017 CST [15004] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-26 13:25:37.184 CST [30680] LOG:  database system was shut down at 2026-05-26 13:25:26 CST
+2026-05-26 13:25:37.212 CST [15004] LOG:  database system is ready to accept connections
+2026-05-26 13:26:03.740 CST [25904] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-26 13:26:03.740 CST [25904] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.preference_key = $2::VARCHAR AND user_profile_preference.is_active IS true
+2026-05-26 13:27:31.559 CST [25904] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-26 13:27:31.559 CST [25904] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.preference_key = $2::VARCHAR AND user_profile_preference.is_active IS true
+2026-05-26 13:28:10.819 CST [25904] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-26 13:28:10.819 CST [25904] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.preference_key = $2::VARCHAR AND user_profile_preference.is_active IS true
+2026-05-26 13:29:08.568 CST [25904] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-26 13:29:08.568 CST [25904] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.preference_key = $2::VARCHAR AND user_profile_preference.is_active IS true
+2026-05-26 13:30:37.174 CST [9492] LOG:  checkpoint starting: time
+2026-05-26 13:30:38.652 CST [9492] LOG:  checkpoint complete: wrote 16 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=1.458 s, sync=0.010 s, total=1.481 s; sync files=7, longest=0.005 s, average=0.002 s; distance=76 kB, estimate=76 kB; lsn=0/1F46DC0, redo lsn=0/1F46D88
+2026-05-26 13:46:33.232 CST [15004] LOG:  received fast shutdown request
+2026-05-26 13:46:33.233 CST [18536] ERROR:  canceling statement due to user request
+2026-05-26 13:46:33.271 CST [15004] LOG:  aborting any active transactions
+2026-05-26 13:46:33.271 CST [25904] FATAL:  terminating connection due to administrator command
+2026-05-26 13:46:33.272 CST [15004] LOG:  background worker "logical replication launcher" (PID 18536) exited with exit code 1
+2026-05-26 13:46:33.287 CST [9492] LOG:  shutting down
+2026-05-26 13:46:33.289 CST [9492] LOG:  checkpoint starting: shutdown immediate
+2026-05-26 13:46:33.313 CST [9492] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.002 s, sync=0.001 s, total=0.026 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=68 kB; lsn=0/1F46E70, redo lsn=0/1F46E70
+2026-05-26 13:46:33.333 CST [15004] LOG:  database system is shut down
+2026-05-26 13:46:42.554 CST [19252] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-26 13:46:42.560 CST [19252] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-26 13:46:42.561 CST [19252] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-26 13:46:42.678 CST [15372] LOG:  database system was shut down at 2026-05-26 13:46:33 CST
+2026-05-26 13:46:42.706 CST [19252] LOG:  database system is ready to accept connections
+2026-05-26 13:50:29.587 CST [16520] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-26 13:50:29.587 CST [16520] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.preference_key = $2::VARCHAR AND user_profile_preference.is_active IS true
+2026-05-26 13:51:42.674 CST [30956] LOG:  checkpoint starting: time
+2026-05-26 13:51:43.874 CST [30956] LOG:  checkpoint complete: wrote 13 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=1.096 s, sync=0.035 s, total=1.202 s; sync files=7, longest=0.011 s, average=0.005 s; distance=55 kB, estimate=55 kB; lsn=0/1F54E10, redo lsn=0/1F54DD8
+2026-05-26 13:51:56.270 CST [16520] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-26 13:51:56.270 CST [16520] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.preference_key = $2::VARCHAR AND user_profile_preference.is_active IS true
+2026-05-26 13:56:10.561 CST [16520] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-26 13:56:10.561 CST [16520] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.preference_key = $2::VARCHAR AND user_profile_preference.is_active IS true
+2026-05-26 13:56:42.887 CST [30956] LOG:  checkpoint starting: time
+2026-05-26 13:56:43.665 CST [30956] LOG:  checkpoint complete: wrote 8 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.760 s, sync=0.005 s, total=0.778 s; sync files=6, longest=0.002 s, average=0.001 s; distance=36 kB, estimate=53 kB; lsn=0/1F5DF78, redo lsn=0/1F5DF40
+2026-05-26 13:59:53.871 CST [16520] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-26 13:59:53.871 CST [16520] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.preference_key = $2::VARCHAR AND user_profile_preference.is_active IS true
+2026-05-26 14:01:42.672 CST [30956] LOG:  checkpoint starting: time
+2026-05-26 14:01:43.357 CST [30956] LOG:  checkpoint complete: wrote 7 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.664 s, sync=0.007 s, total=0.686 s; sync files=6, longest=0.003 s, average=0.002 s; distance=25 kB, estimate=51 kB; lsn=0/1F644A0, redo lsn=0/1F64468
+2026-05-26 14:07:26.152 CST [19252] LOG:  received fast shutdown request
+2026-05-26 14:07:26.153 CST [5676] ERROR:  canceling statement due to user request
+2026-05-26 14:07:26.190 CST [19252] LOG:  aborting any active transactions
+2026-05-26 14:07:26.190 CST [16520] FATAL:  terminating connection due to administrator command
+2026-05-26 14:07:26.191 CST [19252] LOG:  background worker "logical replication launcher" (PID 5676) exited with exit code 1
+2026-05-26 14:07:26.203 CST [30956] LOG:  shutting down
+2026-05-26 14:07:26.205 CST [30956] LOG:  checkpoint starting: shutdown immediate
+2026-05-26 14:07:26.228 CST [30956] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.002 s, sync=0.001 s, total=0.026 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=45 kB; lsn=0/1F64550, redo lsn=0/1F64550
+2026-05-26 14:07:26.248 CST [19252] LOG:  database system is shut down
+2026-05-26 22:42:36.782 CST [28268] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-26 22:42:36.787 CST [28268] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-26 22:42:36.787 CST [28268] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-26 22:42:36.893 CST [19944] LOG:  database system was shut down at 2026-05-26 14:07:26 CST
+2026-05-26 22:42:36.924 CST [28268] LOG:  database system is ready to accept connections
+2026-05-26 22:49:10.747 CST [29116] LOG:  checkpoint starting: time
+2026-05-26 22:49:10.798 CST [29116] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.010 s, sync=0.003 s, total=0.054 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/1F64638, redo lsn=0/1F64600
+2026-05-26 23:28:54.346 CST [28268] LOG:  received fast shutdown request
+2026-05-26 23:28:54.346 CST [27476] ERROR:  canceling statement due to user request
+2026-05-26 23:28:54.362 CST [28268] LOG:  aborting any active transactions
+2026-05-26 23:28:54.363 CST [28268] LOG:  background worker "logical replication launcher" (PID 27476) exited with exit code 1
+2026-05-26 23:28:54.364 CST [13368] FATAL:  terminating connection due to administrator command
+2026-05-26 23:28:54.373 CST [29116] LOG:  shutting down
+2026-05-26 23:28:54.375 CST [29116] LOG:  checkpoint starting: shutdown immediate
+2026-05-26 23:28:54.392 CST [29116] LOG:  checkpoint complete: wrote 6 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.005 s, sync=0.003 s, total=0.019 s; sync files=5, longest=0.001 s, average=0.001 s; distance=29 kB, estimate=29 kB; lsn=0/1F6BB88, redo lsn=0/1F6BB88
+2026-05-26 23:28:54.409 CST [28268] LOG:  database system is shut down
+2026-05-26 23:29:08.040 CST [21816] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-26 23:29:08.048 CST [21816] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-26 23:29:08.048 CST [21816] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-26 23:29:08.156 CST [21148] LOG:  database system was shut down at 2026-05-26 23:28:54 CST
+2026-05-26 23:29:08.185 CST [21816] LOG:  database system is ready to accept connections
+2026-05-26 23:30:49.137 CST [21816] LOG:  received fast shutdown request
+2026-05-26 23:30:49.137 CST [8508] ERROR:  canceling statement due to user request
+2026-05-26 23:30:49.141 CST [21816] LOG:  aborting any active transactions
+2026-05-26 23:30:49.147 CST [21816] LOG:  background worker "logical replication launcher" (PID 8508) exited with exit code 1
+2026-05-26 23:30:49.153 CST [6352] LOG:  shutting down
+2026-05-26 23:30:49.155 CST [6352] LOG:  checkpoint starting: shutdown immediate
+2026-05-26 23:30:49.172 CST [6352] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.005 s, sync=0.002 s, total=0.019 s; sync files=2, longest=0.002 s, average=0.001 s; distance=0 kB, estimate=0 kB; lsn=0/1F6BC38, redo lsn=0/1F6BC38
+2026-05-26 23:30:49.185 CST [21816] LOG:  database system is shut down
+2026-05-26 23:31:02.264 CST [12648] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-26 23:31:02.274 CST [12648] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-26 23:31:02.274 CST [12648] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-26 23:31:02.384 CST [27516] LOG:  database system was shut down at 2026-05-26 23:30:49 CST
+2026-05-26 23:31:02.413 CST [12648] LOG:  database system is ready to accept connections
+2026-05-26 23:36:02.390 CST [23588] LOG:  checkpoint starting: time
+2026-05-26 23:36:03.298 CST [23588] LOG:  checkpoint complete: wrote 11 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.886 s, sync=0.008 s, total=0.910 s; sync files=7, longest=0.003 s, average=0.002 s; distance=43 kB, estimate=43 kB; lsn=0/1F76AB0, redo lsn=0/1F76A78
+2026-05-26 23:46:16.746 CST [12648] LOG:  received fast shutdown request
+2026-05-26 23:46:16.748 CST [16108] ERROR:  canceling statement due to user request
+2026-05-26 23:46:16.764 CST [12648] LOG:  aborting any active transactions
+2026-05-26 23:46:16.765 CST [3260] FATAL:  terminating connection due to administrator command
+2026-05-26 23:46:16.766 CST [12648] LOG:  background worker "logical replication launcher" (PID 16108) exited with exit code 1
+2026-05-26 23:46:16.777 CST [23588] LOG:  shutting down
+2026-05-26 23:46:16.778 CST [23588] LOG:  checkpoint starting: shutdown immediate
+2026-05-26 23:46:16.795 CST [23588] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.019 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=39 kB; lsn=0/1F76B60, redo lsn=0/1F76B60
+2026-05-26 23:46:16.804 CST [12648] LOG:  database system is shut down
+2026-05-26 23:46:28.459 CST [12112] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-26 23:46:28.469 CST [12112] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-26 23:46:28.470 CST [12112] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-26 23:46:28.585 CST [5852] LOG:  database system was shut down at 2026-05-26 23:46:16 CST
+2026-05-26 23:46:28.617 CST [12112] LOG:  database system is ready to accept connections
+2026-05-26 23:50:04.333 CST [15460] LOG:  could not receive data from client: An existing connection was forcibly closed by the remote host.
+	
+2026-05-26 23:51:28.584 CST [30080] LOG:  checkpoint starting: time
+2026-05-26 23:51:29.500 CST [30080] LOG:  checkpoint complete: wrote 11 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.895 s, sync=0.006 s, total=0.917 s; sync files=7, longest=0.002 s, average=0.001 s; distance=44 kB, estimate=44 kB; lsn=0/1F81DD8, redo lsn=0/1F81DA0
+2026-05-26 23:56:28.506 CST [30080] LOG:  checkpoint starting: time
+2026-05-26 23:56:29.202 CST [30080] LOG:  checkpoint complete: wrote 7 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.649 s, sync=0.008 s, total=0.696 s; sync files=5, longest=0.003 s, average=0.002 s; distance=33 kB, estimate=43 kB; lsn=0/1F8A280, redo lsn=0/1F8A248
+2026-05-27 00:06:21.611 CST [12112] LOG:  received fast shutdown request
+2026-05-27 00:06:21.612 CST [21776] ERROR:  canceling statement due to user request
+2026-05-27 00:06:21.649 CST [12112] LOG:  aborting any active transactions
+2026-05-27 00:06:21.650 CST [12112] LOG:  background worker "logical replication launcher" (PID 21776) exited with exit code 1
+2026-05-27 00:06:21.650 CST [27520] FATAL:  terminating connection due to administrator command
+2026-05-27 00:06:21.663 CST [30080] LOG:  shutting down
+2026-05-27 00:06:21.664 CST [30080] LOG:  checkpoint starting: shutdown immediate
+2026-05-27 00:06:21.683 CST [30080] LOG:  checkpoint complete: wrote 12 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.007 s, sync=0.004 s, total=0.020 s; sync files=6, longest=0.002 s, average=0.001 s; distance=62 kB, estimate=62 kB; lsn=0/1F99A90, redo lsn=0/1F99A90
+2026-05-27 00:06:21.717 CST [12112] LOG:  database system is shut down
+2026-05-27 00:06:33.489 CST [4032] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-27 00:06:33.497 CST [4032] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-27 00:06:33.498 CST [4032] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-27 00:06:33.607 CST [22008] LOG:  database system was shut down at 2026-05-27 00:06:21 CST
+2026-05-27 00:06:33.633 CST [4032] LOG:  database system is ready to accept connections
+2026-05-27 00:11:33.608 CST [28892] LOG:  checkpoint starting: time
+2026-05-27 00:11:33.642 CST [28892] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.009 s, sync=0.004 s, total=0.037 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/1F99B78, redo lsn=0/1F99B40
+2026-05-27 00:21:14.493 CST [4032] LOG:  received fast shutdown request
+2026-05-27 00:21:14.494 CST [27620] ERROR:  canceling statement due to user request
+2026-05-27 00:21:14.495 CST [4032] LOG:  aborting any active transactions
+2026-05-27 00:21:14.501 CST [4032] LOG:  background worker "logical replication launcher" (PID 27620) exited with exit code 1
+2026-05-27 00:21:14.504 CST [28892] LOG:  shutting down
+2026-05-27 00:21:14.506 CST [28892] LOG:  checkpoint starting: shutdown immediate
+2026-05-27 00:21:14.525 CST [28892] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.021 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=0 kB; lsn=0/1F99C28, redo lsn=0/1F99C28
+2026-05-27 00:21:14.533 CST [4032] LOG:  database system is shut down
+2026-05-27 00:21:27.711 CST [30528] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-27 00:21:27.717 CST [30528] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-27 00:21:27.717 CST [30528] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-27 00:21:27.825 CST [18748] LOG:  database system was shut down at 2026-05-27 00:21:14 CST
+2026-05-27 00:21:27.854 CST [30528] LOG:  database system is ready to accept connections
+2026-05-27 00:26:27.826 CST [7376] LOG:  checkpoint starting: time
+2026-05-27 00:26:28.675 CST [7376] LOG:  checkpoint complete: wrote 10 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.782 s, sync=0.015 s, total=0.852 s; sync files=7, longest=0.006 s, average=0.003 s; distance=42 kB, estimate=42 kB; lsn=0/1FA4778, redo lsn=0/1FA4740
+2026-05-27 00:31:01.204 CST [15528] ERROR:  relation "user_profile_preference" does not exist at character 522
+2026-05-27 00:31:01.204 CST [15528] STATEMENT:  SELECT user_profile_preference.id, user_profile_preference.user_id, user_profile_preference.preference_key, user_profile_preference.current_value, user_profile_preference.confidence, user_profile_preference.source_memory_id, user_profile_preference.effective_from, user_profile_preference.effective_to, user_profile_preference.status, user_profile_preference.is_active, user_profile_preference.source_session_id, user_profile_preference.extra, user_profile_preference.created_at, user_profile_preference.updated_at 
+	FROM user_profile_preference 
+	WHERE user_profile_preference.user_id = $1::VARCHAR AND user_profile_preference.preference_key = $2::VARCHAR AND user_profile_preference.is_active IS true
+2026-05-27 00:31:27.673 CST [7376] LOG:  checkpoint starting: time
+2026-05-27 00:31:28.627 CST [7376] LOG:  checkpoint complete: wrote 9 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.904 s, sync=0.011 s, total=0.955 s; sync files=7, longest=0.004 s, average=0.002 s; distance=44 kB, estimate=44 kB; lsn=0/1FBDBC8, redo lsn=0/1FAF898
+2026-05-27 00:45:58.214 CST [30528] LOG:  server process (PID 15528) was terminated by exception 0xC000013A
+2026-05-27 00:45:58.214 CST [30528] DETAIL:  Failed process was running: COMMIT
+2026-05-27 00:45:58.214 CST [30528] HINT:  See C include file "ntstatus.h" for a description of the hexadecimal value.
+2026-05-27 00:45:58.214 CST [30528] LOG:  terminating any other active server processes
+2026-05-27 00:45:58.222 CST [30528] LOG:  all server processes terminated; reinitializing
+2026-05-27 12:04:01.584 CST [31776] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-27 12:04:01.588 CST [31776] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-27 12:04:01.588 CST [31776] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-27 12:04:01.683 CST [8676] LOG:  database system was interrupted; last known up at 2026-05-27 00:31:28 CST
+2026-05-27 12:04:03.681 CST [8676] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-05-27 12:04:03.684 CST [8676] LOG:  redo starts at 0/1FAF898
+2026-05-27 12:04:03.689 CST [8676] LOG:  invalid record length at 0/1FBDC78: expected at least 24, got 0
+2026-05-27 12:04:03.689 CST [8676] LOG:  redo done at 0/1FBDC40 system usage: CPU: user: 0.00 s, system: 0.01 s, elapsed: 0.00 s
+2026-05-27 12:04:03.693 CST [10604] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-05-27 12:04:03.706 CST [10604] LOG:  checkpoint complete: wrote 15 buffers (0.1%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.005 s, sync=0.005 s, total=0.015 s; sync files=9, longest=0.001 s, average=0.001 s; distance=56 kB, estimate=56 kB; lsn=0/1FBDC78, redo lsn=0/1FBDC78
+2026-05-27 12:04:03.729 CST [31776] LOG:  database system is ready to accept connections
+2026-05-27 12:07:22.878 CST [31776] LOG:  received fast shutdown request
+2026-05-27 12:07:22.879 CST [6844] ERROR:  canceling statement due to user request
+2026-05-27 12:07:22.879 CST [17920] ERROR:  canceling statement due to user request
+2026-05-27 12:07:22.881 CST [31776] LOG:  aborting any active transactions
+2026-05-27 12:07:22.892 CST [31776] LOG:  background worker "logical replication launcher" (PID 17920) exited with exit code 1
+2026-05-27 12:07:22.894 CST [10604] LOG:  shutting down
+2026-05-27 12:07:22.895 CST [10604] LOG:  checkpoint starting: shutdown immediate
+2026-05-27 12:07:22.916 CST [10604] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.023 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=51 kB; lsn=0/1FBDD28, redo lsn=0/1FBDD28
+2026-05-27 12:07:22.927 CST [31776] LOG:  database system is shut down
+2026-05-27 12:07:37.357 CST [13412] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-27 12:07:37.365 CST [13412] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-27 12:07:37.365 CST [13412] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-27 12:07:37.478 CST [18176] LOG:  database system was shut down at 2026-05-27 12:07:22 CST
+2026-05-27 12:07:37.513 CST [13412] LOG:  database system is ready to accept connections
+2026-05-27 12:12:37.482 CST [30468] LOG:  checkpoint starting: time
+2026-05-27 12:12:37.569 CST [30468] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.010 s, sync=0.005 s, total=0.089 s; sync files=2, longest=0.003 s, average=0.003 s; distance=0 kB, estimate=0 kB; lsn=0/1FBDE10, redo lsn=0/1FBDDD8
+2026-05-27 12:15:24.239 CST [13412] LOG:  received fast shutdown request
+2026-05-27 12:15:24.241 CST [1064] ERROR:  canceling statement due to user request
+2026-05-27 12:15:24.241 CST [31764] ERROR:  canceling statement due to user request
+2026-05-27 12:15:24.243 CST [13412] LOG:  aborting any active transactions
+2026-05-27 12:15:24.257 CST [13412] LOG:  background worker "logical replication launcher" (PID 31764) exited with exit code 1
+2026-05-27 12:15:24.258 CST [30468] LOG:  shutting down
+2026-05-27 12:15:24.260 CST [30468] LOG:  checkpoint starting: shutdown immediate
+2026-05-27 12:15:24.281 CST [30468] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.024 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=0 kB; lsn=0/1FBDEC0, redo lsn=0/1FBDEC0
+2026-05-27 12:15:24.294 CST [13412] LOG:  database system is shut down
+2026-05-27 12:15:36.516 CST [21180] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-27 12:15:36.523 CST [21180] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-27 12:15:36.523 CST [21180] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-27 12:15:36.638 CST [32340] LOG:  database system was shut down at 2026-05-27 12:15:24 CST
+2026-05-27 12:15:36.663 CST [21180] LOG:  database system is ready to accept connections
+2026-05-27 12:20:36.647 CST [20224] LOG:  checkpoint starting: time
+2026-05-27 12:20:36.685 CST [20224] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.010 s, sync=0.004 s, total=0.040 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/1FBDFA8, redo lsn=0/1FBDF70
+2026-05-27 12:40:34.937 CST [21180] LOG:  received fast shutdown request
+2026-05-27 12:40:34.938 CST [12900] ERROR:  canceling statement due to user request
+2026-05-27 12:40:34.938 CST [16792] ERROR:  canceling statement due to user request
+2026-05-27 12:40:34.957 CST [21180] LOG:  aborting any active transactions
+2026-05-27 12:40:34.958 CST [21180] LOG:  background worker "logical replication launcher" (PID 12900) exited with exit code 1
+2026-05-27 12:40:34.968 CST [20224] LOG:  shutting down
+2026-05-27 12:40:34.970 CST [20224] LOG:  checkpoint starting: shutdown immediate
+2026-05-27 12:40:34.994 CST [20224] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.026 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=0 kB; lsn=0/1FBE070, redo lsn=0/1FBE070
+2026-05-27 12:40:35.011 CST [21180] LOG:  database system is shut down
+2026-05-27 12:40:46.423 CST [23316] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-27 12:40:46.429 CST [23316] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-27 12:40:46.429 CST [23316] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-27 12:40:46.531 CST [9764] LOG:  database system was shut down at 2026-05-27 12:40:34 CST
+2026-05-27 12:40:46.555 CST [23316] LOG:  database system is ready to accept connections
+2026-05-27 12:45:46.529 CST [11016] LOG:  checkpoint starting: time
+2026-05-27 12:45:46.554 CST [11016] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.007 s, sync=0.003 s, total=0.027 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/1FBE158, redo lsn=0/1FBE120
+2026-05-27 12:51:04.820 CST [23316] LOG:  received fast shutdown request
+2026-05-27 12:51:04.822 CST [30560] ERROR:  canceling statement due to user request
+2026-05-27 12:51:04.822 CST [10956] ERROR:  canceling statement due to user request
+2026-05-27 12:51:04.862 CST [23316] LOG:  aborting any active transactions
+2026-05-27 12:51:04.863 CST [23316] LOG:  background worker "logical replication launcher" (PID 30560) exited with exit code 1
+2026-05-27 12:51:04.870 CST [11016] LOG:  shutting down
+2026-05-27 12:51:04.872 CST [11016] LOG:  checkpoint starting: shutdown immediate
+2026-05-27 12:51:04.894 CST [11016] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.024 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=0 kB; lsn=0/1FBE208, redo lsn=0/1FBE208
+2026-05-27 12:51:04.912 CST [23316] LOG:  database system is shut down
+2026-05-27 12:51:18.950 CST [7356] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-27 12:51:18.956 CST [7356] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-27 12:51:18.957 CST [7356] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-27 12:51:19.054 CST [32524] LOG:  database system was shut down at 2026-05-27 12:51:04 CST
+2026-05-27 12:51:19.076 CST [7356] LOG:  database system is ready to accept connections
+2026-05-27 12:51:19.607 CST [7356] LOG:  background worker "logical replication launcher" (PID 30808) was terminated by exception 0xC000013A
+2026-05-27 12:51:19.607 CST [7356] HINT:  See C include file "ntstatus.h" for a description of the hexadecimal value.
+2026-05-27 12:51:19.607 CST [7356] LOG:  terminating any other active server processes
+2026-05-27 12:51:19.615 CST [7356] LOG:  received fast shutdown request
+^C2026-05-27 12:51:36.054 CST [18756] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-27 12:51:36.061 CST [18756] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-27 12:51:36.061 CST [18756] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-27 12:51:36.168 CST [29196] LOG:  database system was interrupted; last known up at 2026-05-27 12:51:19 CST
+2026-05-27 12:51:36.816 CST [29196] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-05-27 12:51:36.819 CST [29196] LOG:  invalid record length at 0/1FBE280: expected at least 24, got 0
+2026-05-27 12:51:36.819 CST [29196] LOG:  redo is not required
+2026-05-27 12:51:36.841 CST [24204] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-05-27 12:51:36.862 CST [24204] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.007 s, sync=0.003 s, total=0.036 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/1FBE280, redo lsn=0/1FBE280
+2026-05-27 12:51:36.920 CST [18756] LOG:  database system is ready to accept connections
+2026-05-27 16:36:22.011 CST [8016] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-27 16:36:22.020 CST [8016] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-27 16:36:22.020 CST [8016] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-27 16:36:22.165 CST [9148] LOG:  database system was interrupted; last known up at 2026-05-27 12:51:36 CST
+2026-05-27 16:36:27.635 CST [9148] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-05-27 16:36:27.641 CST [9148] LOG:  redo starts at 0/1FBE2F8
+2026-05-27 16:36:27.642 CST [9148] LOG:  invalid record length at 0/1FBE330: expected at least 24, got 0
+2026-05-27 16:36:27.642 CST [9148] LOG:  redo done at 0/1FBE2F8 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+2026-05-27 16:36:27.655 CST [3920] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-05-27 16:36:27.676 CST [3920] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.006 s, sync=0.003 s, total=0.025 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/1FBE330, redo lsn=0/1FBE330
+2026-05-27 16:36:27.738 CST [8016] LOG:  database system is ready to accept connections
+2026-05-27 16:43:16.386 CST [20836] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-27 16:43:16.392 CST [20836] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-27 16:43:16.393 CST [20836] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-27 16:43:16.488 CST [6100] LOG:  database system was interrupted; last known up at 2026-05-27 16:36:27 CST
+2026-05-27 16:43:16.900 CST [6100] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-05-27 16:43:16.903 CST [6100] LOG:  redo starts at 0/1FBE3A8
+2026-05-27 16:43:16.903 CST [6100] LOG:  invalid record length at 0/1FBE3E0: expected at least 24, got 0
+2026-05-27 16:43:16.903 CST [6100] LOG:  redo done at 0/1FBE3A8 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+2026-05-27 16:43:16.917 CST [27224] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-05-27 16:43:16.931 CST [27224] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.005 s, sync=0.003 s, total=0.023 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/1FBE3E0, redo lsn=0/1FBE3E0
+2026-05-27 16:43:16.970 CST [20836] LOG:  database system is ready to accept connections
+2026-05-27 20:25:59.655 CST [17612] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-27 20:25:59.663 CST [17612] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-27 20:25:59.663 CST [17612] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-27 20:25:59.868 CST [30520] LOG:  database system was interrupted; last known up at 2026-05-27 16:43:16 CST
+2026-05-27 20:26:05.663 CST [30520] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-05-27 20:26:05.669 CST [30520] LOG:  redo starts at 0/1FBE458
+2026-05-27 20:26:05.669 CST [30520] LOG:  invalid record length at 0/1FBE490: expected at least 24, got 0
+2026-05-27 20:26:05.669 CST [30520] LOG:  redo done at 0/1FBE458 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+2026-05-27 20:26:05.682 CST [28080] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-05-27 20:26:05.703 CST [28080] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.005 s, sync=0.003 s, total=0.027 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/1FBE490, redo lsn=0/1FBE490
+2026-05-27 20:26:05.757 CST [17612] LOG:  database system is ready to accept connections
+2026-05-27 20:31:30.963 CST [17612] LOG:  received fast shutdown request
+2026-05-27 20:31:30.965 CST [16944] ERROR:  canceling statement due to user request
+2026-05-27 20:31:30.965 CST [10204] ERROR:  canceling statement due to user request
+2026-05-27 20:31:30.966 CST [17612] LOG:  aborting any active transactions
+2026-05-27 20:31:30.981 CST [17612] LOG:  background worker "logical replication launcher" (PID 10204) exited with exit code 1
+2026-05-27 20:31:30.981 CST [28080] LOG:  shutting down
+2026-05-27 20:31:30.984 CST [28080] LOG:  checkpoint starting: shutdown immediate
+2026-05-27 20:31:31.002 CST [28080] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.002 s, sync=0.001 s, total=0.021 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=0 kB; lsn=0/1FBE540, redo lsn=0/1FBE540
+2026-05-27 20:31:31.023 CST [17612] LOG:  database system is shut down
+2026-05-27 20:31:46.131 CST [26588] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-27 20:31:46.137 CST [26588] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-27 20:31:46.138 CST [26588] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-27 20:31:46.336 CST [28296] LOG:  database system was shut down at 2026-05-27 20:31:30 CST
+2026-05-27 20:31:46.378 CST [26588] LOG:  database system is ready to accept connections
+2026-05-27 20:36:46.313 CST [25152] LOG:  checkpoint starting: time
+2026-05-27 20:36:46.405 CST [25152] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.010 s, sync=0.005 s, total=0.094 s; sync files=2, longest=0.003 s, average=0.003 s; distance=0 kB, estimate=0 kB; lsn=0/1FBE628, redo lsn=0/1FBE5F0
+2026-05-27 23:15:29.406 CST [28412] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-27 23:15:29.412 CST [28412] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-27 23:15:29.413 CST [28412] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-27 23:15:29.541 CST [1604] LOG:  database system was interrupted; last known up at 2026-05-27 20:36:46 CST
+2026-05-27 23:15:33.169 CST [1604] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-05-27 23:15:33.173 CST [1604] LOG:  redo starts at 0/1FBE5F0
+2026-05-27 23:15:33.173 CST [1604] LOG:  invalid record length at 0/1FBE6D8: expected at least 24, got 0
+2026-05-27 23:15:33.173 CST [1604] LOG:  redo done at 0/1FBE6A0 system usage: CPU: user: 0.00 s, system: 0.00 s, elapsed: 0.00 s
+2026-05-27 23:15:33.183 CST [9636] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-05-27 23:15:33.194 CST [9636] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.003 s, sync=0.002 s, total=0.018 s; sync files=2, longest=0.001 s, average=0.001 s; distance=0 kB, estimate=0 kB; lsn=0/1FBE6D8, redo lsn=0/1FBE6D8
+2026-05-27 23:15:33.224 CST [28412] LOG:  database system is ready to accept connections
+2026-05-27 23:31:10.008 CST [28412] LOG:  received fast shutdown request
+2026-05-27 23:31:10.008 CST [6580] ERROR:  canceling statement due to user request
+2026-05-27 23:31:10.008 CST [19428] ERROR:  canceling statement due to user request
+2026-05-27 23:31:10.010 CST [28412] LOG:  aborting any active transactions
+2026-05-27 23:31:10.013 CST [28412] LOG:  background worker "logical replication launcher" (PID 19428) exited with exit code 1
+2026-05-27 23:31:10.016 CST [9636] LOG:  shutting down
+2026-05-27 23:31:10.017 CST [9636] LOG:  checkpoint starting: shutdown immediate
+2026-05-27 23:31:10.022 CST [9636] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.006 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=0 kB; lsn=0/1FBE788, redo lsn=0/1FBE788
+2026-05-27 23:31:10.031 CST [28412] LOG:  database system is shut down
+2026-05-27 23:31:35.672 CST [22540] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-27 23:31:35.677 CST [22540] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-27 23:31:35.677 CST [22540] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-27 23:31:35.750 CST [30520] LOG:  database system was shut down at 2026-05-27 23:31:10 CST
+2026-05-27 23:31:35.766 CST [22540] LOG:  database system is ready to accept connections
+2026-05-27 23:36:35.753 CST [14344] LOG:  checkpoint starting: time
+2026-05-27 23:36:35.767 CST [14344] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.004 s, sync=0.002 s, total=0.016 s; sync files=2, longest=0.002 s, average=0.001 s; distance=0 kB, estimate=0 kB; lsn=0/1FBE870, redo lsn=0/1FBE838
+2026-05-27 23:52:29.859 CST [22540] LOG:  received fast shutdown request
+2026-05-27 23:52:29.861 CST [29256] ERROR:  canceling statement due to user request
+2026-05-27 23:52:29.861 CST [20508] ERROR:  canceling statement due to user request
+2026-05-27 23:52:29.890 CST [22540] LOG:  aborting any active transactions
+2026-05-27 23:52:29.891 CST [22540] LOG:  background worker "logical replication launcher" (PID 29256) exited with exit code 1
+2026-05-27 23:52:29.899 CST [14344] LOG:  shutting down
+2026-05-27 23:52:29.900 CST [14344] LOG:  checkpoint starting: shutdown immediate
+2026-05-27 23:52:29.907 CST [14344] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.002 s, sync=0.001 s, total=0.009 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=0 kB; lsn=0/1FBE920, redo lsn=0/1FBE920
+2026-05-27 23:52:29.917 CST [22540] LOG:  database system is shut down
+2026-05-27 23:52:39.607 CST [6724] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-27 23:52:39.612 CST [6724] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-27 23:52:39.612 CST [6724] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-27 23:52:39.710 CST [5240] LOG:  database system was shut down at 2026-05-27 23:52:29 CST
+2026-05-27 23:52:39.723 CST [6724] LOG:  database system is ready to accept connections
+2026-05-27 23:57:39.702 CST [9968] LOG:  checkpoint starting: time
+2026-05-27 23:57:39.739 CST [9968] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.004 s, sync=0.003 s, total=0.038 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/1FBEA08, redo lsn=0/1FBE9D0
+2026-05-28 00:14:10.426 CST [18908] ERROR:  canceling statement due to user request
+2026-05-28 00:14:10.430 CST [6724] LOG:  received fast shutdown request
+2026-05-28 00:14:10.430 CST [28344] ERROR:  canceling statement due to user request
+2026-05-28 00:14:10.432 CST [6724] LOG:  aborting any active transactions
+2026-05-28 00:14:10.434 CST [6724] LOG:  background worker "logical replication launcher" (PID 18908) exited with exit code 1
+2026-05-28 00:14:10.438 CST [9968] LOG:  shutting down
+2026-05-28 00:14:10.439 CST [9968] LOG:  checkpoint starting: shutdown immediate
+2026-05-28 00:14:10.446 CST [9968] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.009 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=0 kB; lsn=0/1FBEAB8, redo lsn=0/1FBEAB8
+2026-05-28 00:14:10.457 CST [6724] LOG:  database system is shut down
+2026-05-28 00:14:21.025 CST [4408] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-28 00:14:21.030 CST [4408] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-28 00:14:21.030 CST [4408] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-28 00:14:21.120 CST [25448] LOG:  database system was shut down at 2026-05-28 00:14:10 CST
+2026-05-28 00:14:21.134 CST [4408] LOG:  database system is ready to accept connections
+2026-05-28 00:19:21.125 CST [14128] LOG:  checkpoint starting: time
+2026-05-28 00:19:21.132 CST [14128] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.002 s, sync=0.001 s, total=0.009 s; sync files=2, longest=0.001 s, average=0.001 s; distance=0 kB, estimate=0 kB; lsn=0/1FBEBA0, redo lsn=0/1FBEB68
+2026-05-28 00:39:25.391 CST [4408] LOG:  received fast shutdown request
+2026-05-28 00:39:25.392 CST [20888] ERROR:  canceling statement due to user request
+2026-05-28 00:39:25.392 CST [30908] ERROR:  canceling statement due to user request
+2026-05-28 00:39:25.428 CST [4408] LOG:  aborting any active transactions
+2026-05-28 00:39:25.429 CST [4408] LOG:  background worker "logical replication launcher" (PID 20888) exited with exit code 1
+2026-05-28 00:39:25.438 CST [14128] LOG:  shutting down
+2026-05-28 00:39:25.439 CST [14128] LOG:  checkpoint starting: shutdown immediate
+2026-05-28 00:39:25.446 CST [14128] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.008 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=0 kB; lsn=0/1FBEC50, redo lsn=0/1FBEC50
+2026-05-28 00:39:25.458 CST [4408] LOG:  database system is shut down
+2026-05-28 00:39:35.647 CST [9648] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-28 00:39:35.652 CST [9648] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-28 00:39:35.652 CST [9648] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-28 00:39:35.739 CST [25772] LOG:  database system was shut down at 2026-05-28 00:39:25 CST
+2026-05-28 00:39:35.753 CST [9648] LOG:  database system is ready to accept connections
+2026-05-28 00:44:35.743 CST [23572] LOG:  checkpoint starting: time
+2026-05-28 00:44:35.757 CST [23572] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.004 s, sync=0.003 s, total=0.016 s; sync files=2, longest=0.002 s, average=0.002 s; distance=0 kB, estimate=0 kB; lsn=0/1FBED38, redo lsn=0/1FBED00
+2026-05-28 00:52:44.737 CST [9648] LOG:  received fast shutdown request
+2026-05-28 00:52:44.737 CST [5780] ERROR:  canceling statement due to user request
+2026-05-28 00:52:44.739 CST [13172] ERROR:  canceling statement due to user request
+2026-05-28 00:52:44.740 CST [9648] LOG:  aborting any active transactions
+2026-05-28 00:52:44.745 CST [9648] LOG:  background worker "logical replication launcher" (PID 13172) exited with exit code 1
+2026-05-28 00:52:44.746 CST [23572] LOG:  shutting down
+2026-05-28 00:52:44.747 CST [23572] LOG:  checkpoint starting: shutdown immediate
+2026-05-28 00:52:44.751 CST [23572] LOG:  checkpoint complete: wrote 0 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.001 s, sync=0.001 s, total=0.006 s; sync files=0, longest=0.000 s, average=0.000 s; distance=0 kB, estimate=0 kB; lsn=0/1FBEDE8, redo lsn=0/1FBEDE8
+2026-05-28 00:52:44.758 CST [9648] LOG:  database system is shut down
+2026-05-28 00:53:05.233 CST [20172] LOG:  starting PostgreSQL 16.13, compiled by Visual C++ build 1944, 64-bit
+2026-05-28 00:53:05.238 CST [20172] LOG:  listening on IPv6 address "::1", port 5432
+2026-05-28 00:53:05.238 CST [20172] LOG:  listening on IPv4 address "127.0.0.1", port 5432
+2026-05-28 00:53:05.321 CST [12116] LOG:  database system was shut down at 2026-05-28 00:52:44 CST
+2026-05-28 00:53:05.354 CST [20172] LOG:  database system is ready to accept connections
+2026-05-28 00:58:05.318 CST [25768] LOG:  checkpoint starting: time
+2026-05-28 00:58:05.334 CST [25768] LOG:  checkpoint complete: wrote 3 buffers (0.0%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.004 s, sync=0.002 s, total=0.019 s; sync files=2, longest=0.001 s, average=0.001 s; distance=0 kB, estimate=0 kB; lsn=0/1FBEED0, redo lsn=0/1FBEE98

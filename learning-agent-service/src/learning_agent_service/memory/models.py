@@ -69,7 +69,9 @@ class TopicMasteryRecord:
 class PersistentSessionContext:
     current_topic: Optional[str] = None
     current_shop: Optional[str] = None
+    current_shop_anchor: Mapping[str, Any] = field(default_factory=dict)
     recent_entities: Tuple[str, ...] = ()
+    pending_user_need: Mapping[str, Any] = field(default_factory=dict)
     clarification_result: Mapping[str, Any] = field(default_factory=dict)
     user_preferences: Mapping[str, Any] = field(default_factory=dict)
     last_retrieval_topic: Optional[str] = None

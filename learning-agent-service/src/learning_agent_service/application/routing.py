@@ -1746,6 +1746,10 @@ def build_evidence_quality(
     if not facet_covered_names and required_roles_covered:
         facet_covered_names.extend(_facet_names(required_facets_ctx[:1]) if required_facets_ctx else [])
 
+    # Force deduplication and mutual exclusion
+    facet_covered_names = list(dict.fromkeys(facet_covered_names))
+    facet_missing_names = [f for f in list(dict.fromkeys(facet_missing_names)) if f not in facet_covered_names]
+
     clarification_slot = clarification_slot_ctx
     if not clarification_slot and missing_slots_ctx:
         clarification_slot = missing_slots_ctx[0]
@@ -2688,7 +2692,7 @@ def build_clarification_question(
     if slot in {"shop_id", "shop_name", "shop", "merchant", "merchant_name"}:
         return "你是指刚才那家店，还是要重新推荐一家？"
     if slot in {"shop_detail", "merchant_detail", "detail"}:
-        return "你是想看这家店的具体信息，还是想重新选一家店？"
+        return "你是想看哪家店的详情，还是想重新选一家店？"
     if slot in {"time", "booking_time", "date", "datetime"}:
         return "你是问现在，还是某个具体时间？"
     if slot in {"voucher_id", "coupon_id", "package_id", "coupon", "package"}:
@@ -3127,6 +3131,54 @@ def _apply_route_review(
                 "unserviceable_location": True,
             },
         )
+    # Check for pronoun reference failure in sequential routing
+    has_pronoun = any(p in raw_query for p in ("这家", "那家", "它", "该店", "此店", "这店", "这个店", "那个店", "这间", "刚才那家", "这商家", "这个商家", "刚才那个"))
+    has_resolved_ref = bool(
+        persistent.selected_shop_id
+        or persistent.recent_entities
+        or persistent.last_candidates
+        or (client_context and (client_context.get("shopId") or client_context.get("shop_id") or client_context.get("selected_shop_id")))
+    )
+    if has_pronoun and not has_resolved_ref:
+        return RoutingDecision(
+            raw_query=str(raw_query or ""),
+            normalized_query=normalize_query(raw_query),
+            domain="local_life",
+            confidence=0.9,
+            input_quality=getattr(routing, "input_quality"),
+            intent=IntentRoutingDecision(
+                name="clarify",
+                confidence=0.9,
+                required_slots=["shop_name"],
+                missing_slots=["shop_name"],
+                allowed_routes=["clarify"],
+                forbidden_routes=["rag_retrieval", "tool_call"],
+            ),
+            required_action="clarify",
+            blocked=False,
+            blocked_reason=None,
+            should_rewrite_query=False,
+            should_retrieve=False,
+            should_call_tool=False,
+            should_use_memory=False,
+            should_persist_memory=False,
+            should_vectorize_memory=False,
+            should_emit_retrieval_events=False,
+            retrieval_skipped_reason="reference_resolution_failed",
+            missing_slots=["shop_name"],
+            resolved_references=[],
+            route_reason="reference_resolution_failed",
+            route_candidate="clarify",
+            preferred_chunk_roles=[],
+            tool_candidates=[],
+            clarification_question="你问的是哪家店？请告诉我具体店名或选择刚才提到的商家。",
+            extra={
+                **dict(getattr(routing, "extra", {}) or {}),
+                "client_context": dict(client_context or {}),
+                "ambiguity_type": "reference_clarify",
+            },
+        )
+
     route_review_enabled, required_facets_enabled, _ = _phase1_flags()
     if not route_review_enabled:
         return routing

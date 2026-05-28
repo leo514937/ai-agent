@@ -8,6 +8,7 @@
       <span class="thinking-label" :class="{ 'is-thinking': isThinkingActiveRaw }">
         {{ isThinkingActiveRaw ? '思考中 ' + displayTime : '已思考 ' + displayTime }}
       </span>
+      <span style="color: red; font-weight: bold; margin-left: 10px;">[DEBUG: BLOCK IS MOUNTED!]</span>
       <svg
         class="toggle-arrow"
         :class="{ 'is-expanded': showThinkingDetail }"
@@ -25,7 +26,7 @@
     </button>
 
     <transition name="collapse">
-      <div v-if="showThinkingDetail" class="assistant-message__thinking-content-wrapper">
+      <div v-show="showThinkingDetail && (timelineSteps.length > 0 || thinkingContent)" class="assistant-message__thinking-content-wrapper">
         <div v-if="timelineSteps.length" class="assistant-message__timeline-list">
           <div v-for="(step, index) in timelineSteps" :key="index" class="assistant-message__timeline-item">
             {{ step }}
@@ -47,6 +48,10 @@ const props = defineProps({
     type: Boolean,
     default: false
   },
+  isMessageActive: {
+    type: Boolean,
+    default: false
+  },
   timelineSteps: {
     type: Array,
     default: () => []
@@ -61,21 +66,10 @@ const props = defineProps({
   }
 });
 
-const showThinkingDetail = ref(props.isThinkingActiveRaw);
-let collapseTimer = null;
+const showThinkingDetail = ref(props.isMessageActive || props.isThinkingActiveRaw);
 
-// Auto-expand when thinking starts, auto-collapse when thinking ends
-watch(() => props.isThinkingActiveRaw, (newVal) => {
-  if (newVal) {
-    if (collapseTimer) { clearTimeout(collapseTimer); collapseTimer = null; }
-    showThinkingDetail.value = true;
-  } else {
-    // Delay collapse slightly so the user can see the final state
-    collapseTimer = setTimeout(() => {
-      showThinkingDetail.value = false;
-      collapseTimer = null;
-    }, 600);
-  }
+watch(() => props.isMessageActive, (newVal) => {
+  showThinkingDetail.value = newVal;
 });
 
 const thinkingTime = ref(0);
@@ -153,7 +147,6 @@ watch(() => props.message?.eventTimeline?.length, () => {
 
 onBeforeUnmount(() => {
   stopTimer();
-  if (collapseTimer) { clearTimeout(collapseTimer); collapseTimer = null; }
 });
 
 const displayTime = computed(() => {

@@ -886,7 +886,12 @@ def synthesize_retrieval_plan(
         retrieval_filters["shop_name"] = shop_name
     shop_id = slots.get("shop_id") or persistent.selected_shop_id
     if shop_id is not None:
-        retrieval_filters["shop_id"] = shop_id
+        try:
+            shop_id_int = int(shop_id)
+            retrieval_filters["shop_id"] = shop_id_int
+            retrieval_filters["candidate_shop_ids"] = [shop_id_int]
+        except (ValueError, TypeError):
+            retrieval_filters["shop_id"] = shop_id
     city = str(slots.get("city") or persistent.current_city or "").strip()
     if city:
         retrieval_filters["city"] = city
@@ -1014,6 +1019,15 @@ def _build_tool_input(
     slots: Mapping[str, Any],
 ) -> dict[str, Any]:
     normalized = _normalize_text(turn.raw_query or routing.normalized_query)
+    
+    raw_shop_id = slots.get("shop_id") or persistent.selected_shop_id
+    shop_id = None
+    if raw_shop_id is not None:
+        try:
+            shop_id = int(raw_shop_id)
+        except (ValueError, TypeError):
+            shop_id = raw_shop_id
+
     if tool_name == "search_restaurants":
         location = slots.get("location") or persistent.current_location or {}
         city = slots.get("city") or persistent.current_city
@@ -1028,19 +1042,19 @@ def _build_tool_input(
         }
     if tool_name == "get_coupon_list":
         return {
-            "shop_id": slots.get("shop_id") or persistent.selected_shop_id,
+            "shop_id": shop_id,
             "shop_name": slots.get("shop_name") or persistent.current_shop or persistent.selected_shop_name or persistent.current_topic,
             "voucher_id": slots.get("voucher_id"),
             "query": normalized,
         }
     if tool_name == "get_order_status":
         return {
-            "shop_id": slots.get("shop_id") or persistent.selected_shop_id,
+            "shop_id": shop_id,
             "shop_name": slots.get("shop_name") or persistent.current_shop or persistent.selected_shop_name or persistent.current_topic,
             "query": normalized,
         }
     return {
-        "shop_id": slots.get("shop_id") or persistent.selected_shop_id,
+        "shop_id": shop_id,
         "shop_name": slots.get("shop_name") or persistent.current_shop or persistent.selected_shop_name or persistent.current_topic,
         "query": normalized,
     }

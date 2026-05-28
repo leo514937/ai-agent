@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import unittest
 import json
+from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import _bootstrap  # noqa: F401
 
 from learning_agent_service.application.use_cases.chat_workflow import ChatWorkflowService
+from learning_agent_service.application.service import WorkflowLearningAgentService
 from learning_agent_service.application.dependencies import OpenAIBackedModelGateway
 from learning_agent_service.application.workflow.adapters import WorkflowNodeAdapter
-from learning_agent_service.domain import ChatTurnCommand, PersistentSessionContext, TurnUnderstandingRequest
+from learning_agent_service.domain import ChatTurnCommand, PersistentSessionContext, SseEnvelope, TurnUnderstandingRequest
 from learning_agent_service.domain.errors import TerminalEvent, WorkflowErrorCode, build_error
 from learning_agent_service.domain.enums import IntentType, TurnDecision
 from learning_agent_service.domain.state import build_initial_state
@@ -48,7 +50,7 @@ class ChatWorkflowServiceTestCase(unittest.TestCase):
             session_id="session-1",
             turn_id="turn-1",
             user_id="user-1",
-            message="推荐附近火锅",
+            message="解释一下 Python 的列表推导式",
         )
 
         events = list(service.run(command))
@@ -57,6 +59,85 @@ class ChatWorkflowServiceTestCase(unittest.TestCase):
         self.assertEqual(len(service._workflow_runner.calls), 1)
         self.assertFalse(service._workflow.called)
         self.assertEqual(service._workflow_runner.calls[0][1].current_topic, "火锅")
+
+    def test_run_uses_local_life_subgraph_for_local_life_turn(self) -> None:
+        store = SimpleNamespace(load=MagicMock(return_value=PersistentSessionContext(current_topic="火锅")))
+        service = ChatWorkflowService.__new__(ChatWorkflowService)
+        service._container = SimpleNamespace(session_context_store=store)
+        service._workflow_runner = _RecordingRunner()
+        service._workflow = _RecordingSubgraph()
+
+        command = ChatTurnCommand(
+            trace_id="trace-2",
+            session_id="session-2",
+            turn_id="turn-2",
+            user_id="user-2",
+            message="海底捞火锅(水晶城购物中心店）怎么样？",
+            page="assistant",
+        )
+
+        events = list(service.run(command))
+
+        self.assertEqual(events, ["subgraph-event"])
+        self.assertEqual(len(service._workflow_runner.calls), 0)
+        self.assertTrue(service._workflow.called)
+        self.assertEqual(service._workflow.called, True)
+
+
+class _RecordingChatUseCase:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def run(self, *, command, persistent_context):
+        self.calls.append((command, persistent_context))
+        return [
+            SseEnvelope(
+                event_type="final",
+                trace_id=command.trace_id,
+                session_id=command.session_id,
+                turn_id=command.turn_id,
+                timestamp=datetime.now(timezone.utc),
+                workflow_version="test-workflow",
+                payload={"answer_text": "subgraph-final"},
+            )
+        ]
+
+
+class WorkflowLearningAgentServiceTestCase(unittest.TestCase):
+    def test_chat_stream_for_local_life_turn_uses_chat_use_case(self) -> None:
+        store = SimpleNamespace(load=MagicMock(return_value=PersistentSessionContext(current_topic="火锅")))
+        container = SimpleNamespace(
+            settings=SimpleNamespace(workflow_version="test-workflow"),
+            session_context_store=store,
+            memory_service=SimpleNamespace(),
+        )
+        service = WorkflowLearningAgentService.__new__(WorkflowLearningAgentService)
+        service.container = container
+        recording_use_case = _RecordingChatUseCase()
+        service.chat_use_case = recording_use_case
+        service.session_query_use_case = SimpleNamespace(get=lambda session_id: PersistentSessionContext())
+
+        request = SimpleNamespace(
+            trace_id="trace-api-1",
+            session_id="session-api-1",
+            turn_id="turn-api-1",
+            user_id="user-api-1",
+            message="海底捞火锅(水晶城购物中心店）怎么样？",
+            page="assistant",
+            response_mode=None,
+            topic_hint=None,
+            history_summary=None,
+            client_context={},
+        )
+
+        events = list(service.run_stream(request))
+
+        self.assertEqual(events[0].event_type, "ack")
+        self.assertEqual(events[-1].event_type, "final")
+        self.assertEqual(events[-1].payload["answer_text"], "subgraph-final")
+        self.assertEqual(len(recording_use_case.calls), 1)
+        self.assertEqual(recording_use_case.calls[0][0].message, request.message)
+        self.assertEqual(recording_use_case.calls[0][1].current_topic, "火锅")
 
 
 class DomainModelDefaultsTestCase(unittest.TestCase):

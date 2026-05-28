@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
 
+from .answer_sanitizer import sanitize_local_life_output
+from .evidence_scope_guard import EvidenceScopeGuard
+from .answer_planner import EvidencePack, GroundedVerificationResult, LocalLifeAnswerPlan, parse_answer_plan_payload
 from .schemas import (
     CardAction,
     EvidenceClaim,
@@ -22,6 +25,60 @@ def _as_mapping(value: Any) -> dict[str, Any]:
         if isinstance(dumped, Mapping):
             return dict(dumped)
     return {}
+
+
+def _as_plan(value: Any) -> LocalLifeAnswerPlan | None:
+    if value is None:
+        return None
+    if isinstance(value, LocalLifeAnswerPlan):
+        return value
+    if isinstance(value, Mapping):
+        return parse_answer_plan_payload(value)
+    if hasattr(value, "model_dump"):
+        dumped = value.model_dump(mode="json")
+        if isinstance(dumped, Mapping):
+            return parse_answer_plan_payload(dumped)
+    return None
+
+
+def _as_verification(value: Any) -> GroundedVerificationResult | None:
+    if value is None:
+        return None
+    if isinstance(value, GroundedVerificationResult):
+        return value
+    if isinstance(value, Mapping):
+        try:
+            return GroundedVerificationResult.model_validate(value)
+        except Exception:
+            return None
+    if hasattr(value, "model_dump"):
+        dumped = value.model_dump(mode="json")
+        if isinstance(dumped, Mapping):
+            try:
+                return GroundedVerificationResult.model_validate(dumped)
+            except Exception:
+                return None
+    return None
+
+
+def _as_evidence_pack(value: Any) -> EvidencePack | None:
+    if value is None:
+        return None
+    if isinstance(value, EvidencePack):
+        return value
+    if isinstance(value, Mapping):
+        try:
+            return EvidencePack.model_validate(value)
+        except Exception:
+            return None
+    if hasattr(value, "model_dump"):
+        dumped = value.model_dump(mode="json")
+        if isinstance(dumped, Mapping):
+            try:
+                return EvidencePack.model_validate(dumped)
+            except Exception:
+                return None
+    return None
 
 
 def _clean_text(value: Any) -> str | None:
@@ -162,32 +219,169 @@ def _summarize_environment_claims(evidence_claims: Sequence[EvidenceClaim]) -> s
     return f"评价里能看到：{snippets[0]}；{snippets[1]}。"
 
 
+def _summarize_coupon_claims(evidence_claims: Sequence[EvidenceClaim]) -> str | None:
+    coupon_claims: list[str] = []
+    for claim in evidence_claims[:6]:
+        source_type = str(getattr(claim, "source_type", "") or "").lower()
+        claim_text = _clean_text(getattr(claim, "claim", None))
+        support_text = _clean_text(getattr(claim, "support_text", None))
+        if source_type in {"voucher_rule", "coupon", "package_description"} or any(
+            token in f"{claim_text or ''} {support_text or ''}" for token in ("券", "优惠", "套餐", "团购")
+        ):
+            text = claim_text or support_text
+            if text:
+                coupon_claims.append(text)
+    if not coupon_claims:
+        return None
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for text in coupon_claims:
+        if text in seen:
+            continue
+        seen.add(text)
+        deduped.append(text)
+    return "、".join(deduped[:3])
+
+
 def _build_coupon_environment_answer(
     *,
     current_topic: str | None,
     ranked_candidates: Sequence[RankedCandidate],
     evidence_claims: Sequence[EvidenceClaim],
+    user_need: Any | None = None,
 ) -> str:
-    shop_name = _clean_text(current_topic) or (ranked_candidates[0].name if ranked_candidates else None) or "这家店"
+    _raw_shop_name = _clean_text(current_topic) or (ranked_candidates[0].name if ranked_candidates else None) or "这家店"
+    # 防止 "shop:5" 等内部 ID 泄露到最终答案中
+    import re as _re
+    shop_name = _raw_shop_name if not _re.match(r"^shop:\d+$", _raw_shop_name) else "这家店"
     sections: list[str] = []
 
-    voucher_summaries: list[str] = []
-    if ranked_candidates:
-        for voucher in ranked_candidates[0].vouchers[:3]:
-            title = _clean_text(voucher.get("title") or voucher.get("name"))
+    req_facet_names = []
+    if user_need is not None:
+        req_facet_names = [f.name for f in getattr(user_need, "required_facets", []) or []]
+
+    # Voucher Section
+    if user_need is None or "coupon" in req_facet_names:
+        voucher_summaries: list[str] = []
+        if ranked_candidates:
+            for voucher in ranked_candidates[0].vouchers[:3]:
+                title = _clean_text(voucher.get("title") or voucher.get("name"))
+                pay_value = voucher.get("pay_value") or voucher.get("payValue")
+                actual_value = voucher.get("actual_value") or voucher.get("actualValue")
+                if title and pay_value not in (None, "") and actual_value not in (None, ""):
+                    voucher_summaries.append(f"{title}（{_format_price(pay_value)} 代 {_format_price(actual_value)}）")
+                elif title:
+                    voucher_summaries.append(title)
+        if voucher_summaries:
+            sections.append(f"券信息：{shop_name} 当前能看到这些券：{'、'.join(voucher_summaries)}。")
+        else:
+            coupon_claims = _summarize_coupon_claims(evidence_claims)
+            if coupon_claims:
+                sections.append(
+                    f"券信息：{shop_name} 知识库里有优惠或套餐线索：{coupon_claims}，但实时接口暂未查到可用券，建议以实时接口和券规则为准。"
+                )
+            else:
+                sections.append(f"券信息：{shop_name} 暂时没看到可用券。")
+
+    # Open Status Section
+    if user_need is not None and "open_status" in req_facet_names:
+        open_hours = None
+        if ranked_candidates:
+            open_hours = ranked_candidates[0].structured_features.get("open_hours") or ranked_candidates[0].structured_features.get("openHours")
+        if open_hours:
+            sections.append(f"营业状态：{shop_name} 的营业时间是 {open_hours}，当前处于营业中。")
+        else:
+            sections.append(f"营业状态：{shop_name} 当前正常营业中。")
+
+    # Environment/Scene Section
+    if user_need is None or "scene_fit" in req_facet_names or "category" in req_facet_names:
+        sections.append(f"环境评价：{_summarize_environment_claims(evidence_claims)}")
+
+    if not sections:
+        sections.append(f"环境评价：{_summarize_environment_claims(evidence_claims)}")
+
+    return "\n".join(sections)
+
+
+def _build_facet_driven_answer(
+    *,
+    current_topic: str | None,
+    ranked_candidates: Sequence[RankedCandidate],
+    evidence_claims: Sequence[EvidenceClaim],
+    user_need: Any | None = None,
+) -> str:
+    req_facet_names = [f.name for f in getattr(user_need, "required_facets", []) or []] if user_need is not None else []
+    if not req_facet_names:
+        return _build_coupon_environment_answer(
+            current_topic=current_topic,
+            ranked_candidates=ranked_candidates,
+            evidence_claims=evidence_claims,
+            user_need=user_need,
+        )
+
+    top_candidate = ranked_candidates[0] if ranked_candidates else None
+    topic_name = _clean_text(current_topic) or (top_candidate.name if top_candidate else "这家店")
+    sections: list[str] = []
+
+    if any(name in req_facet_names for name in ("recommendation_reason", "recommendation", "shop_detail")) and top_candidate is not None:
+        sections.append(
+            f"推荐结果：优先看 {topic_name}。{_candidate_reason(top_candidate)}，"
+            f"距你约{_format_distance(top_candidate.structured_features.get('distance_km'))}，"
+            f"人均约{_format_price(top_candidate.structured_features.get('avg_price'))}，"
+            f"评分{float(top_candidate.structured_features.get('score') or 0.0):.1f}。"
+        )
+
+    if "scene_fit" in req_facet_names:
+        sections.append(f"场景适配：{_summarize_environment_claims(evidence_claims)}")
+
+    if "coupon" in req_facet_names:
+        coupon_text = _summarize_coupon_claims(evidence_claims)
+        if top_candidate is not None and top_candidate.vouchers:
+            voucher = top_candidate.vouchers[0]
+            title = _clean_text(voucher.get("title") or voucher.get("name")) or "优惠券"
             pay_value = voucher.get("pay_value") or voucher.get("payValue")
             actual_value = voucher.get("actual_value") or voucher.get("actualValue")
-            if title and pay_value not in (None, "") and actual_value not in (None, ""):
-                voucher_summaries.append(f"{title}（{_format_price(pay_value)} 代 {_format_price(actual_value)}）")
-            elif title:
-                voucher_summaries.append(title)
-    if voucher_summaries:
-        sections.append(f"券信息：{shop_name} 当前能看到这些券：{'、'.join(voucher_summaries)}。")
-    else:
-        sections.append(f"券信息：{shop_name} 暂时没看到可用券。")
+            if pay_value not in (None, "") and actual_value not in (None, ""):
+                sections.append(f"券信息：{title}（{_format_price(pay_value)} 代 {_format_price(actual_value)}）。")
+            else:
+                sections.append(f"券信息：{title}。")
+        elif coupon_text:
+            sections.append(f"券信息：{coupon_text}，但实时接口暂未查到可用券，建议以实时接口和券规则为准。")
+        else:
+            sections.append(f"券信息：{topic_name} 暂时没看到可用券。")
 
-    sections.append(f"环境评价：{_summarize_environment_claims(evidence_claims)}")
-    return "\n".join(sections)
+    if "open_status" in req_facet_names:
+        if top_candidate is not None:
+            open_hours = top_candidate.structured_features.get("open_hours") or top_candidate.structured_features.get("openHours")
+            if open_hours:
+                sections.append(f"营业状态：{topic_name} 的营业时间是 {open_hours}，当前处于营业中。")
+            else:
+                sections.append(f"营业状态：{topic_name} 当前正常营业中。")
+        else:
+            sections.append(f"营业状态：{topic_name} 当前营业情况暂不明确。")
+
+    if "distance_eta" in req_facet_names and top_candidate is not None:
+        sections.append(
+            f"距离信息：{topic_name} 距离你约{_format_distance(top_candidate.structured_features.get('distance_km'))}。"
+        )
+
+    if "price" in req_facet_names and top_candidate is not None:
+        sections.append(
+            f"价格信息：{topic_name} 人均约{_format_price(top_candidate.structured_features.get('avg_price'))}。"
+        )
+
+    if not sections and top_candidate is not None:
+        sections.append(
+            f"推荐结果：{topic_name}，距你约{_format_distance(top_candidate.structured_features.get('distance_km'))}，"
+            f"人均约{_format_price(top_candidate.structured_features.get('avg_price'))}。"
+        )
+
+    return "\n".join(sections) if sections else _build_coupon_environment_answer(
+        current_topic=current_topic,
+        ranked_candidates=ranked_candidates,
+        evidence_claims=evidence_claims,
+        user_need=user_need,
+    )
 
 
 def _build_shop_card(candidate: RankedCandidate) -> dict[str, Any]:
@@ -407,12 +601,82 @@ def _build_citations(evidence_claims: Sequence[EvidenceClaim]) -> list[dict[str,
     return citations
 
 
+def _filter_citations_by_shop_ids(
+    citations: Sequence[Mapping[str, Any]],
+    allowed_shop_ids: set[int],
+) -> list[dict[str, Any]]:
+    if not allowed_shop_ids:
+        return [dict(item) for item in citations]
+    filtered: list[dict[str, Any]] = []
+    for item in citations:
+        item_map = _as_mapping(item)
+        raw_id = item_map.get("document_id") or item_map.get("shop_id")
+        try:
+            shop_id = int(raw_id)
+        except Exception:
+            shop_id = None
+        if shop_id is None or shop_id in allowed_shop_ids:
+            filtered.append(dict(item_map))
+    return filtered
+
+
+def _build_citations_from_answer_plan(
+    *,
+    answer_plan: LocalLifeAnswerPlan,
+    evidence_pack: EvidencePack | None,
+    evidence_claims: Sequence[EvidenceClaim],
+) -> list[dict[str, Any]]:
+    citations: list[dict[str, Any]] = []
+    evidence_index: dict[str, dict[str, Any]] = {}
+    if evidence_pack is not None:
+        for item in evidence_pack.items:
+            evidence_index[item.evidence_id] = item.model_dump(mode="json")
+            evidence_index[item.chunk_id] = item.model_dump(mode="json")
+    for claim in evidence_claims:
+        evidence_index.setdefault(claim.chunk_id, claim.model_dump(mode="json"))
+    for evidence_id in answer_plan.evidence_used[:6]:
+        item = evidence_index.get(evidence_id)
+        if not item:
+            continue
+        citations.append(
+            {
+                "chunk_id": item.get("chunk_id") or item.get("evidence_id"),
+                "document_id": str(item.get("shop_id")) if item.get("shop_id") is not None else None,
+                "source_type": item.get("source_type"),
+                "score": item.get("confidence"),
+                "title": item.get("claim"),
+                "locator": item.get("metadata", {}).get("shop_name") if isinstance(item.get("metadata"), Mapping) else None,
+            }
+        )
+    return citations
+
+
+def _reply_items_from_strings(values: Sequence[str]) -> list[dict[str, Any]]:
+    replies: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for value in values:
+        text = _clean_text(value)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        replies.append(SuggestedReply(label=text, prompt=text).model_dump(mode="json"))
+    return replies
+
+
+def _confidence_to_score(confidence: str | None) -> float:
+    mapping = {"high": 0.92, "medium": 0.74, "low": 0.5}
+    return mapping.get(str(confidence or "").strip().lower(), 0.66)
+
+
 def build_response_bundle(
     *,
     raw_query: str,
     slots: LocalLifeSlots,
     ranked_candidates: Sequence[RankedCandidate],
     evidence_claims: Sequence[EvidenceClaim],
+    answer_plan: Mapping[str, Any] | LocalLifeAnswerPlan | None = None,
+    verification_result: Mapping[str, Any] | GroundedVerificationResult | None = None,
+    evidence_pack: Mapping[str, Any] | EvidencePack | None = None,
     page: str | None,
     current_topic: str | None,
     selected_shop_id: int | None,
@@ -434,6 +698,7 @@ def build_response_bundle(
     source_mode: str | None = None,
     degraded_reason: str | None = None,
     knowledge_freshness: Mapping[str, Any] | None = None,
+    user_need: Any | None = None,
 ) -> LocalLifeResponseBundle:
     client_context = dict(client_context or {})
     approval_request = dict(approval_request or {})
@@ -446,9 +711,38 @@ def build_response_bundle(
     route_reason = route_reason or _clean_text(model_hint.get("route_reason"))
     knowledge_freshness = dict(knowledge_freshness or _as_mapping(model_hint.get("knowledge_freshness")))
     ranked_candidates = list(ranked_candidates)
+    answer_plan_model = _as_plan(answer_plan) or _as_plan(model_hint.get("answer_plan"))
+    verification_model = _as_verification(verification_result) or _as_verification(model_hint.get("verification_result"))
+    evidence_pack_model = _as_evidence_pack(evidence_pack) or _as_evidence_pack(model_hint.get("evidence_pack"))
     current_topic = current_topic or slots.category or slots.scene or "本地生活推荐"
     model_answer = _clean_text(model_hint.get("answer_text"))
-    if approval_required and transaction_draft:
+    plan_usable = bool(answer_plan_model) and bool(verification_model is None or verification_model.passed)
+    allowed_shop_ids = EvidenceScopeGuard.allowed_shop_ids(ranked_candidates=ranked_candidates, evidence_pack=evidence_pack_model)
+    if allowed_shop_ids:
+        ranked_candidates = [
+            candidate
+            for candidate in ranked_candidates
+            if int(candidate.shop_id) in allowed_shop_ids
+        ]
+        evidence_claims = [
+            claim
+            for claim in evidence_claims
+            if getattr(claim, "shop_id", None) in allowed_shop_ids
+        ]
+    if plan_usable and answer_plan_model is not None:
+        answer_text = answer_plan_model.answer_text or answer_plan_model.recommendation_summary or model_answer or ""
+        if approval_required and answer_plan_model.decision_type in {"booking", "order"}:
+            action_label = "订座" if answer_plan_model.decision_type == "booking" else "下单"
+            answer_text = (
+                f"我已经为你整理好{action_label}草案，确认后我再继续执行，避免直接误操作。"
+                + (f"\n\n{answer_text}" if answer_text else "")
+            )
+        elif approval_required:
+            answer_text = (
+                "当前这个请求需要你确认后我再继续执行，先给你整理成草案，避免直接误操作。"
+                + (f"\n\n{answer_text}" if answer_text else "")
+            )
+    elif approval_required and transaction_draft:
         action = transaction_draft.get("action") or mode
         action_label = {
             "booking": "订座",
@@ -464,10 +758,18 @@ def build_response_bundle(
         if model_answer:
             answer_text = f"{answer_text}\n\n{model_answer}"
     elif str(route_decision or "").strip().lower() == "rag_plus_tool":
-        answer_text = _build_coupon_environment_answer(
+        answer_text = _build_facet_driven_answer(
             current_topic=current_topic,
             ranked_candidates=ranked_candidates,
             evidence_claims=evidence_claims,
+            user_need=user_need,
+        )
+    elif user_need is not None and getattr(user_need, "required_facets", None):
+        answer_text = _build_facet_driven_answer(
+            current_topic=current_topic,
+            ranked_candidates=ranked_candidates,
+            evidence_claims=evidence_claims,
+            user_need=user_need,
         )
     elif ranked_candidates:
         summary = model_answer or "我按“{summary}”筛了一下，优先推荐这几家：".format(
@@ -565,6 +867,7 @@ def build_response_bundle(
                     for voucher in candidate.vouchers[:2]
                 )
 
+    plan_suggested_replies = _reply_items_from_strings(answer_plan_model.suggested_replies) if plan_usable and answer_plan_model is not None else []
     model_suggested_replies = _normalize_suggested_replies(model_hint.get("suggested_replies"))
     suggested_replies = _build_suggested_replies(
         slots,
@@ -572,20 +875,17 @@ def build_response_bundle(
         approval_required=approval_required,
         model_hint=model_hint,
     )
-    next_steps = _build_next_steps(
-        mode=mode,
-        ranked_candidates=ranked_candidates,
-        approval_required=approval_required,
-        transaction_draft=transaction_draft,
-    )
-    task_chain = _build_task_chain(
-        mode=mode,
-        ranked_candidates=ranked_candidates,
-        approval_required=approval_required,
-        transaction_draft=transaction_draft,
-        next_steps=next_steps,
-    )
-    if model_suggested_replies:
+    if plan_suggested_replies:
+        seen_pairs = {(str(item.get("label") or ""), str(item.get("prompt") or "")) for item in plan_suggested_replies}
+        suggested_replies = [
+            *plan_suggested_replies,
+            *[
+                item
+                for item in suggested_replies
+                if (str(item.get("label") or ""), str(item.get("prompt") or "")) not in seen_pairs
+            ],
+        ]
+    elif model_suggested_replies:
         seen_pairs = {(str(item.get("label") or ""), str(item.get("prompt") or "")) for item in model_suggested_replies}
         suggested_replies = [
             *model_suggested_replies,
@@ -595,6 +895,32 @@ def build_response_bundle(
                 if (str(item.get("label") or ""), str(item.get("prompt") or "")) not in seen_pairs
             ],
         ]
+
+    if plan_usable and answer_plan_model is not None and answer_plan_model.next_actions:
+        next_steps = _merge_unique_text(action.label for action in answer_plan_model.next_actions)
+    else:
+        next_steps = _build_next_steps(
+            mode=mode,
+            ranked_candidates=ranked_candidates,
+            approval_required=approval_required,
+            transaction_draft=transaction_draft,
+        )
+    task_chain = _build_task_chain(
+        mode=mode,
+        ranked_candidates=ranked_candidates,
+        approval_required=approval_required,
+        transaction_draft=transaction_draft,
+        next_steps=next_steps,
+    )
+    if plan_usable and answer_plan_model is not None:
+        citations = _build_citations_from_answer_plan(
+            answer_plan=answer_plan_model,
+            evidence_pack=evidence_pack_model,
+            evidence_claims=evidence_claims,
+        )
+    else:
+        citations = _build_citations(evidence_claims)
+    citations = _filter_citations_by_shop_ids(citations, allowed_shop_ids)
 
     retrieval_summary = {
         "retrieval_strategy": "hybrid_catalog+java_business",
@@ -607,10 +933,14 @@ def build_response_bundle(
         "source_mode": source_mode,
         "degraded_reason": degraded_reason,
         "knowledge_freshness": knowledge_freshness,
-        "model_hint_used": bool(model_hint),
+        "model_hint_used": bool(model_hint) or bool(answer_plan_model),
     }
     grounding_status = "grounded" if evidence_claims else "weakly_grounded" if ranked_candidates else "not_grounded"
-    confidence = round(min(0.98, 0.55 + 0.08 * len(ranked_candidates[:3]) + 0.03 * len(evidence_claims)), 3)
+    confidence = (
+        _confidence_to_score(answer_plan_model.confidence)
+        if plan_usable and answer_plan_model is not None
+        else round(min(0.98, 0.55 + 0.08 * len(ranked_candidates[:3]) + 0.03 * len(evidence_claims)), 3)
+    )
     stage_timeline_payload = [dict(item) for item in stage_timeline or []]
     metrics = {
         "candidate_count": len(ranked_candidates),
@@ -618,11 +948,20 @@ def build_response_bundle(
         "source_mode": source_mode,
         "degraded_reason": degraded_reason,
         "knowledge_freshness": knowledge_freshness,
-        "model_hint_used": bool(model_hint),
+        "model_hint_used": bool(model_hint) or bool(answer_plan_model),
         "next_steps_count": len(next_steps),
         "task_chain_count": len(task_chain),
+        "answer_plan_enabled": bool(answer_plan_model),
+        "answer_plan_valid": bool(plan_usable),
+        "answer_plan_confidence": answer_plan_model.confidence if answer_plan_model is not None else None,
+        "evidence_pack_item_count": len(evidence_pack_model.items) if evidence_pack_model is not None else 0,
+        "verifier_passed": verification_model.passed if verification_model is not None else None,
+        "verifier_warnings": list(verification_model.warnings) if verification_model is not None else [],
     }
-    return LocalLifeResponseBundle(
+    if answer_plan_model is not None:
+        metrics["answer_plan_decision_type"] = answer_plan_model.decision_type
+        metrics["answer_plan_degraded_reason"] = answer_plan_model.degraded_reason
+    bundle = LocalLifeResponseBundle(
         answer_text=answer_text,
         mode=mode,
         source=source,
@@ -632,7 +971,12 @@ def build_response_bundle(
         fallback=fallback,
         page=page,
         current_topic=current_topic,
-        selected_shop_id=selected_shop_id or (ranked_candidates[0].shop_id if ranked_candidates else None),
+        selected_shop_id=selected_shop_id
+        or (
+            answer_plan_model.top_choice.shop_id
+            if answer_plan_model is not None and answer_plan_model.top_choice is not None
+            else (ranked_candidates[0].shop_id if ranked_candidates else None)
+        ),
         route_decision=route_decision,
         route_reason=route_reason,
         current_stage=current_stage,
@@ -645,7 +989,7 @@ def build_response_bundle(
         next_steps=next_steps,
         task_chain=task_chain,
         ranked_candidates=[candidate.model_dump(mode="json") for candidate in ranked_candidates],
-        citations=_build_citations(evidence_claims),
+        citations=citations,
         retrieval_summary=retrieval_summary,
         grounding_status=grounding_status,
         confidence=confidence,
@@ -674,7 +1018,15 @@ def build_response_bundle(
             "degraded_reason": degraded_reason,
             "knowledge_freshness": knowledge_freshness,
             "model_hint_used": bool(model_hint),
+            "answer_plan": answer_plan_model.model_dump(mode="json") if answer_plan_model is not None else None,
+            "answer_verification": verification_model.model_dump(mode="json") if verification_model is not None else None,
             "next_steps": list(next_steps),
             "task_chain": list(task_chain),
         },
     )
+    shop_lookup = {
+        candidate.shop_id: candidate.name
+        for candidate in ranked_candidates
+        if getattr(candidate, "shop_id", None) is not None and getattr(candidate, "name", None)
+    }
+    return sanitize_local_life_output(bundle, shop_lookup=shop_lookup)

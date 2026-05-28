@@ -58,14 +58,83 @@ export function notifyAssistantStateChange() {
 export function loadAssistantSessions(storage = typeof window !== 'undefined' ? window.localStorage : undefined) {
   const stored = readStoredJSON(storage, SESSIONS_KEY, null);
   if (Array.isArray(stored) && stored.length > 0) {
-    return stored.map(cloneSession);
+    return stored.map((session) => {
+      const cloned = cloneSession(session);
+      if (Array.isArray(cloned.messages)) {
+        cloned.messages.forEach(msg => {
+          if (msg.role === 'assistant' && msg.streaming) {
+            msg.streaming = false;
+            msg.error = true;
+          }
+        });
+      }
+      return cloned;
+    });
   }
 
   return mockAssistantSessions.map(cloneSession);
 }
 
+function pruneSessionForStorage(session) {
+  const cloned = cloneSession(session);
+  if (Array.isArray(cloned.messages)) {
+    cloned.messages = cloned.messages.map((msg) => {
+      if (msg?.role === 'assistant') {
+        const pruned = { ...msg };
+        delete pruned.finalPayload;
+        delete pruned.final_payload;
+        delete pruned.metrics;
+        delete pruned.stageTimeline;
+        delete pruned.stage_timeline;
+        delete pruned.taskChain;
+        delete pruned.task_chain;
+        // Keep a lightweight eventTimeline for thinking block display.
+        // Only preserve type + timestamp (no payload) to save space.
+        if (Array.isArray(pruned.eventTimeline)) {
+          pruned.eventTimeline = pruned.eventTimeline.map(e => ({
+            type: e.type || '',
+            createdAt: e.createdAt || e.timestamp || '',
+          }));
+        }
+        
+        if (Array.isArray(pruned.citations)) {
+          pruned.citations = pruned.citations.slice(0, 2).map(c => ({
+            id: c.id,
+            title: c.title,
+            source: c.source,
+          }));
+        }
+        
+        if (Array.isArray(pruned.shops)) {
+          pruned.shops = pruned.shops.map(s => ({
+            id: s.id,
+            name: s.name,
+            score: s.score,
+            avgPrice: s.avgPrice || s.avg_price,
+          }));
+        }
+
+        if (Array.isArray(pruned.vouchers)) {
+          pruned.vouchers = pruned.vouchers.map(v => ({
+            id: v.id,
+            title: v.title,
+            payValue: v.payValue,
+            actualValue: v.actualValue,
+          }));
+        }
+        
+        return pruned;
+      }
+      return msg;
+    });
+  }
+  return cloned;
+}
+
 export function saveAssistantSessions(storage, sessions, { notify = true } = {}) {
-  writeStoredJSON(storage, SESSIONS_KEY, sessions.map(cloneSession));
+  const limitedSessions = Array.isArray(sessions) ? sessions.slice(0, 5) : [];
+  const pruned = limitedSessions.map(pruneSessionForStorage);
+  writeStoredJSON(storage, SESSIONS_KEY, pruned);
   if (notify) {
     notifyAssistantStateChange();
   }

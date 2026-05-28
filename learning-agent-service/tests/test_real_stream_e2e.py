@@ -196,6 +196,7 @@ class RealStreamE2ETestCase(unittest.TestCase):
                 )
             )
             shop_state_turn1 = self._read_session_state(redis_client, session_shop)
+            print(f"DEBUG: shop_state_turn1 = {shop_state_turn1}")
             self.assertEqual(shop_state_turn1.get("current_shop"), "山城一锅")
             self.assertEqual(shop_state_turn1.get("selected_shop_name"), "山城一锅")
 

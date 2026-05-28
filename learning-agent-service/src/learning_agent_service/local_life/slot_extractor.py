@@ -115,10 +115,51 @@ def _extract_category(text: str, session_context: Mapping[str, Any]) -> Optional
 
 
 def _extract_shop_query(text: str, session_context: Mapping[str, Any]) -> Optional[str]:
+    import re
+
+    compact = (text or "").strip()
+    if compact:
+        normalized = compact.rstrip("？?。.!！")
+        pronoun_hits = ("这家", "这店", "这间", "它", "刚才那家", "刚才那个", "这商家", "这个商家")
+        for pronoun in ("这家", "这店", "这间", "它", "刚才那家", "刚才那个", "这商家", "这个商家"):
+            idx = normalized.find(pronoun)
+            if idx > 0:
+                prefix = normalized[:idx].strip(" ，,;；")
+                if prefix:
+                    return prefix
+        if any(pronoun in normalized for pronoun in pronoun_hits):
+            return None
+        for suffix in (
+            "怎么样",
+            "有券吗",
+            "有券",
+            "适合约会吗",
+            "适合吗",
+            "好不好",
+            "值不值得",
+            "值不值",
+            "营业吗",
+            "现在营业吗",
+            "现在有券吗",
+            "现在开吗",
+            "适合带爸妈吗",
+            "适合家庭聚餐吗",
+        ):
+            if normalized.endswith(suffix):
+                prefix = normalized[: -len(suffix)].strip(" ，,;；")
+                if prefix:
+                    return prefix
+        match = re.match(r"^(?P<name>.+?)(?:\s+)?(什么|哪家|哪个好|行不行|可以吗)$", normalized)
+        if match:
+            prefix = match.group("name").strip(" ，,;；")
+            if prefix:
+                return prefix
     for key in ("selected_shop_name", "shop_name", "current_shop"):
         value = session_context.get(key)
         if value:
-            return str(value)
+            text_value = str(value).strip()
+            if text_value and not re.match(r"^shop:\d+$", text_value):
+                return text_value
     return None
 
 
@@ -202,7 +243,7 @@ def extract_slots(
     compact = text.replace(" ", "")
 
     category = _extract_category(compact, session_context)
-    shop_query = _extract_shop_query(compact, session_context)
+    shop_query = _extract_shop_query(text, session_context)
     city = (
         understanding.location_norm.city
         or understanding.extra.get("city")
@@ -354,6 +395,26 @@ def extract_slots(
         if resolved_shop_ids:
             slots.shop_ids = list(dict.fromkeys([*slots.shop_ids, *resolved_shop_ids]))
 
+    # 针对 "shop:N" 测试数据/查询模式，自动解析为 shop_ids = [N]
+    import re
+    shop_id_candidates: list[int] = []
+    if slots.shop_query:
+        match = re.search(r"shop:(\d+)", slots.shop_query, re.IGNORECASE)
+        if match:
+            try:
+                shop_id_candidates.append(int(match.group(1)))
+            except Exception:
+                pass
+    if raw_query:
+        match = re.search(r"shop:(\d+)", raw_query, re.IGNORECASE)
+        if match:
+            try:
+                shop_id_candidates.append(int(match.group(1)))
+            except Exception:
+                pass
+    if shop_id_candidates:
+        slots.shop_ids = list(dict.fromkeys([*slots.shop_ids, *shop_id_candidates]))
+
     last_ids = _last_candidate_ids(session_context)
     if any(token in compact for token in ("第二家", "第二个", "第二间")) and len(last_ids) >= 2:
         slots.shop_ids = [last_ids[1]]
@@ -364,7 +425,10 @@ def extract_slots(
 
     intent = _classify_intent(compact, bool(slots.shop_ids or slots.shop_query))
     if model_intent is not None and model_confidence >= 0.45:
-        intent = model_intent
+        # 宽泛意图限制覆盖：如果本地启发式根据关键字提取出了特定的强意图（如 coupon, booking, comparison, navigation 等），
+        # 且外部大模型仅判定为最基础宽泛的 RESTAURANT_RECOMMENDATION，则不进行覆盖以保护高特异性。
+        if intent == LocalLifeIntentType.RESTAURANT_RECOMMENDATION or model_intent != LocalLifeIntentType.RESTAURANT_RECOMMENDATION:
+            intent = model_intent
     slots.action = slots.action or intent
 
     clarification = ClarificationDecision()

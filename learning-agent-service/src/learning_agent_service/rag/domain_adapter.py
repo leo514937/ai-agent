@@ -627,6 +627,10 @@ class DomainRagAdapter:
 
     @staticmethod
     def _contains_reference_token(message: str, lowered_message: str) -> bool:
-        return any(token in lowered_message for token in ("this", "that", "previous", "it")) or any(
-            token in message for token in (_CN_THIS, _CN_THAT, _CN_PREVIOUS, _CN_IT)
+        pronouns = (
+            "this", "that", "previous", "it", 
+            "这家", "那家", "该店", "此店", "这店", "这个店", "那个店", "这间", "刚才那家", "这商家", "这个商家", "刚才那个", "它"
+        )
+        return any(token in lowered_message for token in pronouns) or any(
+            token in message for token in pronouns
         )

@@ -601,6 +601,10 @@ class RetrievalSummary(CoreModel):
     current_stage: Optional[str]
     stage_status: Optional[str]
     stage_timeline: List[Dict[str, Any]] = Field(default_factory=list)
+    source_mode: Optional[str] = None
+    degraded_reason: Optional[str] = None
+    knowledge_freshness: Dict[str, Any] = Field(default_factory=dict)
+    model_hint_used: bool = False
 
 
 class MemoryUsedItemSummary(CoreModel):
@@ -658,7 +662,9 @@ class AnswerComposeResult(CoreModel):
 class PersistentSessionContext(CoreModel):
     current_topic: Optional[str] = None
     current_shop: Optional[str] = None
+    current_shop_anchor: Dict[str, Any] = Field(default_factory=dict)
     recent_entities: List[str] = Field(default_factory=list)
+    pending_user_need: Dict[str, Any] = Field(default_factory=dict)
     clarification_result: Dict[str, Any] = Field(default_factory=dict)
     user_preferences: Dict[str, Any] = Field(default_factory=dict)
     last_retrieval_topic: Optional[str] = None
@@ -766,6 +772,9 @@ class GraphRuntimeMeta(CoreModel):
 class FinalPayload(CoreModel):
     answer_text: str
     citations: List[Citation] = Field(default_factory=list)
+    source_mode: Optional[str] = None
+    degraded_reason: Optional[str] = None
+    knowledge_freshness: Dict[str, Any] = Field(default_factory=dict)
     used_tools: List[str] = Field(default_factory=list)
     resolved_topic: Optional[str] = None
     current_topic: Optional[str] = None

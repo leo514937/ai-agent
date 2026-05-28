@@ -73,6 +73,67 @@ class LocalLifeSlots(LocalLifeModel):
     page: Optional[str] = None
 
 
+class RequiredFacet(LocalLifeModel):
+    name: str
+    required: bool
+    data_source: Literal[
+        "slot",
+        "static_rag",
+        "dynamic_tool",
+        "business_api",
+        "memory",
+        "client_context",
+        "mixed",
+    ]
+    freshness: Literal["static_ok", "near_realtime_required"]
+    entity_keys: List[str] = Field(default_factory=list)
+    missing_policy: Literal[
+        "partial_grounded",
+        "ask_clarification",
+        "no_answer",
+    ]
+
+
+class ContextRef(LocalLifeModel):
+    type: str
+    id: Optional[str] = None
+    name: Optional[str] = None
+    source: str
+    confidence: float = 1.0
+
+
+class UserNeed(LocalLifeModel):
+    intent: str
+    raw_query: str
+    resolved_query: str
+    slots: LocalLifeSlots
+    constraints: Dict[str, Any] = Field(default_factory=dict)
+    required_facets: List[RequiredFacet] = Field(default_factory=list)
+    optional_facets: List[RequiredFacet] = Field(default_factory=list)
+    missing_slots: List[str] = Field(default_factory=list)
+    context_refs: List[ContextRef] = Field(default_factory=list)
+
+
+class RouteExecutionRequirement(LocalLifeModel):
+    required_facets: List[str] = Field(default_factory=list)
+    execute_tools: List[str] = Field(default_factory=list)
+    execute_rag: bool = False
+    reference_needed: bool = False
+    resolved_shop_id: Optional[int] = None
+    candidate_shop_ids: List[int] = Field(default_factory=list)
+
+
+class RouteReviewResult(LocalLifeModel):
+    reviewed_route: Any
+    execution_requirements: RouteExecutionRequirement
+    review_reason: str
+    intercepted: bool = False
+    clarification: Optional[ClarificationDecision] = None
+    reviewed_clarification: Optional[ClarificationDecision] = None
+    resolved_shop_id: Optional[int] = None
+    candidate_shop_ids: List[int] = Field(default_factory=list)
+
+
 class ClarificationDecision(LocalLifeModel):
     need_clarification: bool = False
     question: Optional[str] = None
@@ -272,6 +333,9 @@ class LocalLifeTurnState(LocalLifeModel):
     safety_result: Dict[str, Any] = Field(default_factory=dict)
     metrics: Dict[str, Any] = Field(default_factory=dict)
     raw_result: Dict[str, Any] = Field(default_factory=dict)
+    user_need: Optional[UserNeed] = None
+    route_review: Optional[RouteReviewResult] = None
 
 
 ClarificationDecision.model_rebuild()
+RouteReviewResult.model_rebuild()

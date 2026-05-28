@@ -236,6 +236,35 @@ test('streamAssistantPrompt 在 clarification_card 终态下不应抛出缺少 f
   assert.equal(result.terminalMessage.content.includes('需要你补充信息'), true);
 });
 
+test('streamAssistantPrompt 在只有增量、没有 final 时会回退成最终消息', async (t) => {
+  const originalFetch = global.fetch;
+  global.fetch = async () => {
+    return {
+      ok: true,
+      body: new ReadableStream({
+        start(controller) {
+          const encoder = new TextEncoder();
+          controller.enqueue(encoder.encode('event: ack\n'));
+          controller.enqueue(encoder.encode('data: {"traceId":"trace-3","sessionId":"sess-3","turnId":"turn-3","payload":{"message":"accepted"}}\n\n'));
+          controller.enqueue(encoder.encode('event: delta\n'));
+          controller.enqueue(encoder.encode('data: {"traceId":"trace-3","sessionId":"sess-3","turnId":"turn-3","payload":{"delta":"先看券","answer_text":"先看券"}}\n\n'));
+          controller.close();
+        },
+      }),
+    };
+  };
+  t.after(() => {
+    global.fetch = originalFetch;
+  });
+
+  const result = await streamAssistantPrompt({ message: '有券吗', context: { page: 'ai' } });
+
+  assert.equal(result.final?.content, '先看券');
+  assert.equal(result.error, null);
+  assert.equal(result.terminalType, 'final');
+  assert.equal(result.timeline.length, 2);
+});
+
 test('streamAssistantPrompt 在 signal abort 时返回 cancelled 且停止继续消费事件', async (t) => {
   const originalFetch = global.fetch;
   const abortController = new AbortController();

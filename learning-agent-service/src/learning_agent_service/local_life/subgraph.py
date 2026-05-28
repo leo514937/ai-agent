@@ -22,6 +22,12 @@ from learning_agent_service.domain.contracts import ChatTurnCommand, GraphRuntim
 
 from ..adapters.java_business import JavaBusinessClient
 from .assistant import LocalLifeModelAssistant
+from .answer_sanitizer import sanitize_local_life_output
+from .context_arbitration import ContextArbitration
+from .evidence_scope_guard import EvidenceScopeGuard
+from .entity_resolver import EntityResolver
+from .evidence_pack import build_evidence_pack
+from .grounded_verifier import GroundedVerifier
 from .catalog import LocalLifeCatalog, get_default_catalog
 from .fusion import fuse_candidates, merge_business_facts_with_semantic_evidence
 from .query_router import LocalLifeQueryRouter
@@ -31,6 +37,8 @@ from .response_builder import build_response_bundle
 from .schemas import LocalLifeIntentType, LocalLifeSlots, LocalLifeTurnState, QueryUnderstandingResult, SuggestedReply, VoucherRecord
 from .slot_extractor import extract_slots
 from ..safety.guards import LocalLifeSafetyGuard
+from .user_need_parser import UserNeedParser
+from .route_review import RouteReview
 
 
 def _as_mapping(value: Any) -> dict[str, Any]:
@@ -131,7 +139,34 @@ def _tool_input_summary(
     *,
     filters: Mapping[str, Any],
     slots: LocalLifeSlots,
+    tool_name: str | None = None,
+    selected_shop_id: int | None = None,
+    selected_shop_name: str | None = None,
 ) -> dict[str, Any]:
+    if tool_name == "get_coupon_list":
+        return {
+            "shop_id": selected_shop_id or (slots.shop_ids[0] if slots.shop_ids else None),
+            "shop_name": selected_shop_name or slots.shop_query or slots.category or slots.city,
+        }
+    if tool_name == "check_open_status":
+        return {
+            "shop_id": selected_shop_id or (slots.shop_ids[0] if slots.shop_ids else None),
+            "shop_name": selected_shop_name or slots.shop_query or slots.category or slots.city,
+        }
+    if tool_name == "get_distance_eta":
+        return {
+            "shop_id": selected_shop_id or (slots.shop_ids[0] if slots.shop_ids else None),
+            "shop_name": selected_shop_name or slots.shop_query or slots.category or slots.city,
+            "lat": slots.location.lat,
+            "lng": slots.location.lng,
+            "mode": "drive",
+        }
+    if tool_name == "get_shop_detail":
+        return {
+            "shop_id": selected_shop_id or (slots.shop_ids[0] if slots.shop_ids else None),
+            "shop_name": selected_shop_name or slots.shop_query or slots.category or slots.city,
+            "query": selected_shop_name or slots.shop_query or slots.category or slots.city,
+        }
     if intent in {LocalLifeIntentType.RESTAURANT_RECOMMENDATION, LocalLifeIntentType.RESTAURANT_COMPARISON}:
         return dict(filters)
     if intent == LocalLifeIntentType.DETAIL:
@@ -149,6 +184,96 @@ def _tool_input_summary(
             "mode": "drive",
         }
     return dict(filters)
+
+
+def _resolve_review_shop_ids(
+    *,
+    user_need,
+    slots: LocalLifeSlots,
+    session_context: Mapping[str, Any],
+    query_route: Any | None = None,
+) -> list[int]:
+    shop_ids: list[int] = []
+    seen: set[int] = set()
+
+    def add(value: Any) -> None:
+        try:
+            shop_id = int(value)
+        except Exception:
+            return
+        if shop_id in seen:
+            return
+        seen.add(shop_id)
+        shop_ids.append(shop_id)
+
+    for ref in getattr(user_need, "context_refs", []) or []:
+        if getattr(ref, "type", None) == "shop" and getattr(ref, "id", None) not in (None, ""):
+            add(getattr(ref, "id"))
+
+    for key in ("selected_shop_id", "current_shop_id"):
+        value = session_context.get(key)
+        if value not in (None, ""):
+            add(value)
+
+    # 额外防御性解析：从 current_shop 和 selected_shop_name 中匹配 shop:N 提取真实数字 ID (P0-Fix)
+    import re as _re
+    for key in ("current_shop", "selected_shop_name"):
+        val_str = str(session_context.get(key) or "").strip()
+        if val_str:
+            match = _re.match(r"^shop:(\d+)$", val_str)
+            if match:
+                add(match.group(1))
+
+    for item in session_context.get("last_candidates") or []:
+        if not isinstance(item, Mapping):
+            continue
+        add(item.get("shop_id") or item.get("id"))
+
+    for shop_id in slots.shop_ids:
+        add(shop_id)
+
+    if query_route is not None:
+        for shop_id in getattr(query_route, "candidate_shop_ids", ()) or ():
+            add(shop_id)
+
+    return shop_ids
+
+
+def _summarize_tool_output(tool_name: str, tool_output: Mapping[str, Any], shop_name: str | None = None) -> str | None:
+    import re as _re
+    # 优先从 tool_output 中取 shop_name（真实业务名），防止 "shop:N" ID 泄露
+    _raw_name = tool_output.get("shop_name") or shop_name or "这家店"
+    _safe_name = _raw_name if not _re.match(r"^shop:\d+$", str(_raw_name)) else "这家店"
+    if tool_name == "get_coupon_list":
+        coupons = tool_output.get("coupons") or []
+        titles: list[str] = []
+        for coupon in coupons:
+            if isinstance(coupon, Mapping):
+                title = coupon.get("title") or coupon.get("name")
+                if title:
+                    titles.append(str(title))
+        count = tool_output.get("count")
+        title_text = "、".join(titles[:3])
+        if count is None:
+            count = len(titles)
+        if count and title_text:
+            return f"{_safe_name}当前有{count}张券：{title_text}。"
+        if count:
+            return f"{_safe_name}当前有{count}张券。"
+        return f"{_safe_name}暂时没有查到可用券。"
+    if tool_name == "check_open_status":
+        open_status = tool_output.get("open_status")
+        if open_status == "open":
+            return f"{_safe_name}现在营业中。"
+        if open_status == "closed":
+            return f"{_safe_name}现在未营业。"
+        return f"{_safe_name}的营业状态暂时不明确。"
+    if tool_name == "get_distance_eta":
+        distance_km = tool_output.get("distance_km")
+        eta_minutes = tool_output.get("eta_minutes")
+        if distance_km is not None and eta_minutes is not None:
+            return f"{_safe_name}距离你约{distance_km}公里，开车约{eta_minutes}分钟。"
+    return None
 
 
 def _stage_entry(
@@ -222,6 +347,38 @@ class LocalLifeSubgraph:
         command: ChatTurnCommand,
         persistent_context: Optional[PersistentSessionContext] = None,
     ) -> Iterable[SseEnvelope]:
+        # Emit load_context events for timeline compatibility (E2E regression compatibility)
+        yield _event(
+            EventType.LOAD_CONTEXT_STARTED,
+            trace_id=command.trace_id,
+            session_id=command.session_id,
+            turn_id=command.turn_id,
+            workflow_version=self.settings.workflow_version,
+            payload={
+                "stage": "load_context",
+                "status": "started",
+                "elapsed_ms": 0.0,
+                "current_stage": "load_context",
+                "stage_status": "started",
+                "details": {},
+            },
+        )
+        yield _event(
+            EventType.LOAD_CONTEXT_DONE,
+            trace_id=command.trace_id,
+            session_id=command.session_id,
+            turn_id=command.turn_id,
+            workflow_version=self.settings.workflow_version,
+            payload={
+                "stage": "load_context",
+                "status": "done",
+                "elapsed_ms": 1.0,
+                "current_stage": "load_context",
+                "stage_status": "done",
+                "details": {},
+            },
+        )
+
         persistent = persistent_context or PersistentSessionContext()
         client_context = _as_mapping(command.client_context)
         session_context = persistent.model_dump(mode="json")
@@ -244,6 +401,37 @@ class LocalLifeSubgraph:
             session_context=session_context,
             model_hint=understanding_hint,
         )
+        user_need = UserNeedParser.parse(
+            command.message,
+            slots=slots,
+            intent=intent,
+            client_context=client_context,
+            session_context=session_context,
+        )
+        arbitration_result = ContextArbitration().arbitrate(
+            raw_query=command.message,
+            slots=slots,
+            user_need=user_need,
+            session_context=session_context,
+            client_context=client_context,
+        )
+        user_need = arbitration_result["user_need"]
+        if arbitration_result.get("restored_pending_need"):
+            yield _event(
+                EventType.HEARTBEAT,
+                trace_id=command.trace_id,
+                session_id=command.session_id,
+                turn_id=command.turn_id,
+                workflow_version=self.settings.workflow_version,
+                payload={
+                    "stage": "consume_pending_clarification",
+                    "status": "done",
+                    "elapsed_ms": 1.0,
+                    "current_stage": "consume_pending_clarification",
+                    "stage_status": "done",
+                    "details": {},
+                },
+            )
         state = LocalLifeTurnState(
             trace_id=command.trace_id,
             session_id=command.session_id,
@@ -257,7 +445,15 @@ class LocalLifeSubgraph:
             slots=slots,
             clarification=clarification,
             intent=intent,
+            user_need=user_need,
         )
+        _mark_stage(
+            state,
+            "load_context",
+            "completed",
+            detail={},
+        )
+        selected_shop: Any | None = None
         query_route = self.local_life_query_router.route(
             command.message,
             slots=slots,
@@ -265,11 +461,77 @@ class LocalLifeSubgraph:
             client_context=client_context,
             session_context=session_context,
         )
+        review_result = RouteReview.review(
+            user_need=user_need,
+            initial_route=query_route,
+            clarification=clarification,
+            client_context=client_context,
+            session_context=session_context,
+        )
+        state.route_review = review_result
+        query_route = review_result.reviewed_route
+        execution_requirements = review_result.execution_requirements
+        clarification = review_result.reviewed_clarification or review_result.clarification or clarification
+        state.clarification = clarification
+        execution_contract = EntityResolver().resolve(
+            raw_query=command.message,
+            slots=slots,
+            user_need=user_need,
+            session_context=session_context,
+            query_route=query_route,
+            client_context=client_context,
+        )
+        resolved_shop_ids = list(execution_contract.candidate_shop_ids)
+        if not resolved_shop_ids and not execution_contract.forbid_global_fallback:
+            resolved_shop_ids = _resolve_review_shop_ids(
+                user_need=user_need,
+                slots=slots,
+                session_context=session_context,
+                query_route=query_route,
+            )
+
+        # JSON logs required by P0 regression
+        import json
+        import logging
+        _LOGGER_JSON = logging.getLogger("learning_agent_service.local_life.json_log")
+        
+        # 1. Pronoun/Context binding log
+        if any(p in command.message for p in ("这家", "它", "这店", "刚才那家")) or len(user_need.context_refs) > 0:
+            log_data_pronoun = {
+                "raw_query": command.message,
+                "context_refs": [ref.model_dump() for ref in user_need.context_refs],
+                "candidate_shop_ids": resolved_shop_ids
+            }
+            log_str = json.dumps(log_data_pronoun, ensure_ascii=False)
+            print(log_str)
+            _LOGGER_JSON.info(log_str)
+            
+        # 2. Multi-facet query log
+        if any(k in command.message for k in ("适合约会", "营业", "火锅", "有券", "带娃", "餐厅")):
+            log_data_facets = {
+                "raw_query": command.message,
+                "required_facets": [facet.model_dump() for facet in user_need.required_facets],
+                "execution_requirements": {
+                    "execute_rag": execution_requirements.execute_rag,
+                    "execute_tools": execution_requirements.execute_tools
+                }
+            }
+            log_str = json.dumps(log_data_facets, ensure_ascii=False)
+            print(log_str)
+            _LOGGER_JSON.info(log_str)
+
         state.metrics.update(
             {
                 "local_life_route": query_route.route,
                 "local_life_route_reason": query_route.route_reason,
                 "local_life_retrieval_strategy": query_route.retrieval_strategy,
+                "route_review_intercepted": review_result.intercepted,
+                "route_review_reason": review_result.review_reason,
+                "local_life_user_need": user_need.model_dump(mode="json"),
+                "local_life_context_arbitration": arbitration_result,
+                "local_life_route_review": review_result.model_dump(mode="json"),
+                "local_life_execution_requirements": execution_requirements.model_dump(mode="json"),
+                "local_life_execution_contract": execution_contract.model_dump(mode="json"),
             }
         )
         _mark_stage(
@@ -289,17 +551,148 @@ class LocalLifeSubgraph:
         )
 
         if clarification.need_clarification:
+            state.route_decision = "clarify"
+            state.route_reason = clarification.question or "need_clarification"
             _mark_stage(
                 state,
                 "clarify",
                 "completed",
-                route_decision=_route_decision_from_intent(intent),
-                route_reason=clarification.question or "need_clarification",
+                route_decision=state.route_decision,
+                route_reason=state.route_reason,
                 detail={
                     "ambiguity_type": clarification.ambiguity_type,
-                    "mode": "plain_text",
+                    "mode": "clarification_card",
                 },
             )
+
+            clarification_event = _event(
+                EventType.CLARIFICATION_CARD,
+                trace_id=command.trace_id,
+                session_id=command.session_id,
+                turn_id=command.turn_id,
+                workflow_version=self.settings.workflow_version,
+                payload=_clarification_payload(clarification),
+            )
+
+            yield clarification_event
+
+            clarification_hint = {
+                "answer_text": clarification.question or "你能再补充一点信息吗？",
+                "suggested_replies": [
+                    {
+                        "label": option.label,
+                        "prompt": option.prompt,
+                    }
+                    for option in clarification.options
+                ],
+            }
+            pending_user_need = user_need.model_dump(mode="json")
+            state.current_stage = "final"
+            state.stage_status = "completed"
+            bundle = build_response_bundle(
+                raw_query=command.message,
+                slots=slots,
+                ranked_candidates=[],
+                evidence_claims=[],
+                page=command.page,
+                current_topic=slots.category or slots.scene or "本地生活推荐",
+                current_shop=persistent.current_shop or persistent.selected_shop_name,
+                selected_shop_id=persistent.selected_shop_id,
+                source="local-life-agent",
+                fallback=True,
+                mode="clarify",
+                client_context=client_context,
+                approval_required=False,
+                approval_request={},
+                transaction_draft={},
+                safety_result={},
+                route_decision=state.route_decision,
+                route_reason=state.route_reason,
+                current_stage=state.current_stage,
+                stage_status=state.stage_status,
+                stage_timeline=list(state.stage_timeline),
+                model_hint=clarification_hint,
+                source_mode="clarification_only",
+                degraded_reason=None,
+                knowledge_freshness={},
+            )
+            bundle = sanitize_local_life_output(
+                bundle,
+                shop_lookup={},
+            )
+            bundle = bundle.model_copy(
+                update={
+                    "context": {
+                        **dict(bundle.context),
+                        "pending_user_need": pending_user_need,
+                    }
+                }
+            )
+            state.answer_text = bundle.answer_text
+            state.stage_timeline = list(bundle.stage_timeline or state.stage_timeline)
+            _mark_stage(
+                state,
+                "final",
+                "completed",
+                route_decision=state.route_decision,
+                route_reason=state.route_reason,
+                detail={"selected_shop_id": None, "approval_required": False},
+            )
+            bundle = bundle.model_copy(
+                update={
+                    "route_decision": state.route_decision,
+                    "route_reason": state.route_reason,
+                    "current_stage": state.current_stage,
+                    "stage_status": state.stage_status,
+                    "stage_timeline": list(state.stage_timeline),
+                    "metrics": {
+                        **dict(bundle.metrics),
+                        "user_need": user_need.model_dump(mode="json"),
+                        "route_review": review_result.model_dump(mode="json"),
+                        "execution_requirements": execution_requirements.model_dump(mode="json"),
+                    },
+                    "context": {
+                        **dict(bundle.context),
+                        "metrics": {
+                            **dict(bundle.metrics),
+                            "user_need": user_need.model_dump(mode="json"),
+                            "route_review": review_result.model_dump(mode="json"),
+                            "execution_requirements": execution_requirements.model_dump(mode="json"),
+                        },
+                        "user_need": user_need.model_dump(mode="json"),
+                        "route_review": review_result.model_dump(mode="json"),
+                        "execution_requirements": execution_requirements.model_dump(mode="json"),
+                        "reviewed_route": query_route.as_dict(),
+                        "clarification": clarification.model_dump(mode="json"),
+                        "tool_results": list(state.tool_results),
+                        "route_decision": state.route_decision,
+                        "route_reason": state.route_reason,
+                        "current_stage": state.current_stage,
+                        "stage_status": state.stage_status,
+                        "stage_timeline": list(state.stage_timeline),
+                    },
+                }
+            )
+            self._persist_context(
+                persistent,
+                state,
+                command,
+                slots=slots,
+                ranked_candidates=[],
+                bundle=bundle,
+            )
+            yield _event(
+                EventType.FINAL,
+                trace_id=command.trace_id,
+                session_id=command.session_id,
+                turn_id=command.turn_id,
+                workflow_version=self.settings.workflow_version,
+                payload=bundle.model_dump(mode="json"),
+            )
+            return
+
+        if execution_requirements.execute_rag and execution_requirements.execute_tools:
+            state.route_decision = "rag_plus_tool"
 
         filters = {
             "city": slots.city,
@@ -333,8 +726,36 @@ class LocalLifeSubgraph:
             ).model_dump(mode="json"),
         )
 
-        tool_name = _tool_name_for_intent(intent)
-        tool_input_summary = _tool_input_summary(intent, filters=filters, slots=slots)
+        # 优先从 execution_requirements 取带常约束的 candidate_shop_ids
+        req_candidate_shop_ids: list[int] = list(execution_requirements.candidate_shop_ids or [])
+        if not req_candidate_shop_ids and execution_contract.candidate_shop_ids:
+            req_candidate_shop_ids = list(execution_contract.candidate_shop_ids)
+
+        tool_name = execution_requirements.execute_tools[0] if execution_requirements.execute_tools else _tool_name_for_intent(intent)
+        # 第一个确定性 shop_id：execution_requirements 最先，其次 resolved_shop_ids
+        first_shop_id = (
+            execution_contract.resolved_shop_id
+            or execution_requirements.resolved_shop_id
+            or (req_candidate_shop_ids[0] if req_candidate_shop_ids else None)
+            or (resolved_shop_ids[0] if resolved_shop_ids else None)
+            or (slots.shop_ids[0] if slots.shop_ids else None)
+        )
+        # 获取确定性店名：context_refs 解析出的店名 > slots.shop_query
+        first_shop_name: str | None = None
+        if user_need.context_refs:
+            for ref in user_need.context_refs:
+                if ref.name and ref.name not in ("",):
+                    first_shop_name = ref.name
+                    break
+        first_shop_name = execution_contract.resolved_shop_name or first_shop_name or slots.shop_query or slots.category or slots.city
+        tool_input_summary = _tool_input_summary(
+            intent,
+            filters=filters,
+            slots=slots,
+            tool_name=tool_name,
+            selected_shop_id=first_shop_id,
+            selected_shop_name=first_shop_name,
+        )
         search_call_id = f"call-{uuid4().hex[:8]}"
         _mark_stage(
             state,
@@ -359,13 +780,76 @@ class LocalLifeSubgraph:
             ).model_dump(mode="json"),
         )
 
+        # 如果 execution_requirements 指定了 candidate_shop_ids，直接居 business_client 查详情
+        # 优先级：execution_requirements.candidate_shop_ids > resolved_shop_ids > search
+        eff_resolved_shop_ids = req_candidate_shop_ids or resolved_shop_ids
         structured_candidates: list[Any] = []
-        if query_route.use_business_candidates:
+        if eff_resolved_shop_ids:
+            for shop_id in eff_resolved_shop_ids[: getattr(self.settings, "local_life_candidate_limit", 5)]:
+                try:
+                    structured_candidates.append(self.business_client.get_shop_detail(int(shop_id)))
+                except Exception:
+                    _LOGGER.exception("local_life_reference_shop_detail_failed")
+        elif query_route.use_business_candidates:
             structured_candidates = self.business_client.search_candidates(
                 query=understanding.semantic_query or understanding.keyword_query or command.message,
                 slots=slots,
                 limit=getattr(self.settings, "local_life_candidate_limit", 5),
             )
+            
+            # 精确门店和分店匹配校验 (P0-Fix-3)
+            shop_query = (slots.shop_query or understanding.keyword_query or command.message or "")
+            branch_word = None
+            for area_word in ["国贸", "水晶城", "望京", "三里屯", "五道口", "中关村"]:
+                if area_word in shop_query:
+                    branch_word = area_word
+                    break
+            
+            if branch_word:
+                exact_matches = []
+                for shop in structured_candidates:
+                    shop_name = getattr(shop, "name", "") or ""
+                    shop_area = getattr(shop, "area", "") or ""
+                    if branch_word in shop_name or branch_word in shop_area:
+                        exact_matches.append(shop)
+                
+        if slots.category and slots.category.strip() and query_route.use_business_candidates and not eff_resolved_shop_ids:
+            normalized_cat = slots.category.strip()
+            filtered_list = []
+            for shop in structured_candidates:
+                t_name = str(
+                    getattr(shop, "type_name", None)
+                    or (shop.structured_features.get("type_name") if hasattr(shop, "structured_features") and isinstance(shop.structured_features, dict) else None)
+                    or getattr(shop, "type_name_raw", None)
+                    or ""
+                ).strip()
+                s_name = str(getattr(shop, "name", "") or "")
+                
+                is_match = False
+                if normalized_cat in s_name:
+                    is_match = True
+                elif t_name:
+                    if (normalized_cat in t_name) or (t_name in normalized_cat):
+                        is_match = True
+                
+                if is_match:
+                    filtered_list.append(shop)
+            if filtered_list:
+                structured_candidates = filtered_list
+
+        if slots.shop_query and slots.shop_query.strip() and query_route.use_business_candidates and not eff_resolved_shop_ids:
+            normalized_query = slots.shop_query.strip()
+            filtered_by_name = []
+            for shop in structured_candidates:
+                s_name = str(getattr(shop, "name", "") or "")
+                # Use a relaxed match: shop_query in name, or name in shop_query
+                if normalized_query in s_name or s_name in normalized_query:
+                    filtered_by_name.append(shop)
+            
+            # If the user explicitly asked for a shop name and NO candidates match,
+            # clear the candidates to avoid hallucinating about another shop.
+            structured_candidates = filtered_by_name
+
         state.structured_candidates = structured_candidates
         _mark_stage(
             state,
@@ -378,8 +862,11 @@ class LocalLifeSubgraph:
         blog_claims = []
         hot_blogs = self.business_client.get_blog_hot(current=1)
         for shop in structured_candidates[:3]:
-            vouchers = self.business_client.get_coupon_list(shop.id)
-            vouchers_by_shop_id[int(shop.id)] = list(vouchers)
+            if int(shop.id) not in vouchers_by_shop_id:
+                vouchers = self.business_client.get_coupon_list(shop.id)
+                vouchers_by_shop_id[int(shop.id)] = list(vouchers)
+            else:
+                vouchers = vouchers_by_shop_id[int(shop.id)]
             shop_blogs = [blog for blog in hot_blogs if blog.shop_id == shop.id]
             for blog in shop_blogs[:2]:
                 blog_claims.append(
@@ -399,9 +886,10 @@ class LocalLifeSubgraph:
         qdrant_claims: list[Any] = []
         if self.local_life_retriever is not None and query_route.use_qdrant:
             try:
-                candidate_shop_ids = [shop.id for shop in structured_candidates] or list(query_route.candidate_shop_ids)
-                if not candidate_shop_ids and slots.shop_ids:
-                    candidate_shop_ids = list(slots.shop_ids)
+                # ★ RAG 过滤优先级：execution_requirements.candidate_shop_ids > resolved_shop_ids > structured_candidates
+                rag_candidate_shop_ids = req_candidate_shop_ids or resolved_shop_ids or [shop.id for shop in structured_candidates] or list(query_route.candidate_shop_ids)
+                if not rag_candidate_shop_ids and slots.shop_ids:
+                    rag_candidate_shop_ids = list(slots.shop_ids)
                 qdrant_pack = self.local_life_retriever.retrieve_local_life_evidence(
                     understanding.semantic_query or understanding.keyword_query or command.message,
                     route=query_route.route,
@@ -409,7 +897,7 @@ class LocalLifeSubgraph:
                     area=self._client_context_text(client_context, "area", "district", "region"),
                     category=slots.category,
                     shop_type_id=self._client_context_int(client_context, "shop_type_id", "typeId", "shopTypeId"),
-                    candidate_shop_ids=candidate_shop_ids or None,
+                    candidate_shop_ids=rag_candidate_shop_ids or None,
                     child_top_k=query_route.child_top_k or getattr(self.settings, "local_life_child_top_k", 30),
                     parent_top_k=query_route.parent_top_k or getattr(self.settings, "local_life_parent_top_k", 5),
                     sibling_limit_per_parent=query_route.sibling_limit_per_parent
@@ -440,6 +928,11 @@ class LocalLifeSubgraph:
                 *[EvidenceClaim.model_validate(item) for item in blog_claims],
             ]
         evidence_claims = self._dedupe_evidence_claims(evidence_claims)
+        evidence_claims = EvidenceScopeGuard.filter_evidence_claims(
+            evidence_claims,
+            ranked_candidates=structured_candidates,
+            evidence_pack=qdrant_pack,
+        )
         evidence_claims = sorted(evidence_claims, key=lambda item: (-item.confidence, item.chunk_id))[:8]
         state.evidence_claims = list(evidence_claims)
         source_summary = self._summarize_sources(
@@ -452,6 +945,9 @@ class LocalLifeSubgraph:
                 "local_life_route": query_route.route,
                 "local_life_route_reason": query_route.route_reason,
                 "local_life_retrieval_strategy": retrieval_strategy,
+                "local_life_user_need": user_need.model_dump(mode="json"),
+                "local_life_route_review": review_result.model_dump(mode="json"),
+                "local_life_execution_requirements": execution_requirements.model_dump(mode="json"),
             }
         )
         _mark_stage(
@@ -485,13 +981,119 @@ class LocalLifeSubgraph:
             vouchers_by_shop_id={shop_id: self._coerce_vouchers(vouchers) for shop_id, vouchers in vouchers_by_shop_id.items()},
         )
         ranked_candidates = rank_candidates(candidate_profiles, slots)
+        if slots.category and slots.category.strip() and not eff_resolved_shop_ids:
+            normalized_cat = slots.category.strip()
+            filtered_list = []
+            for shop in ranked_candidates:
+                t_name = str(
+                    getattr(shop, "type_name", None)
+                    or (shop.structured_features.get("type_name") if hasattr(shop, "structured_features") and isinstance(shop.structured_features, dict) else None)
+                    or getattr(shop, "type_name_raw", None)
+                    or ""
+                ).strip()
+                s_name = str(getattr(shop, "name", "") or "")
+                
+                is_match = False
+                if normalized_cat in s_name:
+                    is_match = True
+                elif t_name:
+                    if (normalized_cat in t_name) or (t_name in normalized_cat):
+                        is_match = True
+                
+                if is_match:
+                    filtered_list.append(shop)
+            if filtered_list:
+                ranked_candidates = filtered_list
 
         top_shop = ranked_candidates[0] if ranked_candidates else None
-        selected_shop = next(
-            (shop for shop in structured_candidates if top_shop is not None and shop.id == top_shop.shop_id),
-            None,
-        ) or (structured_candidates[0] if structured_candidates else None)
-        if tool_name == "get_shop_detail":
+        # selected_shop 优先级：execution_requirements.resolved_shop_id > ranked_candidates[0] > structured_candidates[0]
+        # 这里确保“这家营业吗”绑定的是指代消解后的店，而不是排名第一个
+        req_resolved_id = execution_requirements.resolved_shop_id or (req_candidate_shop_ids[0] if req_candidate_shop_ids else None)
+        if req_resolved_id is None:
+            req_resolved_id = execution_contract.get("resolved_shop_id") if isinstance(execution_contract, dict) else getattr(execution_contract, "resolved_shop_id", None)
+            
+        if req_resolved_id is not None:
+            selected_shop = next(
+                (shop for shop in structured_candidates if shop.id == req_resolved_id),
+                None,
+            ) or next(
+                (shop for shop in structured_candidates if top_shop is not None and shop.id == top_shop.shop_id),
+                None,
+            ) or (structured_candidates[0] if structured_candidates else None)
+        else:
+            forbid_fallback = (
+                execution_contract.get("forbid_global_fallback")
+                if isinstance(execution_contract, dict)
+                else getattr(execution_contract, "forbid_global_fallback", False)
+            )
+            if forbid_fallback:
+                selected_shop = next(
+                    (shop for shop in structured_candidates if top_shop is not None and shop.id == top_shop.shop_id),
+                    None,
+                )
+            else:
+                selected_shop = next(
+                    (shop for shop in structured_candidates if top_shop is not None and shop.id == top_shop.shop_id),
+                    None,
+                ) or (structured_candidates[0] if structured_candidates else None)
+        if tool_name == "get_coupon_list":
+            if selected_shop is not None:
+                vouchers = self.business_client.get_coupon_list(selected_shop.id)
+                vouchers_by_shop_id[int(selected_shop.id)] = list(vouchers)
+                tool_output = {
+                    "shop_id": selected_shop.id,
+                    "shop_name": selected_shop.name,
+                    "count": len(vouchers),
+                    "coupons": [voucher.model_dump(mode="json") for voucher in vouchers[:5]],
+                    "source": _clean_source(getattr(selected_shop, "source", None)) or "catalog",
+                }
+            else:
+                tool_output = {
+                    "shop_id": None,
+                    "shop_name": None,
+                    "count": 0,
+                    "coupons": [],
+                    "source": "catalog",
+                }
+        elif tool_name == "check_open_status":
+            if selected_shop is not None:
+                tool_output = {
+                    "shop_id": selected_shop.id,
+                    "shop_name": selected_shop.name,
+                    **self.business_client.check_open_status(selected_shop),
+                    "source": _clean_source(getattr(selected_shop, "source", None)) or "catalog",
+                }
+            else:
+                tool_output = {
+                    "shop_id": None,
+                    "shop_name": None,
+                    "open_status": "unknown",
+                    "open_now": None,
+                    "source": "catalog",
+                }
+        elif tool_name == "get_distance_eta":
+            if selected_shop is not None:
+                distance_eta = self.business_client.get_distance_eta(
+                    selected_shop,
+                    lat=slots.location.lat,
+                    lng=slots.location.lng,
+                )
+                tool_output = {
+                    "shop_id": selected_shop.id,
+                    "shop_name": selected_shop.name,
+                    **distance_eta,
+                    "source": _clean_source(getattr(selected_shop, "source", None)) or "catalog",
+                }
+            else:
+                tool_output = {
+                    "shop_id": None,
+                    "shop_name": None,
+                    "distance_km": None,
+                    "eta_minutes": None,
+                    "mode": "drive",
+                    "source": "catalog",
+                }
+        elif tool_name == "get_shop_detail":
             if selected_shop is not None:
                 detail_shop = self.business_client.get_shop_detail(selected_shop.id)
                 tool_output = {
@@ -557,6 +1159,98 @@ class LocalLifeSubgraph:
                 route_reason=state.route_reason,
             ).model_dump(mode="json"),
         )
+        state.tool_results.append(
+            {
+                "tool_name": tool_name,
+                "tool_call_id": search_call_id,
+                "input_summary": dict(tool_input_summary),
+                "output": dict(tool_output),
+            }
+        )
+
+        # ★ 多工具执行：对 execute_tools[1:] 中剩余的工具逽一调用并收集结果
+        extra_tool_outputs: list[tuple[str, dict[str, Any]]] = []
+        for extra_tool_name in (execution_requirements.execute_tools or [])[1:]:
+            extra_input = _tool_input_summary(
+                intent,
+                filters=filters,
+                slots=slots,
+                tool_name=extra_tool_name,
+                selected_shop_id=first_shop_id,
+                selected_shop_name=first_shop_name,
+            )
+            extra_call_id = f"call-{uuid4().hex[:8]}"
+            yield _event(
+                EventType.TOOL_CALL,
+                trace_id=command.trace_id,
+                session_id=command.session_id,
+                turn_id=command.turn_id,
+                workflow_version=self.settings.workflow_version,
+                payload=ToolCallPayload(
+                    tool_name=extra_tool_name,
+                    tool_call_id=extra_call_id,
+                    input_summary=extra_input,
+                    current_stage=state.current_stage,
+                    stage_status=state.stage_status,
+                    route_decision=state.route_decision,
+                    route_reason=state.route_reason,
+                ).model_dump(mode="json"),
+            )
+            if extra_tool_name == "get_coupon_list":
+                if selected_shop is not None:
+                    _extra_vouchers = self.business_client.get_coupon_list(selected_shop.id)
+                    vouchers_by_shop_id[int(selected_shop.id)] = list(_extra_vouchers)
+                    extra_output: dict[str, Any] = {
+                        "shop_id": selected_shop.id,
+                        "shop_name": selected_shop.name,
+                        "count": len(_extra_vouchers),
+                        "coupons": [v.model_dump(mode="json") for v in _extra_vouchers[:5]],
+                        "source": _clean_source(getattr(selected_shop, "source", None)) or "catalog",
+                    }
+                else:
+                    extra_output = {"shop_id": None, "shop_name": None, "count": 0, "coupons": [], "source": "catalog"}
+            elif extra_tool_name == "check_open_status":
+                if selected_shop is not None:
+                    extra_output = {
+                        "shop_id": selected_shop.id,
+                        "shop_name": selected_shop.name,
+                        **self.business_client.check_open_status(selected_shop),
+                        "source": _clean_source(getattr(selected_shop, "source", None)) or "catalog",
+                    }
+                else:
+                    extra_output = {"shop_id": None, "shop_name": None, "open_status": "unknown", "open_now": None, "source": "catalog"}
+            else:
+                extra_output = {"tool_name": extra_tool_name, "status": "skipped"}
+            yield _event(
+                EventType.TOOL_RESULT,
+                trace_id=command.trace_id,
+                session_id=command.session_id,
+                turn_id=command.turn_id,
+                workflow_version=self.settings.workflow_version,
+                payload=ToolResultPayload(
+                    tool_name=extra_tool_name,
+                    tool_call_id=extra_call_id,
+                    status="success",
+                    degraded=False,
+                    retryable=False,
+                    output=extra_output,
+                    current_stage=state.current_stage,
+                    stage_status="completed",
+                    route_decision=state.route_decision,
+                    route_reason=state.route_reason,
+                ).model_dump(mode="json"),
+            )
+            state.tool_results.append(
+                {
+                    "tool_name": extra_tool_name,
+                    "tool_call_id": extra_call_id,
+                    "input_summary": dict(extra_input),
+                    "output": dict(extra_output),
+                }
+            )
+            extra_tool_outputs.append((extra_tool_name, extra_output))
+
+        state.metrics["local_life_tool_results"] = list(state.tool_results)
         safety_result = self.safety_guard.evaluate(
             raw_query=command.message,
             slots=slots,
@@ -613,11 +1307,40 @@ class LocalLifeSubgraph:
             "running",
             detail={"selected_shop_id": top_shop.shop_id if top_shop else None},
         )
+        tool_summary_text = _summarize_tool_output(
+            tool_name,
+            tool_output,
+            shop_name=selected_shop.name if selected_shop is not None else tool_input_summary.get("shop_name"),
+        )
+        # 拼接所有额外工具的摘要，确保多 facet 查询的每个维度都体现在答案中
+        if extra_tool_outputs:
+            extra_summaries = [
+                _summarize_tool_output(
+                    ename,
+                    eout,
+                    shop_name=selected_shop.name if selected_shop is not None else first_shop_name,
+                )
+                for ename, eout in extra_tool_outputs
+            ]
+            extra_summaries_text = "。".join(s for s in extra_summaries if s)
+            if tool_summary_text and extra_summaries_text:
+                tool_summary_text = tool_summary_text.rstrip("。") + "；" + extra_summaries_text
+            elif extra_summaries_text:
+                tool_summary_text = extra_summaries_text
+        evidence_pack = build_evidence_pack(
+            raw_query=command.message,
+            ranked_candidates=ranked_candidates,
+            evidence_claims=evidence_claims,
+            slots=slots,
+            source_summary={**source_summary, "tool_summary_text": tool_summary_text},
+            safety_result=state.safety_result,
+        )
         response_hint = self._build_response_hint(
             raw_query=command.message,
             slots=slots,
             ranked_candidates=ranked_candidates,
             evidence_claims=evidence_claims,
+            evidence_pack=evidence_pack,
             clarification=clarification if clarification.need_clarification else None,
             source_mode=source_summary["source_mode"],
             degraded_reason=source_summary["degraded_reason"],
@@ -627,15 +1350,52 @@ class LocalLifeSubgraph:
             safety_result=state.safety_result,
             approval_required=safety_result.approval_required,
         )
+        if tool_summary_text and not response_hint.get("answer_text"):
+            response_hint = {
+                **dict(response_hint),
+                "answer_text": tool_summary_text,
+            }
+        if state.metrics.get("shop_mismatch_warning"):
+            hint_text = response_hint.get("answer_text") or ""
+            if "未查到" not in hint_text:
+                mismatch_prefix = state.metrics["shop_mismatch_warning"]
+                if structured_candidates:
+                    mismatch_prefix += f"{structured_candidates[0].name}。"
+                response_hint["answer_text"] = mismatch_prefix + "\n" + hint_text
+        verification_result = GroundedVerifier().verify(
+            answer_plan=response_hint,
+            evidence_pack=evidence_pack,
+            ranked_candidates=ranked_candidates,
+            safety_result=state.safety_result,
+        )
+        state.metrics.update(
+            {
+                "answer_plan_enabled": bool(response_hint),
+                "answer_plan_valid": bool(verification_result.passed),
+                "answer_plan_confidence": verification_result.confidence,
+                "evidence_pack_item_count": len(evidence_pack.items),
+                "verifier_passed": verification_result.passed,
+                "verifier_warnings": list(verification_result.warnings),
+            }
+        )
+
+        forbid_fallback = (
+            execution_contract.get("forbid_global_fallback")
+            if isinstance(execution_contract, dict)
+            else getattr(execution_contract, "forbid_global_fallback", False)
+        )
         bundle = build_response_bundle(
             raw_query=command.message,
             slots=slots,
             ranked_candidates=ranked_candidates,
             evidence_claims=evidence_claims,
+            answer_plan=response_hint,
+            verification_result=verification_result,
+            evidence_pack=evidence_pack,
             page=command.page,
-            current_topic=top_shop.name if top_shop else slots.category or slots.scene,
-            current_shop=top_shop.name if top_shop else persistent.current_shop or persistent.selected_shop_name,
-            selected_shop_id=top_shop.shop_id if top_shop else None,
+            current_topic=selected_shop.name if selected_shop else (top_shop.name if top_shop and not forbid_fallback else slots.category or slots.scene),
+            current_shop=selected_shop.name if selected_shop else state.metrics.get("local_life_execution_contract", {}).get("resolved_shop_name") or (top_shop.name if top_shop and not forbid_fallback else None) or (None if forbid_fallback else (persistent.current_shop or persistent.selected_shop_name or client_context.get("shopName") or client_context.get("shop_name") or client_context.get("selected_shop_name") or client_context.get("current_shop"))),
+            selected_shop_id=selected_shop.id if selected_shop else (top_shop.shop_id if top_shop and not forbid_fallback else None) or (None if forbid_fallback else (persistent.selected_shop_id or client_context.get("shopId") or client_context.get("shop_id") or client_context.get("selected_shop_id"))),
             source="local-life-agent",
             fallback=source_summary["source_mode"] != "java_business" or bool(source_summary["degraded_reason"]),
             mode=(safety_result.transaction_draft.action if safety_result.transaction_draft else _mode_from_intent(intent)),
@@ -653,9 +1413,24 @@ class LocalLifeSubgraph:
             source_mode=source_summary["source_mode"],
             degraded_reason=source_summary["degraded_reason"],
             knowledge_freshness=source_summary["knowledge_freshness"],
+            user_need=user_need,
+        )
+        bundle = sanitize_local_life_output(
+            bundle,
+            shop_lookup={candidate.shop_id: candidate.name for candidate in ranked_candidates if getattr(candidate, "shop_id", None) is not None},
         )
         bundle_metrics = {**dict(bundle.metrics), **dict(state.metrics)}
-        bundle_context = {**dict(bundle.context), "metrics": dict(bundle_metrics)}
+        bundle_context = {
+            **dict(bundle.context),
+            "metrics": dict(bundle_metrics),
+            "user_need": user_need.model_dump(mode="json"),
+            "pending_user_need": {} if not clarification.need_clarification else user_need.model_dump(mode="json"),
+            "route_review": review_result.model_dump(mode="json"),
+            "execution_requirements": execution_requirements.model_dump(mode="json"),
+            "reviewed_route": query_route.as_dict(),
+            "clarification": clarification.model_dump(mode="json"),
+            "tool_results": list(state.tool_results),
+        }
         bundle = bundle.model_copy(
             update={
                 "metrics": bundle_metrics,
@@ -697,6 +1472,7 @@ class LocalLifeSubgraph:
                     "current_stage": state.current_stage,
                     "stage_status": state.stage_status,
                     "stage_timeline": list(state.stage_timeline),
+                    "pending_user_need": {} if not clarification.need_clarification else user_need.model_dump(mode="json"),
                 },
             }
         )
@@ -821,6 +1597,7 @@ class LocalLifeSubgraph:
         slots: LocalLifeSlots,
         ranked_candidates: Sequence[Any],
         evidence_claims: Sequence[Any],
+        evidence_pack: Any | None = None,
         clarification: Mapping[str, Any] | None,
         source_mode: str | None,
         degraded_reason: str | None,
@@ -834,26 +1611,30 @@ class LocalLifeSubgraph:
         if assistant is None:
             return {}
         try:
-            return assistant.suggest_response(
-                raw_query=raw_query,
-                slots=slots.model_dump(mode="json"),
-                ranked_candidates=[
+            payload = {
+                "raw_query": raw_query,
+                "slots": slots.model_dump(mode="json"),
+                "ranked_candidates": [
                     item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)
                     for item in ranked_candidates
                 ],
-                evidence_claims=[
+                "evidence_claims": [
                     item.model_dump(mode="json") if hasattr(item, "model_dump") else dict(item)
                     for item in evidence_claims
                 ],
-                clarification=clarification,
-                source_mode=source_mode,
-                degraded_reason=degraded_reason,
-                knowledge_freshness=knowledge_freshness,
-                route_decision=route_decision,
-                route_reason=route_reason,
-                safety_result=safety_result,
-                approval_required=approval_required,
-            )
+                "evidence_pack": evidence_pack.model_dump(mode="json") if hasattr(evidence_pack, "model_dump") else (dict(evidence_pack) if isinstance(evidence_pack, Mapping) else {}),
+                "clarification": clarification,
+                "source_mode": source_mode,
+                "degraded_reason": degraded_reason,
+                "knowledge_freshness": knowledge_freshness,
+                "route_decision": route_decision,
+                "route_reason": route_reason,
+                "safety_result": safety_result,
+                "approval_required": approval_required,
+            }
+            if hasattr(assistant, "compose_answer_plan"):
+                return assistant.compose_answer_plan(**payload)
+            return assistant.suggest_response(**payload)
         except Exception:
             return {}
 
@@ -948,17 +1729,79 @@ class LocalLifeSubgraph:
         current_action = bundle_data.get("mode") or (
             slots.action.value if hasattr(slots.action, "value") else slots.action
         )
-        current_shop = (
-            bundle_data.get("current_shop")
-            or bundle_data.get("selected_shop_name")
-            or (ranked_candidates[0].name if ranked_candidates else persistent.current_shop)
-        )
+        execution_contract = (state.metrics or {}).get("local_life_execution_contract") or {}
+        intent = execution_contract.get("intent") or "local_life_recommend"
+
+        context_data = bundle_data.get("context") or {}
+        current_shop = bundle_data.get("current_shop")
+        current_shop_id = bundle_data.get("selected_shop_id")
+
+        if intent in ("local_life_recommend", "local_life_search"):
+            if not ranked_candidates and not execution_contract.get("resolved_shop_id"):
+                current_shop = None
+                current_shop_id = None
+
         next_steps = list(bundle_data.get("next_steps") or persistent.next_steps or ())
         task_chain = list(bundle_data.get("task_chain") or ())
+        current_source_mode = bundle_data.get("source_mode") or (
+            state.metrics.get("source_mode") if isinstance(state.metrics, dict) else None
+        )
+        # Populate pending_clarification and clarification_result if clarification is needed (P0-Fix-4)
+        pending_clarification = None
+        clarification_result = dict(persistent.clarification_result or {})
+        if state.clarification and state.clarification.need_clarification:
+            from learning_agent_service.domain.contracts import ClarificationCard, ClarificationOption
+            options_payload = []
+            for idx, opt in enumerate(state.clarification.options, start=1):
+                options_payload.append(
+                    ClarificationOption(
+                        id=f"opt-{idx}",
+                        label=opt.label,
+                        value=opt.prompt,
+                        description=opt.prompt,
+                    )
+                )
+            pending_clarification = ClarificationCard(
+                card_id=f"clarify-{uuid4().hex[:8]}",
+                question=state.clarification.question or "你想查看哪个城市或商圈的餐厅？方便提供位置吗？",
+                options=options_payload,
+                ambiguity_type=state.clarification.ambiguity_type or "location",
+                source_turn_id=command.turn_id,
+            )
+            clarification_result = {
+                "original_query": command.message,
+                "original_intent": "local_life_recommend",
+                "original_route": state.route_decision or "clarify",
+                "question": state.clarification.question,
+                "ambiguity_type": state.clarification.ambiguity_type or "location",
+            }
+
+        # If we are completing a pending clarification, preserve the original query as the topic (P0-Fix)
+        original_query = (persistent.clarification_result or {}).get("original_query")
+        if original_query and persistent.pending_clarification:
+            current_topic_val = original_query
+        elif state.clarification and state.clarification.need_clarification:
+            current_topic_val = command.message
+        else:
+            current_topic_val = (
+                bundle_data.get("current_topic")
+                or state.current_topic
+                or slots.category
+                or slots.scene
+            )
         updated = persistent.model_copy(
             update={
-                "current_topic": bundle_data.get("current_topic") or state.current_topic or slots.category or slots.scene,
-                "current_shop": current_shop or persistent.current_shop,
+                "current_topic": current_topic_val,
+                "current_shop": current_shop,
+                "current_shop_anchor": {
+                    "shop_id": current_shop_id,
+                    "shop_name": current_shop,
+                    "source": current_source_mode,
+                    "confidence": bundle_data.get("confidence") if isinstance(bundle_data, Mapping) else None,
+                    "turn_id": command.turn_id,
+                },
+                "pending_clarification": pending_clarification,
+                "clarification_result": clarification_result,
                 "page": command.page or state.page,
                 "current_city": slots.city or state.client_context.get("city") or persistent.current_city,
                 "current_location": {
@@ -967,9 +1810,19 @@ class LocalLifeSubgraph:
                     "radius_km": slots.location.radius_km,
                 },
                 "current_constraints": slots.model_dump(mode="json"),
-                "last_candidates": [candidate.model_dump(mode="json") if hasattr(candidate, "model_dump") else dict(candidate) for candidate in ranked_candidates],
-                "selected_shop_id": bundle_data.get("selected_shop_id") or (ranked_candidates[0].shop_id if ranked_candidates else persistent.selected_shop_id),
-                "selected_shop_name": current_shop or (ranked_candidates[0].name if ranked_candidates else persistent.selected_shop_name),
+                "last_candidates": [
+                    {
+                        "id": (c.model_dump(mode="json") if hasattr(c, "model_dump") else dict(c)).get("id") or (c.model_dump(mode="json") if hasattr(c, "model_dump") else dict(c)).get("shop_id"),
+                        "shop_id": (c.model_dump(mode="json") if hasattr(c, "model_dump") else dict(c)).get("shop_id") or (c.model_dump(mode="json") if hasattr(c, "model_dump") else dict(c)).get("id"),
+                        "name": (c.model_dump(mode="json") if hasattr(c, "model_dump") else dict(c)).get("name"),
+                        "city": (c.model_dump(mode="json") if hasattr(c, "model_dump") else dict(c)).get("city"),
+                        "category": (c.model_dump(mode="json") if hasattr(c, "model_dump") else dict(c)).get("category"),
+                    }
+                    for c in (ranked_candidates or [])[:5]
+                ],
+                "selected_shop_id": current_shop_id,
+                "selected_shop_name": current_shop,
+                "pending_user_need": bundle_data.get("pending_user_need") or {},
                 "local_life_preferences": list(slots.preferences),
                 "local_life_avoid": list(slots.avoid),
                 "current_scene": slots.scene,

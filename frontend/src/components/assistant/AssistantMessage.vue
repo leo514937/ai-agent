@@ -54,6 +54,7 @@
       <AssistantThinkingBlock
         v-if="hasThinkingBlock"
         :is-thinking-active-raw="isThinkingActiveRaw"
+        :is-message-active="message.streaming || isTyping"
         :timeline-steps="timelineSteps"
         :thinking-content="parsedMessage.thinkingContent"
         :message="message"
@@ -111,7 +112,7 @@ const messageRef = computed(() => props.message);
 const approvalSubmitting = ref(false);
 const approvalHint = ref('');
 
-const { displayedRawContent } = useTypewriter(messageRef, () => emit('typewrite'));
+const { displayedRawContent, isTyping } = useTypewriter(messageRef, () => emit('typewrite'));
 
 const { 
   isThinkingActiveRaw,
@@ -119,7 +120,7 @@ const {
   timelineSteps,
   hasThinkingBlock,
   citationLines 
-} = useAssistantParsing(messageRef, displayedRawContent);
+} = useAssistantParsing(messageRef, displayedRawContent, isTyping);
 
 const assistantMetaLabel = computed(() => {
   if (role.value !== 'assistant') {

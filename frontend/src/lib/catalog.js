@@ -183,6 +183,24 @@ export async function sendAssistantPrompt(payload) {
   );
 }
 
+function buildFallbackFinalMessage(timeline, meta, payload) {
+  const normalizedPayload = payload && typeof payload === 'object' && !Array.isArray(payload)
+    ? payload
+    : {};
+  const candidate = buildAssistantSessionMessage(normalizedPayload, {
+    ...meta,
+    eventTimeline: Array.isArray(timeline) ? timeline.slice() : [],
+    finalPayload: normalizedPayload,
+  });
+
+  const content = String(candidate?.answerContent || candidate?.answer || candidate?.content || '').trim();
+  if (!content) {
+    return null;
+  }
+
+  return candidate;
+}
+
 const ASSISTANT_STREAM_EVENTS = new Set([
   'ack',
   'heartbeat',
@@ -244,6 +262,7 @@ export async function streamAssistantPrompt(payload, handlers = {}, options = {}
   let terminalType = '';
   let terminalMessage = null;
   let errorMessage = null;
+  let lastAnswerPayload = null;
 
   // Internal AbortController: wraps the user's signal and also aborts
   // automatically when a terminal event (final/error) is received.
@@ -300,6 +319,7 @@ export async function streamAssistantPrompt(payload, handlers = {}, options = {}
         }
 
         if (entry.type === 'delta' || entry.type === 'answer_delta') {
+          lastAnswerPayload = normalized.payload;
           await handlers.onDelta?.(entry);
           return;
         }
@@ -381,6 +401,19 @@ export async function streamAssistantPrompt(payload, handlers = {}, options = {}
   }
 
   if (!finalMessage) {
+    if (!finalMessage && lastAnswerPayload) {
+      finalMessage = buildFallbackFinalMessage(timeline, meta, lastAnswerPayload);
+    }
+    if (finalMessage) {
+      return {
+        final: finalMessage,
+        error: null,
+        terminalType: 'final',
+        terminalMessage: finalMessage,
+        timeline,
+        meta,
+      };
+    }
     if (terminalType === 'clarification_card' && terminalMessage) {
       return {
         final: null,

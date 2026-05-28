@@ -65,6 +65,10 @@ const props = defineProps({
     type: String,
     default: '有问必答...',
   },
+  hint: {
+    type: String,
+    default: '',
+  },
   loading: {
     type: Boolean,
     default: false,

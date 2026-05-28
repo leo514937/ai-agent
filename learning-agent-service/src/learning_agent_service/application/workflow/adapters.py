@@ -1973,14 +1973,46 @@ class WorkflowNodeAdapter:
             or client_context.get("current_shop")
             or ""
         ).strip()
+        persistent_updates = {}
         if current_shop:
-            persistent_updates = {}
             if not state["persistent"].current_shop:
                 persistent_updates["current_shop"] = current_shop
             if not state["persistent"].selected_shop_name:
                 persistent_updates["selected_shop_name"] = current_shop
-            if persistent_updates:
-                state["persistent"] = state["persistent"].model_copy(update=persistent_updates)
+
+        selected_entity = answer_contract.selected_entity or entity_join_result.selected_entity
+        selected_shop_id = None
+        if selected_entity:
+            try:
+                selected_shop_id = int(selected_entity)
+            except (ValueError, TypeError):
+                pass
+
+        if selected_shop_id is not None:
+            persistent_updates["selected_shop_id"] = selected_shop_id
+            
+            # Update recent_entities
+            current_recent = list(state["persistent"].recent_entities or [])
+            selected_str = str(selected_shop_id)
+            if selected_str not in current_recent:
+                persistent_updates["recent_entities"] = [selected_str] + current_recent
+            else:
+                current_recent.remove(selected_str)
+                persistent_updates["recent_entities"] = [selected_str] + current_recent
+            
+            # Update last_candidates
+            current_candidates = list(state["persistent"].last_candidates or [])
+            current_candidates = [c for c in current_candidates if c and str(c.get("shop_id")) != selected_str]
+            candidate_name = current_shop if current_shop else selected_str
+            candidate_dict = {
+                "shop_id": selected_shop_id,
+                "name": candidate_name,
+                "shop_name": candidate_name
+            }
+            persistent_updates["last_candidates"] = [candidate_dict] + current_candidates
+
+        if persistent_updates:
+            state["persistent"] = state["persistent"].model_copy(update=persistent_updates)
         request = AnswerComposeRequest(
             raw_query=turn.raw_query,
             requested_output_style=turn.requested_output_style,

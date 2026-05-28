@@ -6,6 +6,8 @@ from typing import Any, Dict, Mapping, Sequence
 
 from learning_agent_service.infrastructure.db.openai_client import OpenAIRuntime
 
+from .answer_planner import LocalLifeAnswerPlan, build_answer_planner_request, parse_answer_plan_payload
+
 
 def _as_mapping(value: Any) -> Dict[str, Any]:
     if isinstance(value, Mapping):
@@ -122,6 +124,7 @@ class LocalLifeModelAssistant:
         slots: Mapping[str, Any] | None = None,
         ranked_candidates: Sequence[Mapping[str, Any]] | None = None,
         evidence_claims: Sequence[Mapping[str, Any]] | None = None,
+        evidence_pack: Mapping[str, Any] | None = None,
         clarification: Mapping[str, Any] | None = None,
         source_mode: str | None = None,
         degraded_reason: str | None = None,
@@ -131,32 +134,81 @@ class LocalLifeModelAssistant:
         safety_result: Mapping[str, Any] | None = None,
         approval_required: bool = False,
     ) -> Dict[str, Any]:
-        prompt = {
-            "stage": "response",
-            "raw_query": raw_query,
-            "slots": _as_mapping(slots),
-            "ranked_candidates": [
-                _as_mapping(item) for item in ranked_candidates or []
-            ],
-            "evidence_claims": [
-                _as_mapping(item) for item in evidence_claims or []
-            ],
-            "clarification": _as_mapping(clarification),
-            "source_mode": source_mode,
-            "degraded_reason": degraded_reason,
-            "knowledge_freshness": _as_mapping(knowledge_freshness),
-            "route_decision": route_decision,
-            "route_reason": route_reason,
-            "safety_result": _as_mapping(safety_result),
-            "approval_required": approval_required,
-        }
-        system_text = (
-            "你是本地生活助手的回复层。"
-            "请返回严格 JSON，字段可以包括 answer_text、suggested_replies、route_reason、source_mode、degraded_reason、knowledge_freshness。"
-            "如果信息不足，请用普通文本自然地说明缺少什么，而不要输出卡片或结构化澄清。"
-            "回复要简洁、可解释，并且与给定候选、证据和澄清提示保持一致。"
+        return self.compose_answer_plan(
+            raw_query=raw_query,
+            slots=slots,
+            ranked_candidates=ranked_candidates,
+            evidence_claims=evidence_claims,
+            evidence_pack=evidence_pack,
+            clarification=clarification,
+            source_mode=source_mode,
+            degraded_reason=degraded_reason,
+            knowledge_freshness=knowledge_freshness,
+            route_decision=route_decision,
+            route_reason=route_reason,
+            safety_result=safety_result,
+            approval_required=approval_required,
         )
-        return self._call_json(system_text=system_text, prompt=prompt, max_output_tokens=360)
+
+    def compose_answer_plan(
+        self,
+        *,
+        raw_query: str,
+        slots: Mapping[str, Any] | None = None,
+        ranked_candidates: Sequence[Mapping[str, Any]] | None = None,
+        evidence_claims: Sequence[Mapping[str, Any]] | None = None,
+        evidence_pack: Mapping[str, Any] | None = None,
+        clarification: Mapping[str, Any] | None = None,
+        source_mode: str | None = None,
+        degraded_reason: str | None = None,
+        knowledge_freshness: Mapping[str, Any] | None = None,
+        route_decision: str | None = None,
+        route_reason: str | None = None,
+        safety_result: Mapping[str, Any] | None = None,
+        approval_required: bool = False,
+    ) -> Dict[str, Any]:
+        prompt = build_answer_planner_request(
+            raw_query=raw_query,
+            slots=_as_mapping(slots),
+            ranked_candidates=[_as_mapping(item) for item in ranked_candidates or []],
+            evidence_pack=evidence_pack,
+            safety_result=_as_mapping(safety_result),
+            source_mode=source_mode,
+            degraded_reason=degraded_reason,
+            knowledge_freshness=_as_mapping(knowledge_freshness),
+            route_decision=route_decision,
+            route_reason=route_reason,
+            clarification=_as_mapping(clarification),
+            approval_required=approval_required,
+        )
+        if evidence_claims:
+            prompt["evidence_claims"] = [_as_mapping(item) for item in evidence_claims]
+        system_text = (
+            "你是本地生活决策生成器。"
+            "你只能基于 EvidencePack、ranked_candidates、slots、safety_result 回答。"
+            "不得编造不存在的优惠券、评分、距离、营业时间、排队情况。"
+            "如果证据不足，要说明“不确定”或“当前证据不足”。"
+            "本地生活回答必须覆盖：结论、推荐理由、适合/不适合场景、风险点、优惠券建议、下一步动作。"
+            "不同意图走不同策略：recommend 给 top 1 + 备选 2 家；compare 对比距离、价格、评分、环境、优惠、风险；"
+            "shop_detail 围绕单店回答，强调适合谁、注意什么、是否值得去；coupon_advice 判断券是否值得，说明限制和风险；"
+            "environment_check 重点回答安静、停车、排队、卫生、服务等体验因素；avoid_pit 重点输出坑点和规避建议；"
+            "booking/order 必须遵守 safety_result 和 approval_required，不得直接替用户确认交易；clarification 信息不足时提出最小必要澄清。"
+            "输出必须是严格 JSON，不要 markdown，不要代码块。"
+            "evidence_used 必须引用 EvidencePack 中存在的 evidence_id。"
+        )
+        payload = self._call_json(system_text=system_text, prompt=prompt, max_output_tokens=640)
+        if not payload:
+            return {}
+        if (
+            not any(payload.get(key) for key in ("answer_text", "decision_type", "recommendation_summary"))
+            and not payload.get("candidate_reasons")
+            and not payload.get("evidence_used")
+        ):
+            return {}
+        plan = parse_answer_plan_payload(payload)
+        if plan is None:
+            return {}
+        return plan.model_dump(mode="json")
 
     def _call_json(self, *, system_text: str, prompt: Mapping[str, Any], max_output_tokens: int) -> Dict[str, Any]:
         if self.runtime is None:

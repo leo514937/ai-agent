@@ -380,7 +380,7 @@ class JavaBusinessClient:
         items = [item for item in items if item is not None]
         if not items:
             payload = self._request_json("GET", "/shop/of/type", params=params)
-            items = [_coerce_shop(item) for item in _coerce_list(payload)]
+            items = [_coerce_shop(item) for item in _coerce_list(_unwrap_result(payload))]
             items = [item for item in items if item is not None]
         if items:
             return items
@@ -389,25 +389,9 @@ class JavaBusinessClient:
         return items
 
     def search_shops_by_name(self, *, name: str, current: int = 1) -> list[ShopRecord]:
-        payload = self._request_json(
-            "POST",
-            "/internal/v1/business/shops/search",
-            json_body={
-                "message": str(name or ""),
-                "limit": int(current) * 5 if int(current) > 0 else 5,
-                "context": {
-                    "shopName": str(name or ""),
-                    "shopQuery": str(name or ""),
-                },
-            },
-        )
-        payload_map = _coerce_map(_unwrap_result(payload))
-        items = [_coerce_shop(item) for item in _coerce_list(payload_map.get("shops"))]
-        items = [item for item in items if item is not None]
-        if not items:
-            params = {"name": name, "current": int(current)}
-            payload = self._request_json("GET", "/shop/of/name", params=params)
-            items = [_coerce_shop(item) for item in _coerce_list(payload)]
+        params = {"name": name, "current": int(current)}
+        payload = self._request_json("GET", "/shop/of/name", params=params)
+        items = [_coerce_shop(item) for item in _coerce_list(_unwrap_result(payload))]
         items = [item for item in items if item is not None]
         if items:
             return items

@@ -4,7 +4,7 @@ import unittest
 
 import _bootstrap  # noqa: F401
 
-from learning_agent_service.domain import ChatTurnCommand
+from learning_agent_service.domain import ChatTurnCommand, PersistentSessionContext
 from learning_agent_service.local_life import build_response_bundle, extract_slots, normalize_query
 from learning_agent_service.local_life.subgraph import LocalLifeSubgraph
 from learning_agent_service.rag.local_life_retrieval import LocalLifeEvidencePack
@@ -420,6 +420,12 @@ class LocalLifePipelineTestCase(unittest.TestCase):
             model_assistant=_FakeLocalLifeAssistant(),
             session_context_store=session_store,
         )
+        persistent_context = PersistentSessionContext(
+            current_shop="示例粤菜馆",
+            selected_shop_id=1001,
+            selected_shop_name="示例粤菜馆",
+            last_candidates=[{"shop_id": 1001, "name": "示例粤菜馆"}],
+        )
 
         events = list(
             subgraph.run_stream(
@@ -435,7 +441,8 @@ class LocalLifePipelineTestCase(unittest.TestCase):
                         "location": {"lat": 39.9, "lng": 116.4},
                         "entry": "meituan_search_box",
                     },
-                )
+                ),
+                persistent_context=persistent_context,
             )
         )
 
