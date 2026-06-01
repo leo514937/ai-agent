@@ -1,5 +1,18 @@
 <template>
   <div class="page shop-detail-page fade-in">
+    <template v-if="notFound">
+      <section class="section">
+        <EmptyState
+          glyph="店"
+          title="店铺不存在"
+          description="后端数据库中没有找到这家店，请返回商铺列表重新选择。"
+          action-label="返回商铺列表"
+          @action="goBack"
+        />
+      </section>
+    </template>
+
+    <template v-else>
     <section class="page__hero">
       <article class="hero-card panel-strong shop-detail-page__hero">
         <div class="shop-detail-page__media">
@@ -30,7 +43,7 @@
       </article>
 
       <div class="hero-side">
-        <StatCard label="评分" :value="shop.scoreText || '0.0'" hint="按后端评分或本地演示展示" />
+        <StatCard label="评分" :value="shop.scoreText || '0.0'" hint="按后端数据库展示" />
         <StatCard label="月售" :value="shop.sold || 0" hint="代表店铺热度与人气" />
         <StatCard label="评论" :value="shop.comments || 0" hint="口碑和互动数量" />
       </div>
@@ -48,7 +61,7 @@
             <span class="tag">区域：{{ shop.area || '未提供' }}</span>
           </div>
           <p class="shop-detail-page__copy">
-            {{ shop.metaText || '店铺基础信息会优先来自后端，后端不可用时使用本地演示数据。' }}
+            {{ shop.metaText || '店铺基础信息以后端数据库为准。' }}
           </p>
         </article>
 
@@ -121,6 +134,7 @@
         </div>
       </div>
     </section>
+    </template>
   </div>
 </template>
 
@@ -139,6 +153,7 @@ const route = useRoute();
 const router = useRouter();
 
 const loading = ref(true);
+const notFound = ref(false);
 const shop = ref({});
 const vouchers = ref([]);
 const relatedShops = ref([]);
@@ -148,8 +163,17 @@ const shopId = computed(() => Number(route.params.id));
 
 async function loadDetail() {
   loading.value = true;
+  notFound.value = false;
   try {
     const detail = await loadShopDetail(shopId.value);
+    if (!detail) {
+      shop.value = {};
+      vouchers.value = [];
+      relatedShops.value = [];
+      relatedBlogs.value = [];
+      notFound.value = true;
+      return;
+    }
     shop.value = detail || {};
 
     const [voucherList, shopList, blogList] = await Promise.all([

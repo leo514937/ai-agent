@@ -248,6 +248,8 @@ class Settings(BaseSettings):
     allow_in_memory_fallback: bool = True
     workflow_checkpoint_enabled: bool = True
     workflow_checkpoint_sqlite_path: str = "var/langgraph/checkpoints.sqlite"
+    local_life_use_langgraph: bool = True
+    local_life_langgraph_fallback_legacy: bool = True
     enable_route_review: bool = True
     enable_required_facets: bool = True
     enable_required_facets_to_plans: bool = True
@@ -420,6 +422,18 @@ class Settings(BaseSettings):
                 _env("LEARNING_AGENT_WORKFLOW_CHECKPOINT_SQLITE_PATH", "var/langgraph/checkpoints.sqlite"),
             )
             or "var/langgraph/checkpoints.sqlite"
+        )
+        local_life_use_langgraph = bool(
+            data.pop(
+                "local_life_use_langgraph",
+                _env_bool("LEARNING_AGENT_LOCAL_LIFE_USE_LANGGRAPH", True),
+            )
+        )
+        local_life_langgraph_fallback_legacy = bool(
+            data.pop(
+                "local_life_langgraph_fallback_legacy",
+                _env_bool("LEARNING_AGENT_LOCAL_LIFE_LANGGRAPH_FALLBACK_LEGACY", True),
+            )
         )
         enable_route_review = bool(
             data.pop("enable_route_review", _env_bool("LEARNING_AGENT_ENABLE_ROUTE_REVIEW", True))
@@ -1109,6 +1123,8 @@ class Settings(BaseSettings):
         data.setdefault("allow_in_memory_fallback", data["app"].allow_in_memory_fallback)
         data.setdefault("workflow_checkpoint_enabled", workflow_checkpoint_enabled)
         data.setdefault("workflow_checkpoint_sqlite_path", workflow_checkpoint_sqlite_path)
+        data.setdefault("local_life_use_langgraph", local_life_use_langgraph)
+        data.setdefault("local_life_langgraph_fallback_legacy", local_life_langgraph_fallback_legacy)
         data.setdefault("enable_route_review", enable_route_review)
         data.setdefault("enable_required_facets", enable_required_facets)
         data.setdefault("enable_required_facets_to_plans", enable_required_facets_to_plans)

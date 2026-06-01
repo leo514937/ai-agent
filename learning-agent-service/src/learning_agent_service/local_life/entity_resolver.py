@@ -3,20 +3,13 @@ from __future__ import annotations
 import re
 from typing import Any, Mapping, Optional
 
-from .execution_contract import ExecutionContract
+from .catalog import get_default_catalog
+from .facet_execution_plan import FacetExecutionPlan, FacetExecutionItem
 from .schemas import LocalLifeSlots
+from .target_shop_policy import TargetShopPolicy
 
-_PRONOUNS = ("这家", "这店", "这间", "它", "刚才那家", "刚才那个", "这商家", "这个商家")
+_PRONOUNS = ("这家", "这店", "这间", "它", "他", "她", "刚才那家", "刚才那个", "这商家", "这个商家", "这几家", "第一家", "第二家")
 _EXPLICIT_SUFFIXES = (
-    "怎么样",
-    "有券吗",
-    "有券",
-    "适合约会吗",
-    "适合吗",
-    "好不好",
-    "值不值得",
-    "值不值",
-    "营业吗",
     "现在营业吗",
     "现在有券吗",
     "现在能不能订",
@@ -24,15 +17,27 @@ _EXPLICIT_SUFFIXES = (
     "现在开吗",
     "适合带爸妈吗",
     "适合家庭聚餐吗",
+    "怎么样呢",
+    "有券吗呢",
+    "营业吗呢",
+    "怎么样",
+    "有券吗",
+    "有券",
+    "有几张券",
+    "有可用优惠券吗",
+    "适合约会吗",
+    "适合吗",
+    "好不好",
+    "值不值得",
+    "值不值",
+    "营业吗",
     "呢",
     "店呢",
     "家呢",
     "商家呢",
     "哪个呢",
-    "怎么样呢",
-    "有券吗呢",
-    "营业吗呢",
 )
+
 
 
 def _as_mapping(value: Any) -> dict[str, Any]:
@@ -69,29 +74,65 @@ def _get_val(obj: Any, key: str) -> Any:
     return getattr(obj, key, None)
 
 
+def _strip_facet_suffixes(prefix: str) -> str:
+    if not prefix:
+        return prefix
+    facet_suffixes = ("环境", "价格", "人均", "味道", "口味", "服务", "券", "优惠", "营业时间", "营业状态", "地址", "电话")
+    # Also strip question-verb patterns that embed facet keywords
+    _question_verb_patterns = (
+        "有券吗", "有优惠吗", "有优惠券吗", "有没有券", "有没有优惠",
+        "有券", "有优惠", "营业吗", "开门吗", "现在营业吗",
+    )
+    changed = True
+    while changed:
+        changed = False
+        for qv in _question_verb_patterns:
+            if prefix.endswith(qv):
+                prefix = prefix[:-len(qv)].strip(" 的，,;；")
+                changed = True
+                break
+        if not changed:
+            for f_suf in facet_suffixes:
+                if prefix.endswith(f_suf):
+                    prefix = prefix[:-len(f_suf)].strip(" 的，,;；")
+                    changed = True
+                    break
+    return prefix
+
+
 def _explicit_entity_from_query(raw_query: str) -> str | None:
     text = (raw_query or "").strip()
     if not text:
         return None
     compact = text.rstrip("？?。.!！")
+    generic_query_tokens = ("附近", "推荐", "餐厅", "餐馆", "美食", "店铺", "店家", "一家", "几家")
     if compact.startswith("那"):
         compact = re.sub(r"^那[，,\s]?", "", compact).strip()
     for pronoun in _PRONOUNS:
         idx = compact.find(pronoun)
         if idx > 0:
             prefix = compact[:idx].strip(" ，,;；")
-            if prefix and prefix not in _PRONOUNS:
-                return prefix
+            if prefix and prefix not in _PRONOUNS and not any(token in prefix for token in generic_query_tokens):
+                return _strip_facet_suffixes(prefix)
     for suffix in _EXPLICIT_SUFFIXES:
         if compact.endswith(suffix):
             prefix = compact[: -len(suffix)].strip(" ，,;；")
-            if prefix and prefix not in _PRONOUNS:
-                return prefix
+            if prefix:
+                # Guard: If prefix contains or is a pronoun, it must not be treated as an explicit merchant entity.
+                if any(pronoun in prefix for pronoun in _PRONOUNS) or prefix in _PRONOUNS:
+                    continue
+                if any(token in prefix for token in generic_query_tokens):
+                    continue
+                return _strip_facet_suffixes(prefix)
     match = re.match(r"^(?P<name>.+?)(?:\s+)?(什么|哪家|哪个好|行不行|可以吗)$", compact)
     if match:
         prefix = match.group("name").strip(" ，,;；")
-        if prefix and prefix not in _PRONOUNS:
-            return prefix
+        if prefix:
+            if any(pronoun in prefix for pronoun in _PRONOUNS) or prefix in _PRONOUNS:
+                return None
+            if any(token in prefix for token in generic_query_tokens):
+                return None
+            return _strip_facet_suffixes(prefix)
     return None
 
 
@@ -114,7 +155,7 @@ class EntityResolver:
         session_context: Mapping[str, Any] | None = None,
         query_route: Any | None = None,
         client_context: Mapping[str, Any] | None = None,
-    ) -> ExecutionContract:
+    ) -> FacetExecutionPlan:
         session_context_map = _as_mapping(session_context)
         client_context_map = _as_mapping(client_context)
         user_need_map = _as_mapping(user_need)
@@ -122,6 +163,33 @@ class EntityResolver:
         pronoun_only = _is_pronoun_only_query(raw_query, explicit_entity)
 
         context_refs = list(getattr(user_need, "context_refs", []) or [])
+        target_shop = TargetShopPolicy().resolve_target(
+            raw_query=raw_query,
+            slots=slots,
+            session_context=session_context_map,
+            explicit_entity=explicit_entity
+        )
+
+        if explicit_entity and target_shop.confidence > 0.0 and target_shop.shop_id is None:
+            try:
+                catalog = get_default_catalog()
+                catalog_matches = catalog.search_shops(query=explicit_entity, slots=slots, limit=5)
+                if catalog_matches:
+                    best_match = catalog_matches[0]
+                    matched_ids = []
+                    for item in catalog_matches:
+                        if getattr(item, "id", None) is not None:
+                            matched_ids.append(int(item.id))
+                    target_shop = target_shop.model_copy(
+                        update={
+                            "shop_id": int(best_match.id),
+                            "shop_name": best_match.name,
+                            "candidate_shop_ids": matched_ids or [int(best_match.id)],
+                        }
+                    )
+            except Exception:
+                pass
+
         resolved_shop_id: Optional[int] = None
         resolved_shop_name: Optional[str] = None
         candidate_shop_ids: list[int] = []
@@ -133,77 +201,85 @@ class EntityResolver:
                 return
             candidate_shop_ids.append(shop_id)
 
-        # 1. 物理隔离高优先级代词指代解析：优先扫描并绑定用户显式口头提问 (ref_source == "explicit_entity") 的引用，防止静态页面默认抢占
-        explicit_refs = [r for r in context_refs if _clean_text(_get_val(r, "source")) == "explicit_entity"]
-        other_refs = [r for r in context_refs if _clean_text(_get_val(r, "source")) != "explicit_entity"]
-
-        for ref in explicit_refs:
-            ref_type = _get_val(ref, "type")
-            ref_id = _get_val(ref, "id")
-            ref_name = _clean_text(_get_val(ref, "name"))
-            ref_source = _clean_text(_get_val(ref, "source"))
-            if ref_type == "shop":
-                if ref_id not in (None, ""):
-                    add_candidate(ref_id)
-                    if resolved_shop_id is None:
-                        resolved_shop_id = _first_int(ref_id)
-                        resolved_shop_name = ref_name
-                        shop_context_source = ref_source or "explicit_entity"
-                elif explicit_entity and resolved_shop_name is None:
-                    resolved_shop_name = explicit_entity
-                    shop_context_source = "query"
-
-        for ref in other_refs:
-            ref_type = _get_val(ref, "type")
-            ref_id = _get_val(ref, "id")
-            ref_name = _clean_text(_get_val(ref, "name"))
-            ref_source = _clean_text(_get_val(ref, "source"))
-            if ref_type == "shop":
-                if ref_id not in (None, ""):
-                    add_candidate(ref_id)
-                    if resolved_shop_id is None:
-                        resolved_shop_id = _first_int(ref_id)
-                        resolved_shop_name = ref_name
-                        shop_context_source = ref_source or "context_ref"
-                elif explicit_entity and resolved_shop_name is None:
-                    resolved_shop_name = explicit_entity
-                    shop_context_source = "query"
-
-        if explicit_entity and resolved_shop_name is None:
-            resolved_shop_name = explicit_entity
-            shop_context_source = "query"
-            for value in slots.shop_ids:
+        if target_shop.confidence > 0.0:
+            resolved_shop_id = target_shop.shop_id
+            resolved_shop_name = target_shop.shop_name
+            candidate_shop_ids = list(target_shop.candidate_shop_ids)
+            shop_context_source = target_shop.source
+            for value in target_shop.candidate_shop_ids:
                 add_candidate(value)
-            if resolved_shop_id is None:
+        else:
+            # 1. 物理隔离高优先级代词指代解析：优先扫描并绑定用户显式口头提问 (ref_source == "explicit_entity") 的引用，防止静态页面默认抢占
+            explicit_refs = [r for r in context_refs if _clean_text(_get_val(r, "source")) == "explicit_entity"]
+            other_refs = [r for r in context_refs if _clean_text(_get_val(r, "source")) != "explicit_entity"]
+
+            for ref in explicit_refs:
+                ref_type = _get_val(ref, "type")
+                ref_id = _get_val(ref, "id")
+                ref_name = _clean_text(_get_val(ref, "name"))
+                ref_source = _clean_text(_get_val(ref, "source"))
+                if ref_type == "shop":
+                    if ref_id not in (None, ""):
+                        add_candidate(ref_id)
+                        if resolved_shop_id is None:
+                            resolved_shop_id = _first_int(ref_id)
+                            resolved_shop_name = ref_name
+                            shop_context_source = ref_source or "explicit_entity"
+                    elif explicit_entity and resolved_shop_name is None:
+                        resolved_shop_name = explicit_entity
+                        shop_context_source = "query"
+
+            for ref in other_refs:
+                ref_type = _get_val(ref, "type")
+                ref_id = _get_val(ref, "id")
+                ref_name = _clean_text(_get_val(ref, "name"))
+                ref_source = _clean_text(_get_val(ref, "source"))
+                if ref_type == "shop":
+                    if ref_id not in (None, ""):
+                        add_candidate(ref_id)
+                        if resolved_shop_id is None:
+                            resolved_shop_id = _first_int(ref_id)
+                            resolved_shop_name = ref_name
+                            shop_context_source = ref_source or "context_ref"
+                    elif explicit_entity and resolved_shop_name is None:
+                        resolved_shop_name = explicit_entity
+                        shop_context_source = "query"
+
+            if explicit_entity and resolved_shop_name is None:
+                resolved_shop_name = explicit_entity
+                shop_context_source = "query"
                 for value in slots.shop_ids:
-                    resolved_shop_id = _first_int(value)
-                    if resolved_shop_id is not None:
-                        break
-        elif slots.shop_query and slots.shop_query.strip() and resolved_shop_name is None:
-            resolved_shop_name = _clean_text(slots.shop_query)
-            if slots.shop_ids:
-                resolved_shop_id = _first_int(slots.shop_ids[0])
-                shop_context_source = "slot"
+                    add_candidate(value)
+                if resolved_shop_id is None:
+                    for value in slots.shop_ids:
+                        resolved_shop_id = _first_int(value)
+                        if resolved_shop_id is not None:
+                            break
+            elif slots.shop_query and slots.shop_query.strip() and resolved_shop_name is None:
+                resolved_shop_name = _clean_text(slots.shop_query)
+                if slots.shop_ids:
+                    resolved_shop_id = _first_int(slots.shop_ids[0])
+                    shop_context_source = "slot"
 
-        if resolved_shop_id is None and not explicit_entity:
-            selected_shop_id = _first_int(session_context_map.get("selected_shop_id") or session_context_map.get("current_shop_id"))
-            current_shop_name = _clean_text(session_context_map.get("selected_shop_name") or session_context_map.get("current_shop"))
-            if selected_shop_id is not None:
-                resolved_shop_id = selected_shop_id
-                resolved_shop_name = resolved_shop_name or current_shop_name
-                add_candidate(selected_shop_id)
-                shop_context_source = shop_context_source or "session"
-            elif current_shop_name and not pronoun_only:
-                resolved_shop_name = resolved_shop_name or current_shop_name
-                shop_context_source = shop_context_source or "session"
+            if resolved_shop_id is None and not explicit_entity:
+                selected_shop_id = _first_int(session_context_map.get("selected_shop_id") or session_context_map.get("current_shop_id"))
+                current_shop_name = _clean_text(session_context_map.get("selected_shop_name") or session_context_map.get("current_shop"))
+                if selected_shop_id is not None:
+                    resolved_shop_id = selected_shop_id
+                    resolved_shop_name = resolved_shop_name or current_shop_name
+                    add_candidate(selected_shop_id)
+                    shop_context_source = shop_context_source or "session"
+                elif current_shop_name and not pronoun_only:
+                    resolved_shop_name = resolved_shop_name or current_shop_name
+                    shop_context_source = shop_context_source or "session"
 
-        if not explicit_entity:
-            for item in session_context_map.get("last_candidates") or []:
-                if isinstance(item, Mapping):
-                    add_candidate(item.get("shop_id") or item.get("id"))
+            if not explicit_entity:
+                for item in session_context_map.get("last_candidates") or []:
+                    if isinstance(item, Mapping):
+                        add_candidate(item.get("shop_id") or item.get("id"))
 
-        if not candidate_shop_ids and resolved_shop_id is not None:
-            add_candidate(resolved_shop_id)
+            if not candidate_shop_ids and resolved_shop_id is not None:
+                add_candidate(resolved_shop_id)
 
         intent = str(getattr(user_need, "intent", None) or user_need_map.get("intent") or "")
         if pronoun_only and resolved_shop_id is None and not candidate_shop_ids:
@@ -245,7 +321,38 @@ class EntityResolver:
                 candidate_shop_ids = []
                 shop_context_source = None
 
-        return ExecutionContract(
+        execution_items = []
+        for f in required_facets:
+            if f == "coupon":
+                execution_items.append(FacetExecutionItem(
+                    facet="coupon",
+                    source="tool",
+                    tool_name="get_coupon_list",
+                    required=True
+                ))
+            elif f == "open_status":
+                execution_items.append(FacetExecutionItem(
+                    facet="open_status",
+                    source="tool",
+                    tool_name="check_open_status",
+                    required=True
+                ))
+            elif f == "distance_eta":
+                execution_items.append(FacetExecutionItem(
+                    facet="distance_eta",
+                    source="tool",
+                    tool_name="get_distance_eta",
+                    required=True
+                ))
+            else:
+                src = "rag" if execute_rag else "context"
+                execution_items.append(FacetExecutionItem(
+                    facet=f,
+                    source=src,
+                    required=False
+                ))
+
+        return FacetExecutionPlan(
             raw_query=raw_query,
             resolved_query=explicit_entity or _clean_text(slots.shop_query) or raw_query.strip(),
             intent=str(getattr(user_need, "intent", None) or user_need_map.get("intent") or ""),
@@ -267,6 +374,8 @@ class EntityResolver:
             reason="explicit_entity" if explicit_entity else ("pronoun_reference" if pronoun_only else "session_context"),
             source=shop_context_source or ("query" if explicit_entity else ("reference" if pronoun_only else "session")),
             shop_context_source=shop_context_source,
+            target_shop=target_shop,
+            items=execution_items,
             extra={
                 "explicit_entity": explicit_entity,
                 "pronoun_only": pronoun_only,

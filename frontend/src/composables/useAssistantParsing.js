@@ -33,7 +33,7 @@ export function useAssistantParsing(messageRef, displayedRawContentRef, isTyping
     if (!messageRef.value.eventTimeline) return [];
     const steps = [];
     const ignoreTypes = new Set(['approval_required', 'clarification_card', 'error', 'final', 'ack', 'delta', 'answer_delta']);
-    
+
     for (const entry of messageRef.value.eventTimeline) {
       if (ignoreTypes.has(entry.type)) {
         continue;
@@ -48,10 +48,10 @@ export function useAssistantParsing(messageRef, displayedRawContentRef, isTyping
 
   const hasThinkingBlock = computed(() => {
     if (messageRef.value.error) return false;
-    
-    const result = parsedMessage.value.hasThinking 
-      || timelineSteps.value.length > 0 
-      || Boolean(messageRef.value.streaming) 
+
+    const result = parsedMessage.value.hasThinking
+      || timelineSteps.value.length > 0
+      || Boolean(messageRef.value.streaming)
       || Boolean(isTyping.value);
 
     console.log('--- DEBUG hasThinkingBlock ---');

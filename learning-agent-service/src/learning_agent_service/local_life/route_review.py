@@ -23,10 +23,25 @@ class RouteReview:
             client_context=client_context,
             session_context=session_context,
         )
-        # Extract resolved_shop_id and candidate_shop_ids from context_refs
+        
+        # 优先使用 TargetShopPolicy 从 session 继承实体
+        from .target_shop_policy import TargetShopPolicy
+        from .entity_resolver import _explicit_entity_from_query
+        explicit_entity = _explicit_entity_from_query(user_need.raw_query)
+        target_shop = TargetShopPolicy().resolve_target(
+            raw_query=user_need.raw_query,
+            slots=user_need.slots,
+            session_context=session_context,
+            explicit_entity=explicit_entity
+        )
+        
         resolved_shop_id = None
         candidate_shop_ids = []
-        if user_need.context_refs:
+        
+        if target_shop.shop_id:
+            resolved_shop_id = target_shop.shop_id
+            candidate_shop_ids = [resolved_shop_id]
+        elif user_need.context_refs:
             for ref in user_need.context_refs:
                 if ref.type == "shop" and ref.id:
                     try:
@@ -35,6 +50,58 @@ class RouteReview:
                         break
                     except (ValueError, TypeError):
                         pass
+
+        required_facet_names = [f.name for f in user_need.required_facets]
+        if not required_facet_names:
+            query_text = (user_need.raw_query or "").replace(" ", "")
+            inferred_facet_names: list[str] = []
+            coupon_tokens = ("券", "优惠", "领券", "打折", "代金券", "折扣", "有券", "团购")
+            open_tokens = ("营业", "开门", "开着", "营业时间", "现在营业吗", "现在开吗", "营业吗")
+            distance_tokens = ("距离", "有多远", "导航", "路线", "怎么走", "怎么去")
+
+            if any(token in query_text for token in coupon_tokens):
+                inferred_facet_names.append("coupon")
+            if any(token in query_text for token in open_tokens):
+                inferred_facet_names.append("open_status")
+            if any(token in query_text for token in distance_tokens):
+                inferred_facet_names.append("distance_eta")
+
+            if inferred_facet_names:
+                required_facet_names = inferred_facet_names
+        print(f"[DEBUG RouteReview] resolved_shop_id={resolved_shop_id}, required_facet_names={required_facet_names}, session_context={session_context}, target_shop={target_shop}, explicit_entity={explicit_entity}")
+        # DAY3 HARDENING: Front-end Routing Interception for Coupon queries without explicit target shops
+        is_coupon_query = "coupon" in required_facet_names or any(x in user_need.raw_query for x in ["券", "优惠", "代金券", "团购"])
+        has_no_target_shop = not resolved_shop_id and not (target_shop and (target_shop.shop_id or target_shop.shop_name)) and not explicit_entity
+        
+        if is_coupon_query and has_no_target_shop:
+            new_clarification = ClarificationDecision(
+                need_clarification=True,
+                question="你想查询哪家店的优惠券？请告诉我具体门店名称。",
+                ambiguity_type="reference_clarify",
+            )
+
+            reviewed_route = LocalLifeRouteDecision(
+                route="clarify",
+                retrieval_strategy="clarification_only",
+                route_reason="coupon_query_without_shop",
+                candidate_shop_ids=(),
+                use_business_candidates=False,
+                use_qdrant=False,
+            )
+            exec_reqs = RouteExecutionRequirement(
+                required_facets=[],
+                execute_tools=[],
+                execute_rag=False,
+                reference_needed=True,
+            )
+            return RouteReviewResult(
+                reviewed_route=reviewed_route,
+                execution_requirements=exec_reqs,
+                review_reason="Coupon query without target shop. Triggered reference clarification.",
+                intercepted=True,
+                clarification=new_clarification,
+                reviewed_clarification=new_clarification,
+            )
         
         # Inject into result
         result = result.model_copy(
@@ -69,7 +136,7 @@ class RouteReview:
         has_static_facet = any(name in required_facet_names for name in ("scene_fit", "shop_detail", "price"))
 
         # Determine if pronouns are used in query
-        has_pronoun = any(p in normalized_query for p in ("它", "这家", "这店", "这间", "刚才那家", "这个店", "刚才那个"))
+        has_pronoun = any(p in normalized_query for p in ("他", "她", "它", "这家", "这店", "这间", "刚才那家", "这个店", "刚才那个", "这几家", "第一家", "第二家"))
 
         # Determine if coordinates/city are present in client context
         has_location_ctx = (
@@ -81,34 +148,45 @@ class RouteReview:
         )
 
         # 1. Rule: Pronoun reference failure (Case 6)
-        if has_pronoun and not user_need.context_refs:
-            new_clarification = ClarificationDecision(
-                need_clarification=True,
-                question="你问的是哪家店？请告诉我具体店名或选择刚才提到的商家。",
-                ambiguity_type="reference_clarify",
+        # 如果有指代词，但是 context_refs 为空，且利用 TargetShopPolicy 也没能从 Session 继承实体，才触发澄清
+        if has_pronoun:
+            from .target_shop_policy import TargetShopPolicy
+            from .entity_resolver import _explicit_entity_from_query
+            explicit_entity = _explicit_entity_from_query(user_need.raw_query)
+            target_shop = TargetShopPolicy().resolve_target(
+                raw_query=user_need.raw_query,
+                slots=user_need.slots,
+                session_context=session_ctx,
+                explicit_entity=explicit_entity
             )
-            reviewed_route = LocalLifeRouteDecision(
-                route="clarify",
-                retrieval_strategy="clarification_only",
-                route_reason="reference_resolution_failed",
-                candidate_shop_ids=(),
-                use_business_candidates=False,
-                use_qdrant=False,
-            )
-            exec_reqs = RouteExecutionRequirement(
-                required_facets=[],
-                execute_tools=[],
-                execute_rag=False,
-                reference_needed=True,
-            )
-            return RouteReviewResult(
-                reviewed_route=reviewed_route,
-                execution_requirements=exec_reqs,
-                review_reason="Pronoun reference used but no recent shop entity found in session. Triggered reference clarification.",
-                intercepted=True,
-                clarification=new_clarification,
-                reviewed_clarification=new_clarification,
-            )
+            if not user_need.context_refs and not (target_shop.shop_id or target_shop.shop_name):
+                new_clarification = ClarificationDecision(
+                    need_clarification=True,
+                    question="你问的是哪家店？请告诉我具体店名或选择刚才提到的商家。",
+                    ambiguity_type="reference_clarify",
+                )
+                reviewed_route = LocalLifeRouteDecision(
+                    route="clarify",
+                    retrieval_strategy="clarification_only",
+                    route_reason="reference_resolution_failed",
+                    candidate_shop_ids=(),
+                    use_business_candidates=False,
+                    use_qdrant=False,
+                )
+                exec_reqs = RouteExecutionRequirement(
+                    required_facets=[],
+                    execute_tools=[],
+                    execute_rag=False,
+                    reference_needed=True,
+                )
+                return RouteReviewResult(
+                    reviewed_route=reviewed_route,
+                    execution_requirements=exec_reqs,
+                    review_reason="Pronoun reference used but no recent shop entity found in session. Triggered reference clarification.",
+                    intercepted=True,
+                    clarification=new_clarification,
+                    reviewed_clarification=new_clarification,
+                )
 
         # 2. Rule: Specific Location Clarification Overriding (Case 4 vs Case 5)
         # If the LLM triggered clarification, or if the location context is completely missing for a vague nearby query
@@ -128,10 +206,10 @@ class RouteReview:
                 # Align routing to search + RAG
                 reviewed_route = dataclasses.replace(
                     initial_route,
-                    route="structured_first" if has_static_facet else "realtime_tool",
-                    retrieval_strategy="business_candidates->parent_child_rag->shop_rerank" if has_static_facet else "java_business_tool_only",
+                    route="structured_first",
+                    retrieval_strategy="business_candidates->parent_child_rag->shop_rerank",
                     use_business_candidates=True,
-                    use_qdrant=has_static_facet,
+                    use_qdrant=True,
                 )
                 
                 tools_to_run = []
@@ -160,33 +238,25 @@ class RouteReview:
             
             # Case 5: Retain slot clarification for vague nearby queries without location
             elif not has_location_ctx:
-                new_clarification = ClarificationDecision(
-                    need_clarification=True,
-                    question="你想查看哪个城市或商圈的餐厅？方便提供位置吗？",
-                    ambiguity_type="slot_clarify",
-                    options=[
-                        SuggestedReply(label="发位置", prompt="我在北京朝阳"),
-                        SuggestedReply(label="给城市", prompt="北京"),
-                    ]
-                )
+                new_clarification = ClarificationDecision(need_clarification=False)
                 reviewed_route = LocalLifeRouteDecision(
-                    route="clarify",
-                    retrieval_strategy="clarification_only",
-                    route_reason="missing_location_context",
+                    route="structured_first",
+                    retrieval_strategy="business_candidates->parent_child_rag->shop_rerank",
+                    route_reason="default_nearby_recommendation",
                     candidate_shop_ids=(),
-                    use_business_candidates=False,
-                    use_qdrant=False,
+                    use_business_candidates=True,
+                    use_qdrant=True,
                 )
                 exec_reqs = RouteExecutionRequirement(
-                    required_facets=["location"],
+                    required_facets=[],
                     execute_tools=[],
-                    execute_rag=False,
+                    execute_rag=True,
                     reference_needed=False,
                 )
                 return RouteReviewResult(
                     reviewed_route=reviewed_route,
                     execution_requirements=exec_reqs,
-                    review_reason="Vague nearby recommendation query but location context is completely missing. Forced slot clarification.",
+                    review_reason="Vague nearby recommendation query without location context defaults to broad recommendation search.",
                     intercepted=True,
                     clarification=new_clarification,
                     reviewed_clarification=new_clarification,

@@ -38,6 +38,68 @@ def route_after_load_context(state: GraphState) -> str:
     return "understand_turn"
 
 
+def route_gate(state: GraphState) -> GraphState:
+    turn = state["turn"]
+    runtime = state["runtime"]
+    routing = getattr(turn, "routing_decision", None)
+    branch = route_decider(state)
+    effective_action_map = {
+        "recommendation": "rag_plus_tool",
+        "tool": "tool_call",
+        "rag_plus_tool": "rag_plus_tool",
+        "rag": "rag_retrieval",
+        "direct": "direct_answer",
+        "clarify": "clarify",
+    }
+    effective_action = effective_action_map.get(branch, str(getattr(routing, "required_action", "") or "").strip().lower() if routing is not None else None)
+    if routing is not None and effective_action and effective_action != str(getattr(routing, "required_action", "") or "").strip().lower():
+        routing = routing.model_copy(
+            update={
+                "required_action": effective_action,
+                "blocked": False,
+                "blocked_reason": None,
+                "should_retrieve": effective_action in {"rag_retrieval", "rag_plus_tool"},
+                "should_call_tool": effective_action in {"tool_call", "rag_plus_tool"},
+                "should_use_memory": effective_action not in {"clarify", "reject", "no_op"},
+                "should_persist_memory": effective_action not in {"clarify", "reject", "no_op"},
+                "should_vectorize_memory": effective_action not in {"clarify", "reject", "no_op"},
+                "should_emit_retrieval_events": effective_action in {"rag_retrieval", "rag_plus_tool"},
+            }
+        )
+        turn_extra = dict(turn.extra)
+        turn_extra["routing_decision"] = routing.model_dump(mode="json")
+        state["turn"] = turn.model_copy(update={"routing_decision": routing, "extra": turn_extra})
+        turn = state["turn"]
+    required_action = str(getattr(routing, "required_action", "") or "").strip().lower() if routing is not None else None
+    route_candidate = str(getattr(routing, "route_candidate", "") or "").strip().lower() if routing is not None else None
+    route_reason = str(getattr(routing, "route_reason", "") or "").strip() if routing is not None else ""
+    fallback_reason = _route_decision_for_turn(turn)
+    gate_trace = {
+        "branch": branch,
+        "required_action": required_action,
+        "route_candidate": route_candidate,
+        "route_reason": route_reason or None,
+    }
+
+    turn_extra = dict(turn.extra)
+    turn_extra["route_gate"] = gate_trace
+    state["turn"] = turn.model_copy(update={"extra": turn_extra})
+
+    runtime_metrics = dict(getattr(runtime, "metrics", {}) or {})
+    runtime_metrics["route_gate"] = gate_trace
+    state["runtime"] = runtime.model_copy(update={"metrics": runtime_metrics})
+
+    state = _mark_stage(
+        state,
+        "route_gate",
+        "completed",
+        route_decision=_route_decision_for_turn(state["turn"]),
+        route_reason=gate_trace["route_reason"] or fallback_reason,
+        detail=gate_trace,
+    )
+    return state
+
+
 def _stage_entry(stage: str, status: str, *, route_decision: str | None = None, route_reason: str | None = None, detail=None):
     return {
         "stage": stage,
@@ -225,6 +287,42 @@ def run_rag_subgraph(state: GraphState, services: RagSubgraphServices) -> GraphS
     return _ensure_rag_result(state)
 
 
+def run_recommendation_subgraph(state: GraphState, services: RagSubgraphServices) -> GraphState:
+    turn = state["turn"]
+    runtime = state["runtime"]
+    turn_extra = dict(turn.extra)
+    turn_extra["recommendation_mode"] = True
+    turn_extra["route_gate"] = {
+        **dict(turn_extra.get("route_gate", {}) or {}),
+        "branch": "recommendation",
+    }
+    state["turn"] = turn.model_copy(update={"extra": turn_extra})
+
+    runtime_metrics = dict(getattr(runtime, "metrics", {}) or {})
+    runtime_metrics["recommendation_mode"] = True
+    runtime_metrics["rag_mode"] = "recommendation_rag"
+    state["runtime"] = runtime.model_copy(update={"metrics": runtime_metrics})
+
+    state = _mark_stage(
+        state,
+        "recommendation",
+        "running",
+        route_decision=_route_decision_for_turn(state["turn"]),
+        route_reason=str(state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])),
+        detail={"branch": "recommendation"},
+    )
+    state = run_rag_subgraph(state, services)
+    state = _mark_stage(
+        state,
+        "recommendation",
+        "completed",
+        route_decision=_route_decision_for_turn(state["turn"]),
+        route_reason=str(state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])),
+        detail={"branch": "recommendation"},
+    )
+    return state
+
+
 def run_tool_subgraph(state: GraphState, services: ToolSubgraphServices) -> GraphState:
     state = _mark_stage(
         state,
@@ -373,19 +471,60 @@ def should_run_plan_execute(state: GraphState) -> bool:
 def route_after_understand(state: GraphState) -> str:
     if should_run_plan_execute(state):
         return "plan_execute_subgraph"
-    routing = state["turn"].routing_decision
-    if routing is not None:
-        if routing.blocked:
-            return "compose_answer"
-        action = str(routing.required_action).strip().lower()
-        if action == "rag_retrieval":
-            return "rag_subgraph" if can_enter_retrieval(state).allowed else "compose_answer"
-        if action == "tool_call":
-            return "tool_subgraph" if can_enter_tool(state).allowed else "compose_answer"
-        if action == "rag_plus_tool":
-            return "rag_subgraph" if can_enter_retrieval(state).allowed else "compose_answer"
-        return "compose_answer"
-    return "compose_answer"
+    return "route_gate"
+
+
+def route_decider(state: GraphState) -> str:
+    turn = state["turn"]
+    routing = getattr(turn, "routing_decision", None)
+    if routing is None:
+        return "direct"
+
+    action = str(routing.required_action or "").strip().lower()
+    route_candidate = str(getattr(routing, "route_candidate", "") or "").strip().lower()
+    extra = dict(getattr(turn, "extra", {}) or {})
+    route_review = extra.get("route_review_decision")
+    if not isinstance(route_review, dict):
+        route_review = dict(getattr(routing, "extra", {}) or {}).get("route_review_decision")
+        if isinstance(route_review, dict):
+            route_review = dict(route_review)
+        else:
+            route_review = {}
+
+    effective_action = action
+    if route_review:
+        current_action = str(route_review.get("current_action") or "").strip().lower()
+        recommended_action = str(route_review.get("recommended_action") or "").strip().lower()
+        if current_action in {"tool_call", "rag_plus_tool", "rag_retrieval", "direct_answer"}:
+            if current_action == "rag_retrieval" and recommended_action in {"tool_call", "rag_plus_tool", "rag_retrieval", "direct_answer"}:
+                effective_action = recommended_action
+            else:
+                effective_action = current_action
+        elif current_action == "clarify" and recommended_action in {"tool_call", "rag_plus_tool", "rag_retrieval", "direct_answer"}:
+            effective_action = recommended_action
+
+    recommendation_mode = bool(
+        extra.get("recommendation_mode")
+        or effective_action == "local_life_recommend"
+        or route_candidate in {"recommendation"}
+        or (route_candidate.startswith("local_life.") and "recommend" in route_candidate)
+    )
+
+    if routing.blocked and effective_action == action:
+        return "clarify"
+    if recommendation_mode:
+        return "recommendation"
+    if effective_action == "clarify":
+        return "clarify"
+    if effective_action == "tool_call":
+        return "tool"
+    if effective_action == "rag_plus_tool":
+        return "rag_plus_tool"
+    if effective_action == "rag_retrieval":
+        return "rag"
+    if effective_action in {"direct_answer", "memory_update", "no_op", "reject"}:
+        return "direct"
+    return "direct"
 
 
 def route_after_rag(state: GraphState) -> str:

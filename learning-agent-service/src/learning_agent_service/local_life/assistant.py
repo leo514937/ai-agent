@@ -133,6 +133,7 @@ class LocalLifeModelAssistant:
         route_reason: str | None = None,
         safety_result: Mapping[str, Any] | None = None,
         approval_required: bool = False,
+        answer_contract: Any | None = None,
     ) -> Dict[str, Any]:
         return self.compose_answer_plan(
             raw_query=raw_query,
@@ -148,6 +149,7 @@ class LocalLifeModelAssistant:
             route_reason=route_reason,
             safety_result=safety_result,
             approval_required=approval_required,
+            answer_contract=answer_contract,
         )
 
     def compose_answer_plan(
@@ -166,6 +168,7 @@ class LocalLifeModelAssistant:
         route_reason: str | None = None,
         safety_result: Mapping[str, Any] | None = None,
         approval_required: bool = False,
+        answer_contract: Any | None = None,
     ) -> Dict[str, Any]:
         prompt = build_answer_planner_request(
             raw_query=raw_query,
@@ -180,6 +183,7 @@ class LocalLifeModelAssistant:
             route_reason=route_reason,
             clarification=_as_mapping(clarification),
             approval_required=approval_required,
+            answer_contract=answer_contract,
         )
         if evidence_claims:
             prompt["evidence_claims"] = [_as_mapping(item) for item in evidence_claims]

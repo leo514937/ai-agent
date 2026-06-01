@@ -6,7 +6,7 @@
         <h2 class="hero-title">直接进入服务页面</h2>
         <p class="hero-copy">
           基于本地生活助手后端的服务台，启动后不展示登录页，直接进入店铺、博客、个人中心和 AI 助手。
-          如果后端暂时不可用，也会自动切回本地演示数据。
+          店铺数据始终以后端数据库为准。
         </p>
 
         <div class="hero-actions">
@@ -19,7 +19,7 @@
       <div class="hero-side">
         <div class="grid-2">
           <StatCard label="服务入口" :value="5" hint="首页、商铺、博客、AI、个人中心" />
-          <StatCard label="推荐店铺" :value="featuredShops.length" hint="本地演示与后端数据自动兜底" />
+          <StatCard label="推荐店铺" :value="featuredShops.length" hint="直接来自后端数据库" />
         </div>
 
         <div class="home-page__pulse card panel">
@@ -67,7 +67,7 @@
       <SectionTitle
         eyebrow="Featured"
         title="推荐商铺"
-        subtitle="来自后端或本地演示的精选店铺，适合直接进入详情。"
+        subtitle="来自后端数据库的精选店铺，适合直接进入详情。"
       >
         <template #actions>
           <RouterLink class="chip chip--active" to="/shops">查看全部</RouterLink>

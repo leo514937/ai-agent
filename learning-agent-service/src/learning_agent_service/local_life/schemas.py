@@ -112,6 +112,8 @@ class UserNeed(LocalLifeModel):
     optional_facets: List[RequiredFacet] = Field(default_factory=list)
     missing_slots: List[str] = Field(default_factory=list)
     context_refs: List[ContextRef] = Field(default_factory=list)
+    recommendation_count: int = 3
+
 
 
 class RouteExecutionRequirement(LocalLifeModel):

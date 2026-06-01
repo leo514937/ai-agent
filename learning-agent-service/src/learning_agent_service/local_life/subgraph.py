@@ -38,7 +38,10 @@ from .schemas import LocalLifeIntentType, LocalLifeSlots, LocalLifeTurnState, Qu
 from .slot_extractor import extract_slots
 from ..safety.guards import LocalLifeSafetyGuard
 from .user_need_parser import UserNeedParser
+from .target_shop_policy import TargetShop, TargetShopPolicy
 from .route_review import RouteReview
+from .coupon_result import CouponResult, CouponItem
+from .facet_result_bundle import FacetResultBundle
 
 
 def _as_mapping(value: Any) -> dict[str, Any]:
@@ -247,20 +250,31 @@ def _summarize_tool_output(tool_name: str, tool_output: Mapping[str, Any], shop_
     if tool_name == "get_coupon_list":
         coupons = tool_output.get("coupons") or []
         titles: list[str] = []
+        total_stock = 0
         for coupon in coupons:
             if isinstance(coupon, Mapping):
                 title = coupon.get("title") or coupon.get("name")
                 if title:
                     titles.append(str(title))
-        count = tool_output.get("count")
+                stock = coupon.get("stock")
+                if stock is not None:
+                    try:
+                        total_stock += int(stock)
+                    except (TypeError, ValueError):
+                        pass
+        count = tool_output.get("count")  # 券的种类数
         title_text = "、".join(titles[:3])
         if count is None:
             count = len(titles)
         if count and title_text:
+            if total_stock > 0:
+                return f"{_safe_name}当前有{count}种券，共{total_stock}张库存：{title_text}。"
             return f"{_safe_name}当前有{count}张券：{title_text}。"
         if count:
+            if total_stock > 0:
+                return f"{_safe_name}当前有{count}种券，共{total_stock}张库存。"
             return f"{_safe_name}当前有{count}张券。"
-        return f"{_safe_name}暂时没有查到可用券。"
+        return f"{_safe_name}实时接口暂无可用券。"
     if tool_name == "check_open_status":
         open_status = tool_output.get("open_status")
         if open_status == "open":
@@ -318,6 +332,18 @@ def _mark_stage(
             detail=detail,
         )
     )
+def _is_name_match(query_name: str, shop_name: str) -> bool:
+    q_name = str(query_name or "").lower().strip()
+    s_name = str(shop_name or "").lower().strip()
+    for brand in ["海底捞", "巴奴", "新白鹿", "蔡馬洪涛", "Mamala", "幸福里", "炉鱼", "浅草屋", "羊老三", "开乐迪", "INLOVE", "星聚会"]:
+        brand_lower = brand.lower()
+        if brand_lower in q_name and brand_lower in s_name:
+            area_words = ["水晶城", "运河上街", "丝联", "万达", "乐堤港", "北城天地", "城西", "武林广场"]
+            query_area = next((w for w in area_words if w.lower() in q_name), None)
+            if query_area:
+                return query_area.lower() in s_name
+            return True
+    return q_name in s_name or s_name in q_name
 
 
 class LocalLifeSubgraph:
@@ -382,23 +408,30 @@ class LocalLifeSubgraph:
         persistent = persistent_context or PersistentSessionContext()
         client_context = _as_mapping(command.client_context)
         session_context = persistent.model_dump(mode="json")
+        # Day2 P1: Multi-turn only inherits entity, not facets/constraints
+        # We strip out facet-related session context to prevent inheritance pollution
+        clean_session_context = dict(session_context)
+        for key in ("current_scene", "scene", "local_life_preferences", "local_life_avoid", "current_constraints"):
+            if key in clean_session_context:
+                del clean_session_context[key]
+
         understanding_hint = self._build_understanding_hint(
             raw_query=command.message,
             client_context=client_context,
-            session_context=session_context,
+            session_context=clean_session_context,
         )
 
         understanding = normalize_query(
             command.message,
             client_context=client_context,
-            session_context=session_context,
+            session_context=clean_session_context,
             model_hint=understanding_hint,
         )
         slots, clarification, intent = extract_slots(
             understanding,
             command.message,
             client_context=client_context,
-            session_context=session_context,
+            session_context=clean_session_context,
             model_hint=understanding_hint,
         )
         user_need = UserNeedParser.parse(
@@ -406,16 +439,20 @@ class LocalLifeSubgraph:
             slots=slots,
             intent=intent,
             client_context=client_context,
-            session_context=session_context,
+            session_context=clean_session_context,
         )
         arbitration_result = ContextArbitration().arbitrate(
             raw_query=command.message,
             slots=slots,
             user_need=user_need,
-            session_context=session_context,
+            session_context=clean_session_context,
             client_context=client_context,
         )
         user_need = arbitration_result["user_need"]
+        try:
+            intent = LocalLifeIntentType(str(getattr(user_need, "intent", intent)))
+        except Exception:
+            pass
         if arbitration_result.get("restored_pending_need"):
             yield _event(
                 EventType.HEARTBEAT,
@@ -466,21 +503,32 @@ class LocalLifeSubgraph:
             initial_route=query_route,
             clarification=clarification,
             client_context=client_context,
-            session_context=session_context,
+            session_context=clean_session_context,
         )
         state.route_review = review_result
+        print(f"[DEBUG Subgraph Review Result] review_result={review_result.model_dump(mode='json')}")
         query_route = review_result.reviewed_route
         execution_requirements = review_result.execution_requirements
         clarification = review_result.reviewed_clarification or review_result.clarification or clarification
         state.clarification = clarification
+        print(f"[DEBUG Subgraph Clarification] clarification={clarification}, need_clarification={getattr(clarification, 'need_clarification', None)}")
         execution_contract = EntityResolver().resolve(
             raw_query=command.message,
             slots=slots,
             user_need=user_need,
-            session_context=session_context,
+            session_context=clean_session_context,
             query_route=query_route,
             client_context=client_context,
         )
+
+        target_shop = getattr(execution_contract, "target_shop", None)
+        single_shop_mode = False
+        if target_shop and (target_shop.shop_id is not None or target_shop.shop_name is not None):
+            single_shop_mode = True
+
+        from .answer_contract import AnswerContract
+        answer_contract = AnswerContract.build_contract(user_need, target_shop)
+
         resolved_shop_ids = list(execution_contract.candidate_shop_ids)
         if not resolved_shop_ids and not execution_contract.forbid_global_fallback:
             resolved_shop_ids = _resolve_review_shop_ids(
@@ -532,6 +580,12 @@ class LocalLifeSubgraph:
                 "local_life_route_review": review_result.model_dump(mode="json"),
                 "local_life_execution_requirements": execution_requirements.model_dump(mode="json"),
                 "local_life_execution_contract": execution_contract.model_dump(mode="json"),
+                "target_shop": target_shop.model_dump(mode="json") if target_shop else None,
+                "target_shop.source": target_shop.source if target_shop else None,
+                "target_shop.shop_id": target_shop.shop_id if target_shop else None,
+                "target_shop.shop_name": target_shop.shop_name if target_shop else None,
+                "single_shop_mode": single_shop_mode,
+                "answer_contract": answer_contract.model_dump(mode="json"),
             }
         )
         _mark_stage(
@@ -592,6 +646,7 @@ class LocalLifeSubgraph:
             bundle = build_response_bundle(
                 raw_query=command.message,
                 slots=slots,
+                answer_contract=answer_contract,
                 ranked_candidates=[],
                 evidence_claims=[],
                 page=command.page,
@@ -790,7 +845,7 @@ class LocalLifeSubgraph:
                     structured_candidates.append(self.business_client.get_shop_detail(int(shop_id)))
                 except Exception:
                     _LOGGER.exception("local_life_reference_shop_detail_failed")
-        elif query_route.use_business_candidates:
+        elif query_route.use_business_candidates or slots.shop_query or (target_shop and target_shop.shop_name):
             structured_candidates = self.business_client.search_candidates(
                 query=understanding.semantic_query or understanding.keyword_query or command.message,
                 slots=slots,
@@ -812,6 +867,8 @@ class LocalLifeSubgraph:
                     shop_area = getattr(shop, "area", "") or ""
                     if branch_word in shop_name or branch_word in shop_area:
                         exact_matches.append(shop)
+                if exact_matches:
+                    structured_candidates = exact_matches
                 
         if slots.category and slots.category.strip() and query_route.use_business_candidates and not eff_resolved_shop_ids:
             normalized_cat = slots.category.strip()
@@ -837,18 +894,42 @@ class LocalLifeSubgraph:
             if filtered_list:
                 structured_candidates = filtered_list
 
-        if slots.shop_query and slots.shop_query.strip() and query_route.use_business_candidates and not eff_resolved_shop_ids:
+        if target_shop and target_shop.shop_name and query_route.use_business_candidates and not eff_resolved_shop_ids:
+            normalized_query = target_shop.shop_name.strip()
+            filtered_by_name = []
+            for shop in structured_candidates:
+                s_name = str(getattr(shop, "name", "") or "")
+                if _is_name_match(normalized_query, s_name):
+                    filtered_by_name.append(shop)
+            structured_candidates = filtered_by_name
+        elif slots.shop_query and slots.shop_query.strip() and query_route.use_business_candidates and not eff_resolved_shop_ids:
             normalized_query = slots.shop_query.strip()
             filtered_by_name = []
             for shop in structured_candidates:
                 s_name = str(getattr(shop, "name", "") or "")
-                # Use a relaxed match: shop_query in name, or name in shop_query
-                if normalized_query in s_name or s_name in normalized_query:
+                if _is_name_match(normalized_query, s_name):
                     filtered_by_name.append(shop)
             
             # If the user explicitly asked for a shop name and NO candidates match,
             # clear the candidates to avoid hallucinating about another shop.
             structured_candidates = filtered_by_name
+
+        recommendation_intent = str(getattr(user_need, "intent", "") or "")
+        if (
+            not structured_candidates
+            and query_route.use_business_candidates
+            and recommendation_intent in ("local_life_recommend", "restaurant_recommendation")
+            and not (target_shop and target_shop.shop_id is not None)
+        ):
+            fallback_limit = max(5, int(getattr(user_need, "recommendation_count", 3) or 3))
+            structured_candidates = self.catalog.search_shops(
+                query=understanding.semantic_query or understanding.keyword_query or command.message,
+                slots=slots,
+                limit=fallback_limit,
+            )
+            if structured_candidates:
+                state.metrics["catalog_recommendation_fallback"] = True
+                state.metrics["catalog_recommendation_fallback_reason"] = "empty_business_candidates"
 
         state.structured_candidates = structured_candidates
         _mark_stage(
@@ -890,6 +971,19 @@ class LocalLifeSubgraph:
                 rag_candidate_shop_ids = req_candidate_shop_ids or resolved_shop_ids or [shop.id for shop in structured_candidates] or list(query_route.candidate_shop_ids)
                 if not rag_candidate_shop_ids and slots.shop_ids:
                     rag_candidate_shop_ids = list(slots.shop_ids)
+                
+                # Single shop hard filter
+                if single_shop_mode and target_shop and target_shop.shop_id is not None:
+                    rag_candidate_shop_ids = [target_shop.shop_id]
+                    child_k = query_route.child_top_k or getattr(self.settings, "local_life_child_top_k", 30)
+                    parent_k = query_route.parent_top_k or getattr(self.settings, "local_life_parent_top_k", 5)
+                    state.metrics["rag_mode"] = "single_shop_rag"
+                else:
+                    # Broad recommendation RAG: child_top_k = 50, parent_top_k = 10
+                    child_k = 50
+                    parent_k = 10
+                    state.metrics["rag_mode"] = "recommendation_rag"
+
                 qdrant_pack = self.local_life_retriever.retrieve_local_life_evidence(
                     understanding.semantic_query or understanding.keyword_query or command.message,
                     route=query_route.route,
@@ -898,8 +992,8 @@ class LocalLifeSubgraph:
                     category=slots.category,
                     shop_type_id=self._client_context_int(client_context, "shop_type_id", "typeId", "shopTypeId"),
                     candidate_shop_ids=rag_candidate_shop_ids or None,
-                    child_top_k=query_route.child_top_k or getattr(self.settings, "local_life_child_top_k", 30),
-                    parent_top_k=query_route.parent_top_k or getattr(self.settings, "local_life_parent_top_k", 5),
+                    child_top_k=child_k,
+                    parent_top_k=parent_k,
                     sibling_limit_per_parent=query_route.sibling_limit_per_parent
                     or getattr(self.settings, "local_life_sibling_limit_per_parent", 6),
                 )
@@ -908,10 +1002,11 @@ class LocalLifeSubgraph:
                     structured_candidates,
                     qdrant_pack,
                     vouchers_by_shop_id=vouchers_by_shop_id,
-                    limit=8,
+                    limit=30 if not single_shop_mode else 8,
                 )
             except Exception:
                 _LOGGER.exception("local_life_parent_child_retriever_failed")
+
 
         catalog_evidence_claims = self.catalog.build_evidence(
             query=understanding.semantic_query or understanding.keyword_query or command.message,
@@ -932,9 +1027,25 @@ class LocalLifeSubgraph:
             evidence_claims,
             ranked_candidates=structured_candidates,
             evidence_pack=qdrant_pack,
+            target_shop_id=target_shop.shop_id if (single_shop_mode and target_shop) else None,
         )
-        evidence_claims = sorted(evidence_claims, key=lambda item: (-item.confidence, item.chunk_id))[:8]
+        evidence_claims = sorted(evidence_claims, key=lambda item: (-item.confidence, item.chunk_id))[:30 if not single_shop_mode else 8]
         state.evidence_claims = list(evidence_claims)
+
+        # Trace exposure of evidence shop IDs (P2)
+        evidence_shop_ids = []
+        for claim in evidence_claims:
+            claim_map = _as_mapping(claim)
+            c_shop_id = claim_map.get("shop_id") or _as_mapping(claim_map.get("metadata")).get("shop_id")
+            if c_shop_id is not None:
+                evidence_shop_ids.append(int(c_shop_id))
+        state.metrics["evidence_shop_ids"] = list(set(evidence_shop_ids))
+        state.metrics["evidence_shop_groups"] = [
+            {"shop_id": sid, "evidence_count": evidence_shop_ids.count(sid)}
+            for sid in set(evidence_shop_ids)
+        ]
+        state.metrics["single_shop_mode"] = single_shop_mode
+
         source_summary = self._summarize_sources(
             structured_candidates=structured_candidates,
             vouchers_by_shop_id=vouchers_by_shop_id,
@@ -1005,181 +1116,124 @@ class LocalLifeSubgraph:
             if filtered_list:
                 ranked_candidates = filtered_list
 
+        # RAG top1 fallback if target_shop is not set
+        is_recommendation = user_need.intent in ("local_life_recommend", "restaurant_recommendation")
+        if not is_recommendation and (not target_shop or target_shop.confidence == 0.0) and ranked_candidates:
+            from .target_shop_policy import TargetShop
+            first = ranked_candidates[0]
+            target_shop = TargetShop(
+                shop_id=first.shop_id,
+                shop_name=first.name,
+                source="rag_fallback",
+                confidence=0.7,
+                is_explicit_in_current_turn=False,
+                candidate_shop_ids=[first.shop_id]
+            )
+            single_shop_mode = True
+            state.metrics.update({
+                "target_shop": target_shop.model_dump(mode="json"),
+                "target_shop.source": target_shop.source,
+                "target_shop.shop_id": target_shop.shop_id,
+                "target_shop.shop_name": target_shop.shop_name,
+                "single_shop_mode": single_shop_mode,
+            })
+
+        # Reorder ranked_candidates to put target_shop.shop_id at index 0
+        if target_shop and target_shop.shop_id is not None and ranked_candidates:
+            target_idx = -1
+            for i, cand in enumerate(ranked_candidates):
+                if int(cand.shop_id) == int(target_shop.shop_id):
+                    target_idx = i
+                    break
+            if target_idx != -1:
+                target_cand = ranked_candidates.pop(target_idx)
+                ranked_candidates.insert(0, target_cand)
+
         top_shop = ranked_candidates[0] if ranked_candidates else None
-        # selected_shop 优先级：execution_requirements.resolved_shop_id > ranked_candidates[0] > structured_candidates[0]
-        # 这里确保“这家营业吗”绑定的是指代消解后的店，而不是排名第一个
-        req_resolved_id = execution_requirements.resolved_shop_id or (req_candidate_shop_ids[0] if req_candidate_shop_ids else None)
-        if req_resolved_id is None:
-            req_resolved_id = execution_contract.get("resolved_shop_id") if isinstance(execution_contract, dict) else getattr(execution_contract, "resolved_shop_id", None)
-            
-        if req_resolved_id is not None:
+        
+        # Determine selected_shop: target_shop.shop_id takes absolute precedence!
+        if target_shop and target_shop.shop_id is not None:
             selected_shop = next(
-                (shop for shop in structured_candidates if shop.id == req_resolved_id),
+                (shop for shop in structured_candidates if int(shop.id) == int(target_shop.shop_id)),
                 None,
             ) or next(
-                (shop for shop in structured_candidates if top_shop is not None and shop.id == top_shop.shop_id),
+                (shop for shop in structured_candidates if top_shop is not None and int(shop.id) == int(top_shop.shop_id)),
                 None,
             ) or (structured_candidates[0] if structured_candidates else None)
         else:
-            forbid_fallback = (
-                execution_contract.get("forbid_global_fallback")
-                if isinstance(execution_contract, dict)
-                else getattr(execution_contract, "forbid_global_fallback", False)
-            )
-            if forbid_fallback:
+            # selected_shop 优先级：execution_requirements.resolved_shop_id > ranked_candidates[0] > structured_candidates[0]
+            # 这里确保“这家营业吗”绑定的是指代消解后的店，而不是排名第一个
+            req_resolved_id = execution_requirements.resolved_shop_id or (req_candidate_shop_ids[0] if req_candidate_shop_ids else None)
+            if req_resolved_id is None:
+                req_resolved_id = execution_contract.get("resolved_shop_id") if isinstance(execution_contract, dict) else getattr(execution_contract, "resolved_shop_id", None)
+                
+            if req_resolved_id is not None:
                 selected_shop = next(
-                    (shop for shop in structured_candidates if top_shop is not None and shop.id == top_shop.shop_id),
+                    (shop for shop in structured_candidates if shop.id == req_resolved_id),
                     None,
-                )
-            else:
-                selected_shop = next(
+                ) or next(
                     (shop for shop in structured_candidates if top_shop is not None and shop.id == top_shop.shop_id),
                     None,
                 ) or (structured_candidates[0] if structured_candidates else None)
-        if tool_name == "get_coupon_list":
-            if selected_shop is not None:
-                vouchers = self.business_client.get_coupon_list(selected_shop.id)
-                vouchers_by_shop_id[int(selected_shop.id)] = list(vouchers)
-                tool_output = {
-                    "shop_id": selected_shop.id,
-                    "shop_name": selected_shop.name,
-                    "count": len(vouchers),
-                    "coupons": [voucher.model_dump(mode="json") for voucher in vouchers[:5]],
-                    "source": _clean_source(getattr(selected_shop, "source", None)) or "catalog",
-                }
             else:
-                tool_output = {
-                    "shop_id": None,
-                    "shop_name": None,
-                    "count": 0,
-                    "coupons": [],
-                    "source": "catalog",
-                }
-        elif tool_name == "check_open_status":
-            if selected_shop is not None:
-                tool_output = {
-                    "shop_id": selected_shop.id,
-                    "shop_name": selected_shop.name,
-                    **self.business_client.check_open_status(selected_shop),
-                    "source": _clean_source(getattr(selected_shop, "source", None)) or "catalog",
-                }
-            else:
-                tool_output = {
-                    "shop_id": None,
-                    "shop_name": None,
-                    "open_status": "unknown",
-                    "open_now": None,
-                    "source": "catalog",
-                }
-        elif tool_name == "get_distance_eta":
-            if selected_shop is not None:
-                distance_eta = self.business_client.get_distance_eta(
-                    selected_shop,
-                    lat=slots.location.lat,
-                    lng=slots.location.lng,
+                forbid_fallback = (
+                    execution_contract.get("forbid_global_fallback")
+                    if isinstance(execution_contract, dict)
+                    else getattr(execution_contract, "forbid_global_fallback", False)
                 )
-                tool_output = {
-                    "shop_id": selected_shop.id,
-                    "shop_name": selected_shop.name,
-                    **distance_eta,
-                    "source": _clean_source(getattr(selected_shop, "source", None)) or "catalog",
-                }
-            else:
-                tool_output = {
-                    "shop_id": None,
-                    "shop_name": None,
-                    "distance_km": None,
-                    "eta_minutes": None,
-                    "mode": "drive",
-                    "source": "catalog",
-                }
-        elif tool_name == "get_shop_detail":
-            if selected_shop is not None:
-                detail_shop = self.business_client.get_shop_detail(selected_shop.id)
-                tool_output = {
-                    "shop_id": detail_shop.id,
-                    "shop": detail_shop.model_dump(mode="json"),
-                    "open_status": self.business_client.check_open_status(detail_shop),
-                    "distance_eta": self.business_client.get_distance_eta(
-                        detail_shop,
-                        lat=slots.location.lat,
-                        lng=slots.location.lng,
-                    ),
-                    "source": _clean_source(getattr(detail_shop, "source", None)) or "catalog",
-                }
-            else:
-                tool_output = {
-                    "status": "not_found",
-                    "shop_id": None,
-                    "shop": None,
-                    "source": "catalog",
-                }
-        elif tool_name == "get_distance_eta":
-            if selected_shop is not None:
-                distance_eta = self.business_client.get_distance_eta(
-                    selected_shop,
-                    lat=slots.location.lat,
-                    lng=slots.location.lng,
-                )
-                tool_output = {
-                    "shop_id": selected_shop.id,
-                    "shop_name": selected_shop.name,
-                    **distance_eta,
-                    "source": _clean_source(getattr(selected_shop, "source", None)) or "catalog",
-                }
-            else:
-                tool_output = {
-                    "distance_km": None,
-                    "eta_minutes": None,
-                    "mode": "drive",
-                    "source": "catalog",
-                }
-        else:
-            tool_output = {
-                "candidate_count": len(structured_candidates),
-                "candidate_ids": [shop.id for shop in structured_candidates],
-                "shops": [shop.model_dump(mode="json") for shop in structured_candidates[:5]],
-            }
-        yield _event(
-            EventType.TOOL_RESULT,
-            trace_id=command.trace_id,
-            session_id=command.session_id,
-            turn_id=command.turn_id,
-            workflow_version=self.settings.workflow_version,
-            payload=ToolResultPayload(
-                tool_name=tool_name,
-                tool_call_id=search_call_id,
-                status="success",
-                degraded=False,
-                retryable=False,
-                output=tool_output,
-                current_stage=state.current_stage,
-                stage_status="completed",
-                route_decision=state.route_decision,
-                route_reason=state.route_reason,
-            ).model_dump(mode="json"),
-        )
-        state.tool_results.append(
-            {
-                "tool_name": tool_name,
-                "tool_call_id": search_call_id,
-                "input_summary": dict(tool_input_summary),
-                "output": dict(tool_output),
-            }
-        )
+                if forbid_fallback:
+                    selected_shop = next(
+                        (shop for shop in structured_candidates if top_shop is not None and shop.id == top_shop.shop_id),
+                        None,
+                    )
+                else:
+                    selected_shop = next(
+                        (shop for shop in structured_candidates if top_shop is not None and shop.id == top_shop.shop_id),
+                        None,
+                    ) or (structured_candidates[0] if structured_candidates else None)
+        facet_bundle = FacetResultBundle()
+        coupon_result_obj = None
+        
+        # Day3 Hardening: Explicitly initialize legacy variables to prevent UnboundLocalError when no tools are run
+        tool_name = None
+        tool_output = {}
+        search_call_id = None
 
-        # ★ 多工具执行：对 execute_tools[1:] 中剩余的工具逽一调用并收集结果
-        extra_tool_outputs: list[tuple[str, dict[str, Any]]] = []
-        for extra_tool_name in (execution_requirements.execute_tools or [])[1:]:
-            extra_input = _tool_input_summary(
+        # Build list of tools to run based on FacetExecutionPlan
+        execution_items = []
+        if hasattr(execution_contract, "items") and execution_contract.items:
+            execution_items = execution_contract.items
+        else:
+            # Fallback/Backward compatibility
+            from .facet_execution_plan import FacetExecutionItem
+            for t_name in (execution_requirements.execute_tools or [tool_name]):
+                facet = "coupon" if t_name == "get_coupon_list" else ("open_status" if t_name == "check_open_status" else ("distance_eta" if t_name == "get_distance_eta" else "other"))
+                execution_items.append(FacetExecutionItem(facet=facet, source="tool", tool_name=t_name))
+
+        extra_tool_outputs = []
+
+        # Now traverse and execute each execution item
+        for item in execution_items:
+            if item.source != "tool" or not item.tool_name:
+                continue
+
+            current_tool_name = item.tool_name
+            current_input = _tool_input_summary(
                 intent,
                 filters=filters,
                 slots=slots,
-                tool_name=extra_tool_name,
+                tool_name=current_tool_name,
                 selected_shop_id=first_shop_id,
                 selected_shop_name=first_shop_name,
             )
-            extra_call_id = f"call-{uuid4().hex[:8]}"
+            current_call_id = f"call-{uuid4().hex[:8]}"
+
+            _mark_stage(
+                state,
+                "tool",
+                "running",
+                detail={"tool_name": current_tool_name, "tool_call_id": current_call_id},
+            )
             yield _event(
                 EventType.TOOL_CALL,
                 trace_id=command.trace_id,
@@ -1187,40 +1241,155 @@ class LocalLifeSubgraph:
                 turn_id=command.turn_id,
                 workflow_version=self.settings.workflow_version,
                 payload=ToolCallPayload(
-                    tool_name=extra_tool_name,
-                    tool_call_id=extra_call_id,
-                    input_summary=extra_input,
+                    tool_name=current_tool_name,
+                    tool_call_id=current_call_id,
+                    input_summary=current_input,
                     current_stage=state.current_stage,
                     stage_status=state.stage_status,
                     route_decision=state.route_decision,
                     route_reason=state.route_reason,
                 ).model_dump(mode="json"),
             )
-            if extra_tool_name == "get_coupon_list":
+
+            current_output = {}
+            if current_tool_name == "get_coupon_list":
                 if selected_shop is not None:
-                    _extra_vouchers = self.business_client.get_coupon_list(selected_shop.id)
-                    vouchers_by_shop_id[int(selected_shop.id)] = list(_extra_vouchers)
-                    extra_output: dict[str, Any] = {
+                    vouchers = self.business_client.get_coupon_list(selected_shop.id)
+                    vouchers_by_shop_id[int(selected_shop.id)] = list(vouchers)
+                    
+                    coupon_items_list = []
+                    for v in vouchers:
+                        coupon_items_list.append(CouponItem(
+                            coupon_id=str(v.id),
+                            title=v.title,
+                            status="available" if (v.stock is None or v.stock > 0) else "unavailable",
+                            source="realtime_tool",
+                            shop_id=selected_shop.id,
+                            price=v.pay_value,
+                            original_price=v.actual_value,
+                            description=v.sub_title
+                        ))
+                    
+                    coupon_result_obj = CouponResult(
+                        shop_id=selected_shop.id,
+                        realtime_available_count=len(vouchers),
+                        realtime_total_count=len(vouchers),
+                        items=coupon_items_list,
+                        query_success=True,
+                        source="realtime_tool"
+                    )
+
+                    current_output = {
                         "shop_id": selected_shop.id,
                         "shop_name": selected_shop.name,
-                        "count": len(_extra_vouchers),
-                        "coupons": [v.model_dump(mode="json") for v in _extra_vouchers[:5]],
+                        "count": len(vouchers),
+                        "coupons": [voucher.model_dump(mode="json") for voucher in vouchers[:5]],
                         "source": _clean_source(getattr(selected_shop, "source", None)) or "catalog",
                     }
+                    # Update ranked_candidates with dynamic vouchers
+                    for cand in ranked_candidates:
+                        if int(cand.shop_id) == int(selected_shop.id):
+                            cand.vouchers = [v.model_dump(mode="json") if hasattr(v, "model_dump") else dict(v) for v in vouchers]
                 else:
-                    extra_output = {"shop_id": None, "shop_name": None, "count": 0, "coupons": [], "source": "catalog"}
-            elif extra_tool_name == "check_open_status":
+                    coupon_result_obj = CouponResult(
+                        shop_id=0,
+                        realtime_available_count=0,
+                        realtime_total_count=0,
+                        items=[],
+                        query_success=False,
+                        source="fallback",
+                        error_message="selected_shop_not_found"
+                    )
+                    current_output = {
+                        "shop_id": None,
+                        "shop_name": None,
+                        "count": 0,
+                        "coupons": [],
+                        "source": "catalog",
+                    }
+                facet_bundle.coupon_result = coupon_result_obj
+
+            elif current_tool_name == "check_open_status":
                 if selected_shop is not None:
-                    extra_output = {
+                    open_status_info = self.business_client.check_open_status(selected_shop)
+                    current_output = {
                         "shop_id": selected_shop.id,
                         "shop_name": selected_shop.name,
-                        **self.business_client.check_open_status(selected_shop),
+                        **open_status_info,
                         "source": _clean_source(getattr(selected_shop, "source", None)) or "catalog",
                     }
+                    # Update ranked_candidates with dynamic open status
+                    for cand in ranked_candidates:
+                        if int(cand.shop_id) == int(selected_shop.id):
+                            cand.structured_features["open_hours"] = open_status_info.get("open_hours") or open_status_info.get("openHours") or cand.structured_features.get("open_hours")
+                            cand.structured_features["open_now"] = open_status_info.get("open_now")
                 else:
-                    extra_output = {"shop_id": None, "shop_name": None, "open_status": "unknown", "open_now": None, "source": "catalog"}
+                    current_output = {
+                        "shop_id": None,
+                        "shop_name": None,
+                        "open_status": "unknown",
+                        "open_now": None,
+                        "source": "catalog",
+                    }
+                facet_bundle.open_status_result = current_output
+
+            elif current_tool_name == "get_distance_eta":
+                if selected_shop is not None:
+                    distance_eta = self.business_client.get_distance_eta(
+                        selected_shop,
+                        lat=slots.location.lat,
+                        lng=slots.location.lng,
+                    )
+                    current_output = {
+                        "shop_id": selected_shop.id,
+                        "shop_name": selected_shop.name,
+                        **distance_eta,
+                        "source": _clean_source(getattr(selected_shop, "source", None)) or "catalog",
+                    }
+                    # Update ranked_candidates with dynamic distance/eta
+                    for cand in ranked_candidates:
+                        if int(cand.shop_id) == int(selected_shop.id):
+                            cand.structured_features["distance_km"] = distance_eta.get("distance_km")
+                else:
+                    current_output = {
+                        "shop_id": None,
+                        "shop_name": None,
+                        "distance_km": None,
+                        "eta_minutes": None,
+                        "mode": "drive",
+                        "source": "catalog",
+                    }
+                facet_bundle.distance_eta_result = current_output
+
+            elif current_tool_name == "get_shop_detail":
+                if selected_shop is not None:
+                    detail_shop = self.business_client.get_shop_detail(selected_shop.id)
+                    current_output = {
+                        "shop_id": detail_shop.id,
+                        "shop": detail_shop.model_dump(mode="json"),
+                        "open_status": self.business_client.check_open_status(detail_shop),
+                        "distance_eta": self.business_client.get_distance_eta(
+                            detail_shop,
+                            lat=slots.location.lat,
+                            lng=slots.location.lng,
+                        ),
+                        "source": _clean_source(getattr(detail_shop, "source", None)) or "catalog",
+                    }
+                else:
+                    current_output = {
+                        "status": "not_found",
+                        "shop_id": None,
+                        "shop": None,
+                        "source": "catalog",
+                    }
+
             else:
-                extra_output = {"tool_name": extra_tool_name, "status": "skipped"}
+                current_output = {
+                    "candidate_count": len(structured_candidates),
+                    "candidate_ids": [shop.id for shop in structured_candidates],
+                    "shops": [shop.model_dump(mode="json") for shop in structured_candidates[:5]],
+                }
+
             yield _event(
                 EventType.TOOL_RESULT,
                 trace_id=command.trace_id,
@@ -1228,27 +1397,46 @@ class LocalLifeSubgraph:
                 turn_id=command.turn_id,
                 workflow_version=self.settings.workflow_version,
                 payload=ToolResultPayload(
-                    tool_name=extra_tool_name,
-                    tool_call_id=extra_call_id,
+                    tool_name=current_tool_name,
+                    tool_call_id=current_call_id,
                     status="success",
                     degraded=False,
                     retryable=False,
-                    output=extra_output,
+                    output=current_output,
                     current_stage=state.current_stage,
                     stage_status="completed",
                     route_decision=state.route_decision,
                     route_reason=state.route_reason,
                 ).model_dump(mode="json"),
             )
+
             state.tool_results.append(
                 {
-                    "tool_name": extra_tool_name,
-                    "tool_call_id": extra_call_id,
-                    "input_summary": dict(extra_input),
-                    "output": dict(extra_output),
+                    "tool_name": current_tool_name,
+                    "tool_call_id": current_call_id,
+                    "input_summary": dict(current_input),
+                    "output": dict(current_output),
                 }
             )
-            extra_tool_outputs.append((extra_tool_name, extra_output))
+
+            # Store first tool results backward-compatibly in tool_output
+            if len(state.tool_results) == 1:
+                tool_name = current_tool_name
+                search_call_id = current_call_id
+                tool_output = current_output
+            else:
+                extra_tool_outputs.append((current_tool_name, current_output))
+
+            _mark_stage(
+                state,
+                "tool",
+                "completed",
+                detail={"tool_name": current_tool_name, "candidate_count": len(structured_candidates)},
+            )
+
+        if coupon_result_obj:
+            state.metrics["coupon_result"] = coupon_result_obj.model_dump(mode="json")
+        state.metrics["facet_result_bundle"] = facet_bundle.model_dump(mode="json")
 
         state.metrics["local_life_tool_results"] = list(state.tool_results)
         safety_result = self.safety_guard.evaluate(
@@ -1307,11 +1495,14 @@ class LocalLifeSubgraph:
             "running",
             detail={"selected_shop_id": top_shop.shop_id if top_shop else None},
         )
-        tool_summary_text = _summarize_tool_output(
-            tool_name,
-            tool_output,
-            shop_name=selected_shop.name if selected_shop is not None else tool_input_summary.get("shop_name"),
-        )
+        # Day3 Hardening: Avoid calling _summarize_tool_output if no tool was executed (tool_name is None)
+        tool_summary_text = ""
+        if tool_name:
+            tool_summary_text = _summarize_tool_output(
+                tool_name,
+                tool_output,
+                shop_name=selected_shop.name if selected_shop is not None else tool_input_summary.get("shop_name"),
+            )
         # 拼接所有额外工具的摘要，确保多 facet 查询的每个维度都体现在答案中
         if extra_tool_outputs:
             extra_summaries = [
@@ -1349,6 +1540,7 @@ class LocalLifeSubgraph:
             route_reason=state.route_reason,
             safety_result=state.safety_result,
             approval_required=safety_result.approval_required,
+            answer_contract=answer_contract,
         )
         if tool_summary_text and not response_hint.get("answer_text"):
             response_hint = {
@@ -1367,6 +1559,7 @@ class LocalLifeSubgraph:
             evidence_pack=evidence_pack,
             ranked_candidates=ranked_candidates,
             safety_result=state.safety_result,
+            coupon_result=coupon_result_obj,
         )
         state.metrics.update(
             {
@@ -1387,17 +1580,19 @@ class LocalLifeSubgraph:
         bundle = build_response_bundle(
             raw_query=command.message,
             slots=slots,
+            answer_contract=answer_contract,
             ranked_candidates=ranked_candidates,
             evidence_claims=evidence_claims,
             answer_plan=response_hint,
             verification_result=verification_result,
             evidence_pack=evidence_pack,
             page=command.page,
-            current_topic=selected_shop.name if selected_shop else (top_shop.name if top_shop and not forbid_fallback else slots.category or slots.scene),
-            current_shop=selected_shop.name if selected_shop else state.metrics.get("local_life_execution_contract", {}).get("resolved_shop_name") or (top_shop.name if top_shop and not forbid_fallback else None) or (None if forbid_fallback else (persistent.current_shop or persistent.selected_shop_name or client_context.get("shopName") or client_context.get("shop_name") or client_context.get("selected_shop_name") or client_context.get("current_shop"))),
-            selected_shop_id=selected_shop.id if selected_shop else (top_shop.shop_id if top_shop and not forbid_fallback else None) or (None if forbid_fallback else (persistent.selected_shop_id or client_context.get("shopId") or client_context.get("shop_id") or client_context.get("selected_shop_id"))),
+            current_topic=target_shop.shop_name if target_shop and target_shop.shop_name else (selected_shop.name if selected_shop else (top_shop.name if top_shop and not forbid_fallback else slots.category or slots.scene)),
+            current_shop=target_shop.shop_name if target_shop and target_shop.shop_name else (selected_shop.name if selected_shop else state.metrics.get("local_life_execution_contract", {}).get("resolved_shop_name") or (top_shop.name if top_shop and not forbid_fallback else None) or (None if forbid_fallback else (persistent.current_shop or persistent.selected_shop_name or client_context.get("shopName") or client_context.get("shop_name") or client_context.get("selected_shop_name") or client_context.get("current_shop")))),
+            selected_shop_id=target_shop.shop_id if target_shop and target_shop.shop_id is not None else (selected_shop.id if selected_shop else (top_shop.shop_id if top_shop and not forbid_fallback else None) or (None if forbid_fallback else (persistent.selected_shop_id or client_context.get("shopId") or client_context.get("shop_id") or client_context.get("selected_shop_id")))),
             source="local-life-agent",
-            fallback=source_summary["source_mode"] != "java_business" or bool(source_summary["degraded_reason"]),
+            fallback=source_summary["source_mode"] not in {"java_business", "mixed_java_catalog"},
+            facet_result_bundle=facet_bundle,
             mode=(safety_result.transaction_draft.action if safety_result.transaction_draft else _mode_from_intent(intent)),
             client_context=client_context,
             approval_required=safety_result.approval_required,
@@ -1606,6 +1801,7 @@ class LocalLifeSubgraph:
         route_reason: str | None,
         safety_result: Mapping[str, Any],
         approval_required: bool,
+        answer_contract: Any | None = None,
     ) -> Mapping[str, Any]:
         assistant = getattr(self, "model_assistant", None)
         if assistant is None:
@@ -1631,6 +1827,7 @@ class LocalLifeSubgraph:
                 "route_reason": route_reason,
                 "safety_result": safety_result,
                 "approval_required": approval_required,
+                "answer_contract": answer_contract.model_dump(mode="json") if hasattr(answer_contract, "model_dump") else answer_contract,
             }
             if hasattr(assistant, "compose_answer_plan"):
                 return assistant.compose_answer_plan(**payload)
@@ -1736,8 +1933,18 @@ class LocalLifeSubgraph:
         current_shop = bundle_data.get("current_shop") or context_data.get("current_shop") or context_data.get("selected_shop_name") or persistent.current_shop or persistent.selected_shop_name
         current_shop_id = bundle_data.get("selected_shop_id") or context_data.get("selected_shop_id") or context_data.get("shop_id") or persistent.selected_shop_id
 
+        # Update from target_shop resolved metrics (P0-Fix)
+        t_shop = (state.metrics or {}).get("target_shop")
+        if isinstance(t_shop, dict):
+            t_shop_name = t_shop.get("shop_name")
+            t_shop_id = t_shop.get("shop_id")
+            if t_shop_name:
+                current_shop = t_shop_name
+            if t_shop_id:
+                current_shop_id = t_shop_id
+
         if intent in ("local_life_recommend", "local_life_search"):
-            if not ranked_candidates and not execution_contract.get("resolved_shop_id") and not context_data.get("current_shop") and not context_data.get("selected_shop_name"):
+            if not ranked_candidates and not execution_contract.get("resolved_shop_id") and not context_data.get("current_shop") and not context_data.get("selected_shop_name") and not (isinstance(t_shop, dict) and t_shop.get("shop_name")):
                 current_shop = None
                 current_shop_id = None
 
@@ -1749,6 +1956,7 @@ class LocalLifeSubgraph:
         # Populate pending_clarification and clarification_result if clarification is needed (P0-Fix-4)
         pending_clarification = None
         clarification_result = dict(persistent.clarification_result or {})
+        pending_user_need = dict(persistent.pending_user_need or {})
         if state.clarification and state.clarification.need_clarification:
             from learning_agent_service.domain.contracts import ClarificationCard, ClarificationOption
             options_payload = []
@@ -1770,11 +1978,12 @@ class LocalLifeSubgraph:
             )
             clarification_result = {
                 "original_query": command.message,
-                "original_intent": "local_life_recommend",
+                "original_intent": str(state.intent.value if hasattr(state.intent, "value") else state.intent),
                 "original_route": state.route_decision or "clarify",
                 "question": state.clarification.question,
                 "ambiguity_type": state.clarification.ambiguity_type or "location",
             }
+            pending_user_need = state.user_need.model_dump(mode="json")
 
         # If we are completing a pending clarification, preserve the original query as the topic (P0-Fix)
         original_query = (persistent.clarification_result or {}).get("original_query")
@@ -1802,6 +2011,7 @@ class LocalLifeSubgraph:
                 },
                 "pending_clarification": pending_clarification,
                 "clarification_result": clarification_result,
+                "pending_user_need": pending_user_need,
                 "page": command.page or state.page,
                 "current_city": slots.city or state.client_context.get("city") or persistent.current_city,
                 "current_location": {

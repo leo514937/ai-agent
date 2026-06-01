@@ -60,33 +60,32 @@ class UserNeedParser:
             and not slots.shop_ids
         )
 
-        if has_pronoun or is_implicit_ref:
-            if has_explicit_entity:
-                # ★ 显式实体优先：query 含明确店名（如 "INLOVE KTV 这家有券吗"），
-                # 绑定当前显式实体，不沿用 session 历史 shop_id
+        if has_explicit_entity:
+            # ★ 显式实体优先：query 含明确店名（如 "INLOVE KTV 这家有券吗"），
+            # 绑定当前显式实体，不沿用 session 历史 shop_id
+            context_refs.append(
+                ContextRef(
+                    type="shop",
+                    id=str(slots.shop_ids[0]) if slots.shop_ids else None,
+                    name=slots.shop_query,
+                    source="explicit_entity",
+                    confidence=0.98,
+                )
+            )
+        elif slots.shop_ids:
+            # slots 直接带有 shop_ids（由 slot_extractor 解析出来的精确 ID）
+            for shop_id in slots.shop_ids:
                 context_refs.append(
                     ContextRef(
                         type="shop",
-                        id=str(slots.shop_ids[0]) if slots.shop_ids else None,
-                        name=slots.shop_query,
-                        source="explicit_entity",
-                        confidence=0.98,
+                        id=str(shop_id),
+                        name=slots.shop_query or f"商户{shop_id}",
+                        source="slots",
+                        confidence=0.95,
                     )
                 )
-            elif slots.shop_ids:
-                # slots 直接带有 shop_ids（由 slot_extractor 解析出来的精确 ID）
-                for shop_id in slots.shop_ids:
-                    context_refs.append(
-                        ContextRef(
-                            type="shop",
-                            id=str(shop_id),
-                            name=slots.shop_query or f"商户{shop_id}",
-                            source="slots",
-                            confidence=0.95,
-                        )
-                    )
-            else:
-                # 纯代词：从 session 历史解析
+        elif has_pronoun or is_implicit_ref:
+            # 纯代词：从 session 历史解析
                 shop_id = session_ctx.get("selected_shop_id") or session_ctx.get("current_shop_id")
                 shop_name = session_ctx.get("selected_shop_name") or session_ctx.get("current_shop")
 
@@ -240,7 +239,8 @@ class UserNeedParser:
             )
 
         # Shop Detail Facet
-        has_detail_query = any(k in normalized_query for k in DETAIL_KEYWORDS) or slots.shop_query is not None or len(slots.shop_ids) > 0
+        intent_str = str(intent.value if hasattr(intent, "value") else intent)
+        has_detail_query = any(k in normalized_query for k in DETAIL_KEYWORDS) or intent_str == "detail"
         if has_detail_query:
             required_facets.append(
                 RequiredFacet(
@@ -278,6 +278,13 @@ class UserNeedParser:
         if slots.avoid:
             constraints["avoid"] = list(slots.avoid)
 
+        # Parse recommendation count
+        recommendation_count = 3
+        if "推荐一家" in query or "推荐一个" in query or "推荐1家" in query:
+            recommendation_count = 1
+        elif "多推荐几家" in query or "多推荐几个" in query or "推荐5家" in query or "多推荐" in query:
+            recommendation_count = 5
+
         return UserNeed(
             intent=str(intent.value if hasattr(intent, "value") else intent),
             raw_query=query,
@@ -288,4 +295,6 @@ class UserNeedParser:
             optional_facets=optional_facets,
             missing_slots=missing_slots,
             context_refs=context_refs,
+            recommendation_count=recommendation_count,
         )
+

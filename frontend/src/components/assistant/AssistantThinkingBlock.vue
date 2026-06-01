@@ -8,7 +8,6 @@
       <span class="thinking-label" :class="{ 'is-thinking': isThinkingActiveRaw }">
         {{ isThinkingActiveRaw ? '思考中 ' + displayTime : '已思考 ' + displayTime }}
       </span>
-      <span style="color: red; font-weight: bold; margin-left: 10px;">[DEBUG: BLOCK IS MOUNTED!]</span>
       <svg
         class="toggle-arrow"
         :class="{ 'is-expanded': showThinkingDetail }"

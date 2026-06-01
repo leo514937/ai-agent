@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import logging
 from typing import Iterable, Optional
 
 from learning_agent_service.domain import ChatTurnCommand, PersistentSessionContext, SseEnvelope
 from learning_agent_service.local_life.subgraph import LocalLifeSubgraph
 from ..workflow.adapters import WorkflowNodeAdapter
-from ..workflow.runner import SequentialWorkflowRunner
+from ..workflow.builder import create_workflow_runner
 from ..workflow.services import (
     PlanExecuteSubgraphServices,
     RagSubgraphServices,
@@ -13,6 +14,8 @@ from ..workflow.services import (
     UnderstandTurnServices,
     WorkflowServices,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class ChatWorkflowService:
@@ -27,9 +30,11 @@ class ChatWorkflowService:
             session_context_store=session_context_store,
         )
         self._workflow_services = self._build_workflow_services()
-        self._workflow_runner = SequentialWorkflowRunner(
+        self._workflow_runner = create_workflow_runner(
             services=self._workflow_services,
             workflow_version=container.settings.workflow_version,
+            prefer_langgraph=bool(getattr(container.settings, "local_life_use_langgraph", True)),
+            checkpointer=getattr(container, "workflow_checkpointer", None),
         )
 
     def run(
@@ -44,9 +49,32 @@ class ChatWorkflowService:
             persistent = session_context_store.load(command.session_id, command.user_id)
         else:
             persistent = PersistentSessionContext()
-        if self._should_use_local_life_subgraph(command):
-            return self._workflow.run_stream(command=command, persistent_context=persistent)
-        return self._workflow_runner.run_stream(command=command, persistent_context=persistent)
+
+        use_langgraph = bool(getattr(self._container.settings, "local_life_use_langgraph", True))
+        fallback_legacy = bool(getattr(self._container.settings, "local_life_langgraph_fallback_legacy", True))
+
+        def _stream():
+            if not use_langgraph:
+                yield from self._workflow.run_stream(command=command, persistent_context=persistent)
+                return
+
+            yielded_any = False
+            try:
+                for event in self._workflow_runner.run_stream(command=command, persistent_context=persistent):
+                    yielded_any = True
+                    yield event
+            except Exception as exc:
+                if fallback_legacy and not yielded_any:
+                    _LOGGER.exception("local_life_langgraph_failed_fallback_to_legacy: %s", exc)
+                    fallback_extra = dict(getattr(persistent, "extra", {}) or {})
+                    fallback_extra["graph_fallback"] = "legacy"
+                    fallback_extra["graph_fallback_reason"] = str(exc)
+                    fallback_persistent = persistent.model_copy(update={"extra": fallback_extra})
+                    yield from self._workflow.run_stream(command=command, persistent_context=fallback_persistent)
+                    return
+                raise
+
+        return _stream()
 
     def _build_workflow_services(self) -> WorkflowServices:
         adapter = WorkflowNodeAdapter(self._container)
@@ -86,7 +114,10 @@ class ChatWorkflowService:
         )
 
     @staticmethod
-    def _should_use_local_life_subgraph(command: ChatTurnCommand) -> bool:
+    def _should_use_local_life_subgraph(
+        command: ChatTurnCommand,
+        persistent: Optional[PersistentSessionContext] = None,
+    ) -> bool:
         message = str(getattr(command, "message", "") or "")
         compact = message.replace(" ", "")
         if any(k in compact for k in ("记得", "聊过", "刚才", "之前", "回忆", "历史", "上下文", "我们说过")):
@@ -97,7 +128,18 @@ class ChatWorkflowService:
             return True
         if any(key in client_context for key in ("shopId", "shopName", "typeId", "typeName", "city", "location")):
             return True
+        # 如果 session 里有待澄清（上轮 LocalLifeSubgraph 提问了题目），当前轮必须继续进入本地生活子图
+        if persistent is not None and getattr(persistent, "pending_clarification", None) is not None:
+            return True
         return any(
             token in compact
-            for token in ("吃饭", "火锅", "餐厅", "店", "优惠券", "团购", "订座", "预约", "订单", "对比", "哪家", "怎么样", "附近")
+            for token in (
+                "吃饭", "火锅", "餐厅", "店", "优惠券", "券", "团购", "订座", "预约", "订单",
+                "对比", "哪家", "怎么样", "附近", "它", "这家", "这店", "这间", "这商户",
+                # 城市名（用于多轮澄清回答）
+                "北京", "上海", "广州", "深圳", "杭州", "成都", "武汉", "西安", "南京",
+                "重庆", "苏州", "天津", "郑州", "长沙", "宁波",
+                # 位置相关补充词
+                "商圈", "市区", "朝阳", "海淀", "浦东", "余杭", "滨江",
+            )
         )

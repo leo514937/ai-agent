@@ -17,7 +17,7 @@
 
       <div class="hero-side">
         <StatCard label="分类" :value="types.length" hint="点击切换火锅、咖啡、甜品等分类" />
-        <StatCard label="结果" :value="shops.length" hint="后端优先，失败后自动回到本地演示" />
+        <StatCard label="结果" :value="shops.length" hint="直接读取后端数据库" />
       </div>
     </section>
 

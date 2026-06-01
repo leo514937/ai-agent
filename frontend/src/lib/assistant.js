@@ -276,7 +276,7 @@ export function normalizeAssistantEnvelope(event = {}) {
   const payload = normalizeObject(payloadSource);
 
   return {
-    type: String(firstDefined(envelope.event_type, envelope.eventType, event.type, '') || ''),
+    type: String(firstDefined(envelope.event_type, envelope.eventType, event.type, '') || '').trim().toLowerCase(),
     payload,
     traceId: pickMetaValue(
       envelope.traceId,

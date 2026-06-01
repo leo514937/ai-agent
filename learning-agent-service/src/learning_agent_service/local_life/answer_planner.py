@@ -365,6 +365,7 @@ def build_answer_planner_request(
     route_reason: str | None = None,
     clarification: Mapping[str, Any] | Any | None = None,
     approval_required: bool = False,
+    answer_contract: Any | None = None,
 ) -> dict[str, Any]:
     prompt = {
         "stage": "answer_planning",
@@ -383,6 +384,7 @@ def build_answer_planner_request(
         "route_reason": route_reason,
         "clarification": _as_mapping(clarification),
         "approval_required": approval_required,
+        "answer_contract": _as_mapping(answer_contract) if answer_contract is not None else {},
         "instructions": {
             "must_use_only": ["evidence_pack", "ranked_candidates", "slots", "safety_result"],
             "do_not_invent": [
@@ -393,6 +395,7 @@ def build_answer_planner_request(
                 "queue_time",
             ],
             "output_must_be_json": True,
+            "answer_contract_constraints": _as_mapping(answer_contract) if answer_contract is not None else {},
         },
     }
     return prompt
