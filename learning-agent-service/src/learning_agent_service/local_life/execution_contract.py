@@ -1,11 +1,14 @@
 from __future__ import annotations
-
-from typing import Any, Dict, List, Optional
-
-from pydantic import Field
-
+from typing import Any, Dict, List, Literal, Optional
+from pydantic import BaseModel, Field
 from .schemas import LocalLifeModel
 
+class FacetExecutionItem(BaseModel):
+    facet: str
+    source: Literal["tool", "rag", "tool_plus_rag", "context"]
+    tool_name: str | None = None
+    retrieval_mode: str | None = None
+    required: bool = True
 
 class ExecutionContract(LocalLifeModel):
     raw_query: str
@@ -29,5 +32,10 @@ class ExecutionContract(LocalLifeModel):
     reason: str = ""
     source: str = "session"
     shop_context_source: Optional[str] = None
+    target_shop: Optional[Any] = None
     extra: Dict[str, Any] = Field(default_factory=dict)
+    
+    # Day3 Unification: Consolidating FacetExecutionPlan directly inside ExecutionContract 
+    items: List[FacetExecutionItem] = Field(default_factory=list)
+
 

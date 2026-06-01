@@ -130,20 +130,20 @@ def _extract_shop_query(text: str, session_context: Mapping[str, Any]) -> Option
         if any(pronoun in normalized for pronoun in pronoun_hits):
             return None
         for suffix in (
-            "怎么样",
-            "有券吗",
-            "有券",
-            "适合约会吗",
-            "适合吗",
-            "好不好",
-            "值不值得",
-            "值不值",
-            "营业吗",
+            "适合家庭聚餐吗",
+            "适合带爸妈吗",
             "现在营业吗",
             "现在有券吗",
+            "适合约会吗",
+            "值不值得",
+            "怎么样",
+            "有券吗",
+            "营业吗",
             "现在开吗",
-            "适合带爸妈吗",
-            "适合家庭聚餐吗",
+            "有券",
+            "适合吗",
+            "好不好",
+            "值不值",
         ):
             if normalized.endswith(suffix):
                 prefix = normalized[: -len(suffix)].strip(" ，,;；")

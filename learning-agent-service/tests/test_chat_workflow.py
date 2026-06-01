@@ -60,7 +60,7 @@ class ChatWorkflowServiceTestCase(unittest.TestCase):
         self.assertFalse(service._workflow.called)
         self.assertEqual(service._workflow_runner.calls[0][1].current_topic, "火锅")
 
-    def test_run_uses_local_life_subgraph_for_local_life_turn(self) -> None:
+    def test_run_uses_workflow_runner_for_local_life_turn(self) -> None:
         store = SimpleNamespace(load=MagicMock(return_value=PersistentSessionContext(current_topic="火锅")))
         service = ChatWorkflowService.__new__(ChatWorkflowService)
         service._container = SimpleNamespace(session_context_store=store)
@@ -78,10 +78,9 @@ class ChatWorkflowServiceTestCase(unittest.TestCase):
 
         events = list(service.run(command))
 
-        self.assertEqual(events, ["subgraph-event"])
-        self.assertEqual(len(service._workflow_runner.calls), 0)
-        self.assertTrue(service._workflow.called)
-        self.assertEqual(service._workflow.called, True)
+        self.assertEqual(events, ["runner-event"])
+        self.assertEqual(len(service._workflow_runner.calls), 1)
+        self.assertFalse(service._workflow.called)
 
 
 class _RecordingChatUseCase:

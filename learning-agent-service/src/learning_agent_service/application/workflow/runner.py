@@ -19,8 +19,11 @@ from .services import WorkflowServices
 from .subgraphs import (
     run_plan_execute_subgraph,
     run_rag_subgraph,
+    run_recommendation_subgraph,
     run_tool_subgraph,
     run_understand_turn,
+    route_decider,
+    route_gate,
     route_after_rag,
     route_after_understand,
 )
@@ -176,6 +179,75 @@ class SequentialWorkflowRunner:
                 )
                 if self._is_terminal(state):
                     return self._finalize_terminal(state)
+        elif next_stage == "route_gate":
+            state = self._invoke_stage("route_gate", route_gate, state)
+            if self._is_terminal(state):
+                return self._finalize_terminal(state)
+            next_stage = route_decider(state)
+            if next_stage == "clarify":
+                state = self._invoke_stage("compose_answer", self.services.compose_answer, state)
+                state = self._materialize_pending_clarification_from_answer(state)
+                if self._is_terminal(state):
+                    persistent = state["persistent"]
+                    if getattr(persistent, "pending_clarification", None) is not None:
+                        state = self._invoke_stage("persist_session", self.services.persist_session, state)
+                        if self._is_terminal(state):
+                            return self._finalize_terminal(state)
+                    return self._finalize_terminal(state)
+                state = self._invoke_stage("persist_session", self.services.persist_session, state)
+                if self._is_terminal(state):
+                    return self._finalize_terminal(state)
+                return self._finalize_terminal(state, default_terminal=TerminalEvent.FINAL)
+            if next_stage == "tool":
+                state = self._invoke_stage(
+                    "tool_subgraph",
+                    lambda current: run_tool_subgraph(current, self.services.tool_subgraph),
+                    state,
+                )
+                if self._is_terminal(state):
+                    return self._finalize_terminal(state)
+            elif next_stage == "rag":
+                state = self._invoke_stage(
+                    "rag_subgraph",
+                    lambda current: run_rag_subgraph(current, self.services.rag_subgraph),
+                    state,
+                )
+                if self._is_terminal(state):
+                    return self._finalize_terminal(state)
+                next_stage = route_after_rag(state)
+                if next_stage == "tool_subgraph":
+                    state = self._invoke_stage(
+                        "tool_subgraph",
+                        lambda current: run_tool_subgraph(current, self.services.tool_subgraph),
+                        state,
+                    )
+                    if self._is_terminal(state):
+                        return self._finalize_terminal(state)
+            elif next_stage == "rag_plus_tool":
+                state = self._invoke_stage(
+                    "rag_subgraph",
+                    lambda current: run_rag_subgraph(current, self.services.rag_subgraph),
+                    state,
+                )
+                if self._is_terminal(state):
+                    return self._finalize_terminal(state)
+                state = self._invoke_stage(
+                    "tool_subgraph",
+                    lambda current: run_tool_subgraph(current, self.services.tool_subgraph),
+                    state,
+                )
+                if self._is_terminal(state):
+                    return self._finalize_terminal(state)
+            elif next_stage == "recommendation":
+                state = self._invoke_stage(
+                    "recommendation_subgraph",
+                    lambda current: run_recommendation_subgraph(current, self.services.rag_subgraph),
+                    state,
+                )
+                if self._is_terminal(state):
+                    return self._finalize_terminal(state)
+            elif next_stage == "direct":
+                pass
         elif next_stage == "tool_subgraph":
             state = self._invoke_stage(
                 "tool_subgraph",
@@ -427,6 +499,144 @@ class SequentialWorkflowRunner:
             return
 
         # 3) 分支阶段
+        if next_stage == "route_gate":
+            state = yield from self._invoke_stage_with_heartbeat_streaming(
+                "route_gate",
+                route_gate,
+                state,
+                heartbeat_stage="route_gate",
+            )
+            yield from drain_emitted_events()
+            if self._is_terminal(state):
+                state = self._finalize_terminal(state)
+                yield from drain_emitted_events()
+                return
+            next_stage = route_decider(state)
+            if next_stage == "clarify":
+                self._emit_stage_event(state, "answer_stream_started", "compose_answer", "started", elapsed_ms=0.0)
+                yield from drain_emitted_events()
+                gen = self._invoke_stage_streaming("compose_answer", self.services.compose_answer, state)
+                while True:
+                    try:
+                        item = next(gen)
+                        if isinstance(item, SseEnvelope) and item.event_type == "answer_delta":
+                            item = item.model_copy(update={"event_type": "delta"})
+                        yield item
+                    except StopIteration as e:
+                        state = e.value
+                        break
+                yield from drain_emitted_events()
+                state = self._materialize_pending_clarification_from_answer(state)
+                if self._is_terminal(state):
+                    persistent = state["persistent"]
+                    if getattr(persistent, "pending_clarification", None) is not None:
+                        state = self._mark_streaming_fast_persist(state)
+                        state = yield from self._invoke_stage_with_heartbeat_streaming(
+                            "persist_session",
+                            self.services.persist_session,
+                            state,
+                            heartbeat_stage="persist_session",
+                        )
+                        yield from drain_emitted_events()
+                        if self._is_terminal(state):
+                            state = self._finalize_terminal(state)
+                            yield from drain_emitted_events()
+                            return
+                    state = self._finalize_terminal(state)
+                    yield from drain_emitted_events()
+                    return
+                state = self._mark_streaming_fast_persist(state)
+                state = yield from self._invoke_stage_with_heartbeat_streaming(
+                    "persist_session",
+                    self.services.persist_session,
+                    state,
+                    heartbeat_stage="persist_session",
+                )
+                yield from drain_emitted_events()
+                if self._is_terminal(state):
+                    state = self._finalize_terminal(state)
+                    yield from drain_emitted_events()
+                    return
+                state = self._finalize_terminal(state, default_terminal=TerminalEvent.FINAL)
+                yield from drain_emitted_events()
+                return
+            if next_stage == "tool":
+                state = yield from self._invoke_stage_with_heartbeat_streaming(
+                    "tool_subgraph",
+                    lambda current: run_tool_subgraph(current, self.services.tool_subgraph),
+                    state,
+                    heartbeat_stage="tool",
+                )
+                yield from drain_emitted_events()
+                if self._is_terminal(state):
+                    state = self._finalize_terminal(state)
+                    yield from drain_emitted_events()
+                    return
+            elif next_stage == "rag":
+                self._emit_stage_event(state, "retrieval_started", "retrieval", "started", elapsed_ms=0.0)
+                state = yield from self._invoke_stage_with_heartbeat_streaming(
+                    "rag_subgraph",
+                    lambda current: run_rag_subgraph(current, self.services.rag_subgraph),
+                    state,
+                    heartbeat_stage="retrieval",
+                )
+                yield from drain_emitted_events()
+                if self._is_terminal(state):
+                    state = self._finalize_terminal(state)
+                    yield from drain_emitted_events()
+                    return
+                next_stage = route_after_rag(state)
+                if next_stage == "tool_subgraph":
+                    state = yield from self._invoke_stage_with_heartbeat_streaming(
+                        "tool_subgraph",
+                        lambda current: run_tool_subgraph(current, self.services.tool_subgraph),
+                        state,
+                        heartbeat_stage="tool",
+                    )
+                    yield from drain_emitted_events()
+                    if self._is_terminal(state):
+                        state = self._finalize_terminal(state)
+                        yield from drain_emitted_events()
+                        return
+            elif next_stage == "rag_plus_tool":
+                self._emit_stage_event(state, "retrieval_started", "retrieval", "started", elapsed_ms=0.0)
+                state = yield from self._invoke_stage_with_heartbeat_streaming(
+                    "rag_subgraph",
+                    lambda current: run_rag_subgraph(current, self.services.rag_subgraph),
+                    state,
+                    heartbeat_stage="retrieval",
+                )
+                yield from drain_emitted_events()
+                if self._is_terminal(state):
+                    state = self._finalize_terminal(state)
+                    yield from drain_emitted_events()
+                    return
+                state = yield from self._invoke_stage_with_heartbeat_streaming(
+                    "tool_subgraph",
+                    lambda current: run_tool_subgraph(current, self.services.tool_subgraph),
+                    state,
+                    heartbeat_stage="tool",
+                )
+                yield from drain_emitted_events()
+                if self._is_terminal(state):
+                    state = self._finalize_terminal(state)
+                    yield from drain_emitted_events()
+                    return
+            elif next_stage == "recommendation":
+                self._emit_stage_event(state, "retrieval_started", "retrieval", "started", elapsed_ms=0.0)
+                state = yield from self._invoke_stage_with_heartbeat_streaming(
+                    "recommendation_subgraph",
+                    lambda current: run_recommendation_subgraph(current, self.services.rag_subgraph),
+                    state,
+                    heartbeat_stage="retrieval",
+                )
+                yield from drain_emitted_events()
+                if self._is_terminal(state):
+                    state = self._finalize_terminal(state)
+                    yield from drain_emitted_events()
+                    return
+            elif next_stage == "direct":
+                pass
         if next_stage == "plan_execute_subgraph":
             state = yield from self._invoke_stage_with_heartbeat_streaming(
                 "plan_execute_subgraph",
@@ -592,6 +802,7 @@ class SequentialWorkflowRunner:
             state,
             runner_kind=self.runner_kind,
             runner_backend="sequential",
+            graph_runtime="legacy",
             runner_class=self.__class__.__name__,
             compare_ready=True,
         )

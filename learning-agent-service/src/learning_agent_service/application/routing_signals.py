@@ -196,7 +196,7 @@ def _default_specs() -> tuple[DomainSignalSpec, ...]:
         DomainSignalSpec(
             name="local_life.merchant_detail",
             domain="local_life",
-            keywords=("怎么样", "评价", "评分", "口碑", "人均", "环境", "详情", "介绍", "值不值", "好不好"),
+            keywords=("怎么样", "评价", "评分", "口碑", "人均", "环境", "详情", "介绍", "值不值", "好不好", "特色"),
             default_intent="merchant_detail",
             default_required_action="rag_retrieval",
             fallback_required_action="clarify",
@@ -393,6 +393,17 @@ def _has_shop_context(persistent: PersistentSessionContext, context: Mapping[str
         or context.get("shopName")
         or _extract_shop_name(normalized, _compact_text(normalized))
     )
+
+
+def _infer_follow_up_intent_from_topic(topic: str) -> str | None:
+    compact_topic = _compact_text(topic)
+    if any(token in compact_topic for token in ("券", "优惠", "团购", "套餐", "可用")):
+        return "package_or_coupon"
+    if any(token in compact_topic for token in ("营业", "开门", "开业", "歇业", "关门")):
+        return "merchant_status"
+    if any(token in compact_topic for token in ("距离", "有多远", "导航", "路线", "怎么走", "怎么去")):
+        return "distance_eta"
+    return None
 
 
 def _has_voucher_context(persistent: PersistentSessionContext, context: Mapping[str, Any], normalized: str) -> bool:
@@ -635,6 +646,71 @@ def _fallback_semantic_route(
     lowered = normalized.lower()
     context_has_location = _has_location_context(persistent, client_context or {}, normalized)
     context_has_shop = _has_shop_context(persistent, client_context or {}, normalized)
+    previous_topic = str(
+        persistent.current_topic
+        or persistent.clarification_result.get("original_query")
+        or persistent.clarification_result.get("query")
+        or ""
+    ).strip()
+    shop_hint = bool(
+        any(token in compact for token in ("店", "门店", "分店", "商场"))
+        or (
+            len(compact) <= 6
+            and not any(token in compact for token in ("券", "优惠", "营业", "距离", "推荐", "评价", "怎么样", "好不好", "特色"))
+        )
+    )
+    follow_up_intent = _infer_follow_up_intent_from_topic(previous_topic) if previous_topic and shop_hint else None
+    if follow_up_intent == "package_or_coupon":
+        return SemanticRoutingDraft(
+            domain="local_life",
+            intent="package_or_coupon",
+            confidence=0.82,
+            required_action="tool_call",
+            should_retrieve=False,
+            should_call_tool=True,
+            should_rewrite_query=False,
+            missing_slots=[],
+            preferred_chunk_roles=["package_description", "merchant_review_summary", "merchant_pitfall_summary"],
+            tool_candidates=["get_coupon_list", "getVoucherDetail", "resolveVoucher", "searchVoucher"],
+            route_reason="pending_coupon_restore",
+            clarification_question=None,
+            candidate_names=candidate_names,
+            route_candidate="pending_coupon_restore",
+        )
+    if follow_up_intent == "merchant_status":
+        return SemanticRoutingDraft(
+            domain="local_life",
+            intent="merchant_status",
+            confidence=0.8,
+            required_action="tool_call",
+            should_retrieve=False,
+            should_call_tool=True,
+            should_rewrite_query=False,
+            missing_slots=[],
+            preferred_chunk_roles=["merchant_profile", "merchant_status", "merchant_review_summary"],
+            tool_candidates=["getShopDetail", "getBusinessStatus", "resolveShop"],
+            route_reason="pending_status_restore",
+            clarification_question=None,
+            candidate_names=candidate_names,
+            route_candidate="pending_status_restore",
+        )
+    if follow_up_intent == "distance_eta":
+        return SemanticRoutingDraft(
+            domain="local_life",
+            intent="distance_eta",
+            confidence=0.77,
+            required_action="rag_plus_tool",
+            should_retrieve=True,
+            should_call_tool=True,
+            should_rewrite_query=True,
+            missing_slots=[],
+            preferred_chunk_roles=["merchant_parent_summary", "merchant_scene_fit", "merchant_review_summary", "merchant_profile"],
+            tool_candidates=["get_distance_eta", "search_restaurants"],
+            route_reason="pending_distance_restore",
+            clarification_question=None,
+            candidate_names=candidate_names,
+            route_candidate="pending_distance_restore",
+        )
     if any(token in compact for token in ("以后", "长期", "记住", "偏好", "不吃辣", "少吃辣", "不吃香菜", "不吃牛肉")):
         return SemanticRoutingDraft(
             domain="memory",

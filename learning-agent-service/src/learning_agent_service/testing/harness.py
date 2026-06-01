@@ -182,6 +182,7 @@ class TraceHarnessRecorder:
             turn = _as_mapping(getattr(state, "turn", None))
             runtime = _as_mapping(getattr(state, "runtime", None))
             persistent = _as_mapping(getattr(state, "persistent", None))
+        runtime_metrics = _as_mapping(runtime.get("metrics"))
 
         recorded = {
             "case_id": case_id,
@@ -201,6 +202,8 @@ class TraceHarnessRecorder:
             "stage_timeline": list(turn.get("stage_timeline", []) or []),
             "selected_shop_id": persistent.get("selected_shop_id"),
             "selected_shop_name": persistent.get("selected_shop_name"),
+            "graph_runtime": phase5_trace.get("graph_runtime") or phase5_trace.get("runner_backend") or phase5_trace.get("runner_kind"),
+            "graph_fallback": runtime_metrics.get("graph_fallback") or persistent.get("extra", {}).get("graph_fallback") or "none",
             "phase3_trace": phase3_trace,
             "phase5_trace": phase5_trace,
             "phase4_trace": phase4_trace,
@@ -321,6 +324,8 @@ class EvaluationHarness:
         response_origin_counts = Counter()
         missing_trace_field_counts = Counter()
         runner_kind_counts = Counter()
+        graph_runtime_counts = Counter()
+        graph_fallback_counts = Counter()
         verifier_status_counts = Counter()
         verifier_issue_counts = Counter()
         verifier_response_mode_counts = Counter()
@@ -342,6 +347,15 @@ class EvaluationHarness:
             response_origin_counts[response_origin] += 1
             runner_kind = str(phase5_trace.get("runner_kind") or "unknown").strip() or "unknown"
             runner_kind_counts[runner_kind] += 1
+            graph_runtime = str(
+                phase5_trace.get("graph_runtime")
+                or phase5_trace.get("runner_backend")
+                or phase5_trace.get("runner_kind")
+                or "unknown"
+            ).strip() or "unknown"
+            graph_runtime_counts[graph_runtime] += 1
+            graph_fallback = str(trace.get("graph_fallback") or phase5_trace.get("graph_fallback") or "none").strip() or "none"
+            graph_fallback_counts[graph_fallback] += 1
             for field in ("initial_routing_decision", "evidence_quality", "final_response_mode"):
                 if not phase0_trace.get(field):
                     missing_trace_field_counts[field] += 1
@@ -362,6 +376,8 @@ class EvaluationHarness:
                 "response_mode_distribution": dict(sorted(response_mode_counts.items())),
                 "response_origin_distribution": dict(sorted(response_origin_counts.items())),
                 "runner_kind_distribution": dict(sorted(runner_kind_counts.items())),
+                "graph_runtime_distribution": dict(sorted(graph_runtime_counts.items())),
+                "graph_fallback_distribution": dict(sorted(graph_fallback_counts.items())),
                 "missing_trace_fields": dict(sorted(missing_trace_field_counts.items())),
                 "verifier_status_distribution": dict(sorted(verifier_status_counts.items())),
                 "verifier_issue_distribution": dict(sorted(verifier_issue_counts.items())),

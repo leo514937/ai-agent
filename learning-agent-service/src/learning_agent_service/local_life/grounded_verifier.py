@@ -11,6 +11,7 @@ from .answer_planner import (
     SceneFitSummary,
     parse_answer_plan_payload,
 )
+from .coupon_result import CouponResult
 
 
 def _as_mapping(value: Any) -> dict[str, Any]:
@@ -82,6 +83,7 @@ class GroundedVerifier:
         evidence_pack: EvidencePack | Mapping[str, Any] | None,
         ranked_candidates: Sequence[Mapping[str, Any] | Any],
         safety_result: Mapping[str, Any] | Any,
+        coupon_result: CouponResult | Mapping[str, Any] | None = None,
     ) -> GroundedVerificationResult:
         plan = _plan_from_any(answer_plan)
         if plan is None:
@@ -170,6 +172,34 @@ class GroundedVerifier:
             confidence = "medium"
         else:
             confidence = plan.confidence
+
+        # GroundedVerifier 校验券数量: 防止最终文本与 tool 不一致
+        if coupon_result is not None:
+            realtime_count = 0
+            if hasattr(coupon_result, "realtime_available_count"):
+                realtime_count = coupon_result.realtime_available_count
+            elif isinstance(coupon_result, dict):
+                realtime_count = coupon_result.get("realtime_available_count", 0)
+
+            import re
+            answer_text = str(normalized_plan.get("answer_text") or "")
+            match = re.search(r"(\d+|[一二三四五六七八九十]|两)\s*张(?:券|优惠券)", answer_text)
+            if match:
+                num_str = match.group(1)
+                num_map = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+                try:
+                    num = int(num_str)
+                except ValueError:
+                    num = num_map.get(num_str, 0)
+                
+                if num != realtime_count:
+                    warnings.append("coupon_count_mismatch")
+                    corrected_text = re.sub(
+                        r"(\d+|[一二三四五六七八九十]|两)(\s*张(?:券|优惠券))", 
+                        f"{realtime_count}\\2", 
+                        answer_text
+                    )
+                    normalized_plan["answer_text"] = corrected_text
 
         absolute_tokens = ("一定", "肯定", "绝对", "百分百", "100%")
         answer_text_value = str(normalized_plan.get("answer_text") or "")

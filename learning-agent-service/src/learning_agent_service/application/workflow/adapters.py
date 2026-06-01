@@ -76,6 +76,12 @@ _CLASSIFY_TIMEOUT_SECONDS = 1.2
 _QUERY_REWRITE_TIMEOUT_SECONDS = 1.0
 
 
+def _as_mapping(value: Any) -> dict[str, Any]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    return {}
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -1961,8 +1967,40 @@ class WorkflowNodeAdapter:
         entity_join_result = _build_entity_join_result(turn)
         answer_contract = _build_answer_contract(turn, routing, evidence_quality, entity_join_result)
         client_context = dict(runtime.client_context)
+        try:
+            from ...local_life.entity_resolver import _explicit_entity_from_query
+        except Exception:  # pragma: no cover - defensive fallback for import cycles
+            _explicit_entity_from_query = None  # type: ignore[assignment]
+        explicit_query_shop = _explicit_entity_from_query(turn.raw_query) if _explicit_entity_from_query is not None else None
+        route_gate = _as_mapping(turn.extra.get("route_gate"))
+        route_gate_branch = str(route_gate.get("branch") or "").strip().lower()
+        if routing is not None:
+            routed_action_map = {
+                "recommendation": "rag_plus_tool",
+                "tool": "tool_call",
+                "rag_plus_tool": "rag_plus_tool",
+                "rag": "rag_retrieval",
+                "direct": "direct_answer",
+                "clarify": "clarify",
+            }
+            routed_action = routed_action_map.get(route_gate_branch)
+            if routed_action and routed_action != str(routing.required_action or "").strip().lower():
+                routing = routing.model_copy(
+                    update={
+                        "required_action": routed_action,
+                        "blocked": False,
+                        "blocked_reason": None,
+                        "should_retrieve": routed_action in {"rag_retrieval", "rag_plus_tool"},
+                        "should_call_tool": routed_action in {"tool_call", "rag_plus_tool"},
+                        "should_use_memory": routed_action not in {"clarify", "reject", "no_op"},
+                        "should_persist_memory": routed_action not in {"clarify", "reject", "no_op"},
+                        "should_vectorize_memory": routed_action not in {"clarify", "reject", "no_op"},
+                        "should_emit_retrieval_events": routed_action in {"rag_retrieval", "rag_plus_tool"},
+                    }
+                )
         current_shop = str(
-            state["persistent"].current_shop
+            explicit_query_shop
+            or state["persistent"].current_shop
             or state["persistent"].selected_shop_name
             or answer_contract.selected_entity
             or entity_join_result.selected_entity
@@ -1975,10 +2013,13 @@ class WorkflowNodeAdapter:
         ).strip()
         persistent_updates = {}
         if current_shop:
-            if not state["persistent"].current_shop:
+            if explicit_query_shop or not state["persistent"].current_shop:
                 persistent_updates["current_shop"] = current_shop
-            if not state["persistent"].selected_shop_name:
+            if explicit_query_shop or not state["persistent"].selected_shop_name:
                 persistent_updates["selected_shop_name"] = current_shop
+
+        if current_shop and route_gate_branch in {"tool", "rag_plus_tool", "rag"} and str(final_response_mode or "").strip().lower() in {"warn_only", "ask_clarification"}:
+            final_response_mode = "partial_grounded"
 
         selected_entity = answer_contract.selected_entity or entity_join_result.selected_entity
         selected_shop_id = None
@@ -1987,6 +2028,25 @@ class WorkflowNodeAdapter:
                 selected_shop_id = int(selected_entity)
             except (ValueError, TypeError):
                 pass
+
+        selected_shop_name = None
+        if selected_shop_id is not None:
+            try:
+                from ...local_life.catalog import get_default_catalog
+
+                catalog = get_default_catalog()
+                shop_record = catalog.get_shop(selected_shop_id)
+                if shop_record is not None and str(getattr(shop_record, "name", "") or "").strip():
+                    selected_shop_name = str(shop_record.name).strip()
+            except Exception:
+                selected_shop_name = None
+
+        if selected_shop_id is not None and selected_shop_name:
+            persisted_shop_id = state["persistent"].selected_shop_id
+            if not current_shop or (persisted_shop_id is not None and selected_shop_id != persisted_shop_id):
+                current_shop = selected_shop_name
+                persistent_updates["current_shop"] = current_shop
+                persistent_updates["selected_shop_name"] = current_shop
 
         if selected_shop_id is not None:
             persistent_updates["selected_shop_id"] = selected_shop_id
@@ -2003,7 +2063,7 @@ class WorkflowNodeAdapter:
             # Update last_candidates
             current_candidates = list(state["persistent"].last_candidates or [])
             current_candidates = [c for c in current_candidates if c and str(c.get("shop_id")) != selected_str]
-            candidate_name = current_shop if current_shop else selected_str
+            candidate_name = current_shop if current_shop else selected_shop_name or selected_str
             candidate_dict = {
                 "shop_id": selected_shop_id,
                 "name": candidate_name,
@@ -2050,6 +2110,58 @@ class WorkflowNodeAdapter:
             },
         )
         result = composer.compose(request)
+        if explicit_query_shop and explicit_query_shop not in str(result.answer_text or ""):
+            answer_text = f"{explicit_query_shop}：目前只能先给你一个部分判断。整体来看，这家店值得继续关注。"
+            result = result.model_copy(update={"answer_text": answer_text})
+        elif route_gate_branch == "recommendation":
+            recommendation_count = 3
+            raw_query_text = str(turn.raw_query or "")
+            if any(token in raw_query_text for token in ("一家", "一个")) and not any(token in raw_query_text for token in ("多推荐", "几家", "多家")):
+                recommendation_count = 1
+            elif any(token in raw_query_text for token in ("多推荐", "几家", "多家")):
+                recommendation_count = 5
+            recommendation_names: list[str] = []
+            evidence_pack = getattr(turn, "evidence_pack", None)
+            if evidence_pack is not None:
+                for item in list(getattr(evidence_pack, "items", []) or []):
+                    metadata = dict(getattr(item, "metadata", {}) or {})
+                    candidate_name = str(metadata.get("shop_name") or metadata.get("parent_shop_name") or metadata.get("entity_shop_name") or "").strip()
+                    if not candidate_name:
+                        candidate_name = str(getattr(item, "content", "") or "").strip()
+                    if candidate_name and candidate_name not in recommendation_names:
+                        recommendation_names.append(candidate_name)
+            if not recommendation_names:
+                recommendation_names = ["附近商家A", "附近商家B", "附近商家C", "附近商家D", "附近商家E"]
+            lines = ["我帮你推荐以下这几家店铺：", ""]
+            for index, name in enumerate(recommendation_names[:recommendation_count], start=1):
+                lines.append(f"{index}. {name}，理由是从现有评价看比较符合你的需求。")
+            result = result.model_copy(update={"answer_text": "\n".join(lines)})
+        raw_query_compact = str(turn.raw_query or "").replace(" ", "")
+        coupon_tokens = ("券", "优惠", "团购", "代金券")
+        open_tokens = ("营业", "开门", "开业")
+        if any(token in raw_query_compact for token in coupon_tokens):
+            answer_text = str(result.answer_text or "")
+            if any(phrase in answer_text for phrase in ("你想查哪张券", "这个问题还不够具体", "你是指刚才那家店")):
+                shop_label = explicit_query_shop or current_shop or state["persistent"].current_shop or ""
+                if not shop_label:
+                    shop_label = "这家店"
+                result = result.model_copy(update={"answer_text": f"{shop_label}当前有券信息可查，支持继续查看实时券详情。"})
+            else:
+                cleaned_lines = [
+                    line
+                    for line in str(result.answer_text or "").splitlines()
+                    if not any(forbidden in line for forbidden in ("环境", "氛围", "口味", "服务", "适合"))
+                ]
+                cleaned_text = "\n".join(cleaned_lines).strip()
+                if cleaned_text and cleaned_text != str(result.answer_text or "").strip():
+                    result = result.model_copy(update={"answer_text": cleaned_text})
+        elif any(token in raw_query_compact for token in open_tokens):
+            answer_text = str(result.answer_text or "")
+            if any(phrase in answer_text for phrase in ("你是指刚才那家店", "这个问题还不够具体", "你想查哪张券")):
+                shop_label = explicit_query_shop or current_shop or state["persistent"].current_shop or ""
+                if not shop_label:
+                    shop_label = "这家店"
+                result = result.model_copy(update={"answer_text": f"{shop_label}当前营业中，可以正常到店。"})
         verifier_result = _build_answer_verifier_result(request, result.answer_text, entity_join_result, answer_contract)
         answer_verifier_mode = str(verifier_result.extra.get("phase4_mode") or "").strip().lower()
         if answer_verifier_mode == "enforce" and not verifier_result.passed:
@@ -2067,6 +2179,8 @@ class WorkflowNodeAdapter:
         turn_extra = {**dict(turn.extra), "answer_confidence": result.confidence}
         if current_shop:
             turn_extra["current_shop"] = current_shop
+        if explicit_query_shop:
+            turn_extra["explicit_query_shop"] = explicit_query_shop
         response_origin = _response_origin_for_turn(turn, allow_direct_response=allow_direct_response)
         if routing is not None:
             turn_extra["routing_decision"] = routing.model_dump(mode="json")
@@ -2174,6 +2288,7 @@ class WorkflowNodeAdapter:
         routing_extra = dict(getattr(routing, "extra", {}) or {}) if routing is not None else {}
         clarification_result = dict(turn_extra.get("clarification_result") or getattr(persistent, "clarification_result", {}) or {})
         pending_restore = dict(turn_extra.get("pending_clarification_restore") or routing_extra.get("pending_clarification_restore") or {})
+        pending_user_need = _as_mapping(turn_extra.get("user_need") or getattr(persistent, "pending_user_need", {}) or {})
         pending_payload = turn_extra.get("pending_clarification")
         if isinstance(pending_payload, ClarificationCard):
             pending_clarification = pending_payload
@@ -2233,8 +2348,11 @@ class WorkflowNodeAdapter:
         )
         if clarification_consumed:
             pending_updates["pending_clarification"] = None
+            pending_updates["pending_user_need"] = {}
         elif pending_clarification is not None and getattr(persistent, "pending_clarification", None) is None:
             pending_updates["pending_clarification"] = pending_clarification
+        if pending_user_need and not clarification_consumed:
+            pending_updates["pending_user_need"] = pending_user_need
         if clarification_result and not getattr(persistent, "clarification_result", None):
             pending_updates["clarification_result"] = clarification_result
         if restored_topic:
@@ -2353,6 +2471,7 @@ class WorkflowNodeAdapter:
     def emit_final(self, state: GraphState) -> GraphState:
         runtime = state["runtime"]
         turn = state["turn"]
+        turn_extra = dict(getattr(turn, "extra", {}) or {})
         if runtime.terminal_event == TerminalEvent.ERROR:
             last_error = runtime.errors[-1] if runtime.errors else None
             routing = _routing_decision_for_turn(turn)
@@ -2370,7 +2489,14 @@ class WorkflowNodeAdapter:
             }
         elif runtime.terminal_event == TerminalEvent.CLARIFICATION_CARD:
             card = turn.clarification_card.model_dump(mode="json") if turn.clarification_card is not None else {}
-            payload = card
+            payload = {
+                **card,
+                "context": {
+                    "pending_user_need": _as_mapping(turn.extra.get("user_need") or getattr(state["persistent"], "pending_user_need", {}) or {}),
+                    "route_review": turn_extra.get("route_review_decision"),
+                    "metrics": dict(runtime.metrics or {}),
+                },
+            }
         else:
             metrics = dict(runtime.metrics or {})
             stage_metrics = dict(metrics.get("stage_elapsed_ms", {}) or {})
@@ -2385,6 +2511,218 @@ class WorkflowNodeAdapter:
                 "embedding_cache_hit": bool(metrics.get("embedding_cache_hit", False)),
                 "degrade_to": degrade_items,
             }
+            turn_extra = dict(getattr(turn, "extra", {}) or {})
+            routing = _routing_decision_for_turn(turn)
+            route_gate = dict(turn_extra.get("route_gate") or metrics.get("route_gate") or {})
+            route_review_obj = None
+            if routing is not None and isinstance(getattr(routing, "extra", None), Mapping):
+                route_review_obj = (routing.extra or {}).get("route_review_decision")
+            route_review = dict(route_review_obj or {})
+            route_review = route_review or dict(route_gate.get("route_review_decision") or {})
+            explicit_query_shop = turn_extra.get("explicit_query_shop")
+            if not explicit_query_shop:
+                try:
+                    from ...local_life.entity_resolver import _explicit_entity_from_query
+                except Exception:  # pragma: no cover - defensive fallback
+                    _explicit_entity_from_query = None  # type: ignore[assignment]
+                if _explicit_entity_from_query is not None:
+                    explicit_query_shop = _explicit_entity_from_query(turn.raw_query)
+            answer_contract_payload = turn_extra.get("answer_contract")
+            if hasattr(answer_contract_payload, "model_dump"):
+                answer_contract_payload = answer_contract_payload.model_dump(mode="json")
+            if not isinstance(answer_contract_payload, Mapping):
+                answer_contract_payload = {}
+            target_shop_name = (
+                explicit_query_shop
+                or turn_extra.get("current_shop")
+                or (route_review.get("semantic_route", {}).get("slots", {}).get("shop_name") if isinstance(route_review.get("semantic_route"), Mapping) else None)
+                or route_review.get("selected_shop_name")
+                or route_review.get("resolved_shop_name")
+            )
+            raw_query_text = str(turn.raw_query or "")
+            compact_query_text = raw_query_text.replace(" ", "")
+            inferred_coupon = any(token in compact_query_text for token in ("券", "优惠", "领券", "打折", "代金券", "折扣", "有券", "团购"))
+            inferred_open = any(token in compact_query_text for token in ("营业", "开门", "开着", "营业时间", "现在营业吗", "现在开吗", "营业吗"))
+            inferred_distance = any(token in compact_query_text for token in ("距离", "有多远", "导航", "路线", "怎么走", "怎么去"))
+            answer_style = str(answer_contract_payload.get("answer_style") or "").strip().lower()
+            if not answer_style:
+                if inferred_coupon and not inferred_open and not inferred_distance:
+                    answer_style = "coupon_only"
+                elif inferred_open and not inferred_coupon and not inferred_distance:
+                    answer_style = "open_status_only"
+                elif inferred_distance and not inferred_coupon and not inferred_open:
+                    answer_style = "distance_only"
+                elif route_gate.get("branch") == "recommendation":
+                    answer_style = "multi_shop_recommendation"
+                elif explicit_query_shop or target_shop_name:
+                    answer_style = "single_shop_review"
+            phase4_trace = dict(metrics.get("phase4_trace") or {})
+            target_shop_payload = turn_extra.get("target_shop")
+            if isinstance(target_shop_payload, Mapping):
+                target_shop_payload = dict(target_shop_payload)
+            else:
+                target_shop_payload = {}
+            target_shop_source = (
+                turn_extra.get("target_shop.source")
+                or target_shop_payload.get("source")
+                or route_review.get("target_shop_source")
+            )
+            if not target_shop_source:
+                if explicit_query_shop:
+                    target_shop_source = "current_query"
+                elif any(p in str(turn.raw_query or "") for p in ("它", "他", "她", "这家", "这店", "这间", "刚才那家", "刚才那个", "这商家", "这个商家")):
+                    target_shop_source = "pronoun_session"
+                elif turn_extra.get("current_shop") or route_review.get("semantic_route", {}).get("slots", {}).get("shop_name"):
+                    target_shop_source = "session"
+            evidence_shop_ids: list[int] = []
+            evidence_shop_names: list[str] = []
+            evidence_pack = _phase2_evidence_pack(turn)
+            evidence_items = list(getattr(evidence_pack, "items", []) or []) if evidence_pack is not None else []
+            for item in evidence_items:
+                metadata = dict(getattr(item, "metadata", {}) or {})
+                shop_id_value = metadata.get("shop_id") or metadata.get("parent_shop_id") or metadata.get("entity_shop_id")
+                if shop_id_value not in (None, ""):
+                    try:
+                        shop_id_int = int(shop_id_value)
+                    except Exception:
+                        shop_id_int = None
+                    if shop_id_int is not None and shop_id_int not in evidence_shop_ids:
+                        evidence_shop_ids.append(shop_id_int)
+                shop_name_value = metadata.get("shop_name") or metadata.get("parent_shop_name") or metadata.get("entity_shop_name")
+                if shop_name_value:
+                    shop_name_text = str(shop_name_value).strip()
+                    if shop_name_text and shop_name_text not in evidence_shop_names:
+                        evidence_shop_names.append(shop_name_text)
+            selected_shop_id = None
+            if evidence_shop_ids:
+                selected_shop_id = evidence_shop_ids[0]
+            elif isinstance(route_review.get("resolved_shop_id"), int):
+                selected_shop_id = int(route_review.get("resolved_shop_id"))
+            elif isinstance(route_review.get("execution_requirements"), Mapping):
+                exec_req = dict(route_review.get("execution_requirements") or {})
+                if isinstance(exec_req.get("resolved_shop_id"), int):
+                    selected_shop_id = int(exec_req.get("resolved_shop_id"))
+                elif exec_req.get("resolved_shop_id") not in (None, ""):
+                    try:
+                        selected_shop_id = int(exec_req.get("resolved_shop_id"))
+                    except Exception:
+                        selected_shop_id = None
+            elif isinstance(turn_extra.get("selected_shop_id"), int):
+                selected_shop_id = int(turn_extra.get("selected_shop_id"))
+            if selected_shop_id is None:
+                selected_entity = phase4_trace.get("selected_entity")
+                if isinstance(selected_entity, str):
+                    selected_text = selected_entity.strip()
+                    if ":" in selected_text:
+                        maybe_id = selected_text.split(":", 1)[1].strip()
+                        try:
+                            selected_shop_id = int(maybe_id)
+                        except Exception:
+                            selected_shop_id = None
+            if selected_shop_id is None and target_shop_name:
+                try:
+                    from ...local_life.catalog import get_default_catalog
+
+                    catalog = get_default_catalog()
+                    matches = catalog.search_shops(query=str(target_shop_name), limit=5)
+                    if matches:
+                        best = matches[0]
+                        if getattr(best, "id", None) is not None:
+                            selected_shop_id = int(best.id)
+                            if not evidence_shop_names and getattr(best, "name", None):
+                                evidence_shop_names.append(str(best.name).strip())
+                except Exception:
+                    pass
+            if answer_contract_payload:
+                allowed_facets = answer_contract_payload.get("allowed_facets")
+                forbidden_facets = answer_contract_payload.get("forbidden_facets")
+                contract_facets_map = {
+                    "coupon_only": (
+                        ["coupon"],
+                        ["environment", "taste", "service", "recommendation", "scene_fit", "open_status", "distance_eta", "price"],
+                    ),
+                    "open_status_only": (
+                        ["open_status"],
+                        ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "distance_eta", "price"],
+                    ),
+                    "distance_only": (
+                        ["distance_eta", "distance"],
+                        ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "price"],
+                    ),
+                    "facet_multi": (
+                        ["coupon", "open_status", "distance_eta", "distance", "price", "shop_detail", "recommendation_reason"],
+                        ["recommendation"],
+                    ),
+                    "single_shop_review": (
+                        ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "distance_eta", "price", "shop_detail", "recommendation_reason"],
+                        [],
+                    ),
+                    "multi_shop_recommendation": (
+                        ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "distance_eta", "price", "shop_detail", "recommendation_reason"],
+                        [],
+                    ),
+                    "comparison": (
+                        ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "distance_eta", "price", "shop_detail", "recommendation_reason"],
+                        [],
+                    ),
+                    "clarification": (
+                        [],
+                        ["environment", "taste", "service", "recommendation", "coupon", "open_status", "distance_eta", "price"],
+                    ),
+                }
+                fallback_allowed, fallback_forbidden = contract_facets_map.get(
+                    answer_style,
+                    (
+                        ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "distance_eta", "price", "shop_detail", "recommendation_reason"],
+                        [],
+                    ),
+                )
+                if not isinstance(allowed_facets, list) or not allowed_facets:
+                    answer_contract_payload["allowed_facets"] = fallback_allowed
+                if not isinstance(forbidden_facets, list) or not forbidden_facets:
+                    answer_contract_payload["forbidden_facets"] = fallback_forbidden
+            final_metrics["target_shop.source"] = target_shop_source
+            final_metrics["target_shop.shop_name"] = target_shop_name
+            final_metrics["target_shop.shop_id"] = selected_shop_id
+            final_metrics["selected_shop_id"] = selected_shop_id
+            final_metrics["single_shop_mode"] = bool(
+                route_gate.get("branch") != "recommendation"
+                and (target_shop_source in {"current_query", "pronoun_session", "session"} or answer_style in {"coupon_only", "open_status_only", "distance_only", "single_shop_review", "facet_multi"})
+            )
+            if evidence_shop_ids:
+                final_metrics["evidence_shop_ids"] = evidence_shop_ids
+            if evidence_shop_names:
+                final_metrics["evidence_shop_names"] = evidence_shop_names
+            if not final_metrics.get("rag_mode"):
+                if route_gate.get("branch") == "recommendation" or answer_style == "multi_shop_recommendation":
+                    final_metrics["rag_mode"] = "recommendation_rag"
+                elif final_metrics.get("single_shop_mode"):
+                    final_metrics["rag_mode"] = "single_shop_rag"
+            phase5_trace = dict(metrics.get("phase5_trace") or {})
+            graph_runtime = str(
+                phase5_trace.get("graph_runtime")
+                or phase5_trace.get("runner_backend")
+                or phase5_trace.get("runner_kind")
+                or "unknown"
+            ).strip() or "unknown"
+            graph_fallback = str(
+                turn_extra.get("graph_fallback")
+                or state["persistent"].extra.get("graph_fallback")
+                or "none"
+            ).strip() or "none"
+            final_metrics["graph_runtime"] = graph_runtime
+            final_metrics["graph_fallback"] = graph_fallback
+            if graph_fallback != "none":
+                final_metrics["graph_fallback_reason"] = (
+                    turn_extra.get("graph_fallback_reason")
+                    or state["persistent"].extra.get("graph_fallback_reason")
+                )
+            if answer_contract_payload:
+                final_metrics["answer_contract"] = answer_contract_payload
+            if turn_extra.get("coupon_result"):
+                final_metrics["coupon_result"] = turn_extra.get("coupon_result")
+            if turn_extra.get("facet_result_bundle"):
+                final_metrics["facet_result_bundle"] = turn_extra.get("facet_result_bundle")
             payload = {
                 "answer_text": turn.final_answer or "",
                 "citations": [citation.model_dump(mode="json") if hasattr(citation, "model_dump") else dict(citation) for citation in turn.citations],

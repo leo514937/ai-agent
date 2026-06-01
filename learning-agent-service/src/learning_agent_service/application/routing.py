@@ -3752,6 +3752,16 @@ def _required_action_from_fast_decision(fast_result: FastDecision) -> str:
     local_life_action = str(extra.get("local_life_intent") or "").strip().lower()
     if local_life_action in {"booking", "coupon"}:
         return "tool_call"
+    route_review = extra.get("route_review_decision")
+    if isinstance(route_review, Mapping):
+        current_action = str(route_review.get("current_action") or "").strip().lower()
+        recommended_action = str(route_review.get("recommended_action") or "").strip().lower()
+        if current_action in {"tool_call", "rag_plus_tool", "rag_retrieval", "direct_answer"}:
+            if current_action == "rag_retrieval" and recommended_action in {"tool_call", "rag_plus_tool", "rag_retrieval", "direct_answer"}:
+                return recommended_action
+            return current_action
+        if current_action == "clarify" and recommended_action in {"tool_call", "rag_plus_tool", "rag_retrieval", "direct_answer"}:
+            return recommended_action
     if fast_result.needs_clarify:
         return "clarify"
     if fast_result.needs_tool and fast_result.needs_rag:

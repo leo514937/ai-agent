@@ -128,6 +128,11 @@ class ContextArbitration:
         pending_user_need = _as_mapping(session.get("pending_user_need"))
         pending_clarification = _as_mapping(session.get("pending_clarification"))
         pending_source = dict(pending_user_need or pending_clarification)
+        previous_topic = str(
+            session.get("current_topic")
+            or (session.get("clarification_result") or {}).get("original_query")
+            or ""
+        ).strip()
         merged_need = user_need
         restored = False
         clarification_action = None
@@ -143,7 +148,7 @@ class ContextArbitration:
             if pending_category and current_category:
                 p_cat = str(pending_category).strip()
                 c_cat = str(current_category).strip()
-                if p_cat != c_cat and c_cat not in ("餐厅", "美食", "吃喝", "店", "商家", ""):
+                if p_cat != c_cat and c_cat not in ("餐厅", "美食", "吃喝", "店", "商家", "") and p_cat not in ("餐厅", "美食", "吃喝", "店", "商家", ""):
                     is_drift = True
             
             # 如果发生意图/品类漂移，主动清除 pending 并重置为全新状态，阻止合并
@@ -152,6 +157,7 @@ class ContextArbitration:
                 pending_user_need = {}
                 pending_clarification = {}
 
+
         if pending_source:
             merged_slots = _merge_slots(user_need.slots, pending_source, raw_query)
             merged_constraints = dict(user_need.constraints)
@@ -159,21 +165,126 @@ class ContextArbitration:
                 merged_constraints["client_context"] = client
             if not merged_constraints.get("pending_user_need") and pending_user_need:
                 merged_constraints["pending_user_need"] = pending_user_need
+            restored_intent = str(
+                pending_source.get("intent")
+                or pending_user_need.get("intent")
+                or pending_clarification.get("intent")
+                or user_need.intent
+            )
+            if restored_intent == str(user_need.intent) or restored_intent not in {"coupon", "open_status", "distance_eta"}:
+                topic_hint = str(
+                    previous_topic
+                    or pending_source.get("question")
+                    or pending_clarification.get("question")
+                    or pending_source.get("original_query")
+                    or ""
+                ).strip()
+                coupon_keywords = ("券", "优惠", "领券", "打折", "代金券", "折扣", "团购")
+                open_keywords = ("营业", "开门", "开着", "营业时间", "现在营业吗", "现在开吗", "营业吗")
+                distance_keywords = ("距离", "有多远", "导航", "路线", "怎么走", "怎么去")
+                if any(token in topic_hint for token in coupon_keywords):
+                    restored_intent = "coupon"
+                elif any(token in topic_hint for token in open_keywords):
+                    restored_intent = "open_status"
+                elif any(token in topic_hint for token in distance_keywords):
+                    restored_intent = "distance_eta"
+            merged_facets = _merge_required_facets(user_need.required_facets, pending_source)
+            if restored_intent in ("coupon", "open_status", "distance_eta"):
+                merged_facets = [f for f in merged_facets if f.get("name") == restored_intent]
+                if not merged_facets:
+                    merged_facets = [{
+                        "name": restored_intent,
+                        "required": True,
+                        "data_source": "dynamic_tool" if restored_intent != "distance_eta" else "client_context",
+                        "freshness": "near_realtime_required",
+                        "entity_keys": ["shop_id", "coupon_id"] if restored_intent == "coupon" else ["shop_id"],
+                        "missing_policy": "partial_grounded",
+                    }]
             merged_need = UserNeed.model_validate(
                 {
                      **user_need.model_dump(mode="json"),
+                     "intent": restored_intent,
                      "slots": merged_slots.model_dump(mode="json"),
                      "constraints": merged_constraints,
-                     "required_facets": _merge_required_facets(user_need.required_facets, pending_source),
+                     "required_facets": merged_facets,
                      "context_refs": [ref.model_dump(mode="json") if hasattr(ref, "model_dump") else dict(ref) for ref in user_need.context_refs or []],
                 }
             )
             restored = True
             clarification_action = "resume_pending_need"
 
+        if not restored and session.get("current_action") in ("coupon", "open_status", "distance_eta"):
+            prev_action = session.get("current_action")
+            opposing_keywords = ["环境", "服务", "口味", "特色", "怎么样", "推荐", "好吗", "评价", "好不好", "菜单", "价格"]
+            if not any(k in raw_query for k in opposing_keywords):
+                restored_intent = prev_action
+                merged_facets = [{
+                    "name": restored_intent,
+                    "required": True,
+                    "data_source": "dynamic_tool" if restored_intent != "distance_eta" else "client_context",
+                    "freshness": "near_realtime_required",
+                    "entity_keys": ["shop_id", "coupon_id"] if restored_intent == "coupon" else ["shop_id"],
+                    "missing_policy": "partial_grounded",
+                }]
+                merged_need = UserNeed.model_validate(
+                    {
+                         **user_need.model_dump(mode="json"),
+                         "intent": restored_intent,
+                         "required_facets": merged_facets,
+                    }
+                )
+                restored = True
+                clarification_action = "carry_over_intent"
+
+        if not restored:
+            previous_route = str(session.get("route_decision") or "").strip().lower()
+            compact_query = str(raw_query or "").replace(" ", "")
+            raw_query_is_shop_hint = bool(
+                any(token in compact_query for token in ("店", "门店", "分店", "商场"))
+                or (
+                    len(compact_query) <= 6
+                    and not any(token in compact_query for token in ("券", "优惠", "营业", "距离", "推荐", "评价", "怎么样", "好不好"))
+                )
+            )
+            if raw_query_is_shop_hint and previous_topic:
+                coupon_keywords = ("券", "优惠", "领券", "打折", "代金券", "折扣", "团购")
+                open_keywords = ("营业", "开门", "开着", "营业时间", "现在营业吗", "现在开吗", "营业吗")
+                distance_keywords = ("距离", "有多远", "导航", "路线", "怎么走", "怎么去")
+                inferred_pending_intent = None
+                if any(token in previous_topic for token in coupon_keywords):
+                    inferred_pending_intent = "coupon"
+                elif any(token in previous_topic for token in open_keywords):
+                    inferred_pending_intent = "open_status"
+                elif any(token in previous_topic for token in distance_keywords):
+                    inferred_pending_intent = "distance_eta"
+
+                if inferred_pending_intent is not None:
+                    merged_facets = _merge_required_facets(user_need.required_facets, {"intent": inferred_pending_intent})
+                    if inferred_pending_intent in ("coupon", "open_status", "distance_eta"):
+                        merged_facets = [f for f in merged_facets if f.get("name") == inferred_pending_intent]
+                        if not merged_facets:
+                            merged_facets = [{
+                                "name": inferred_pending_intent,
+                                "required": True,
+                                "data_source": "dynamic_tool" if inferred_pending_intent != "distance_eta" else "client_context",
+                                "freshness": "near_realtime_required",
+                                "entity_keys": ["shop_id", "coupon_id"] if inferred_pending_intent == "coupon" else ["shop_id"],
+                                "missing_policy": "partial_grounded",
+                            }]
+                    merged_need = UserNeed.model_validate(
+                        {
+                        **user_need.model_dump(mode="json"),
+                        "intent": inferred_pending_intent,
+                        "required_facets": merged_facets,
+                    }
+                )
+                restored = True
+                clarification_action = "resume_session_clarify" if previous_route == "clarify" else "resume_topic_clarify"
+
         return {
             "user_need": merged_need,
             "pending_user_need": pending_source or {},
+            "pending_intent": pending_source.get("intent") if pending_source else None,
             "restored_pending_need": restored,
             "clarification_action": clarification_action,
             "source": "pending_user_need" if restored else "query",

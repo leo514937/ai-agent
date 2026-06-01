@@ -1727,4 +1727,10 @@ DELIMITER ;
 CALL `sp_fill_demo_data`();
 DROP PROCEDURE IF EXISTS `sp_fill_demo_data`;
 
+INSERT INTO `tb_voucher` (`id`, `shop_id`, `title`, `sub_title`, `rules`, `pay_value`, `actual_value`, `type`, `status`, `create_time`, `update_time`)
+VALUES (21, 5, '150元家庭聚餐券', '海底捞水晶城店专享', '仅限海底捞火锅(水晶城购物中心店）使用\\n需提前一天预约\\n适合4-6人家庭聚餐\\n仅限堂食\\n不可与其他优惠叠加\\n不兑现、不找零', 12000, 15000, 1, 1, NOW(), NOW());
+
+INSERT INTO `tb_seckill_voucher` (`voucher_id`, `stock`, `create_time`, `begin_time`, `end_time`, `update_time`)
+VALUES (21, 500, NOW(), NOW(), DATE_ADD(NOW(), INTERVAL 30 DAY), NOW());
+
 SET FOREIGN_KEY_CHECKS = 1;

@@ -7,22 +7,35 @@ import {
   normalizeAssistantResponse,
 } from './assistant.js';
 import {
-  filterMockShopsByType,
-  getMockBlogById,
   getMockShopById,
-  getMockShopTypeById,
-  getMockVouchersByShopId,
+  getMockBlogById,
   mockAssistantSessions,
   mockBlogs,
   mockMeStats,
-  mockShops,
-  mockShopTypes,
   mockUserProfile,
 } from './mock-data.js';
 import { buildShopTags, formatDistance, formatPrice, formatScore, normalizeShopImages, pickShopCover } from './shops.js';
 
+const TYPE_SUMMARY_BY_ID = {
+  1: '吃喝美食',
+  2: '聚会夜宵',
+  3: '休闲轻食',
+  4: '甜品拍照',
+  5: '清爽日料',
+  6: '本帮风味',
+  7: '亲子出游',
+  8: '喝酒小聚',
+  9: '运动放松',
+  10: '医美护理',
+};
+
+let cachedShopTypes = null;
+let cachedShops = null;
+
 function enrichShop(shop) {
-  const type = getMockShopTypeById(shop.typeId);
+  const type = cachedShopTypes?.find((item) => Number(item.id) === Number(shop.typeId));
+  const typeName = shop.typeName || type?.name || '店铺';
+  const icon = type?.icon || typeName?.[0] || '店';
   return {
     ...shop,
     cover: pickShopCover(shop),
@@ -31,10 +44,31 @@ function enrichShop(shop) {
     distanceText: formatDistance(shop.distance),
     priceText: formatPrice(shop.avgPrice),
     metaText: [shop.area, shop.openHours].filter(Boolean).join(' · '),
-    tags: shop.tags?.length ? shop.tags : buildShopTags(shop, type?.name),
-    typeName: type?.name || '店铺',
-    typeIcon: type?.icon || '店',
+    tags: shop.tags?.length ? shop.tags : buildShopTags(shop, typeName),
+    typeName,
+    typeIcon: icon && String(icon).includes('/') ? (typeName?.[0] || '店') : icon,
   };
+}
+
+function enrichShopType(type) {
+  const id = Number(type?.id);
+  const name = String(type?.name || '').trim();
+  return {
+    ...type,
+    id,
+    name,
+    icon: String(type?.icon || '').trim(),
+    summary: TYPE_SUMMARY_BY_ID[id] || (name ? `${name} 分类` : '分类'),
+  };
+}
+
+async function requestJsonOrEmpty(path, options = {}) {
+  try {
+    const data = await requestJson(path, options);
+    return data ?? [];
+  } catch {
+    return [];
+  }
 }
 
 function enrichBlog(blog) {
@@ -81,39 +115,72 @@ async function requestJsonOrFallback(path, fallback, options = {}) {
 }
 
 export async function loadShopTypes() {
-  const data = await requestJsonOrFallback('/shop-type/list', mockShopTypes);
-  return Array.isArray(data) ? data : mockShopTypes;
+  if (Array.isArray(cachedShopTypes)) {
+    return cachedShopTypes;
+  }
+
+  const data = await requestJsonOrEmpty('/shop-type/list');
+  cachedShopTypes = Array.isArray(data) ? data.map(enrichShopType) : [];
+  return cachedShopTypes;
+}
+
+async function loadBackendShops() {
+  if (Array.isArray(cachedShops)) {
+    return cachedShops;
+  }
+
+  const types = await loadShopTypes();
+  const pages = await Promise.all(
+    types.map(async (type) => {
+      const data = await requestJsonOrEmpty(`/shop/of/type?typeId=${encodeURIComponent(type.id)}&current=1`);
+      return Array.isArray(data) ? data : [];
+    }),
+  );
+
+  const seen = new Set();
+  const merged = [];
+  for (const page of pages) {
+    for (const item of page) {
+      const shopId = Number(item?.id);
+      if (!Number.isFinite(shopId) || seen.has(shopId)) {
+        continue;
+      }
+      seen.add(shopId);
+      merged.push(enrichShop(item));
+    }
+  }
+
+  cachedShops = merged;
+  return cachedShops;
 }
 
 export async function loadShopsPage({ typeId = 'all', query = '' } = {}) {
   const typeValue = String(typeId || 'all');
-  let data = [];
-
-  if (typeValue === 'all') {
-    data = mockShops;
-  } else {
-    const remote = await requestJsonOrFallback(`/shop/of/type?typeId=${encodeURIComponent(typeValue)}&current=1`, []);
-    data = Array.isArray(remote) && remote.length ? remote : filterMockShopsByType(typeValue, query);
-  }
+  const allShops = await loadBackendShops();
+  const data = typeValue === 'all'
+    ? allShops
+    : allShops.filter((shop) => String(shop.typeId) === typeValue);
 
   const normalizedQuery = String(query || '').trim().toLowerCase();
   const filtered = normalizedQuery
     ? data.filter((shop) => [shop.name, shop.area, shop.address, ...(shop.tags || [])].join(' ').toLowerCase().includes(normalizedQuery))
     : data;
-
-  return filtered.map(enrichShop);
+  return filtered;
 }
 
 export async function loadShopDetail(id) {
   const shopId = Number(id);
-  const data = await requestJsonOrFallback(`/shop/${shopId}`, getMockShopById(shopId));
-  return data ? enrichShop(data) : enrichShop(getMockShopById(shopId) || mockShops[0]);
+  const data = await requestJsonOrEmpty(`/shop/${shopId}`);
+  if (!data || typeof data !== 'object' || Array.isArray(data) || !data.id) {
+    return null;
+  }
+  return enrichShop(data);
 }
 
 export async function loadShopVouchers(shopId) {
   const id = Number(shopId);
-  const data = await requestJsonOrFallback(`/voucher/list/${id}`, getMockVouchersByShopId(id));
-  const vouchers = Array.isArray(data) ? data : getMockVouchersByShopId(id);
+  const data = await requestJsonOrEmpty(`/voucher/list/${id}`);
+  const vouchers = Array.isArray(data) ? data : [];
   return vouchers.map(enrichVoucher);
 }
 
@@ -199,6 +266,25 @@ function buildFallbackFinalMessage(timeline, meta, payload) {
   }
 
   return candidate;
+}
+
+function extractLastAnswerLikePayload(timeline) {
+  const entries = Array.isArray(timeline) ? timeline.slice().reverse() : [];
+  for (const entry of entries) {
+    const payload = entry && typeof entry.payload === 'object' && !Array.isArray(entry.payload)
+      ? entry.payload
+      : {};
+    const answerLike = payload.answer_text
+      || payload.answer
+      || payload.content
+      || payload.delta
+      || payload.summary
+      || payload.message;
+    if (String(answerLike || '').trim()) {
+      return payload;
+    }
+  }
+  return null;
 }
 
 const ASSISTANT_STREAM_EVENTS = new Set([
@@ -400,9 +486,33 @@ export async function streamAssistantPrompt(payload, handlers = {}, options = {}
     };
   }
 
+  if (terminalType === 'clarification_card' && terminalMessage) {
+    return {
+      final: null,
+      error: null,
+      terminalType,
+      terminalMessage,
+      timeline,
+      meta,
+    };
+  }
+
   if (!finalMessage) {
     if (!finalMessage && lastAnswerPayload) {
       finalMessage = buildFallbackFinalMessage(timeline, meta, lastAnswerPayload);
+    }
+    if (!finalMessage) {
+      const timelinePayload = extractLastAnswerLikePayload(timeline);
+      if (timelinePayload) {
+        finalMessage = buildFallbackFinalMessage(timeline, meta, timelinePayload);
+      }
+    }
+    if (!finalMessage && timeline.length > 0) {
+      finalMessage = buildFallbackFinalMessage(timeline, meta, {
+        answer_text: '抱歉，这次回答没有完整返回 final 结果，请稍后重试。',
+        source: 'local-life-agent',
+        mode: 'stream',
+      });
     }
     if (finalMessage) {
       return {
@@ -410,16 +520,6 @@ export async function streamAssistantPrompt(payload, handlers = {}, options = {}
         error: null,
         terminalType: 'final',
         terminalMessage: finalMessage,
-        timeline,
-        meta,
-      };
-    }
-    if (terminalType === 'clarification_card' && terminalMessage) {
-      return {
-        final: null,
-        error: null,
-        terminalType,
-        terminalMessage,
         timeline,
         meta,
       };
@@ -452,12 +552,15 @@ export async function submitAssistantFeedback(payload) {
 }
 
 export async function loadHomeSnapshot() {
-  const [types, blogs] = await Promise.all([loadShopTypes(), loadHotBlogs()]);
-  const featuredShops = filterMockShopsByType('all').slice(0, 4).map(enrichShop);
+  const [types, blogs, featuredShops] = await Promise.all([
+    loadShopTypes(),
+    loadHotBlogs(),
+    loadShopsPage({ typeId: 'all', query: '' }),
+  ]);
   return {
-    types: Array.isArray(types) ? types : mockShopTypes,
+    types: Array.isArray(types) ? types : [],
     blogs: Array.isArray(blogs) ? blogs : mockBlogs,
-    featuredShops,
+    featuredShops: Array.isArray(featuredShops) ? featuredShops.slice(0, 4) : [],
   };
 }
 
