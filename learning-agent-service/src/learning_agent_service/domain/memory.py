@@ -1,15 +1,19 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Mapping, Optional, Protocol, Sequence, runtime_checkable
+from typing import (
+    Any,
+    Literal,
+    Protocol,
+    runtime_checkable,
+)
 from uuid import UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+from learning_agent_service.domain.utils import utcnow as _utcnow
 
 
 class MemoryCoreModel(BaseModel):
@@ -123,22 +127,22 @@ class MemoryTargetStore(str, Enum):
 class MemoryMetadata(MemoryCoreModel):
     memory_id: str = ""
     user_id: str = ""
-    session_id: Optional[str] = None
-    source_session_id: Optional[str] = None
-    project_id: Optional[str] = None
-    topic: Optional[str] = None
-    normalized_key: Optional[str] = None
-    normalized_value: Optional[str] = None
+    session_id: str | None = None
+    source_session_id: str | None = None
+    project_id: str | None = None
+    topic: str | None = None
+    normalized_key: str | None = None
+    normalized_value: str | None = None
     type: MemoryType = MemoryType.SEMANTIC
-    memory_type: Optional[MemoryType] = None
+    memory_type: MemoryType | None = None
     scope: MemoryScope = MemoryScope.USER
     persistence_scope: MemoryPersistenceScope = MemoryPersistenceScope.LONG_TERM
     status: MemoryStatus = MemoryStatus.ACTIVE
     source: MemorySource = MemorySource.SYSTEM_EVENT
     source_turn_id: str = ""
-    evidence_turn_id: Optional[str] = None
-    source_message_ids: List[str] = Field(default_factory=list)
-    summary: Optional[str] = None
+    evidence_turn_id: str | None = None
+    source_message_ids: list[str] = Field(default_factory=list)
+    summary: str | None = None
     content: Any = Field(default_factory=dict)
     confidence: float = 0.0
     importance: float = 0.0
@@ -146,24 +150,24 @@ class MemoryMetadata(MemoryCoreModel):
     sensitivity: MemorySensitivity = MemorySensitivity.PUBLIC
     retrieval_mode: MemoryRetrievalMode = MemoryRetrievalMode.AUTO
     should_vectorize: bool = True
-    ttl_seconds: Optional[int] = None
-    valid_until: Optional[datetime] = None
-    tags: List[str] = Field(default_factory=list)
-    entities: List[str] = Field(default_factory=list)
+    ttl_seconds: int | None = None
+    valid_until: datetime | None = None
+    tags: list[str] = Field(default_factory=list)
+    entities: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
-    last_accessed_at: Optional[datetime] = None
-    last_seen_at: Optional[datetime] = None
+    last_accessed_at: datetime | None = None
+    last_seen_at: datetime | None = None
     access_count: int = 0
     is_active: bool = True
     effective_from: datetime = Field(default_factory=_utcnow)
-    effective_to: Optional[datetime] = None
-    supersedes: Optional[str] = None
-    superseded_by: Optional[str] = None
-    superseded_by_memory_id: Optional[str] = None
-    embedding_id: Optional[str] = None
-    vector_id: Optional[str] = None
-    raw_evidence: Optional[Dict[str, Any]] = None
+    effective_to: datetime | None = None
+    supersedes: str | None = None
+    superseded_by: str | None = None
+    superseded_by_memory_id: str | None = None
+    embedding_id: str | None = None
+    vector_id: str | None = None
+    raw_evidence: dict[str, Any] | None = None
     schema_version: str = "1"
 
     @model_validator(mode="before")
@@ -188,47 +192,47 @@ class MemoryMetadata(MemoryCoreModel):
 class MemoryRecord(MemoryCoreModel):
     memory_id: str = ""
     user_id: str = ""
-    session_id: Optional[str] = None
-    source_session_id: Optional[str] = None
-    project_id: Optional[str] = None
-    topic: Optional[str] = None
-    normalized_key: Optional[str] = None
-    normalized_value: Optional[str] = None
+    session_id: str | None = None
+    source_session_id: str | None = None
+    project_id: str | None = None
+    topic: str | None = None
+    normalized_key: str | None = None
+    normalized_value: str | None = None
     type: MemoryType = MemoryType.SEMANTIC
     scope: MemoryScope = MemoryScope.USER
     persistence_scope: MemoryPersistenceScope = MemoryPersistenceScope.LONG_TERM
     status: MemoryStatus = MemoryStatus.ACTIVE
     source: MemorySource = MemorySource.SYSTEM_EVENT
     content: Any = Field(default_factory=dict)
-    summary: Optional[str] = None
+    summary: str | None = None
     stability: float = 0.5
     sensitivity: MemorySensitivity = MemorySensitivity.PUBLIC
     retrieval_mode: MemoryRetrievalMode = MemoryRetrievalMode.AUTO
     should_vectorize: bool = True
-    ttl_seconds: Optional[int] = None
-    valid_until: Optional[datetime] = None
-    tags: List[str] = Field(default_factory=list)
-    entities: List[str] = Field(default_factory=list)
-    source_turn_id: Optional[str] = None
-    source_message_ids: List[str] = Field(default_factory=list)
+    ttl_seconds: int | None = None
+    valid_until: datetime | None = None
+    tags: list[str] = Field(default_factory=list)
+    entities: list[str] = Field(default_factory=list)
+    source_turn_id: str | None = None
+    source_message_ids: list[str] = Field(default_factory=list)
     confidence: float = 0.0
     importance: float = 0.0
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
-    last_accessed_at: Optional[datetime] = None
-    last_seen_at: Optional[datetime] = None
+    last_accessed_at: datetime | None = None
+    last_seen_at: datetime | None = None
     access_count: int = 0
     is_active: bool = True
     effective_from: datetime = Field(default_factory=_utcnow)
-    effective_to: Optional[datetime] = None
-    supersedes: Optional[str] = None
-    superseded_by: Optional[str] = None
-    superseded_by_memory_id: Optional[str] = None
-    embedding_id: Optional[str] = None
-    raw_evidence: Optional[Dict[str, Any]] = None
+    effective_to: datetime | None = None
+    supersedes: str | None = None
+    superseded_by: str | None = None
+    superseded_by_memory_id: str | None = None
+    embedding_id: str | None = None
+    raw_evidence: dict[str, Any] | None = None
     schema_version: str = "2"
-    metadata: Optional[MemoryMetadata] = None
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    metadata: MemoryMetadata | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
 
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True, populate_by_name=True)
 
@@ -259,7 +263,7 @@ class MemoryRecord(MemoryCoreModel):
         return payload
 
     @model_validator(mode="after")
-    def _sync_metadata(self) -> "MemoryRecord":
+    def _sync_metadata(self) -> MemoryRecord:
         canonical_vector_id = self.embedding_id or vector_id_for_memory_id(self.memory_id)
         self.embedding_id = canonical_vector_id or None
         if self.metadata is None:
@@ -278,8 +282,8 @@ class MemoryRecord(MemoryCoreModel):
                 persistence_scope=self.persistence_scope,
                 status=self.status,
                 source=self.source,
-                source_turn_id=self.source_turn_id,
-                evidence_turn_id=self.source_turn_id,
+                source_turn_id=self.source_turn_id or "",
+                evidence_turn_id=self.source_turn_id or "",
                 source_message_ids=list(self.source_message_ids),
                 summary=self.summary,
                 content=self.content,
@@ -326,8 +330,8 @@ class MemoryRecord(MemoryCoreModel):
                     "persistence_scope": self.persistence_scope,
                     "status": self.status,
                     "source": self.source,
-                    "source_turn_id": self.source_turn_id,
-                    "evidence_turn_id": self.source_turn_id,
+                "source_turn_id": self.source_turn_id or "",
+                "evidence_turn_id": self.source_turn_id or "",
                     "source_message_ids": list(self.source_message_ids),
                     "summary": self.summary,
                     "content": self.content,
@@ -365,27 +369,27 @@ class MemoryRecord(MemoryCoreModel):
         return self.type
 
     @property
-    def evidence_turn_id(self) -> Optional[str]:
+    def evidence_turn_id(self) -> str | None:
         return self.source_turn_id
 
     @evidence_turn_id.setter
-    def evidence_turn_id(self, value: Optional[str]) -> None:
+    def evidence_turn_id(self, value: str | None) -> None:
         self.source_turn_id = value
 
     @property
-    def vector_id(self) -> Optional[str]:
+    def vector_id(self) -> str | None:
         return self.embedding_id or vector_id_for_memory_id(self.memory_id)
 
     @vector_id.setter
-    def vector_id(self, value: Optional[str]) -> None:
+    def vector_id(self, value: str | None) -> None:
         self.embedding_id = value
 
     @property
-    def expires_at(self) -> Optional[datetime]:
+    def expires_at(self) -> datetime | None:
         return self.valid_until
 
     @property
-    def normalized_key_name(self) -> Optional[str]:
+    def normalized_key_name(self) -> str | None:
         return self.normalized_key
 
 
@@ -434,21 +438,21 @@ class MemoryCandidate(MemoryCoreModel):
     importance: float = 0.0
     stability: float = 0.5
     reason: str = ""
-    ttl_seconds: Optional[int] = None
+    ttl_seconds: int | None = None
     source_turn_id: str = ""
-    normalized_key: Optional[str] = None
-    normalized_value: Optional[str] = None
-    dedupe_key: Optional[str] = None
-    conflict_check_key: Optional[str] = None
+    normalized_key: str | None = None
+    normalized_value: str | None = None
+    dedupe_key: str | None = None
+    conflict_check_key: str | None = None
     governance_action: str = "pending"
     require_confirmation: bool = False
-    approval_notes: List[str] = Field(default_factory=list)
+    approval_notes: list[str] = Field(default_factory=list)
     record: MemoryRecord = Field(default_factory=MemoryRecord)
     decision_reason: str = ""
-    conflict_ids: List[str] = Field(default_factory=list)
-    deletion_job_ids: List[str] = Field(default_factory=list)
-    skip_reason: Optional[str] = None
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    conflict_ids: list[str] = Field(default_factory=list)
+    deletion_job_ids: list[str] = Field(default_factory=list)
+    skip_reason: str | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class MemoryEdge(MemoryCoreModel):
@@ -459,34 +463,34 @@ class MemoryEdge(MemoryCoreModel):
     reason: str = ""
     created_at: datetime = Field(default_factory=_utcnow)
     updated_at: datetime = Field(default_factory=_utcnow)
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class MemoryAccessLog(MemoryCoreModel):
     access_log_id: str = ""
     memory_id: str = ""
     user_id: str = ""
-    session_id: Optional[str] = None
-    turn_id: Optional[str] = None
+    session_id: str | None = None
+    turn_id: str | None = None
     action: str = "read"
     accessed_at: datetime = Field(default_factory=_utcnow)
-    trace_id: Optional[str] = None
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    trace_id: str | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class MemoryDeletionJob(MemoryCoreModel):
     deletion_job_id: str = ""
     memory_id: str = ""
     user_id: str = ""
-    session_id: Optional[str] = None
+    session_id: str | None = None
     target_store: MemoryTargetStore = MemoryTargetStore.POSTGRES
     status: MemoryDeletionStatus = MemoryDeletionStatus.PENDING
     reason: str = ""
     scheduled_at: datetime = Field(default_factory=_utcnow)
-    executed_at: Optional[datetime] = None
-    error_message: Optional[str] = None
-    vector_id: Optional[str] = None
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    executed_at: datetime | None = None
+    error_message: str | None = None
+    vector_id: str | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class MemoryTrace(MemoryCoreModel):
@@ -494,21 +498,21 @@ class MemoryTrace(MemoryCoreModel):
     user_id: str = ""
     session_id: str = ""
     turn_id: str = ""
-    retrieved: List[str] = Field(default_factory=list)
-    injected: List[str] = Field(default_factory=list)
-    skipped: List[str] = Field(default_factory=list)
-    candidates: List[str] = Field(default_factory=list)
-    promoted: List[str] = Field(default_factory=list)
-    rejected: List[str] = Field(default_factory=list)
-    decision_reasons: Dict[str, str] = Field(default_factory=dict)
-    conflict_ids: List[str] = Field(default_factory=list)
-    deletion_job_ids: List[str] = Field(default_factory=list)
-    skip_reasons: Dict[str, str] = Field(default_factory=dict)
-    conflict_resolutions: List[Any] = Field(default_factory=list)
+    retrieved: list[str] = Field(default_factory=list)
+    injected: list[str] = Field(default_factory=list)
+    skipped: list[str] = Field(default_factory=list)
+    candidates: list[str] = Field(default_factory=list)
+    promoted: list[str] = Field(default_factory=list)
+    rejected: list[str] = Field(default_factory=list)
+    decision_reasons: dict[str, str] = Field(default_factory=dict)
+    conflict_ids: list[str] = Field(default_factory=list)
+    deletion_job_ids: list[str] = Field(default_factory=list)
+    skip_reasons: dict[str, str] = Field(default_factory=dict)
+    conflict_resolutions: list[Any] = Field(default_factory=list)
     total_memory_tokens: int = 0
     qdrant_degraded: bool = False
     created_at: datetime = Field(default_factory=_utcnow)
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    extra: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod
@@ -531,91 +535,91 @@ class MemoryTrace(MemoryCoreModel):
         return payload
 
     @property
-    def retrieved_memory_ids(self) -> List[str]:
+    def retrieved_memory_ids(self) -> list[str]:
         return self.retrieved
 
     @retrieved_memory_ids.setter
-    def retrieved_memory_ids(self, value: List[str]) -> None:
+    def retrieved_memory_ids(self, value: list[str]) -> None:
         self.retrieved = value
 
     @property
-    def injected_memory_ids(self) -> List[str]:
+    def injected_memory_ids(self) -> list[str]:
         return self.injected
 
     @injected_memory_ids.setter
-    def injected_memory_ids(self, value: List[str]) -> None:
+    def injected_memory_ids(self, value: list[str]) -> None:
         self.injected = value
 
     @property
-    def skipped_memories(self) -> List[str]:
+    def skipped_memories(self) -> list[str]:
         return self.skipped
 
     @skipped_memories.setter
-    def skipped_memories(self, value: List[str]) -> None:
+    def skipped_memories(self, value: list[str]) -> None:
         self.skipped = value
 
     @property
-    def candidate_ids(self) -> List[str]:
+    def candidate_ids(self) -> list[str]:
         return self.candidates
 
     @candidate_ids.setter
-    def candidate_ids(self, value: List[str]) -> None:
+    def candidate_ids(self, value: list[str]) -> None:
         self.candidates = value
 
     @property
-    def promoted_memory_ids(self) -> List[str]:
+    def promoted_memory_ids(self) -> list[str]:
         return self.promoted
 
     @promoted_memory_ids.setter
-    def promoted_memory_ids(self, value: List[str]) -> None:
+    def promoted_memory_ids(self, value: list[str]) -> None:
         self.promoted = value
 
     @property
-    def rejected_candidates(self) -> List[str]:
+    def rejected_candidates(self) -> list[str]:
         return self.rejected
 
     @rejected_candidates.setter
-    def rejected_candidates(self, value: List[str]) -> None:
+    def rejected_candidates(self, value: list[str]) -> None:
         self.rejected = value
 
 
 class MemoryWritePlan(MemoryCoreModel):
-    candidates: List[MemoryCandidate] = Field(default_factory=list)
-    write_targets: List[MemoryTargetStore] = Field(default_factory=list)
+    candidates: list[MemoryCandidate] = Field(default_factory=list)
+    write_targets: list[MemoryTargetStore] = Field(default_factory=list)
     outbox_required: bool = False
 
 
 class MemoryRetrievalPlan(MemoryCoreModel):
     user_id: str = ""
     session_id: str = ""
-    project_id: Optional[str] = None
+    project_id: str | None = None
     raw_query: str = ""
-    intent: Optional[str] = None
-    current_topic: Optional[str] = None
-    recent_entities: List[str] = Field(default_factory=list)
-    history_summary: Optional[str] = None
+    intent: str | None = None
+    current_topic: str | None = None
+    recent_entities: list[str] = Field(default_factory=list)
+    history_summary: str | None = None
     retrieval_budget: int = 8
-    response_mode: Optional[str] = None
+    response_mode: str | None = None
 
 
 class RetrievedMemoryPack(MemoryCoreModel):
-    prompt_memories: List[MemoryRecord] = Field(default_factory=list)
-    state_memories: List[MemoryRecord] = Field(default_factory=list)
-    tool_memories: List[MemoryRecord] = Field(default_factory=list)
-    semantic_memories: List[MemoryRecord] = Field(default_factory=list)
-    episodic_memories: List[MemoryRecord] = Field(default_factory=list)
-    procedural_memories: List[MemoryRecord] = Field(default_factory=list)
-    rag_memories: List[MemoryRecord] = Field(default_factory=list)
-    excluded_memories: List[MemoryRecord] = Field(default_factory=list)
+    prompt_memories: list[MemoryRecord] = Field(default_factory=list)
+    state_memories: list[MemoryRecord] = Field(default_factory=list)
+    tool_memories: list[MemoryRecord] = Field(default_factory=list)
+    semantic_memories: list[MemoryRecord] = Field(default_factory=list)
+    episodic_memories: list[MemoryRecord] = Field(default_factory=list)
+    procedural_memories: list[MemoryRecord] = Field(default_factory=list)
+    rag_memories: list[MemoryRecord] = Field(default_factory=list)
+    excluded_memories: list[MemoryRecord] = Field(default_factory=list)
     retrieval_reason: str = ""
     total_token_estimate: int = 0
-    source_memory_ids: List[str] = Field(default_factory=list)
+    source_memory_ids: list[str] = Field(default_factory=list)
     retrieval_kind: str = "long_term_memory"
     collection_name: str = ""
     source_domain: str = "memory"
 
     @model_validator(mode="after")
-    def _sync_compat_buckets(self) -> "RetrievedMemoryPack":
+    def _sync_compat_buckets(self) -> RetrievedMemoryPack:
         if not self.semantic_memories and self.rag_memories:
             self.semantic_memories = list(self.rag_memories)
         if not self.rag_memories and self.semantic_memories:
@@ -628,18 +632,18 @@ class RetrievedMemoryPack(MemoryCoreModel):
 
 
 class MemoryInjectionPlan(MemoryCoreModel):
-    prompt_memories: List[MemoryRecord] = Field(default_factory=list)
-    state_memories: List[MemoryRecord] = Field(default_factory=list)
-    tool_memories: List[MemoryRecord] = Field(default_factory=list)
-    semantic_memories: List[MemoryRecord] = Field(default_factory=list)
-    episodic_memories: List[MemoryRecord] = Field(default_factory=list)
-    procedural_memories: List[MemoryRecord] = Field(default_factory=list)
-    rag_memories: List[MemoryRecord] = Field(default_factory=list)
-    hidden_trace_memories: List[MemoryRecord] = Field(default_factory=list)
+    prompt_memories: list[MemoryRecord] = Field(default_factory=list)
+    state_memories: list[MemoryRecord] = Field(default_factory=list)
+    tool_memories: list[MemoryRecord] = Field(default_factory=list)
+    semantic_memories: list[MemoryRecord] = Field(default_factory=list)
+    episodic_memories: list[MemoryRecord] = Field(default_factory=list)
+    procedural_memories: list[MemoryRecord] = Field(default_factory=list)
+    rag_memories: list[MemoryRecord] = Field(default_factory=list)
+    hidden_trace_memories: list[MemoryRecord] = Field(default_factory=list)
     token_budget: int = 1200
 
     @model_validator(mode="after")
-    def _sync_compat_buckets(self) -> "MemoryInjectionPlan":
+    def _sync_compat_buckets(self) -> MemoryInjectionPlan:
         if not self.semantic_memories and self.rag_memories:
             self.semantic_memories = list(self.rag_memories)
         if not self.rag_memories and self.semantic_memories:
@@ -652,8 +656,8 @@ class MemoryInjectionPlan(MemoryCoreModel):
 
 
 class MemoryConsolidationPlan(MemoryCoreModel):
-    source_memory_ids: List[str] = Field(default_factory=list)
-    target_memory_id: Optional[str] = None
+    source_memory_ids: list[str] = Field(default_factory=list)
+    target_memory_id: str | None = None
     action: Literal["merge", "supersede", "expire", "split"] = "merge"
     reason: str = ""
 
@@ -661,7 +665,7 @@ class MemoryConsolidationPlan(MemoryCoreModel):
 class MemoryConflict(MemoryCoreModel):
     conflict_id: str = ""
     winner_memory_id: str = ""
-    loser_memory_ids: List[str] = Field(default_factory=list)
+    loser_memory_ids: list[str] = Field(default_factory=list)
     conflict_type: str = ""
     reason: str = ""
     resolved_by: MemorySource = MemorySource.SYSTEM_EVENT
@@ -673,12 +677,12 @@ class MemoryUpdateEvent(MemoryCoreModel):
     memory_id: str = ""
     memory_type: MemoryType = MemoryType.SEMANTIC
     action: str = ""
-    status_before: Optional[MemoryStatus] = None
-    status_after: Optional[MemoryStatus] = None
+    status_before: MemoryStatus | None = None
+    status_after: MemoryStatus | None = None
     source_turn_id: str = ""
     timestamp: datetime = Field(default_factory=_utcnow)
-    trace_id: Optional[str] = None
-    details: Dict[str, Any] = Field(default_factory=dict)
+    trace_id: str | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
 
 
 @runtime_checkable
@@ -731,7 +735,7 @@ class LongTermMemoryStore(Protocol):
     def upsert(self, record: MemoryRecord) -> MemoryRecord:
         ...
 
-    def get(self, memory_id: str) -> Optional[MemoryRecord]:
+    def get(self, memory_id: str) -> MemoryRecord | None:
         ...
 
     def search(
@@ -739,7 +743,7 @@ class LongTermMemoryStore(Protocol):
         query: str,
         user_id: str,
         limit: int = 10,
-        memory_types: Optional[Sequence[MemoryType]] = None,
+        memory_types: Sequence[MemoryType] | None = None,
     ) -> Sequence[MemoryRecord]:
         ...
 
@@ -764,16 +768,16 @@ class EntityMemoryStore(Protocol):
     def upsert(self, record: MemoryRecord) -> MemoryRecord:
         ...
 
-    def get(self, entity_id: str, user_id: str) -> Optional[MemoryRecord]:
+    def get(self, entity_id: str, user_id: str) -> MemoryRecord | None:
         ...
 
-    def list_by_user(self, user_id: str, entity_type: Optional[str] = None) -> Sequence[MemoryRecord]:
+    def list_by_user(self, user_id: str, entity_type: str | None = None) -> Sequence[MemoryRecord]:
         ...
 
     def search(self, user_id: str, query: str, limit: int = 10) -> Sequence[MemoryRecord]:
         ...
 
-    def merge(self, target_entity_id: str, source_entity_ids: List[str], reason: str) -> MemoryRecord:
+    def merge(self, target_entity_id: str, source_entity_ids: list[str], reason: str) -> MemoryRecord:
         ...
 
 

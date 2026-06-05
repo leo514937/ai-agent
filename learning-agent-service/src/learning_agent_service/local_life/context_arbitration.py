@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
+from learning_agent_service.domain.utils import as_mapping as _as_mapping
+
+from .graph_state import (
+    MemoryArbitrationPolicy,
+    build_memory_arbitration_result,
+    build_perception_context,
+)
 from .schemas import LocalLifeSlots, UserNeed
-
-
-def _as_mapping(value: Any) -> dict[str, Any]:
-    if isinstance(value, Mapping):
-        return dict(value)
-    if hasattr(value, "model_dump"):
-        dumped = value.model_dump(mode="json")
-        if isinstance(dumped, Mapping):
-            return dict(dumped)
-    return {}
 
 
 def _is_blank(value: Any) -> bool:
@@ -122,9 +120,28 @@ class ContextArbitration:
         user_need: UserNeed,
         session_context: Mapping[str, Any] | None = None,
         client_context: Mapping[str, Any] | None = None,
+        perception_context: Any | None = None,
+        policy: MemoryArbitrationPolicy | None = None,
     ) -> dict[str, Any]:
         session = _as_mapping(session_context)
         client = _as_mapping(client_context)
+        perception = perception_context or build_perception_context(
+            raw_query=raw_query,
+            normalized_query=raw_query,
+            slots=slots,
+            client_context=client,
+            session_context=session,
+        )
+        if isinstance(policy, Mapping):
+            policy = MemoryArbitrationPolicy(
+                **{
+                    key: value
+                    for key, value in _as_mapping(policy).items()
+                    if key in {"priority_source", "session_keywords", "long_term_keywords", "strict_latest_turn"}
+                }
+            )
+        else:
+            policy = policy or MemoryArbitrationPolicy()
         pending_user_need = _as_mapping(session.get("pending_user_need"))
         pending_clarification = _as_mapping(session.get("pending_clarification"))
         pending_source = dict(pending_user_need or pending_clarification)
@@ -281,6 +298,31 @@ class ContextArbitration:
                 restored = True
                 clarification_action = "resume_session_clarify" if previous_route == "clarify" else "resume_topic_clarify"
 
+        memory_arbitration = build_memory_arbitration_result(
+            merged_context={
+                "user_need": merged_need.model_dump(mode="json"),
+                "pending_user_need": pending_source or {},
+                "restored_pending_need": restored,
+                "clarification_action": clarification_action,
+                "source": "pending_user_need" if restored else "query",
+                "reason": "pending_need_restored" if restored else "query_first",
+                "priority_source": policy.priority_source,
+                "temporal_scope": getattr(perception, "temporal_scope", "neutral"),
+            },
+            winning_sources={
+                "priority_source": policy.priority_source,
+                "temporal_scope": getattr(perception, "temporal_scope", "neutral"),
+                "client_context": bool(client),
+                "session_context": bool(session),
+            },
+            suppressed_memories=[],
+            promotion_candidates=(
+                [{"raw_query": raw_query, "temporal_scope": getattr(perception, "temporal_scope", "neutral")}]
+                if getattr(perception, "temporal_scope", "neutral") == "long_term"
+                else []
+            ),
+            conflict_reason="pending_need_restored" if restored else None,
+        )
         return {
             "user_need": merged_need,
             "pending_user_need": pending_source or {},
@@ -289,4 +331,6 @@ class ContextArbitration:
             "clarification_action": clarification_action,
             "source": "pending_user_need" if restored else "query",
             "reason": "pending_need_restored" if restored else "query_first",
+            "perception_context": perception.to_dict() if hasattr(perception, "to_dict") else perception,
+            "memory_arbitration": memory_arbitration.to_dict(),
         }

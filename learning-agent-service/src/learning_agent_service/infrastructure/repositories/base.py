@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from typing import Any, Callable, Iterator
+from typing import Any
 
 from learning_agent_service.infrastructure.db.errors import require_dependency
 from learning_agent_service.infrastructure.db.models import SQLALCHEMY_AVAILABLE
@@ -11,7 +12,7 @@ from learning_agent_service.infrastructure.db.models import SQLALCHEMY_AVAILABLE
 SessionFactory = Callable[[], Any]
 
 
-class SqlAlchemyRepositoryBase(object):
+class SqlAlchemyRepositoryBase:
     """Small helper that centralizes session lifecycle management."""
 
     def __init__(self, session_factory: SessionFactory) -> None:

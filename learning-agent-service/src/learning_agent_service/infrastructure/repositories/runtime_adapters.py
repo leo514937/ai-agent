@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from datetime import UTC, datetime
+from typing import Any
 
 from learning_agent_service.domain import GraphRuntimeMeta, PersistentSessionContext
 from learning_agent_service.domain.protocols import SessionContextPort
@@ -19,17 +20,16 @@ from learning_agent_service.infrastructure.observability.outbox import (
 from learning_agent_service.memory.models import SemanticMemoryFact
 
 from .outbox import OutboxRepository
+from .preferences import UserPreferenceRepository, UserProfileProjectionRepository
 from .records import (
-    OutboxEventRecord,
     UserPreferenceProfileRecord,
     UserProfilePreferenceRecord,
 )
-from .preferences import UserPreferenceRepository, UserProfileProjectionRepository
 
 
 def _json_default(value: Any) -> Any:
     if isinstance(value, datetime):
-        return value.astimezone(timezone.utc).isoformat()
+        return value.astimezone(UTC).isoformat()
     return str(value)
 
 
@@ -68,7 +68,7 @@ class RedisSessionContextStore(SessionContextPort):
             "next_steps": list(context.next_steps),
             "summary_version": context.summary_version,
             "summary_updated_at": context.summary_updated_at.isoformat() if context.summary_updated_at else None,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(UTC).isoformat(),
         }
         self.runtime.client.set(summary_key, json.dumps(summary_payload))
 
@@ -108,7 +108,7 @@ class OutboxAsyncLogStore:
 class NoOpSemanticMemoryStore:
     """Explicit no-op semantic memory adapter used when no real backend is wired."""
 
-    indexed_topics: Dict[Tuple[str, str], bool] = field(default_factory=dict)
+    indexed_topics: dict[tuple[str, str], bool] = field(default_factory=dict)
 
     def search(self, user_id: str, query: str, limit: int = 5) -> Sequence[SemanticMemoryFact]:
         return ()
@@ -226,14 +226,14 @@ class AdapterStatus:
 
 @dataclass(frozen=True)
 class RuntimeDependencyStatus:
-    adapters: Tuple[AdapterStatus, ...]
-    bootstrap_errors: Tuple[Tuple[str, str], ...] = ()
+    adapters: tuple[AdapterStatus, ...]
+    bootstrap_errors: tuple[tuple[str, str], ...] = ()
 
     @property
-    def fallback_names(self) -> Tuple[str, ...]:
+    def fallback_names(self) -> tuple[str, ...]:
         return tuple(adapter.name for adapter in self.adapters if adapter.mode == "fallback")
 
-    def as_dict(self) -> Dict[str, Any]:
+    def as_dict(self) -> dict[str, Any]:
         return {
             "adapters": [
                 {
@@ -260,10 +260,10 @@ class RuntimeComponentMode:
 @dataclass(frozen=True)
 class RuntimeProfile:
     name: str
-    components: Tuple[RuntimeComponentMode, ...]
-    bootstrap_errors: Tuple[Tuple[str, str], ...] = ()
+    components: tuple[RuntimeComponentMode, ...]
+    bootstrap_errors: tuple[tuple[str, str], ...] = ()
 
-    def as_dict(self) -> Dict[str, Any]:
+    def as_dict(self) -> dict[str, Any]:
         return {
             "profile": self.name,
             "components": [

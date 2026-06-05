@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import List, Optional
+from datetime import UTC, datetime
 
-from learning_agent_service.infrastructure.db.models import UserPreferenceProfileModel, UserProfilePreferenceModel
+from learning_agent_service.domain.utils import utcnow as _utcnow
+from learning_agent_service.infrastructure.db.models import (
+    UserPreferenceProfileModel,
+    UserProfilePreferenceModel,
+)
 
 from .base import SqlAlchemyRepositoryBase
 from .records import UserPreferenceProfileRecord, UserProfilePreferenceRecord
@@ -21,7 +24,7 @@ except ImportError:  # pragma: no cover - depends on optional runtime installati
 class UserPreferenceRepository(SqlAlchemyRepositoryBase):
     """Read/write access for durable user preference profiles."""
 
-    def get(self, user_id: str) -> Optional[UserPreferenceProfileModel]:
+    def get(self, user_id: str) -> UserPreferenceProfileModel | None:
         self._require_sqlalchemy()
         with self.session_scope() as session:
             return session.execute(
@@ -42,16 +45,10 @@ class UserPreferenceRepository(SqlAlchemyRepositoryBase):
             session.add(instance)
             session.flush()
             return instance
-
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
-
 class UserProfileProjectionRepository(SqlAlchemyRepositoryBase):
     """Current user profile projection keyed by normalized preference name."""
 
-    def list_active(self, user_id: str) -> List[UserProfilePreferenceModel]:
+    def list_active(self, user_id: str) -> list[UserProfilePreferenceModel]:
         self._require_sqlalchemy()
         now = _utcnow()
         with self.session_scope() as session:
@@ -69,7 +66,7 @@ class UserProfileProjectionRepository(SqlAlchemyRepositoryBase):
                 ).scalars()
             )
 
-    def get(self, user_id: str, preference_key: str) -> Optional[UserProfilePreferenceModel]:
+    def get(self, user_id: str, preference_key: str) -> UserProfilePreferenceModel | None:
         self._require_sqlalchemy()
         now = _utcnow()
         with self.session_scope() as session:

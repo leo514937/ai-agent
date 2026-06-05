@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Mapping, Sequence
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
+from typing import Any
 
 from .models import KnowledgeChunk
 
 
-def _optional_str(value: Any) -> Optional[str]:
+def _optional_str(value: Any) -> str | None:
     if value is None or value == "":
         return None
     return str(value)
@@ -18,14 +19,14 @@ def _optional_str(value: Any) -> Optional[str]:
 _HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
 
 
-def _repo_root() -> Optional[Path]:
+def _repo_root() -> Path | None:
     try:
         return Path(__file__).resolve().parents[4]
     except Exception:
         return None
 
 
-def _markdown_sources() -> Tuple[Path, ...]:
+def _markdown_sources() -> tuple[Path, ...]:
     root = _repo_root()
     if root is None:
         return ()
@@ -36,8 +37,8 @@ def _markdown_sources() -> Tuple[Path, ...]:
     return tuple(path for path in candidates if path.is_file())
 
 
-def _split_markdown_sections(text: str) -> Tuple[Tuple[str, int, str, int, int], ...]:
-    sections: list[Tuple[str, int, str, int, int]] = []
+def _split_markdown_sections(text: str) -> tuple[tuple[str, int, str, int, int], ...]:
+    sections: list[tuple[str, int, str, int, int]] = []
     lines = text.splitlines()
     current_heading = "Overview"
     current_level = 1
@@ -64,7 +65,7 @@ def _split_markdown_sections(text: str) -> Tuple[Tuple[str, int, str, int, int],
     return tuple(sections)
 
 
-def _normalize_tokens(text: str) -> Tuple[str, ...]:
+def _normalize_tokens(text: str) -> tuple[str, ...]:
     tokens: list[str] = []
     seen: set[str] = set()
     for token in re.findall(r"[A-Za-z0-9_+#.-]+|[\u4e00-\u9fff]{2,}", text or ""):
@@ -96,12 +97,12 @@ def _infer_chunk_type(source_path: Path, heading: str, text: str) -> str:
     return "concept"
 
 
-def _load_repo_local_rows() -> Tuple[Dict[str, Any], ...]:
+def _load_repo_local_rows() -> tuple[dict[str, Any], ...]:
     root = _repo_root()
     if root is None:
         return ()
 
-    rows: list[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     for source_path in _markdown_sources():
         try:
             text = source_path.read_text(encoding="utf-8")
@@ -128,7 +129,7 @@ def _load_repo_local_rows() -> Tuple[Dict[str, Any], ...]:
                 slug=str(relative_path.as_posix()).replace("/", "-").replace("\\", "-").lower(),
                 index=index,
                 digest=hashlib.sha1(
-                    f"{relative_path.as_posix()}:{index}:{normalized_heading}:{normalized_text}".encode("utf-8")
+                    f"{relative_path.as_posix()}:{index}:{normalized_heading}:{normalized_text}".encode()
                 ).hexdigest()[:12],
             )
             rows.append(
@@ -159,7 +160,7 @@ def _load_repo_local_rows() -> Tuple[Dict[str, Any], ...]:
     return tuple(rows)
 
 
-_DEFAULT_ROWS: Tuple[Dict[str, Any], ...] = (
+_DEFAULT_ROWS: tuple[dict[str, Any], ...] = (
     {
         "chunk_id": "rag-concept",
         "document_id": "doc-rag",
@@ -223,7 +224,7 @@ _DEFAULT_ROWS: Tuple[Dict[str, Any], ...] = (
 )
 
 
-def build_default_chunks(rows: Sequence[Mapping[str, Any]] = _DEFAULT_ROWS) -> Tuple[KnowledgeChunk, ...]:
+def build_default_chunks(rows: Sequence[Mapping[str, Any]] = _DEFAULT_ROWS) -> tuple[KnowledgeChunk, ...]:
     return tuple(
         KnowledgeChunk(
             chunk_id=str(row["chunk_id"]),
@@ -240,7 +241,7 @@ def build_default_chunks(rows: Sequence[Mapping[str, Any]] = _DEFAULT_ROWS) -> T
             parent_id=_optional_str(row.get("parent_id")),
             is_latest=bool(row.get("is_latest", True)),
             hash=_optional_str(row.get("hash"))
-            or hashlib.sha1(f'{row["document_id"]}:{row["chunk_id"]}:{row["text"]}'.encode("utf-8")).hexdigest(),
+            or hashlib.sha1(f'{row["document_id"]}:{row["chunk_id"]}:{row["text"]}'.encode()).hexdigest(),
             tags=tuple(str(tag) for tag in row.get("tags", ()) if tag),
             metadata=dict(row.get("metadata", {})),
         )
@@ -249,8 +250,8 @@ def build_default_chunks(rows: Sequence[Mapping[str, Any]] = _DEFAULT_ROWS) -> T
 
 
 @lru_cache(maxsize=1)
-def build_repo_local_chunks() -> Tuple[KnowledgeChunk, ...]:
+def build_repo_local_chunks() -> tuple[KnowledgeChunk, ...]:
     return build_default_chunks(_load_repo_local_rows())
 
 
-DEFAULT_KNOWLEDGE_CHUNKS: Tuple[KnowledgeChunk, ...] = build_default_chunks() + build_repo_local_chunks()
+DEFAULT_KNOWLEDGE_CHUNKS: tuple[KnowledgeChunk, ...] = build_default_chunks() + build_repo_local_chunks()

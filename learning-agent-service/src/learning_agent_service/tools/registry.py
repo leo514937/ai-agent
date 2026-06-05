@@ -1,7 +1,5 @@
 ﻿from __future__ import annotations
 
-from typing import List
-
 from .models import RegisteredTool, ToolSpec
 
 
@@ -11,7 +9,7 @@ class ToolRegistry:
 
     def register(self, registered_tool: RegisteredTool) -> None:
         if registered_tool.spec.name in self._tools:
-            raise ValueError("Tool already registered: {name}".format(name=registered_tool.spec.name))
+            raise ValueError(f"Tool already registered: {registered_tool.spec.name}")
         self._tools[registered_tool.spec.name] = registered_tool
 
     def get(self, name: str) -> RegisteredTool:
@@ -22,5 +20,5 @@ class ToolRegistry:
     def is_registered(self, name: str) -> bool:
         return name in self._tools
 
-    def list_specs(self) -> List[ToolSpec]:
+    def list_specs(self) -> list[ToolSpec]:
         return [registered.spec for registered in self._tools.values()]

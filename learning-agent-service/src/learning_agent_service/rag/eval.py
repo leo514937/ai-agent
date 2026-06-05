@@ -3,8 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import math
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Iterable, Sequence
 
 from .defaults import DEFAULT_KNOWLEDGE_CHUNKS
 from .models import KnowledgeChunk, RetrievalPlan
@@ -12,8 +12,8 @@ from .retrieval import (
     HeuristicDenseRetriever,
     HeuristicMetadataRetriever,
     HeuristicReranker,
-    LocalBM25SparseRetriever,
     HybridRetrieverService,
+    LocalBM25SparseRetriever,
     ReciprocalRankFusion,
 )
 

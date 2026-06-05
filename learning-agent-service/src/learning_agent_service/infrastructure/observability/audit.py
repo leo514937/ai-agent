@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -12,14 +12,14 @@ class AuditEnvelope:
     """A normalized audit event that can be logged or pushed to the outbox."""
 
     event_name: str
-    payload: Dict[str, Any] = field(default_factory=dict)
+    payload: dict[str, Any] = field(default_factory=dict)
     level: str = "INFO"
-    trace_id: Optional[str] = None
-    session_id: Optional[str] = None
-    turn_id: Optional[str] = None
-    emitted_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    trace_id: str | None = None
+    session_id: str | None = None
+    turn_id: str | None = None
+    emitted_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
-    def as_log_extra(self) -> Dict[str, Any]:
+    def as_log_extra(self) -> dict[str, Any]:
         return {
             "audit_event": self.event_name,
             "audit_level": self.level,
@@ -39,7 +39,7 @@ class RetrievalObservation:
     retrieval_hit_count: int = 0
     retrieval_top_score: float = 0.0
     evidence_used_count: int = 0
-    degraded_to: Optional[str] = None
+    degraded_to: str | None = None
 
 
 @dataclass(frozen=True)
@@ -49,6 +49,6 @@ class ToolObservation:
     tool_name: str
     tool_call_id: str
     status: str
-    duration_ms: Optional[int] = None
-    degraded_to: Optional[str] = None
-    error_code: Optional[str] = None
+    duration_ms: int | None = None
+    degraded_to: str | None = None
+    error_code: str | None = None

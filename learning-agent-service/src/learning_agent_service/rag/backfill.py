@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Iterable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Iterable, Mapping, MutableMapping, Optional, Sequence
+from typing import Any
 
 from .models import KnowledgeChunk
 
@@ -93,7 +94,7 @@ def _normalize_payload(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     if "summary" not in normalized and normalized.get("excerpt") is not None:
         normalized["summary"] = normalized.get("excerpt")
     if "hash" not in normalized and document_id and chunk_id:
-        normalized["hash"] = hashlib.sha1(f"{document_id}:{chunk_id}:{text}".encode("utf-8")).hexdigest()
+        normalized["hash"] = hashlib.sha1(f"{document_id}:{chunk_id}:{text}".encode()).hexdigest()
     return {key: value for key, value in normalized.items() if value is not None}
 
 

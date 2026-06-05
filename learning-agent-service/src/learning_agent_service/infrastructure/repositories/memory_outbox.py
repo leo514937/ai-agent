@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, Iterable, List, Optional
+from collections.abc import Iterable
+from datetime import UTC, datetime
+from typing import Any
 
 from learning_agent_service.infrastructure.db.models import MemoryOutboxModel
+from learning_agent_service.domain.utils import utcnow as _utcnow
 
 from .base import SqlAlchemyRepositoryBase
 from .records import MemoryOutboxRecord
@@ -14,19 +16,15 @@ except ImportError:  # pragma: no cover - depends on optional runtime installati
     select = None
 
 
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
-
 class MemoryOutboxRepository(SqlAlchemyRepositoryBase):
     """Durable outbox for memory and vector sync side effects."""
 
     def enqueue(self, event: MemoryOutboxRecord) -> MemoryOutboxModel:
         return self.enqueue_many([event])[0]
 
-    def enqueue_many(self, events: Iterable[MemoryOutboxRecord]) -> List[MemoryOutboxModel]:
+    def enqueue_many(self, events: Iterable[MemoryOutboxRecord]) -> list[MemoryOutboxModel]:
         self._require_sqlalchemy()
-        saved: List[MemoryOutboxModel] = []
+        saved: list[MemoryOutboxModel] = []
         with self.session_scope() as session:
             for event in events:
                 instance = session.execute(
@@ -83,7 +81,7 @@ class MemoryOutboxRepository(SqlAlchemyRepositoryBase):
         session.flush()
         return instance
 
-    def claim_pending(self, limit: int, now: Optional[datetime] = None) -> List[MemoryOutboxModel]:
+    def claim_pending(self, limit: int, now: datetime | None = None) -> list[MemoryOutboxModel]:
         self._require_sqlalchemy()
         claim_time = now or _utcnow()
         with self.session_scope() as session:
@@ -105,7 +103,7 @@ class MemoryOutboxRepository(SqlAlchemyRepositoryBase):
             session.flush()
             return pending
 
-    def mark_published(self, event_id: str) -> Optional[MemoryOutboxModel]:
+    def mark_published(self, event_id: str) -> MemoryOutboxModel | None:
         self._require_sqlalchemy()
         with self.session_scope() as session:
             instance = session.get(MemoryOutboxModel, event_id)
@@ -118,7 +116,7 @@ class MemoryOutboxRepository(SqlAlchemyRepositoryBase):
             session.flush()
             return instance
 
-    def mark_failed(self, event_id: str, error_message: str, retry_delay_seconds: int = 60) -> Optional[MemoryOutboxModel]:
+    def mark_failed(self, event_id: str, error_message: str, retry_delay_seconds: int = 60) -> MemoryOutboxModel | None:
         self._require_sqlalchemy()
         with self.session_scope() as session:
             instance = session.get(MemoryOutboxModel, event_id)
@@ -138,10 +136,10 @@ class MemoryOutboxRepository(SqlAlchemyRepositoryBase):
         self,
         limit: int = 50,
         *,
-        aggregate_type: Optional[str] = None,
-        event_type_prefix: Optional[str] = None,
-        trace_id: Optional[str] = None,
-    ) -> List[MemoryOutboxModel]:
+        aggregate_type: str | None = None,
+        event_type_prefix: str | None = None,
+        trace_id: str | None = None,
+    ) -> list[MemoryOutboxModel]:
         self._require_sqlalchemy()
         with self.session_scope() as session:
             query = select(MemoryOutboxModel)

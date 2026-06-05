@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
+
 from learning_agent_service.domain.memory import MemoryTrace
 from learning_agent_service.infrastructure.db.models import MemoryTraceModel
+from learning_agent_service.domain.utils import utcnow as _utcnow
 
 from .base import SqlAlchemyRepositoryBase
 
@@ -15,11 +17,7 @@ except ImportError:  # pragma: no cover - depends on runtime installation.
     select = None
 
 
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _trace_to_model_fields(trace: MemoryTrace) -> Dict[str, Any]:
+def _trace_to_model_fields(trace: MemoryTrace) -> dict[str, Any]:
     return {
         "trace_id": trace.trace_id,
         "user_id": trace.user_id,
@@ -86,7 +84,7 @@ class MemoryTraceRepository(SqlAlchemyRepositoryBase):
             session.flush()
             return _model_to_trace(instance)
 
-    def get_by_trace_id(self, trace_id: str) -> Optional[MemoryTrace]:
+    def get_by_trace_id(self, trace_id: str) -> MemoryTrace | None:
         self._require_sqlalchemy()
         with self.session_scope() as session:
             model = session.execute(
@@ -94,7 +92,7 @@ class MemoryTraceRepository(SqlAlchemyRepositoryBase):
             ).scalar_one_or_none()
             return _model_to_trace(model) if model is not None else None
 
-    def list_by_session(self, session_id: str) -> List[MemoryTrace]:
+    def list_by_session(self, session_id: str) -> list[MemoryTrace]:
         self._require_sqlalchemy()
         with self.session_scope() as session:
             models = list(
@@ -109,7 +107,7 @@ class MemoryTraceRepository(SqlAlchemyRepositoryBase):
             )
         return [_model_to_trace(model) for model in models]
 
-    def list_by_turn(self, turn_id: str) -> List[MemoryTrace]:
+    def list_by_turn(self, turn_id: str) -> list[MemoryTrace]:
         self._require_sqlalchemy()
         with self.session_scope() as session:
             models = list(
@@ -124,7 +122,7 @@ class MemoryTraceRepository(SqlAlchemyRepositoryBase):
             )
         return [_model_to_trace(model) for model in models]
 
-    def list_recent_by_user(self, user_id: str, limit: int = 20) -> List[MemoryTrace]:
+    def list_recent_by_user(self, user_id: str, limit: int = 20) -> list[MemoryTrace]:
         self._require_sqlalchemy()
         with self.session_scope() as session:
             models = list(

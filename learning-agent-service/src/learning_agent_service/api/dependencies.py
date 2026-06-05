@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Iterable, Protocol
+from collections.abc import Iterable
+from typing import Protocol
 
 from .contracts import (
     ApprovalSubmitRequest,
@@ -9,9 +10,9 @@ from .contracts import (
     FeedbackReportRequest,
     FeedbackReportResponse,
     FeedbackSampleResponse,
+    MemoryAccessLogListResponse,
     MemoryActionRequest,
     MemoryActionResponse,
-    MemoryAccessLogListResponse,
     MemoryCandidateListResponse,
     MemoryDeletionJobListResponse,
     MemoryListResponse,

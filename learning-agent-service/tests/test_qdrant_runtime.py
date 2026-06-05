@@ -452,7 +452,7 @@ class QdrantRuntimeTestCase(unittest.TestCase):
         self.assertEqual(client.set_payload_calls[0]["payload"]["is_active"], False)
         self.assertEqual(client.delete_calls, [])
 
-    def test_build_rag_orchestrator_falls_back_when_knowledge_snapshot_is_missing(self) -> None:
+    def test_build_rag_orchestrator_defers_qdrant_snapshot_loading(self) -> None:
         fake_qdrant = QdrantRuntime(
             client=SimpleNamespace(),
             knowledge_collection="knowledge_chunks",
@@ -481,10 +481,10 @@ class QdrantRuntimeTestCase(unittest.TestCase):
                 InfrastructureClients(qdrant=fake_qdrant, openai=fake_openai),
             )
 
-        self.assertEqual(status.mode, "fallback")
-        self.assertEqual(status.details["reason"], "qdrant_unavailable_empty_or_disabled")
-        self.assertEqual(status.details["fallback_from"], "qdrant")
-        self.assertEqual(status.details["error"], "RuntimeError")
+        self.assertEqual(status.mode, "warming")
+        self.assertEqual(status.details["reason"], "qdrant_warmup_pending_async")
+        self.assertTrue(status.details["warmup_pending"])
+        self.assertEqual(status.details["warmup_strategy"], "async")
         self.assertFalse(status.details["snapshot_loaded"])
         self.assertEqual(status.details["snapshot_source"], "bundled_defaults")
         self.assertFalse(status.details["online_dense_available"])
@@ -492,8 +492,10 @@ class QdrantRuntimeTestCase(unittest.TestCase):
         self.assertEqual(orchestrator.knowledge_chunks, DEFAULT_KNOWLEDGE_CHUNKS)
         self.assertEqual(orchestrator._dense_retriever._vector_name, "embedding")
         self.assertEqual(orchestrator._metadata_retriever._vector_name, "embedding")
+        self.assertEqual(orchestrator.replace_knowledge_chunks(DEFAULT_KNOWLEDGE_CHUNKS[:1]), 1)
+        self.assertEqual(orchestrator.knowledge_chunks, DEFAULT_KNOWLEDGE_CHUNKS[:1])
 
-    def test_build_rag_orchestrator_falls_back_when_online_hybrid_collection_is_missing(self) -> None:
+    def test_build_rag_orchestrator_keeps_default_chunks_until_warmup_replaces_snapshot(self) -> None:
         fake_qdrant = QdrantRuntime(
             client=_MissingHybridCollectionClient(),
             knowledge_collection="knowledge_chunks",
@@ -512,20 +514,17 @@ class QdrantRuntimeTestCase(unittest.TestCase):
         fake_openai = OpenAIRuntime(client=SimpleNamespace(), default_model="gpt-test")
         settings = Settings(prefer_real_adapters=True, allow_in_memory_fallback=True)
 
-        with patch.object(
-            dependencies_module,
-            "_load_qdrant_knowledge_chunks",
-            return_value=DEFAULT_KNOWLEDGE_CHUNKS,
-        ):
-            orchestrator, status = dependencies_module._build_rag_orchestrator(
-                settings,
-                InfrastructureClients(qdrant=fake_qdrant, openai=fake_openai),
-            )
+        orchestrator, status = dependencies_module._build_rag_orchestrator(
+            settings,
+            InfrastructureClients(qdrant=fake_qdrant, openai=fake_openai),
+        )
 
-        self.assertEqual(status.mode, "real")
+        self.assertEqual(status.mode, "warming")
         self.assertIsInstance(orchestrator._dense_retriever, dependencies_module.HeuristicDenseRetriever)
         self.assertIsInstance(orchestrator._metadata_retriever, dependencies_module.HeuristicMetadataRetriever)
-        self.assertEqual(fake_qdrant.client.get_collection_calls, ["local_life_hybrid_chunks"] * 2)
+        self.assertEqual(orchestrator.knowledge_chunks, DEFAULT_KNOWLEDGE_CHUNKS)
+        self.assertEqual(orchestrator.replace_knowledge_chunks(DEFAULT_KNOWLEDGE_CHUNKS[:2]), 2)
+        self.assertEqual(orchestrator.knowledge_chunks, DEFAULT_KNOWLEDGE_CHUNKS[:2])
 
     def test_rag_runtime_details_detect_online_client_capabilities(self) -> None:
         fake_qdrant = QdrantRuntime(

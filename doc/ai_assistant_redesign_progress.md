@@ -118,3 +118,10 @@
     2. 在 `catalog.js` 的 `streamAssistantPrompt` 中创建内部 `AbortController`，封装用户信号并在收到终端事件（`final`/`error`/`clarification_card`）后主动 `abort()`，强制立即终止流读取。
     3. 通过 `selfAborted` 标志精确区分内部自终止与用户手动取消，确保不会误触取消逻辑。
   - **生产编译与验证**：在 `frontend` 目录下运行 `npm run build`，100% 成功顺利通过。
+- [x] **RAG 检索链路兜底（Fallback）根因深度分析 [100% 完成]**：
+  - **完成了 6 大故障点的全链路证据链追踪**，详见 [fallback_analysis.md](file:///d:/javacode/hm-dianping/doc/fallback_analysis.md)。
+  - **核心发现 1 — 向量检索未启用**：`QdrantOnlineDenseRetriever` 虽然 `enable_online_dense_retrieval=True`，但构造阶段即失败，静默回退到了 `HeuristicDenseRetriever`（Jaccard 分词交集），完全不具备语义理解能力。
+  - **核心发现 2 — In-memory Chunks 缺少商铺数据**：`DEFAULT_KNOWLEDGE_CHUNKS` 仅含学习类 mock 数据，与真实本地生活查询完全不匹配。
+  - **核心发现 3 — LLM Query Rewrite 失败**：三路检索全空后 LLM 重写因 `JSONDecodeError` 而失败。
+  - **核心发现 4 — 缺少位置信息不是主因**：`current_city=None` 时 city Filter 不会被添加，Filter 反而更宽松。
+  - **核心发现 5 — LLM Slot Extraction 错误**：`shop_name` 被误抽取为 `"现在"` 而非 `"海底捞水晶城店"`。

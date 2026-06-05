@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-import re
-
 from dataclasses import dataclass
 
-from learning_agent_service.domain import FastDecision, TurnUnderstandingRequest, TurnUnderstandingResult
+from learning_agent_service.domain import (
+    FastDecision,
+    TurnUnderstandingRequest,
+    TurnUnderstandingResult,
+)
 from learning_agent_service.domain.enums import IntentType, OutputStyle, TurnDecision
 
 _CN_COMPARE = "\u533a\u522b"

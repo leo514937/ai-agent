@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Iterable, List
+from collections.abc import Iterable
 
 from learning_agent_service.infrastructure.db.models import ToolInvocationLogModel
 
@@ -18,7 +18,7 @@ except ImportError:  # pragma: no cover - depends on optional runtime installati
 class ToolInvocationLogRepository(SqlAlchemyRepositoryBase):
     """Read/write access for durable tool invocation logging."""
 
-    def append_many(self, entries: Iterable[ToolInvocationLogEntry]) -> List[ToolInvocationLogModel]:
+    def append_many(self, entries: Iterable[ToolInvocationLogEntry]) -> list[ToolInvocationLogModel]:
         self._require_sqlalchemy()
         saved = []
         with self.session_scope() as session:

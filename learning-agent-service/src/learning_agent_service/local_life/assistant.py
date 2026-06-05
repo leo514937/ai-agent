@@ -1,22 +1,15 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Dict, Mapping, Sequence
+from typing import Any
+
+from learning_agent_service.domain.utils import as_mapping as _as_mapping
 
 from learning_agent_service.infrastructure.db.openai_client import OpenAIRuntime
 
-from .answer_planner import LocalLifeAnswerPlan, build_answer_planner_request, parse_answer_plan_payload
-
-
-def _as_mapping(value: Any) -> Dict[str, Any]:
-    if isinstance(value, Mapping):
-        return dict(value)
-    if hasattr(value, "model_dump"):
-        dumped = value.model_dump(mode="json")
-        if isinstance(dumped, Mapping):
-            return dict(dumped)
-    return {}
+from .answer_planner import build_answer_planner_request, parse_answer_plan_payload
 
 
 def _as_list(value: Any) -> list[Any]:
@@ -61,7 +54,7 @@ def _extract_response_text(response: Any) -> str:
     return text or ""
 
 
-def _extract_json_payload(text: str) -> Dict[str, Any]:
+def _extract_json_payload(text: str) -> dict[str, Any]:
     cleaned = (text or "").strip()
     if cleaned.startswith("```"):
         cleaned = cleaned.removeprefix("```json").removeprefix("```").strip()
@@ -99,7 +92,7 @@ class LocalLifeModelAssistant:
         client_context: Mapping[str, Any] | None = None,
         session_context: Mapping[str, Any] | None = None,
         heuristic_summary: Mapping[str, Any] | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         prompt = {
             "stage": "understanding",
             "raw_query": raw_query,
@@ -134,7 +127,7 @@ class LocalLifeModelAssistant:
         safety_result: Mapping[str, Any] | None = None,
         approval_required: bool = False,
         answer_contract: Any | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         return self.compose_answer_plan(
             raw_query=raw_query,
             slots=slots,
@@ -169,12 +162,13 @@ class LocalLifeModelAssistant:
         safety_result: Mapping[str, Any] | None = None,
         approval_required: bool = False,
         answer_contract: Any | None = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         prompt = build_answer_planner_request(
             raw_query=raw_query,
             slots=_as_mapping(slots),
             ranked_candidates=[_as_mapping(item) for item in ranked_candidates or []],
             evidence_pack=evidence_pack,
+            evidence_claims=[_as_mapping(item) for item in evidence_claims or []] or None,
             safety_result=_as_mapping(safety_result),
             source_mode=source_mode,
             degraded_reason=degraded_reason,
@@ -214,7 +208,7 @@ class LocalLifeModelAssistant:
             return {}
         return plan.model_dump(mode="json")
 
-    def _call_json(self, *, system_text: str, prompt: Mapping[str, Any], max_output_tokens: int) -> Dict[str, Any]:
+    def _call_json(self, *, system_text: str, prompt: Mapping[str, Any], max_output_tokens: int) -> dict[str, Any]:
         if self.runtime is None:
             return {}
         client = self.runtime.client

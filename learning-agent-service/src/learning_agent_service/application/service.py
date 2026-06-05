@@ -181,7 +181,7 @@ class WorkflowLearningAgentService:
         except Exception as exc:
             raise RuntimeError("Unable to load session state for approval") from exc
 
-        decision = str(request.decision or "").strip().lower()
+        decision = (request.decision or "").strip().lower()
         if decision not in {"approved", "rejected"}:
             raise RuntimeError("Unsupported approval decision")
 
@@ -288,29 +288,29 @@ class WorkflowLearningAgentService:
         query: str | None = None,
         limit: int = 50,
     ) -> MemoryListResponse:
-        repository = getattr(self.container, "long_term_repository", None)
+        repository: Any = getattr(self.container, "long_term_repository", None)
         if repository is None:
             raise RuntimeError("Long-term memory repository is unavailable")
         if query:
             records = list(repository.search(query, user_id=user_id, limit=limit))
         elif scope:
-            scope_enum = MemoryScope(str(scope).lower())
+            scope_enum = MemoryScope(scope.lower())
             records = list(repository.list_by_scope(user_id, scope_enum))
         else:
             finder = getattr(repository, "find_active_by_user", None)
-            records = list(finder(user_id)) if callable(finder) else list(repository.search("", user_id=user_id, limit=limit))
+            records = list(finder(user_id)) if callable(finder) else list(repository.search("", user_id=user_id, limit=limit))  # type: ignore[arg-type]
         sliced = records[:limit]
         return MemoryListResponse(records=[_memory_record_summary(record) for record in sliced], total=len(records))
 
     def list_memory_candidates(self, user_id: str, limit: int = 50) -> MemoryCandidateListResponse:
-        repository = getattr(self.container, "long_term_repository", None)
+        repository: Any = getattr(self.container, "long_term_repository", None)
         if repository is None:
             raise RuntimeError("Long-term memory repository is unavailable")
         records = list(repository.list_candidates(user_id=user_id))[:limit]
         return MemoryCandidateListResponse(records=[_memory_candidate_summary(item) for item in records], total=len(records))
 
     def get_memory_record(self, memory_id: str) -> MemoryRecordSummary:
-        repository = getattr(self.container, "long_term_repository", None)
+        repository: Any = getattr(self.container, "long_term_repository", None)
         if repository is None:
             raise RuntimeError("Long-term memory repository is unavailable")
         record = repository.get(memory_id)

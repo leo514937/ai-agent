@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Sequence
+from collections.abc import Sequence
 
 from ..local_life.schemas import EvidenceClaim, RankedCandidate
 from .policy import FactCheckResult

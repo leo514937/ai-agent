@@ -4,14 +4,23 @@ import argparse
 import json
 import sys
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any
 
-from learning_agent_service.application.dependencies import OpenAIEmbeddingAdapter, _resolve_memory_vector_size
+from learning_agent_service.application.dependencies import (
+    OpenAIEmbeddingAdapter,
+    _resolve_memory_vector_size,
+)
 from learning_agent_service.config import Settings, get_settings
-from learning_agent_service.domain.memory import MemoryRecord
-from learning_agent_service.infrastructure.db.factories import InfrastructureClients, build_infrastructure_clients
-from learning_agent_service.infrastructure.memory import LongTermMemoryRepository, QdrantLongTermMemoryIndex
+from learning_agent_service.infrastructure.db.factories import (
+    InfrastructureClients,
+    build_infrastructure_clients,
+)
+from learning_agent_service.infrastructure.memory import (
+    LongTermMemoryRepository,
+    QdrantLongTermMemoryIndex,
+)
 
 
 @dataclass(frozen=True)
@@ -44,7 +53,7 @@ def _distance_value(value: Any) -> str:
     return str(value or "").lower()
 
 
-def _collection_vector_params(client: Any, collection_name: str, vector_name: str) -> tuple[Optional[int], Optional[str]]:
+def _collection_vector_params(client: Any, collection_name: str, vector_name: str) -> tuple[int | None, str | None]:
     get_collection = getattr(client, "get_collection", None)
     if not callable(get_collection):
         return None, None
@@ -108,12 +117,12 @@ def reindex_memory_collection(
     settings: Settings,
     *,
     infra: InfrastructureClients | None = None,
-    collection_name: Optional[str] = None,
-    vector_size: Optional[int] = None,
-    vector_name: Optional[str] = None,
-    distance: Optional[str] = None,
+    collection_name: str | None = None,
+    vector_size: int | None = None,
+    vector_name: str | None = None,
+    distance: str | None = None,
     drop_existing: bool = False,
-    expected_old_vector_size: Optional[int] = None,
+    expected_old_vector_size: int | None = None,
     confirm_nonstandard_existing_collection: bool = False,
     batch_size: int = 64,
 ) -> ReindexResult:

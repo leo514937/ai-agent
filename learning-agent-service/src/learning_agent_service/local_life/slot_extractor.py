@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional
+from collections.abc import Mapping
+from typing import Any
+
+from learning_agent_service.domain.utils import as_mapping as _as_mapping, clean_text as _clean_text, coerce_float as _coerce_float
 
 from .schemas import (
     ClarificationDecision,
@@ -25,33 +28,6 @@ _CATEGORY_KEYWORDS: tuple[tuple[str, str], ...] = (
     ("饭店", "餐厅"),
 )
 
-
-def _as_mapping(value: Any) -> Mapping[str, Any]:
-    if isinstance(value, Mapping):
-        return value
-    if hasattr(value, "model_dump"):
-        dumped = value.model_dump(mode="json")
-        if isinstance(dumped, Mapping):
-            return dumped
-    return {}
-
-
-def _clean_text(value: Any) -> Optional[str]:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
-
-
-def _coerce_float(value: Any) -> Optional[float]:
-    if value is None or value == "":
-        return None
-    try:
-        return float(value)
-    except Exception:
-        return None
-
-
 def _merge_text_values(*values: Any) -> list[str]:
     merged: list[str] = []
     seen: set[str] = set()
@@ -67,7 +43,7 @@ def _merge_text_values(*values: Any) -> list[str]:
     return merged
 
 
-def _coerce_intent(value: Any) -> Optional[LocalLifeIntentType]:
+def _coerce_intent(value: Any) -> LocalLifeIntentType | None:
     text = _clean_text(value)
     if not text:
         return None
@@ -103,7 +79,7 @@ def _coerce_intent(value: Any) -> Optional[LocalLifeIntentType]:
     return None
 
 
-def _extract_category(text: str, session_context: Mapping[str, Any]) -> Optional[str]:
+def _extract_category(text: str, session_context: Mapping[str, Any]) -> str | None:
     for keyword, category in _CATEGORY_KEYWORDS:
         if keyword in text:
             return category
@@ -114,7 +90,7 @@ def _extract_category(text: str, session_context: Mapping[str, Any]) -> Optional
     return None
 
 
-def _extract_shop_query(text: str, session_context: Mapping[str, Any]) -> Optional[str]:
+def _extract_shop_query(text: str, session_context: Mapping[str, Any]) -> str | None:
     import re
 
     compact = (text or "").strip()
@@ -154,6 +130,23 @@ def _extract_shop_query(text: str, session_context: Mapping[str, Any]) -> Option
             prefix = match.group("name").strip(" ，,;；")
             if prefix:
                 return prefix
+        nearby_recommendation_like = any(
+            token in normalized
+            for token in (
+                "附近",
+                "周边",
+                "推荐",
+                "帮我找",
+                "找一家",
+                "找个",
+                "想找",
+                "附近推荐",
+                "去哪",
+                "去哪儿",
+            )
+        )
+        if nearby_recommendation_like:
+            return None
     for key in ("selected_shop_name", "shop_name", "current_shop"):
         value = session_context.get(key)
         if value:

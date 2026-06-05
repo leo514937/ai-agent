@@ -1,13 +1,23 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from ...domain.contracts import NormalizedToolResult, PlanExecutionSummary, RagResult, ToolExecutionResult
+from ...domain.contracts import (
+    NormalizedToolResult,
+    PlanExecutionSummary,
+    RagResult,
+    ToolExecutionResult,
+)
 from ...domain.enums import RagStatus, ToolExecutionStatus
 from ...domain.state import GraphState
-from ..routing import can_enter_retrieval, can_enter_tool, should_run_tool as routing_should_run_tool, _update_phase3_trace
-from .services import PlanExecuteSubgraphServices, RagSubgraphServices, ToolSubgraphServices, UnderstandTurnServices
-
+from ..router import _update_phase3_trace, can_enter_retrieval, can_enter_tool
+from ..router import should_run_tool as routing_should_run_tool
+from .services import (
+    PlanExecuteSubgraphServices,
+    RagSubgraphServices,
+    ToolSubgraphServices,
+    UnderstandTurnServices,
+)
 
 _RETRIEVAL_ACTIONS = {"rag_retrieval", "rag_plus_tool"}
 _TOOL_ACTIONS = {"tool_call", "rag_plus_tool"}
@@ -107,7 +117,7 @@ def _stage_entry(stage: str, status: str, *, route_decision: str | None = None, 
         "route_decision": route_decision,
         "route_reason": route_reason,
         "detail": dict(detail or {}),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
     }
 
 
@@ -131,7 +141,11 @@ def _mark_stage(state: GraphState, stage: str, status: str, *, route_decision: s
 def _ensure_rag_result(state: GraphState) -> GraphState:
     turn = state["turn"]
     if turn.rag_result is None:
-        status = RagStatus.EMPTY if turn.evidence_pack is None else RagStatus.OK
+        is_empty = (
+            turn.evidence_pack is None 
+            or not getattr(turn.evidence_pack, "items", [])
+        )
+        status = RagStatus.EMPTY if is_empty else RagStatus.OK
         state["turn"] = turn.model_copy(
             update={
                 "rag_result": RagResult(
@@ -185,6 +199,9 @@ def _ensure_raw_tool_result(state: GraphState) -> GraphState:
                 "raw_tool_result": ToolExecutionResult(
                     status=ToolExecutionStatus.SKIPPED,
                     tool_name=turn.tool_plan.tool_name,
+                    degraded_to=None,
+                    error=None,
+                    approval_status=None,
                 )
             }
         )
@@ -469,8 +486,15 @@ def should_run_plan_execute(state: GraphState) -> bool:
 
 
 def route_after_understand(state: GraphState) -> str:
+    routing = state["turn"].routing_decision
+    if routing is not None and (routing.blocked or str(routing.required_action).strip().lower() in _DIRECT_ACTIONS):
+        return "compose_answer"
     if should_run_plan_execute(state):
         return "plan_execute_subgraph"
+    if should_run_rag(state):
+        return "rag_subgraph"
+    if should_run_tools(state):
+        return "tool_subgraph"
     return "route_gate"
 
 
@@ -491,6 +515,12 @@ def route_decider(state: GraphState) -> str:
         else:
             route_review = {}
 
+    raw_query_text = str(getattr(turn, "raw_query", "") or "")
+    compact_query_text = raw_query_text.replace(" ", "")
+    recommendation_like_query = any(
+        token in compact_query_text
+        for token in ("附近", "周边", "推荐", "几家", "多推荐", "多家")
+    )
     effective_action = action
     if route_review:
         current_action = str(route_review.get("current_action") or "").strip().lower()
@@ -506,16 +536,17 @@ def route_decider(state: GraphState) -> str:
     recommendation_mode = bool(
         extra.get("recommendation_mode")
         or effective_action == "local_life_recommend"
-        or route_candidate in {"recommendation"}
+        or route_candidate in {"recommendation", "local_life.nearby_recommend", "nearby_recommend", "local_life_recommend"}
         or (route_candidate.startswith("local_life.") and "recommend" in route_candidate)
+        or recommendation_like_query
     )
 
     if routing.blocked and effective_action == action:
         return "clarify"
-    if recommendation_mode:
-        return "recommendation"
     if effective_action == "clarify":
         return "clarify"
+    if recommendation_mode:
+        return "recommendation"
     if effective_action == "tool_call":
         return "tool"
     if effective_action == "rag_plus_tool":
@@ -574,7 +605,7 @@ def _ensure_plan_summary(state: GraphState) -> GraphState:
         key_findings.extend(result.observations[:1])
 
     summary = PlanExecutionSummary(
-        status=status,
+        status=status,  # type: ignore[arg-type]
         completed_steps=completed_steps,
         total_steps=total_steps,
         key_findings=key_findings[:5],

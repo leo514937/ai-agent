@@ -1,8 +1,9 @@
 ﻿from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Callable, Dict, Optional, Type
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -17,16 +18,16 @@ class SideEffectLevel(str, Enum):
 class ToolSpec:
     name: str
     description: str
-    input_model: Type[BaseModel]
-    output_model: Type[BaseModel]
+    input_model: type[BaseModel]
+    output_model: type[BaseModel]
     idempotent: bool
     retryable: bool
     side_effect_level: SideEffectLevel
     risk_level: str = "low"
     allowed_execution_modes: tuple[str, ...] = ("auto", "simple", "plan_execute")
     requires_approval: bool = False
-    fallback_strategy: Optional[str] = None
-    degrade_to: Optional[str] = None
+    fallback_strategy: str | None = None
+    degrade_to: str | None = None
     timeout_ms: int = 5000
 
 
@@ -38,39 +39,39 @@ class RegisteredTool:
 
 class ToolSelection(BaseModel):
     tool_name: str
-    input_payload: Dict[str, Any] = Field(default_factory=dict)
-    reason: Optional[str] = None
-    degrade_to: Optional[str] = None
-    timeout_ms: Optional[int] = None
+    input_payload: dict[str, Any] = Field(default_factory=dict)
+    reason: str | None = None
+    degrade_to: str | None = None
+    timeout_ms: int | None = None
     approval_required: bool = False
-    approval_status: Optional[str] = None
-    approval_request: Dict[str, Any] = Field(default_factory=dict)
+    approval_status: str | None = None
+    approval_request: dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolExecutionResult(BaseModel):
     tool_name: str
     status: str
-    output: Dict[str, Any] = Field(default_factory=dict)
-    error_code: Optional[str] = None
-    error_message: Optional[str] = None
+    output: dict[str, Any] = Field(default_factory=dict)
+    error_code: str | None = None
+    error_message: str | None = None
     retryable: bool = False
     degraded: bool = False
-    degrade_to: Optional[str] = None
+    degrade_to: str | None = None
     duration_ms: int = 0
     approval_required: bool = False
-    approval_status: Optional[str] = None
-    approval_request: Dict[str, Any] = Field(default_factory=dict)
+    approval_status: str | None = None
+    approval_request: dict[str, Any] = Field(default_factory=dict)
 
 
 class NormalizedToolResult(BaseModel):
     tool_name: str
     ok: bool
     status: str
-    payload: Dict[str, Any] = Field(default_factory=dict)
-    errors: Dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, Any] = Field(default_factory=dict)
+    errors: dict[str, Any] = Field(default_factory=dict)
     degraded: bool = False
     retryable: bool = False
-    degrade_to: Optional[str] = None
+    degrade_to: str | None = None
     approval_required: bool = False
-    approval_status: Optional[str] = None
-    approval_request: Dict[str, Any] = Field(default_factory=dict)
+    approval_status: str | None = None
+    approval_request: dict[str, Any] = Field(default_factory=dict)

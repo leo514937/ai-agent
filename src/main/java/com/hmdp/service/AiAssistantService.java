@@ -41,14 +41,17 @@ public class AiAssistantService {
     @Resource
     private AiBusinessQueryFacade aiBusinessQueryFacade;
     @Resource
+    private AiInternalBusinessService aiInternalBusinessService;
+    @Resource
     private AiRemoteClient aiRemoteClient;
 
     public AiChatResponse chat(AiChatRequest request, UserDTO user) {
         String message = normalize(request == null ? null : request.getMessage());
         Map<String, Object> context = normalizeContext(request == null ? null : request.getContext());
+        Map<String, Object> enrichedContext = aiInternalBusinessService.enrichRealtimeContext(context);
         String page = firstNonBlank(request == null ? null : request.getPage(), asString(context, "page"), "assistant");
 
-        AiQueryContext queryContext = aiBusinessQueryFacade.resolveContext(context, user);
+        AiQueryContext queryContext = aiBusinessQueryFacade.resolveContext(enrichedContext, user);
         AiRouteType route = aiBusinessQueryFacade.resolveRoute(message, queryContext);
         log.info("AI 请求路由={}, page={}, userId={}, shopContext={}, blogContext={}, typeContext={}",
                 route,

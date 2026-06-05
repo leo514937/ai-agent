@@ -1,7 +1,7 @@
 ﻿from __future__ import annotations
 
 import re
-from typing import Dict, Iterable, Tuple
+from collections.abc import Iterable
 
 _CANONICAL_PATTERN = re.compile("[^a-z0-9\u4e00-\u9fff]+")
 
@@ -19,7 +19,7 @@ CANONICAL_TOPIC_ALIASES = {
 
 
 class CanonicalTopicResolver:
-    def __init__(self, alias_map: Dict[str, str] = None) -> None:
+    def __init__(self, alias_map: dict[str, str] | None = None) -> None:
         self._alias_map = {
             self._normalize(key): value
             for key, value in CANONICAL_TOPIC_ALIASES.items()
@@ -55,7 +55,7 @@ class CanonicalTopicResolver:
             return "agent.rag.core"
         return normalized.replace(" ", ".")
 
-    def canonicalize_many(self, topics: Iterable[str]) -> Tuple[str, ...]:
+    def canonicalize_many(self, topics: Iterable[str]) -> tuple[str, ...]:
         results = []
         seen = set()
         for topic in topics:

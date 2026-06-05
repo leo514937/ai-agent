@@ -4,15 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 @dataclass(frozen=True)
 class UserPreferenceProfileRecord:
     user_id: str
-    answer_style: Optional[str] = None
-    explanation_depth: Optional[str] = None
-    extra: Dict[str, Any] = field(default_factory=dict)
+    answer_style: str | None = None
+    explanation_depth: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -21,13 +21,13 @@ class UserProfilePreferenceRecord:
     preference_key: str
     current_value: str
     confidence: float = 0.0
-    source_memory_id: Optional[str] = None
-    effective_from: Optional[datetime] = None
-    effective_to: Optional[datetime] = None
+    source_memory_id: str | None = None
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
     status: str = "active"
     is_active: bool = True
-    source_session_id: Optional[str] = None
-    extra: Dict[str, Any] = field(default_factory=dict)
+    source_session_id: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -37,12 +37,12 @@ class ClarificationRecordEntry:
     turn_id: str
     ambiguity_type: str
     question_text: str
-    options_json: Dict[str, Any] = field(default_factory=dict)
-    selected_option_id: Optional[str] = None
-    selected_option_label: Optional[str] = None
+    options_json: dict[str, Any] = field(default_factory=dict)
+    selected_option_id: str | None = None
+    selected_option_label: str | None = None
     resolution_status: str = "pending"
-    resolved_at: Optional[datetime] = None
-    extra: Dict[str, Any] = field(default_factory=dict)
+    resolved_at: datetime | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -52,12 +52,12 @@ class ToolInvocationLogEntry:
     tool_name: str
     tool_call_id: str
     status: str
-    duration_ms: Optional[int] = None
-    degraded_to: Optional[str] = None
-    error_code: Optional[str] = None
-    input_summary: Dict[str, Any] = field(default_factory=dict)
-    output_summary: Dict[str, Any] = field(default_factory=dict)
-    extra: Dict[str, Any] = field(default_factory=dict)
+    duration_ms: int | None = None
+    degraded_to: str | None = None
+    error_code: str | None = None
+    input_summary: dict[str, Any] = field(default_factory=dict)
+    output_summary: dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -67,10 +67,10 @@ class KnowledgeDocumentRecord:
     source_type: str
     category: str
     checksum: str
-    source_uri: Optional[str] = None
-    active_version: Optional[str] = None
+    source_uri: str | None = None
+    active_version: str | None = None
     status: str = "active"
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -80,11 +80,11 @@ class KnowledgeDocumentVersionRecord:
     checksum: str
     chunk_count: int = 0
     status: str = "inactive"
-    imported_at: Optional[datetime] = None
-    activated_at: Optional[datetime] = None
-    invalidated_at: Optional[datetime] = None
-    rollback_from_version: Optional[str] = None
-    extra: Dict[str, Any] = field(default_factory=dict)
+    imported_at: datetime | None = None
+    activated_at: datetime | None = None
+    invalidated_at: datetime | None = None
+    rollback_from_version: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -93,12 +93,12 @@ class OutboxEventRecord:
     aggregate_id: str
     event_type: str
     dedupe_key: str
-    payload: Dict[str, Any] = field(default_factory=dict)
+    payload: dict[str, Any] = field(default_factory=dict)
     status: str = "pending"
-    available_at: Optional[datetime] = None
-    trace_id: Optional[str] = None
+    available_at: datetime | None = None
+    trace_id: str | None = None
     attempts: int = 0
-    last_error: Optional[str] = None
+    last_error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -109,13 +109,13 @@ class MemoryOutboxRecord:
     user_id: str
     event_type: str
     dedupe_key: str
-    payload: Dict[str, Any] = field(default_factory=dict)
+    payload: dict[str, Any] = field(default_factory=dict)
     status: str = "pending"
-    session_id: Optional[str] = None
-    turn_id: Optional[str] = None
-    available_at: Optional[datetime] = None
-    trace_id: Optional[str] = None
+    session_id: str | None = None
+    turn_id: str | None = None
+    available_at: datetime | None = None
+    trace_id: str | None = None
     attempts: int = 0
-    last_error: Optional[str] = None
-    vector_id: Optional[str] = None
-    extra: Dict[str, Any] = field(default_factory=dict)
+    last_error: str | None = None
+    vector_id: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)

@@ -1,25 +1,20 @@
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
+
+from learning_agent_service.domain.utils import as_mapping as _as_mapping, clean_text as _clean_text
 
 from .answer_planner import CandidateEvidenceSummary, EvidenceItem, EvidencePack, SceneFitSummary
 
 
-def _as_mapping(value: Any) -> dict[str, Any]:
-    if isinstance(value, Mapping):
-        return dict(value)
-    if hasattr(value, "model_dump"):
-        dumped = value.model_dump(mode="json")
-        if isinstance(dumped, Mapping):
-            return dict(dumped)
-    return {}
-
-
-def _clean_text(value: Any) -> str | None:
-    if value is None:
+def _clean_int(value: Any) -> int | None:
+    if value in (None, ""):
         return None
-    text = str(value).strip()
-    return text or None
+    try:
+        return int(value)
+    except Exception:
+        return None
 
 
 def _string_list(value: Any) -> list[str]:
@@ -126,6 +121,8 @@ def build_evidence_pack(
     slots: Mapping[str, Any] | Any,
     source_summary: Mapping[str, Any] | Any,
     safety_result: Mapping[str, Any] | Any,
+    rag_mode: str | None = None,
+    target_shop_id: int | None = None,
     max_candidates: int = 5,
     max_evidence_per_candidate: int = 3,
 ) -> EvidencePack:
@@ -133,6 +130,15 @@ def build_evidence_pack(
     source_summary_map = _as_mapping(source_summary)
     safety_result_map = _as_mapping(safety_result)
     scene = _clean_text(slots_map.get("scene"))
+    inferred_target_shop_id = target_shop_id
+    if inferred_target_shop_id in (None, ""):
+        inferred_target_shop_id = _clean_int(slots_map.get("shop_id") or source_summary_map.get("target_shop_id"))
+    resolved_rag_mode = _clean_text(
+        rag_mode
+        or slots_map.get("rag_mode")
+        or source_summary_map.get("rag_mode")
+        or ("single_shop_rag" if inferred_target_shop_id is not None else "recommendation_rag")
+    ) or "single_shop_rag"
 
     normalized_candidates: list[dict[str, Any]] = [
         _as_mapping(candidate) for candidate in ranked_candidates[: max(0, int(max_candidates))]
@@ -140,30 +146,46 @@ def build_evidence_pack(
     evidence_by_shop: dict[str, list[EvidenceItem]] = {}
     shop_evidence_map: dict[str, list[str]] = {}
     selected_shop_ids = {
+        str(inferred_target_shop_id)
+    } if inferred_target_shop_id is not None else {
         str(candidate.get("shop_id") or candidate.get("id"))
         for candidate in normalized_candidates
         if candidate.get("shop_id") not in (None, "") or candidate.get("id") not in (None, "")
     }
+    dropped_cross_shop_evidence: list[EvidenceItem] = []
 
-    for claim in evidence_claims:
+    def _make_item(claim_map: Mapping[str, Any], *, shop_key: str, index: int) -> EvidenceItem:
+        shop_id = claim_map.get("shop_id")
+        if shop_id in (None, ""):
+            metadata_shop_id = _as_mapping(claim_map.get("metadata")).get("shop_id")
+            shop_id = metadata_shop_id if metadata_shop_id not in (None, "") else None
+        raw_evidence_id = claim_map.get("chunk_id") or claim_map.get("evidence_id") or f"{shop_key}-{index}"
+        try:
+            normalized_shop_id = int(shop_id) if shop_id not in (None, "") else None
+        except Exception:
+            normalized_shop_id = None
+        return EvidenceItem(
+            evidence_id=str(raw_evidence_id),
+            chunk_id=str(raw_evidence_id),
+            source_type=str(claim_map.get("source_type") or claim_map.get("chunk_type") or "local_life"),
+            shop_id=normalized_shop_id,
+            claim=str(claim_map.get("claim") or claim_map.get("support_text") or claim_map.get("text") or ""),
+            confidence=float(claim_map.get("confidence") or 0.0),
+            metadata=_as_mapping(claim_map.get("metadata")),
+            chunk_type=str(claim_map.get("chunk_type") or claim_map.get("chunk_role") or claim_map.get("source_type") or "local_life"),
+        )
+
+    for claim_index, claim in enumerate(evidence_claims, start=1):
         claim_map = _as_mapping(claim)
         shop_id = claim_map.get("shop_id")
         if shop_id in (None, ""):
             metadata_shop_id = _as_mapping(claim_map.get("metadata")).get("shop_id")
             shop_id = metadata_shop_id if metadata_shop_id not in (None, "") else None
         shop_key = str(shop_id) if shop_id not in (None, "") else "unknown"
+        item = _make_item(claim_map, shop_key=shop_key, index=claim_index)
         if selected_shop_ids and shop_key not in selected_shop_ids:
+            dropped_cross_shop_evidence.append(item)
             continue
-        item = EvidenceItem(
-            evidence_id=str(claim_map.get("chunk_id") or claim_map.get("evidence_id") or f"{shop_key}-{len(evidence_by_shop.get(shop_key, [])) + 1}"),
-            chunk_id=str(claim_map.get("chunk_id") or claim_map.get("evidence_id") or f"{shop_key}-{len(evidence_by_shop.get(shop_key, [])) + 1}"),
-            source_type=str(claim_map.get("source_type") or claim_map.get("chunk_type") or "local_life"),
-            shop_id=int(shop_id) if shop_id not in (None, "") else None,
-            claim=str(claim_map.get("claim") or claim_map.get("support_text") or claim_map.get("text") or ""),
-            confidence=float(claim_map.get("confidence") or 0.0),
-            metadata=_as_mapping(claim_map.get("metadata")),
-            chunk_type=str(claim_map.get("chunk_type") or claim_map.get("chunk_role") or claim_map.get("source_type") or "local_life"),
-        )
         evidence_by_shop.setdefault(shop_key, []).append(item)
 
     for shop_key, items in list(evidence_by_shop.items()):
@@ -196,16 +218,25 @@ def build_evidence_pack(
     if safety_result_map.get("approval_required"):
         notes.append("approval_required")
 
+    empty_reason = _clean_text(source_summary_map.get("empty_reason") or source_summary_map.get("degraded_reason"))
+    if not items and not empty_reason:
+        empty_reason = "no_matching_evidence" if selected_shop_ids else "no_selected_shop_ids"
+
     truncated = len(ranked_candidates) > len(candidate_summaries) or len(evidence_claims) > len(items)
     return EvidencePack(
         raw_query=raw_query,
         slots=slots_map,
+        rag_mode=resolved_rag_mode,
+        target_shop_id=inferred_target_shop_id,
         ranked_candidates=candidate_summaries,
         items=items,
         shop_evidence_map=shop_evidence_map,
+        grouped_by_shop={shop_key: list(items) for shop_key, items in evidence_by_shop.items()},
+        dropped_cross_shop_evidence=dropped_cross_shop_evidence,
         source_summary=source_summary_map,
         safety_result=safety_result_map,
         notes=notes,
+        empty_reason=empty_reason,
         truncated=truncated,
     )
 

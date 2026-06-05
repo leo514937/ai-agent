@@ -3,18 +3,18 @@ from __future__ import annotations
 import json
 import queue
 import threading
-from datetime import datetime, timezone
-from typing import Iterable, Iterator
+from collections.abc import Iterable, Iterator
+from datetime import UTC, datetime
 
 from .compat import StreamingResponse
-from .contracts import EventType, StageStatusPayload, SseEnvelope, validate_event_payload
+from .contracts import EventType, SseEnvelope, StageStatusPayload, validate_event_payload
 
 _KEEPALIVE_SECONDS = 20.0
 _STOP = object()
 
 
 def build_event_id(session_id: str, turn_id: str, seq: int) -> str:
-    return "{session}:{turn}:{seq}".format(session=session_id, turn=turn_id, seq=seq)
+    return f"{session_id}:{turn_id}:{seq}"
 
 
 def serialize_envelope(envelope: SseEnvelope, seq: int) -> str:
@@ -23,10 +23,8 @@ def serialize_envelope(envelope: SseEnvelope, seq: int) -> str:
     )
     body = validated.model_dump(mode="json")
     lines = [
-        "id: {event_id}".format(
-            event_id=build_event_id(validated.session_id, validated.turn_id, seq),
-        ),
-        "event: {event_type}".format(event_type=validated.event_type),
+        f"id: {build_event_id(validated.session_id, validated.turn_id, seq)}",
+        f"event: {validated.event_type}",
         "data: {payload}".format(
             payload=json.dumps(body, ensure_ascii=False, separators=(",", ":")),
         ),
@@ -54,7 +52,7 @@ def _stream_envelopes_with_keepalive(
             yield serialize_envelope(envelope, seq=index)
         return
 
-    event_queue: "queue.Queue[object]" = queue.Queue()
+    event_queue: queue.Queue[object] = queue.Queue()
     worker_error: list[BaseException] = []
 
     def _pump_events() -> None:
@@ -95,7 +93,7 @@ def _stream_envelopes_with_keepalive(
 
 
 def _build_keepalive_envelope(template: SseEnvelope) -> SseEnvelope:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return SseEnvelope(
         event_type=EventType.HEARTBEAT.value,
         trace_id=template.trace_id,

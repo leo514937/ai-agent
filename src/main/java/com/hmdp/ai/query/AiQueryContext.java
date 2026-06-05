@@ -50,7 +50,14 @@ public class AiQueryContext {
         result.setTargetUserName(firstNonBlank(asString(source, "targetUserName"), asString(source, "authorUserName")));
         result.setX(firstDouble(source, "x", "longitude", "lng"));
         result.setY(firstDouble(source, "y", "latitude", "lat"));
-        result.setLocation(firstNonBlank(asString(source, "location"), asString(source, "city"), asString(source, "area")));
+        result.setLocation(firstNonBlank(
+                asString(source, "location"),
+                asString(source, "current_location"),
+                asString(source, "location_name"),
+                asString(source, "address"),
+                asString(source, "city"),
+                asString(source, "area")
+        ));
 
         if (currentUser != null) {
             if (result.getUserId() == null) {

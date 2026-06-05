@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import argparse
 import logging
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Any, Callable, Sequence
+from typing import Any
 
 from learning_agent_service.adapters.java_business import JavaBusinessClient
 from learning_agent_service.application.dependencies import OpenAIEmbeddingAdapter

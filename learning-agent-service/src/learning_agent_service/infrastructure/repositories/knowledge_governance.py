@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
-from learning_agent_service.infrastructure.db.models import KnowledgeDocumentModel, KnowledgeDocumentVersionModel
+from learning_agent_service.infrastructure.db.models import (
+    KnowledgeDocumentModel,
+    KnowledgeDocumentVersionModel,
+)
 
 from .base import SqlAlchemyRepositoryBase
 from .records import KnowledgeDocumentRecord, KnowledgeDocumentVersionRecord
@@ -53,7 +55,7 @@ class KnowledgeGovernanceRepository(SqlAlchemyRepositoryBase):
             instance.checksum = record.checksum
             instance.chunk_count = record.chunk_count
             instance.status = record.status
-            instance.imported_at = record.imported_at or datetime.now(timezone.utc)
+            instance.imported_at = record.imported_at or datetime.now(UTC)
             instance.activated_at = record.activated_at
             instance.invalidated_at = record.invalidated_at
             instance.rollback_from_version = record.rollback_from_version
@@ -62,9 +64,9 @@ class KnowledgeGovernanceRepository(SqlAlchemyRepositoryBase):
             session.flush()
             return instance
 
-    def activate_version(self, document_id: str, version: str) -> Optional[KnowledgeDocumentVersionModel]:
+    def activate_version(self, document_id: str, version: str) -> KnowledgeDocumentVersionModel | None:
         self._require_sqlalchemy()
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         with self.session_scope() as session:
             document = session.execute(
                 select(KnowledgeDocumentModel).where(KnowledgeDocumentModel.document_id == document_id)
@@ -86,7 +88,7 @@ class KnowledgeGovernanceRepository(SqlAlchemyRepositoryBase):
             session.flush()
             return version_row
 
-    def mark_version_inactive(self, document_id: str, version: str, status: str = "inactive") -> Optional[KnowledgeDocumentVersionModel]:
+    def mark_version_inactive(self, document_id: str, version: str, status: str = "inactive") -> KnowledgeDocumentVersionModel | None:
         self._require_sqlalchemy()
         with self.session_scope() as session:
             version_row = session.execute(
@@ -98,12 +100,12 @@ class KnowledgeGovernanceRepository(SqlAlchemyRepositoryBase):
             if version_row is None:
                 return None
             version_row.status = status
-            version_row.invalidated_at = datetime.now(timezone.utc)
+            version_row.invalidated_at = datetime.now(UTC)
             session.add(version_row)
             session.flush()
             return version_row
 
-    def rollback_to_version(self, document_id: str, version: str, rollback_from_version: str) -> Optional[KnowledgeDocumentVersionModel]:
+    def rollback_to_version(self, document_id: str, version: str, rollback_from_version: str) -> KnowledgeDocumentVersionModel | None:
         self._require_sqlalchemy()
         with self.session_scope() as session:
             document = session.execute(
@@ -120,7 +122,7 @@ class KnowledgeGovernanceRepository(SqlAlchemyRepositoryBase):
             document.active_version = version
             version_row.status = "active"
             version_row.rollback_from_version = rollback_from_version
-            version_row.activated_at = datetime.now(timezone.utc)
+            version_row.activated_at = datetime.now(UTC)
             session.add(document)
             session.add(version_row)
             session.flush()

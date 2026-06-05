@@ -1,25 +1,25 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Iterable, Optional, Protocol
+from collections.abc import Iterable
+from typing import TYPE_CHECKING, Protocol
 
 from .contracts import (
     AnswerComposeRequest,
     AnswerComposeResult,
-    ChatTurnCommand,
     Citation,
     CitationBuildRequest,
     ErrorPayload,
     EvidenceEvaluationRequest,
     EvidencePack,
-    FinalPayload,
     FastDecision,
+    FinalPayload,
     GraphRuntimeMeta,
     HybridRecallResult,
     HybridRetrieveRequest,
     NormalizedToolResult,
+    PersistentSessionContext,
     PersistSessionCommand,
     PersistSessionResult,
-    PersistentSessionContext,
     QueryRewriteRequest,
     ReferenceResolutionRequest,
     ReferenceResolutionResult,
@@ -31,10 +31,14 @@ from .contracts import (
     ToolPlanningRequest,
     ToolSelection,
     TurnUnderstandingRequest,
-    TurnUnderstandingResult,
 )
+
 if TYPE_CHECKING:
-    from learning_agent_service.application.rag_gate import RagGateDecision, RagGateRequest
+    from learning_agent_service.application.rag_gate import (
+        RagGateDecision,
+        RagGateRequest,
+        RagGateVote,
+    )
 
 
 class ModelGatewayPort(Protocol):
@@ -71,13 +75,13 @@ class RAGOrchestratorPort(Protocol):
 
 
 class RagRouteGatePort(Protocol):
-    def precheck(self, request: "RagGateRequest"):
+    def precheck(self, request: RagGateRequest) -> RagGateVote:
         ...
 
-    def should_skip_memory_retrieval(self, request: "RagGateRequest") -> bool:
+    def should_skip_memory_retrieval(self, request: RagGateRequest) -> bool:
         ...
 
-    def decide(self, request: "RagGateRequest") -> "RagGateDecision":
+    def decide(self, request: RagGateRequest) -> RagGateDecision:
         ...
 
 
@@ -90,7 +94,7 @@ class MemoryServicePort(Protocol):
 
 
 class ToolPlannerPort(Protocol):
-    def plan(self, request: ToolPlanningRequest) -> Optional[ToolSelection]:
+    def plan(self, request: ToolPlanningRequest) -> ToolSelection | None:
         ...
 
     def plan_from_name(self, tool_name: str, input_payload: dict) -> ToolSelection:
@@ -119,5 +123,5 @@ class FinalizerPort(Protocol):
         terminal_event: str,
         payload: FinalPayload | ErrorPayload | dict,
         runtime: GraphRuntimeMeta,
-    ) -> Optional[SseEnvelope]:
+    ) -> SseEnvelope | None:
         ...

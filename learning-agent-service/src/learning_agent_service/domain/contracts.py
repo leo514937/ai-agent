@@ -2,31 +2,18 @@ from __future__ import annotations
 
 import types
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Literal, get_args, get_origin, Union
+from typing import Any, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .enums import IntentType, OutputStyle, RagStatus, ToolExecutionStatus, TurnDecision
 from .errors import ErrorInfo, TerminalEvent, WorkflowErrorCode
-
 from .memory import (
-    MemoryRecord,
     MemoryCandidate,
+    MemoryInjectionPlan,
     MemoryTrace,
     MemoryWritePlan,
-    MemoryRetrievalPlan,
     RetrievedMemoryPack,
-    MemoryInjectionPlan,
-    MemoryUpdateEvent,
-    MemoryType,
-    MemoryScope,
-    MemoryStatus,
-    MemorySource,
-    MemorySensitivity,
-    MemoryRetrievalMode,
-    MemoryTargetStore,
-    MemoryMetadata,
-    _utcnow,
 )
 
 
@@ -66,158 +53,158 @@ class ChatTurnCommand(CoreModel):
     turn_id: str
     user_id: str
     message: str
-    page: Optional[str] = None
-    response_mode: Optional[str] = None
-    topic_hint: Optional[str] = None
-    history_summary: Optional[str] = None
-    client_context: Dict[str, Any] = Field(default_factory=dict)
+    page: str | None = None
+    response_mode: str | None = None
+    topic_hint: str | None = None
+    history_summary: str | None = None
+    client_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class ClarificationOption(CoreModel):
     id: str
     label: str
-    value: Optional[str]
-    description: Optional[str]
+    value: str | None
+    description: str | None
 
 
 class ClarificationCard(CoreModel):
     card_id: str
     question: str
-    options: List[ClarificationOption] = Field(default_factory=list)
-    ambiguity_type: Optional[str]
-    source_turn_id: Optional[str]
-    expires_at: Optional[datetime]
+    options: list[ClarificationOption] = Field(default_factory=list)
+    ambiguity_type: str | None
+    source_turn_id: str | None
+    expires_at: datetime | None
 
 
 class ReferenceResolutionResult(CoreModel):
     resolved: bool = False
     confidence: float = 0.0
-    resolved_entity: Optional[str]
-    candidate_entities: List[str] = Field(default_factory=list)
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    resolved_entity: str | None
+    candidate_entities: list[str] = Field(default_factory=list)
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class RetrievalPlan(CoreModel):
     semantic_query: str = ""
     keyword_query: str = ""
-    retrieval_filters: Dict[str, Any] = Field(default_factory=dict)
-    preferred_chunk_types: List[str] = Field(default_factory=list)
-    preferred_chunk_roles: List[str] = Field(default_factory=list)
+    retrieval_filters: dict[str, Any] = Field(default_factory=dict)
+    preferred_chunk_types: list[str] = Field(default_factory=list)
+    preferred_chunk_roles: list[str] = Field(default_factory=list)
     need_retry_rewrite: bool = False
     strategy: str = "dense+sparse+metadata->rrf->rerank->evidence"
     source: str = "classifier"
-    reasoning_notes: List[str] = Field(default_factory=list)
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    reasoning_notes: list[str] = Field(default_factory=list)
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class Citation(CoreModel):
     chunk_id: str
-    document_id: Optional[str]
-    source_type: Optional[str]
-    version: Optional[str]
-    score: Optional[float]
-    title: Optional[str]
-    locator: Optional[str]
+    document_id: str | None
+    source_type: str | None
+    version: str | None
+    score: float | None
+    title: str | None
+    locator: str | None
 
 
 class EvidenceItem(CoreModel):
     chunk_id: str
     content: str
     score: float = 0.0
-    document_id: Optional[str]
-    chunk_type: Optional[str]
+    document_id: str | None
+    chunk_type: str | None
     tier: str = "strong"
-    citation_chunk_id: Optional[str]
-    source_chunk_id: Optional[str]
-    parent_chunk_id: Optional[str]
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    citation_chunk_id: str | None
+    source_chunk_id: str | None
+    parent_chunk_id: str | None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class EvidencePack(CoreModel):
-    items: List[EvidenceItem] = Field(default_factory=list)
-    discard_summary: Dict[str, Any] = Field(default_factory=dict)
-    top_scores: List[float] = Field(default_factory=list)
+    items: list[EvidenceItem] = Field(default_factory=list)
+    discard_summary: dict[str, Any] = Field(default_factory=dict)
+    top_scores: list[float] = Field(default_factory=list)
     evidence_status: str = "EMPTY"
-    strong_items: List[EvidenceItem] = Field(default_factory=list)
-    weak_items: List[EvidenceItem] = Field(default_factory=list)
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    strong_items: list[EvidenceItem] = Field(default_factory=list)
+    weak_items: list[EvidenceItem] = Field(default_factory=list)
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class HybridRecallCandidate(CoreModel):
     chunk_id: str
     score: float = 0.0
-    content: Optional[str]
-    document_id: Optional[str]
-    chunk_type: Optional[str]
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-    channels: List[str] = Field(default_factory=list)
-    raw: Dict[str, Any] = Field(default_factory=dict)
+    content: str | None
+    document_id: str | None
+    chunk_type: str | None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    channels: list[str] = Field(default_factory=list)
+    raw: dict[str, Any] = Field(default_factory=dict)
 
 
 class HybridRecallResult(CoreModel):
-    dense_hits: List[HybridRecallCandidate] = Field(default_factory=list)
-    sparse_hits: List[HybridRecallCandidate] = Field(default_factory=list)
-    metadata_hits: List[HybridRecallCandidate] = Field(default_factory=list)
-    fused_hits: List[HybridRecallCandidate] = Field(default_factory=list)
-    reranked_hits: List[HybridRecallCandidate] = Field(default_factory=list)
-    metrics: Dict[str, Any] = Field(default_factory=dict)
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    dense_hits: list[HybridRecallCandidate] = Field(default_factory=list)
+    sparse_hits: list[HybridRecallCandidate] = Field(default_factory=list)
+    metadata_hits: list[HybridRecallCandidate] = Field(default_factory=list)
+    fused_hits: list[HybridRecallCandidate] = Field(default_factory=list)
+    reranked_hits: list[HybridRecallCandidate] = Field(default_factory=list)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class RagResult(CoreModel):
     status: RagStatus = RagStatus.EMPTY
-    evidence_pack: Optional[EvidencePack]
-    citations: List[Citation] = Field(default_factory=list)
+    evidence_pack: EvidencePack | None
+    citations: list[Citation] = Field(default_factory=list)
     evidence_status: str = "EMPTY"
     retrieval_strategy: str = "dense+sparse+metadata->rrf->rerank->evidence"
-    metrics: Dict[str, Any] = Field(default_factory=dict)
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class AnswerPlan(CoreModel):
-    sections: List[str] = Field(default_factory=list)
-    lead: Optional[str]
-    ending_prompt: Optional[str]
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    sections: list[str] = Field(default_factory=list)
+    lead: str | None
+    ending_prompt: str | None
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class EntityJoinResult(CoreModel):
-    candidate_entities: List[str] = Field(default_factory=list)
-    evidence_bindings: Dict[str, List[str]] = Field(default_factory=dict)
-    tool_bindings: Dict[str, List[str]] = Field(default_factory=dict)
-    selected_entity: Optional[str] = None
+    candidate_entities: list[str] = Field(default_factory=list)
+    evidence_bindings: dict[str, list[str]] = Field(default_factory=dict)
+    tool_bindings: dict[str, list[str]] = Field(default_factory=dict)
+    selected_entity: str | None = None
     cross_entity_detected: bool = False
-    issues: List[str] = Field(default_factory=list)
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    issues: list[str] = Field(default_factory=list)
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class AnswerContract(CoreModel):
     original_query: str = ""
-    required_facets: List[Dict[str, Any]] = Field(default_factory=list)
-    evidence_requirements: Dict[str, Any] = Field(default_factory=dict)
-    tool_requirements: Dict[str, Any] = Field(default_factory=dict)
-    forbidden_without_evidence: List[str] = Field(default_factory=list)
-    candidate_entities: List[str] = Field(default_factory=list)
-    selected_entity: Optional[str] = None
-    missing_slots: List[str] = Field(default_factory=list)
-    clarification_slot: Optional[str] = None
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    required_facets: list[dict[str, Any]] = Field(default_factory=list)
+    evidence_requirements: dict[str, Any] = Field(default_factory=dict)
+    tool_requirements: dict[str, Any] = Field(default_factory=dict)
+    forbidden_without_evidence: list[str] = Field(default_factory=list)
+    candidate_entities: list[str] = Field(default_factory=list)
+    selected_entity: str | None = None
+    missing_slots: list[str] = Field(default_factory=list)
+    clarification_slot: str | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class AnswerVerifierResult(CoreModel):
     passed: bool = False
-    issues: List[str] = Field(default_factory=list)
+    issues: list[str] = Field(default_factory=list)
     suggested_response_mode: str = "grounded"
     repair_hint: str = ""
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class PlanStep(CoreModel):
     step_id: str = ""
     goal: str = ""
-    expected_output: Optional[str]
-    allowed_tools: List[str] = Field(default_factory=list)
-    input_payload: Dict[str, Any] = Field(default_factory=dict)
+    expected_output: str | None
+    allowed_tools: list[str] = Field(default_factory=list)
+    input_payload: dict[str, Any] = Field(default_factory=dict)
     risk_level: Literal['low', 'medium', 'high'] = "low"
     requires_approval: bool = False
 
@@ -226,79 +213,79 @@ class TaskPlan(CoreModel):
     enabled: bool = False
     trigger_reason: str = ""
     summary: str = ""
-    route_candidate: Optional[str] = None
+    route_candidate: str | None = None
     task_complexity: Literal['simple', 'complex'] = "complex"
     execution_mode: Literal['auto', 'simple', 'plan_execute'] = "plan_execute"
     can_fallback_to_legacy: bool = True
-    required_facets: List[Dict[str, Any]] = Field(default_factory=list)
-    optional_facets: List[Dict[str, Any]] = Field(default_factory=list)
-    steps: List[PlanStep] = Field(default_factory=list)
-    failure_reason: Optional[str] = None
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    required_facets: list[dict[str, Any]] = Field(default_factory=list)
+    optional_facets: list[dict[str, Any]] = Field(default_factory=list)
+    steps: list[PlanStep] = Field(default_factory=list)
+    failure_reason: str | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class StepResult(CoreModel):
     step_id: str = ""
     status: Literal['success', 'failed', 'skipped', 'need_approval'] = "skipped"
-    tools_used: List[str] = Field(default_factory=list)
-    observations: List[str] = Field(default_factory=list)
-    result: Dict[str, Any] | str | None
-    error: Optional[str]
-    next_action: Optional[str]
+    tools_used: list[str] = Field(default_factory=list)
+    observations: list[str] = Field(default_factory=list)
+    result: dict[str, Any] | str | None
+    error: str | None
+    next_action: str | None
 
 
 class PlanExecutionSummary(CoreModel):
     status: Literal['completed', 'partial', 'failed', 'need_approval'] = "partial"
     completed_steps: int = 0
     total_steps: int = 0
-    key_findings: List[str] = Field(default_factory=list)
-    final_decision: Optional[str]
+    key_findings: list[str] = Field(default_factory=list)
+    final_decision: str | None
 
 
 class ToolSelection(CoreModel):
-    tool_name: Optional[str]
+    tool_name: str | None
     should_execute: bool = False
-    input_payload: Dict[str, Any] = Field(default_factory=dict)
-    reason: Optional[str]
+    input_payload: dict[str, Any] = Field(default_factory=dict)
+    reason: str | None
     approval_required: bool = False
-    approval_status: Optional[str]
-    approval_request: Dict[str, Any] = Field(default_factory=dict)
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    approval_status: str | None
+    approval_request: dict[str, Any] = Field(default_factory=dict)
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolExecutionResult(CoreModel):
     status: ToolExecutionStatus = ToolExecutionStatus.SKIPPED
-    tool_name: Optional[str]
-    output_payload: Dict[str, Any] = Field(default_factory=dict)
-    degraded_to: Optional[str]
-    error: Optional[WorkflowErrorCode]
+    tool_name: str | None
+    output_payload: dict[str, Any] = Field(default_factory=dict)
+    degraded_to: str | None
+    error: WorkflowErrorCode | None
     approval_required: bool = False
-    approval_status: Optional[str]
-    approval_request: Dict[str, Any] = Field(default_factory=dict)
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    approval_status: str | None
+    approval_request: dict[str, Any] = Field(default_factory=dict)
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class NormalizedToolResult(CoreModel):
     status: ToolExecutionStatus = ToolExecutionStatus.SKIPPED
-    tool_name: Optional[str]
-    normalized_output: Dict[str, Any] = Field(default_factory=dict)
-    used_tools: List[str] = Field(default_factory=list)
+    tool_name: str | None
+    normalized_output: dict[str, Any] = Field(default_factory=dict)
+    used_tools: list[str] = Field(default_factory=list)
     approval_required: bool = False
-    approval_status: Optional[str]
-    approval_request: Dict[str, Any] = Field(default_factory=dict)
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    approval_status: str | None
+    approval_request: dict[str, Any] = Field(default_factory=dict)
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class TurnUnderstandingResult(CoreModel):
     decision: TurnDecision = TurnDecision.DIRECT_ANSWER
     intent: IntentType = IntentType.EXPLAIN
     intent_confidence: float = 0.0
-    requested_output_style: Optional[OutputStyle] = None
-    reference_resolution: Optional[ReferenceResolutionResult] = None
-    retrieval_plan: Optional[RetrievalPlan] = None
-    clarification_card: Optional[ClarificationCard] = None
-    slots: Dict[str, Any] = Field(default_factory=dict)
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    requested_output_style: OutputStyle | None = None
+    reference_resolution: ReferenceResolutionResult | None = None
+    retrieval_plan: RetrievalPlan | None = None
+    clarification_card: ClarificationCard | None = None
+    slots: dict[str, Any] = Field(default_factory=dict)
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class FastDecision(CoreModel):
@@ -308,8 +295,8 @@ class FastDecision(CoreModel):
     needs_clarify: bool = False
     needs_query_rewrite: bool = False
     confidence: float = 0.0
-    key_slots: Dict[str, Any] = Field(default_factory=dict)
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    key_slots: dict[str, Any] = Field(default_factory=dict)
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class InputQualityDecision(CoreModel):
@@ -317,24 +304,24 @@ class InputQualityDecision(CoreModel):
     is_valid: bool = True
     reason: str = ""
     score: float = 1.0
-    signals: List[str] = Field(default_factory=list)
+    signals: list[str] = Field(default_factory=list)
 
 
 class IntentRoutingDecision(CoreModel):
     name: str = "unknown"
     confidence: float = 0.0
-    required_slots: List[str] = Field(default_factory=list)
-    missing_slots: List[str] = Field(default_factory=list)
-    allowed_routes: List[str] = Field(default_factory=list)
-    forbidden_routes: List[str] = Field(default_factory=list)
+    required_slots: list[str] = Field(default_factory=list)
+    missing_slots: list[str] = Field(default_factory=list)
+    allowed_routes: list[str] = Field(default_factory=list)
+    forbidden_routes: list[str] = Field(default_factory=list)
 
 
 class RewriteDecision(CoreModel):
     original_query: str = ""
     rewritten_query: str = ""
-    added_terms: List[str] = Field(default_factory=list)
-    removed_terms: List[str] = Field(default_factory=list)
-    preserved_constraints: List[str] = Field(default_factory=list)
+    added_terms: list[str] = Field(default_factory=list)
+    removed_terms: list[str] = Field(default_factory=list)
+    preserved_constraints: list[str] = Field(default_factory=list)
     confidence: float = 0.0
     should_retrieve: bool = False
     reason: str = ""
@@ -354,31 +341,31 @@ class EvidenceQualityDecision(CoreModel):
     response_mode: str = "grounded"
     is_valid: bool = True
     reason: str = ""
-    fallback_reason: Optional[str] = None
-    missing_slots: List[str] = Field(default_factory=list)
-    clarification_slot: Optional[str] = None
-    covered_facets: List[str] = Field(default_factory=list)
-    missing_facets: List[str] = Field(default_factory=list)
-    tool_candidates: List[str] = Field(default_factory=list)
-    details: Dict[str, Any] = Field(default_factory=dict)
+    fallback_reason: str | None = None
+    missing_slots: list[str] = Field(default_factory=list)
+    clarification_slot: str | None = None
+    covered_facets: list[str] = Field(default_factory=list)
+    missing_facets: list[str] = Field(default_factory=list)
+    tool_candidates: list[str] = Field(default_factory=list)
+    details: dict[str, Any] = Field(default_factory=dict)
 
 
 class RetrievalEligibility(CoreModel):
     allowed: bool = False
     blocked: bool = False
     reason: str = ""
-    blocked_reason: Optional[str] = None
-    failure_reasons: List[str] = Field(default_factory=list)
-    required_action: Optional[str] = None
+    blocked_reason: str | None = None
+    failure_reasons: list[str] = Field(default_factory=list)
+    required_action: str | None = None
     intent_allowed: bool = False
     input_quality_ok: bool = False
     input_quality_score: float = 0.0
-    normalized_query: Optional[str] = None
-    rewritten_query: Optional[str] = None
-    semantic_query: Optional[str] = None
+    normalized_query: str | None = None
+    rewritten_query: str | None = None
+    semantic_query: str | None = None
     retrieval_plan_valid: bool = False
-    route_candidate: Optional[str] = None
-    details: Dict[str, Any] = Field(default_factory=dict)
+    route_candidate: str | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
 
 
 class RoutingDecision(CoreModel):
@@ -390,7 +377,7 @@ class RoutingDecision(CoreModel):
     intent: IntentRoutingDecision = Field(default_factory=IntentRoutingDecision)
     required_action: str = "no_op"
     blocked: bool = False
-    blocked_reason: Optional[str] = None
+    blocked_reason: str | None = None
     should_rewrite_query: bool = False
     should_retrieve: bool = False
     should_call_tool: bool = False
@@ -398,46 +385,46 @@ class RoutingDecision(CoreModel):
     should_persist_memory: bool = True
     should_vectorize_memory: bool = True
     should_emit_retrieval_events: bool = False
-    retrieval_skipped_reason: Optional[str] = None
-    missing_slots: List[str] = Field(default_factory=list)
-    resolved_references: List[str] = Field(default_factory=list)
+    retrieval_skipped_reason: str | None = None
+    missing_slots: list[str] = Field(default_factory=list)
+    resolved_references: list[str] = Field(default_factory=list)
     route_reason: str = ""
-    safeguards_triggered: List[str] = Field(default_factory=list)
-    fallback_reason: Optional[str] = None
-    route_candidate: Optional[str] = None
-    preferred_chunk_roles: List[str] = Field(default_factory=list)
-    tool_candidates: List[str] = Field(default_factory=list)
-    clarification_question: Optional[str] = None
-    rewrite_decision: Optional[RewriteDecision] = None
-    evidence_quality: Optional[EvidenceQualityDecision] = None
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    safeguards_triggered: list[str] = Field(default_factory=list)
+    fallback_reason: str | None = None
+    route_candidate: str | None = None
+    preferred_chunk_roles: list[str] = Field(default_factory=list)
+    tool_candidates: list[str] = Field(default_factory=list)
+    clarification_question: str | None = None
+    rewrite_decision: RewriteDecision | None = None
+    evidence_quality: EvidenceQualityDecision | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class TurnUnderstandingRequest(CoreModel):
     command: ChatTurnCommand
-    persistent: 'PersistentSessionContext'
+    persistent: PersistentSessionContext
 
 
 class ReferenceResolutionRequest(CoreModel):
     raw_query: str
-    current_topic: Optional[str] = None
-    recent_entities: List[str] = Field(default_factory=list)
-    clarification_result: Dict[str, Any] = Field(default_factory=dict)
-    pending_clarification: Optional[ClarificationCard] = None
-    history_summary: Optional[str] = None
-    topic_hint: Optional[str] = None
+    current_topic: str | None = None
+    recent_entities: list[str] = Field(default_factory=list)
+    clarification_result: dict[str, Any] = Field(default_factory=dict)
+    pending_clarification: ClarificationCard | None = None
+    history_summary: str | None = None
+    topic_hint: str | None = None
 
 
 class QueryRewriteRequest(CoreModel):
     raw_query: str
-    intent: Optional[IntentType] = None
-    requested_output_style: Optional[OutputStyle] = None
-    reference_resolution: Optional[ReferenceResolutionResult] = None
-    current_topic: Optional[str] = None
-    topic_hint: Optional[str] = None
+    intent: IntentType | None = None
+    requested_output_style: OutputStyle | None = None
+    reference_resolution: ReferenceResolutionResult | None = None
+    current_topic: str | None = None
+    topic_hint: str | None = None
     intent_confidence: float = 0.0
-    user_preferences: Dict[str, Any] = Field(default_factory=dict)
-    base_filters: Dict[str, Any] = Field(default_factory=dict)
+    user_preferences: dict[str, Any] = Field(default_factory=dict)
+    base_filters: dict[str, Any] = Field(default_factory=dict)
 
 
 class HybridRetrieveRequest(CoreModel):
@@ -447,8 +434,8 @@ class HybridRetrieveRequest(CoreModel):
 class EvidenceEvaluationRequest(CoreModel):
     plan: RetrievalPlan
     hybrid_recall: HybridRecallResult
-    intent: Optional[IntentType]
-    requested_output_style: Optional[OutputStyle]
+    intent: IntentType | None
+    requested_output_style: OutputStyle | None
 
 
 class CitationBuildRequest(CoreModel):
@@ -458,25 +445,25 @@ class CitationBuildRequest(CoreModel):
 class KnowledgeSearchRequest(CoreModel):
     topic: str
     limit: int = 5
-    category: Optional[str] = None
-    retrieval_filters: Dict[str, Any] = Field(default_factory=dict)
+    category: str | None = None
+    retrieval_filters: dict[str, Any] = Field(default_factory=dict)
 
 
 class KnowledgeSearchResult(CoreModel):
-    matches: List[Dict[str, Any]] = Field(default_factory=list)
-    evidence_pack: Optional[EvidencePack] = None
-    citations: List[Citation] = Field(default_factory=list)
-    retrieval_strategy: Optional[str] = None
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    matches: list[dict[str, Any]] = Field(default_factory=list)
+    evidence_pack: EvidencePack | None = None
+    citations: list[Citation] = Field(default_factory=list)
+    retrieval_strategy: str | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolPlanningRequest(CoreModel):
     raw_query: str
     decision: str = ""
-    routing_decision: Optional['RoutingDecision'] = None
-    intent: Optional[IntentType] = None
-    slots: Dict[str, Any] = Field(default_factory=dict)
-    current_topic: Optional[str] = None
+    routing_decision: RoutingDecision | None = None
+    intent: IntentType | None = None
+    slots: dict[str, Any] = Field(default_factory=dict)
+    current_topic: str | None = None
 
 
 class ToolExecutionCommand(CoreModel):
@@ -495,14 +482,14 @@ class PersistSessionCommand(CoreModel):
     workflow_version: str = "learn-agent/v1"
     raw_query: str
     answer_text: str
-    resolved_topic: Optional[str] = None
-    intent: Optional[IntentType] = None
-    requested_output_style: Optional[OutputStyle] = None
-    tool_name: Optional[str] = None
+    resolved_topic: str | None = None
+    intent: IntentType | None = None
+    requested_output_style: OutputStyle | None = None
+    tool_name: str | None = None
     request_ts: datetime
-    persistent: 'PersistentSessionContext'
+    persistent: PersistentSessionContext
     final_confidence: float = 0.0
-    session_state_patch: Dict[str, Any] = Field(default_factory=dict)
+    session_state_patch: dict[str, Any] = Field(default_factory=dict)
     allow_memory_promotion: bool = True
     allow_semantic_memory_write: bool = True
 
@@ -515,45 +502,45 @@ class MasteryUpdateCommand(CoreModel):
     workflow_version: str = "learn-agent/v1"
     raw_query: str
     answer_text: str
-    resolved_topic: Optional[str] = None
-    intent: Optional[IntentType] = None
-    requested_output_style: Optional[OutputStyle] = None
-    tool_name: Optional[str] = None
+    resolved_topic: str | None = None
+    intent: IntentType | None = None
+    requested_output_style: OutputStyle | None = None
+    tool_name: str | None = None
     request_ts: datetime
-    persistent: 'PersistentSessionContext'
+    persistent: PersistentSessionContext
     memory_updates: MemoryUpdateSummary = Field(default_factory=lambda: MemoryUpdateSummary())
     final_confidence: float = 0.0
-    session_state_patch: Dict[str, Any] = Field(default_factory=dict)
+    session_state_patch: dict[str, Any] = Field(default_factory=dict)
 
 
 class MemoryUpdateSummary(CoreModel):
-    current_topic: Optional[str] = None
-    updated_preferences: Dict[str, Any] = Field(default_factory=dict)
-    weak_topics: List[str] = Field(default_factory=list)
-    semantic_memory: Dict[str, Any] = Field(default_factory=dict)
-    open_questions: List[str] = Field(default_factory=list)
-    confirmed_facts: List[str] = Field(default_factory=list)
-    next_steps: List[str] = Field(default_factory=list)
+    current_topic: str | None = None
+    updated_preferences: dict[str, Any] = Field(default_factory=dict)
+    weak_topics: list[str] = Field(default_factory=list)
+    semantic_memory: dict[str, Any] = Field(default_factory=dict)
+    open_questions: list[str] = Field(default_factory=list)
+    confirmed_facts: list[str] = Field(default_factory=list)
+    next_steps: list[str] = Field(default_factory=list)
     summary_version: int = 0
-    summary_updated_at: Optional[datetime] = None
-    memory_trace_id: Optional[str] = None
+    summary_updated_at: datetime | None = None
+    memory_trace_id: str | None = None
     write_status: str = "success"
-    write_targets: List[str] = Field(default_factory=list)
-    decision_reasons: List[str] = Field(default_factory=list)
-    degraded_parts: List[str] = Field(default_factory=list)
-    retryable_failures: List[str] = Field(default_factory=list)
-    permanent_failures: List[str] = Field(default_factory=list)
-    memory_write: Optional['MemoryWriteResult'] = None
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    write_targets: list[str] = Field(default_factory=list)
+    decision_reasons: list[str] = Field(default_factory=list)
+    degraded_parts: list[str] = Field(default_factory=list)
+    retryable_failures: list[str] = Field(default_factory=list)
+    permanent_failures: list[str] = Field(default_factory=list)
+    memory_write: MemoryWriteResult | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class MemoryWriteTargetResult(CoreModel):
     target: str
     status: Literal['success', 'degraded', 'retryable_failure', 'permanent_failure', 'skipped'] = "success"
-    reason: Optional[str]
+    reason: str | None
     retryable: bool = False
-    error: Optional[str]
-    details: Dict[str, Any] = Field(default_factory=dict)
+    error: str | None
+    details: dict[str, Any] = Field(default_factory=dict)
 
 
 class MemoryWriteResult(CoreModel):
@@ -564,94 +551,94 @@ class MemoryWriteResult(CoreModel):
     user_id: str = ""
     operation: str = ""
     status: Literal['success', 'partial_success', 'degraded', 'pending_compensation', 'permanent_failure'] = "success"
-    write_targets: List[str] = Field(default_factory=list)
-    target_results: List[MemoryWriteTargetResult] = Field(default_factory=list)
-    decision_reasons: List[str] = Field(default_factory=list)
-    degraded_parts: List[str] = Field(default_factory=list)
-    retryable_failures: List[str] = Field(default_factory=list)
-    permanent_failures: List[str] = Field(default_factory=list)
+    write_targets: list[str] = Field(default_factory=list)
+    target_results: list[MemoryWriteTargetResult] = Field(default_factory=list)
+    decision_reasons: list[str] = Field(default_factory=list)
+    degraded_parts: list[str] = Field(default_factory=list)
+    retryable_failures: list[str] = Field(default_factory=list)
+    permanent_failures: list[str] = Field(default_factory=list)
     compensation_required: bool = False
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class PersistSessionResult(CoreModel):
-    updated_context: 'PersistentSessionContext'
+    updated_context: PersistentSessionContext
     memory_updates: MemoryUpdateSummary = Field(default_factory=MemoryUpdateSummary)
-    memory_write: Optional[MemoryWriteResult]
+    memory_write: MemoryWriteResult | None
 
 
 class MasteryUpdateResult(CoreModel):
-    updated_context: Optional['PersistentSessionContext'] = None
+    updated_context: PersistentSessionContext | None = None
     memory_updates: MemoryUpdateSummary = Field(default_factory=MemoryUpdateSummary)
-    memory_write: Optional[MemoryWriteResult] = None
+    memory_write: MemoryWriteResult | None = None
 
 
 class RetrievalSummary(CoreModel):
-    semantic_query: Optional[str]
-    keyword_query: Optional[str]
-    retrieval_filters: Dict[str, Any] = Field(default_factory=dict)
-    retrieval_strategy: Optional[str]
+    semantic_query: str | None
+    keyword_query: str | None
+    retrieval_filters: dict[str, Any] = Field(default_factory=dict)
+    retrieval_strategy: str | None
     retrieval_hit_count: int = 0
     evidence_used_count: int = 0
     evidence_status: str = "EMPTY"
     evidence_strong_count: int = 0
     evidence_weak_count: int = 0
-    route_decision: Optional[str]
-    route_reason: Optional[str]
-    current_stage: Optional[str]
-    stage_status: Optional[str]
-    stage_timeline: List[Dict[str, Any]] = Field(default_factory=list)
-    source_mode: Optional[str] = None
-    degraded_reason: Optional[str] = None
-    knowledge_freshness: Dict[str, Any] = Field(default_factory=dict)
+    route_decision: str | None
+    route_reason: str | None
+    current_stage: str | None
+    stage_status: str | None
+    stage_timeline: list[dict[str, Any]] = Field(default_factory=list)
+    source_mode: str | None = None
+    degraded_reason: str | None = None
+    knowledge_freshness: dict[str, Any] = Field(default_factory=dict)
     model_hint_used: bool = False
 
 
 class MemoryUsedItemSummary(CoreModel):
     memory_id: str = ""
-    memory_type: Optional[str]
-    scope: Optional[str]
-    summary: Optional[str]
-    source: Optional[str]
+    memory_type: str | None
+    scope: str | None
+    summary: str | None
+    source: str | None
     confidence: float = 0.0
-    retrieval_kind: Optional[str] = None
-    collection_name: Optional[str] = None
-    source_domain: Optional[str] = None
+    retrieval_kind: str | None = None
+    collection_name: str | None = None
+    source_domain: str | None = None
 
 
 class MemoryUsedSummary(CoreModel):
     used: bool = False
     total_memories: int = 0
-    retrieval_reason: Optional[str]
+    retrieval_reason: str | None
     total_token_estimate: int = 0
-    prompt_memories: List[MemoryUsedItemSummary] = Field(default_factory=list)
-    state_memories: List[MemoryUsedItemSummary] = Field(default_factory=list)
-    tool_memories: List[MemoryUsedItemSummary] = Field(default_factory=list)
-    semantic_memories: List[MemoryUsedItemSummary] = Field(default_factory=list)
-    episodic_memories: List[MemoryUsedItemSummary] = Field(default_factory=list)
-    procedural_memories: List[MemoryUsedItemSummary] = Field(default_factory=list)
-    rag_memories: List[MemoryUsedItemSummary] = Field(default_factory=list)
+    prompt_memories: list[MemoryUsedItemSummary] = Field(default_factory=list)
+    state_memories: list[MemoryUsedItemSummary] = Field(default_factory=list)
+    tool_memories: list[MemoryUsedItemSummary] = Field(default_factory=list)
+    semantic_memories: list[MemoryUsedItemSummary] = Field(default_factory=list)
+    episodic_memories: list[MemoryUsedItemSummary] = Field(default_factory=list)
+    procedural_memories: list[MemoryUsedItemSummary] = Field(default_factory=list)
+    rag_memories: list[MemoryUsedItemSummary] = Field(default_factory=list)
 
 
 class AnswerComposeRequest(CoreModel):
     raw_query: str
-    requested_output_style: Optional[OutputStyle]
-    rag_result: Optional[RagResult]
-    tool_result: Optional[NormalizedToolResult]
-    plan_summary: Optional[PlanExecutionSummary]
-    memory_injection_plan: Optional[MemoryInjectionPlan]
-    entity_join_result: Optional[EntityJoinResult] = None
-    answer_contract: Optional[AnswerContract] = None
-    routing_decision: Optional['RoutingDecision'] = None
-    evidence_quality: Optional[EvidenceQualityDecision] = None
-    final_response_mode: Optional[str] = None
-    missing_slots: List[str] = Field(default_factory=list)
-    clarification_slot: Optional[str] = None
+    requested_output_style: OutputStyle | None
+    rag_result: RagResult | None
+    tool_result: NormalizedToolResult | None
+    plan_summary: PlanExecutionSummary | None
+    memory_injection_plan: MemoryInjectionPlan | None
+    entity_join_result: EntityJoinResult | None = None
+    answer_contract: AnswerContract | None = None
+    routing_decision: RoutingDecision | None = None
+    evidence_quality: EvidenceQualityDecision | None = None
+    final_response_mode: str | None = None
+    missing_slots: list[str] = Field(default_factory=list)
+    clarification_slot: str | None = None
     allow_direct_response: bool = False
-    direct_response_kind: Optional[str]
-    history_summary: Optional[str] = None
+    direct_response_kind: str | None
+    history_summary: str | None = None
     stream_event_sink: Any = None
-    stream_event_meta: Dict[str, Any] = Field(default_factory=dict)
+    stream_event_meta: dict[str, Any] = Field(default_factory=dict)
 
 
 class AnswerComposeResult(CoreModel):
@@ -660,90 +647,90 @@ class AnswerComposeResult(CoreModel):
 
 
 class PersistentSessionContext(CoreModel):
-    current_topic: Optional[str] = None
-    current_shop: Optional[str] = None
-    current_shop_anchor: Dict[str, Any] = Field(default_factory=dict)
-    recent_entities: List[str] = Field(default_factory=list)
-    pending_user_need: Dict[str, Any] = Field(default_factory=dict)
-    clarification_result: Dict[str, Any] = Field(default_factory=dict)
-    user_preferences: Dict[str, Any] = Field(default_factory=dict)
-    last_retrieval_topic: Optional[str] = None
-    history_summary: Optional[str] = None
-    open_questions: List[str] = Field(default_factory=list)
-    confirmed_facts: List[str] = Field(default_factory=list)
-    next_steps: List[str] = Field(default_factory=list)
+    current_topic: str | None = None
+    current_shop: str | None = None
+    current_shop_anchor: dict[str, Any] = Field(default_factory=dict)
+    recent_entities: list[str] = Field(default_factory=list)
+    pending_user_need: dict[str, Any] = Field(default_factory=dict)
+    clarification_result: dict[str, Any] = Field(default_factory=dict)
+    user_preferences: dict[str, Any] = Field(default_factory=dict)
+    last_retrieval_topic: str | None = None
+    history_summary: str | None = None
+    open_questions: list[str] = Field(default_factory=list)
+    confirmed_facts: list[str] = Field(default_factory=list)
+    next_steps: list[str] = Field(default_factory=list)
     summary_version: int = 0
-    summary_updated_at: Optional[datetime] = None
-    pending_clarification: Optional[ClarificationCard] = None
-    current_city: Optional[str] = None
-    current_location: Dict[str, Any] = Field(default_factory=dict)
-    current_constraints: Dict[str, Any] = Field(default_factory=dict)
-    last_candidates: List[Dict[str, Any]] = Field(default_factory=list)
-    selected_shop_id: Optional[int] = None
-    selected_shop_name: Optional[str] = None
-    local_life_preferences: List[str] = Field(default_factory=list)
-    local_life_avoid: List[str] = Field(default_factory=list)
-    current_scene: Optional[str] = None
-    current_action: Optional[str] = None
-    page: Optional[str] = None
-    route_decision: Optional[str] = None
-    route_reason: Optional[str] = None
-    current_stage: Optional[str] = None
-    stage_status: Optional[str] = None
-    stage_timeline: List[Dict[str, Any]] = Field(default_factory=list)
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    summary_updated_at: datetime | None = None
+    pending_clarification: ClarificationCard | None = None
+    current_city: str | None = None
+    current_location: dict[str, Any] = Field(default_factory=dict)
+    current_constraints: dict[str, Any] = Field(default_factory=dict)
+    last_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    selected_shop_id: int | None = None
+    selected_shop_name: str | None = None
+    local_life_preferences: list[str] = Field(default_factory=list)
+    local_life_avoid: list[str] = Field(default_factory=list)
+    current_scene: str | None = None
+    current_action: str | None = None
+    page: str | None = None
+    route_decision: str | None = None
+    route_reason: str | None = None
+    current_stage: str | None = None
+    stage_status: str | None = None
+    stage_timeline: list[dict[str, Any]] = Field(default_factory=list)
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class TurnRuntimeState(CoreModel):
     raw_query: str
     decision: str = "direct_answer"
-    intent: Optional[IntentType] = None
+    intent: IntentType | None = None
     intent_confidence: float = 0.0
-    requested_output_style: Optional[OutputStyle] = None
+    requested_output_style: OutputStyle | None = None
     task_complexity: Literal['simple', 'complex'] = "simple"
     execution_mode: Literal['auto', 'simple', 'plan_execute'] = "auto"
     risk_level: Literal['low', 'medium', 'high'] = "low"
-    route_decision: Optional[str] = None
-    route_reason: Optional[str] = None
-    routing_decision: Optional[RoutingDecision] = None
-    rewrite_decision: Optional[RewriteDecision] = None
-    evidence_quality: Optional[EvidenceQualityDecision] = None
-    current_stage: Optional[str] = None
-    stage_status: Optional[str] = None
-    stage_timeline: List[Dict[str, Any]] = Field(default_factory=list)
-    slots: Dict[str, Any] = Field(default_factory=dict)
-    reference_resolution: Optional[ReferenceResolutionResult] = None
-    clarification_card: Optional[ClarificationCard] = None
-    retrieval_plan: Optional[RetrievalPlan] = None
-    hybrid_recall: Optional[HybridRecallResult] = None
-    evidence_pack: Optional[EvidencePack] = None
-    citations: List[Citation] = Field(default_factory=list)
-    answer_plan: Optional[AnswerPlan] = None
-    entity_join_result: Optional[EntityJoinResult] = None
-    answer_contract: Optional[AnswerContract] = None
-    answer_verifier_result: Optional[AnswerVerifierResult] = None
-    tool_plan: Optional[ToolSelection] = None
-    task_plan: Optional[TaskPlan] = None
-    raw_tool_result: Optional[ToolExecutionResult] = None
-    tool_result: Optional[NormalizedToolResult] = None
-    plan: List[PlanStep] = Field(default_factory=list)
+    route_decision: str | None = None
+    route_reason: str | None = None
+    routing_decision: RoutingDecision | None = None
+    rewrite_decision: RewriteDecision | None = None
+    evidence_quality: EvidenceQualityDecision | None = None
+    current_stage: str | None = None
+    stage_status: str | None = None
+    stage_timeline: list[dict[str, Any]] = Field(default_factory=list)
+    slots: dict[str, Any] = Field(default_factory=dict)
+    reference_resolution: ReferenceResolutionResult | None = None
+    clarification_card: ClarificationCard | None = None
+    retrieval_plan: RetrievalPlan | None = None
+    hybrid_recall: HybridRecallResult | None = None
+    evidence_pack: EvidencePack | None = None
+    citations: list[Citation] = Field(default_factory=list)
+    answer_plan: AnswerPlan | None = None
+    entity_join_result: EntityJoinResult | None = None
+    answer_contract: AnswerContract | None = None
+    answer_verifier_result: AnswerVerifierResult | None = None
+    tool_plan: ToolSelection | None = None
+    task_plan: TaskPlan | None = None
+    raw_tool_result: ToolExecutionResult | None = None
+    tool_result: NormalizedToolResult | None = None
+    plan: list[PlanStep] = Field(default_factory=list)
     current_step_index: int = 0
-    current_step: Optional[PlanStep] = None
-    step_results: List[StepResult] = Field(default_factory=list)
+    current_step: PlanStep | None = None
+    step_results: list[StepResult] = Field(default_factory=list)
     need_replan: bool = False
-    replan_reason: Optional[str] = None
+    replan_reason: str | None = None
     need_human_approval: bool = False
-    approval_request: Dict[str, Any] = Field(default_factory=dict)
-    final_task_summary: Optional[PlanExecutionSummary] = None
-    sensory_memory: Dict[str, Any] = Field(default_factory=dict)
-    short_term_window: List[Dict[str, Any]] = Field(default_factory=list)
-    retrieved_memory_pack: Optional[RetrievedMemoryPack] = None
-    memory_candidates: List[MemoryCandidate] = Field(default_factory=list)
-    memory_write_plan: Optional[MemoryWritePlan] = None
-    memory_injection_plan: Optional[MemoryInjectionPlan] = None
-    final_answer: Optional[str] = None
-    rag_result: Optional[RagResult] = None
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    approval_request: dict[str, Any] = Field(default_factory=dict)
+    final_task_summary: PlanExecutionSummary | None = None
+    sensory_memory: dict[str, Any] = Field(default_factory=dict)
+    short_term_window: list[dict[str, Any]] = Field(default_factory=list)
+    retrieved_memory_pack: RetrievedMemoryPack | None = None
+    memory_candidates: list[MemoryCandidate] = Field(default_factory=list)
+    memory_write_plan: MemoryWritePlan | None = None
+    memory_injection_plan: MemoryInjectionPlan | None = None
+    final_answer: str | None = None
+    rag_result: RagResult | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class GraphRuntimeMeta(CoreModel):
@@ -753,62 +740,62 @@ class GraphRuntimeMeta(CoreModel):
     workflow_version: str
     request_ts: datetime
     user_id: str
-    page: Optional[str] = None
-    response_mode: Optional[str] = None
-    topic_hint: Optional[str] = None
-    history_summary: Optional[str] = None
-    client_context: Dict[str, Any] = Field(default_factory=dict)
-    metrics: Dict[str, Any] = Field(default_factory=dict)
-    errors: List[ErrorInfo] = Field(default_factory=list)
-    degrade_to: Optional[str] = None
-    terminal_event: Optional[TerminalEvent] = None
-    emitted_events: List[SseEnvelope] = Field(default_factory=list)
+    page: str | None = None
+    response_mode: str | None = None
+    topic_hint: str | None = None
+    history_summary: str | None = None
+    client_context: dict[str, Any] = Field(default_factory=dict)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    errors: list[ErrorInfo] = Field(default_factory=list)
+    degrade_to: str | None = None
+    terminal_event: TerminalEvent | None = None
+    emitted_events: list[SseEnvelope] = Field(default_factory=list)
     memory_updates: MemoryUpdateSummary = Field(default_factory=MemoryUpdateSummary)
-    memory_trace: Optional[MemoryTrace] = None
+    memory_trace: MemoryTrace | None = None
     session_persisted: bool = False
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class FinalPayload(CoreModel):
     answer_text: str
-    citations: List[Citation] = Field(default_factory=list)
-    source_mode: Optional[str] = None
-    degraded_reason: Optional[str] = None
-    knowledge_freshness: Dict[str, Any] = Field(default_factory=dict)
-    used_tools: List[str] = Field(default_factory=list)
-    resolved_topic: Optional[str] = None
-    current_topic: Optional[str] = None
+    citations: list[Citation] = Field(default_factory=list)
+    source_mode: str | None = None
+    degraded_reason: str | None = None
+    knowledge_freshness: dict[str, Any] = Field(default_factory=dict)
+    used_tools: list[str] = Field(default_factory=list)
+    resolved_topic: str | None = None
+    current_topic: str | None = None
     mode: str = "recommend"
     source: str = "local-life-agent"
-    page: Optional[str] = None
-    selected_shop_id: Optional[int] = None
-    route_decision: Optional[str] = None
-    route_reason: Optional[str] = None
-    current_stage: Optional[str] = None
-    stage_status: Optional[str] = None
-    stage_timeline: List[Dict[str, Any]] = Field(default_factory=list)
-    cards: List[Dict[str, Any]] = Field(default_factory=list)
-    shops: List[Dict[str, Any]] = Field(default_factory=list)
-    vouchers: List[Dict[str, Any]] = Field(default_factory=list)
-    suggested_replies: List[Dict[str, Any]] = Field(default_factory=list)
-    next_steps: List[str] = Field(default_factory=list)
-    task_chain: List[Dict[str, Any]] = Field(default_factory=list)
-    ranked_candidates: List[Dict[str, Any]] = Field(default_factory=list)
+    page: str | None = None
+    selected_shop_id: int | None = None
+    route_decision: str | None = None
+    route_reason: str | None = None
+    current_stage: str | None = None
+    stage_status: str | None = None
+    stage_timeline: list[dict[str, Any]] = Field(default_factory=list)
+    cards: list[dict[str, Any]] = Field(default_factory=list)
+    shops: list[dict[str, Any]] = Field(default_factory=list)
+    vouchers: list[dict[str, Any]] = Field(default_factory=list)
+    suggested_replies: list[dict[str, Any]] = Field(default_factory=list)
+    next_steps: list[str] = Field(default_factory=list)
+    task_chain: list[dict[str, Any]] = Field(default_factory=list)
+    ranked_candidates: list[dict[str, Any]] = Field(default_factory=list)
     fallback: bool = False
-    retrieval_strategy: Optional[str] = None
+    retrieval_strategy: str | None = None
     grounding_status: Literal['grounded', 'weakly_grounded', 'not_grounded'] = "not_grounded"
-    retrieval_summary: Optional[RetrievalSummary] = None
-    memory_used_summary: Optional[MemoryUsedSummary] = None
-    memory_updates: Dict[str, Any] = Field(default_factory=dict)
+    retrieval_summary: RetrievalSummary | None = None
+    memory_used_summary: MemoryUsedSummary | None = None
+    memory_updates: dict[str, Any] = Field(default_factory=dict)
     confidence: float = 0.0
     approval_required: bool = False
-    approval_request: Dict[str, Any] = Field(default_factory=dict)
-    transaction_draft: Dict[str, Any] = Field(default_factory=dict)
-    safety_result: Dict[str, Any] = Field(default_factory=dict)
-    intent: Optional[IntentType] = None
-    requested_output_style: Optional[OutputStyle] = None
-    metrics: Dict[str, Any] = Field(default_factory=dict)
-    context: Dict[str, Any] = Field(default_factory=dict)
+    approval_request: dict[str, Any] = Field(default_factory=dict)
+    transaction_draft: dict[str, Any] = Field(default_factory=dict)
+    safety_result: dict[str, Any] = Field(default_factory=dict)
+    intent: IntentType | None = None
+    requested_output_style: OutputStyle | None = None
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    context: dict[str, Any] = Field(default_factory=dict)
 
 
 class ErrorPayload(CoreModel):
@@ -816,12 +803,12 @@ class ErrorPayload(CoreModel):
     message: str
     retryable: bool = False
     stage: str
-    degraded_to: Optional[str] = None
-    details: Dict[str, Any] = Field(default_factory=dict)
-    current_stage: Optional[str] = None
-    stage_status: Optional[str] = None
-    route_decision: Optional[str] = None
-    route_reason: Optional[str] = None
+    degraded_to: str | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
+    current_stage: str | None = None
+    stage_status: str | None = None
+    route_decision: str | None = None
+    route_reason: str | None = None
 
 
 class SseEnvelope(CoreModel):
@@ -831,7 +818,7 @@ class SseEnvelope(CoreModel):
     turn_id: str
     timestamp: datetime
     workflow_version: str
-    payload: Dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 # Rebuild models at the end

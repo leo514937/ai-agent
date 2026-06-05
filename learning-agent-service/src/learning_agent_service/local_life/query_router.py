@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
+from typing import Any
+
+from learning_agent_service.domain.utils import compact_text as _compact_text
 
 from .schemas import LocalLifeIntentType, LocalLifeSlots
 
@@ -343,7 +346,7 @@ class LocalLifeQueryRouter:
 
     @staticmethod
     def _compact_text(value: str) -> str:
-        return "".join(str(value or "").split()).lower()
+        return _compact_text(value)
 
     @staticmethod
     def _contains_any(text: str, keywords: Sequence[str]) -> bool:

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import List, Sequence
 
-from learning_agent_service.domain.memory import MemoryInjectionPlan, MemoryRecord, RetrievedMemoryPack
+from learning_agent_service.domain.memory import (
+    MemoryInjectionPlan,
+    MemoryRecord,
+    RetrievedMemoryPack,
+)
 
 
 @dataclass(frozen=True)
@@ -53,14 +57,14 @@ class MemoryInjectionPolicy:
         )
 
     @staticmethod
-    def _priority_slice(records: Sequence[MemoryRecord], limit: int) -> List[MemoryRecord]:
+    def _priority_slice(records: Sequence[MemoryRecord], limit: int) -> list[MemoryRecord]:
         ordered = sorted(records, key=lambda item: (item.importance, item.confidence, item.updated_at), reverse=True)
         return list(ordered[:limit])
 
     @staticmethod
-    def _dedupe(records: Sequence[MemoryRecord]) -> List[MemoryRecord]:
+    def _dedupe(records: Sequence[MemoryRecord]) -> list[MemoryRecord]:
         seen: set[str] = set()
-        unique: List[MemoryRecord] = []
+        unique: list[MemoryRecord] = []
         for record in records:
             if record.memory_id in seen:
                 continue
@@ -69,8 +73,8 @@ class MemoryInjectionPolicy:
         return unique
 
     @staticmethod
-    def _apply_budget(records: Sequence[MemoryRecord], *, budget: int) -> List[MemoryRecord]:
-        selected: List[MemoryRecord] = []
+    def _apply_budget(records: Sequence[MemoryRecord], *, budget: int) -> list[MemoryRecord]:
+        selected: list[MemoryRecord] = []
         total = 0
         for record in records:
             cost = max(8, len(f"{record.summary or ''} {record.content}") // 4 + 1)

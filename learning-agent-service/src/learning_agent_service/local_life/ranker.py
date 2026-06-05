@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from typing import Any, Mapping, Sequence
+from typing import Any
+
+from learning_agent_service.domain.utils import as_mapping as _as_mapping
 
 from .schemas import CandidateProfile, LocalLifeSlots, RankedCandidate
 
@@ -80,16 +83,6 @@ def _availability_score(candidate: CandidateProfile) -> float:
 
 def _risk_penalty(candidate: CandidateProfile) -> float:
     return min(1.0, 0.18 * len(candidate.risk_flags))
-
-
-def _as_mapping(value: Any) -> Mapping[str, Any]:
-    if isinstance(value, Mapping):
-        return value
-    if hasattr(value, "model_dump"):
-        dumped = value.model_dump(mode="json")
-        if isinstance(dumped, Mapping):
-            return dumped
-    return {}
 
 
 def _parent_business_score(evidence: Any) -> float:

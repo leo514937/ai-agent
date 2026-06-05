@@ -1,28 +1,17 @@
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
+
+from learning_agent_service.domain.utils import as_mapping as _as_mapping
 
 from .answer_planner import (
-    CandidateEvidenceSummary,
-    CouponAdvice,
     EvidencePack,
     GroundedVerificationResult,
     LocalLifeAnswerPlan,
-    SceneFitSummary,
     parse_answer_plan_payload,
 )
 from .coupon_result import CouponResult
-
-
-def _as_mapping(value: Any) -> dict[str, Any]:
-    if isinstance(value, Mapping):
-        return dict(value)
-    if hasattr(value, "model_dump"):
-        dumped = value.model_dump(mode="json")
-        if isinstance(dumped, Mapping):
-            return dict(dumped)
-    return {}
-
 
 def _string_list(value: Any) -> list[str]:
     if value is None:
@@ -94,7 +83,7 @@ class GroundedVerifier:
                 suggested_response_mode="fallback",
                 degraded_reason="answer_plan_missing_or_invalid",
                 normalized_plan={},
-                evidence_pack_item_count=len((_as_mapping(evidence_pack).get("items") or [])),
+                evidence_pack_item_count=len(_as_mapping(evidence_pack).get("items") or []),
                 confidence="low",
             )
 

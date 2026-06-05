@@ -31,3 +31,19 @@ build/
 
 ### VS Code ###
 .vscode/
+
+### Local Python & DB files ###
+*.log
+*.rdb
+var/
+.codegraph/
+**/var/
+**/local-logs/
+**/dump.rdb
+**/redis.log
+**/graph.png
+**/nul
+scratch/
+**/scratch/
+pyrightconfig.json
+

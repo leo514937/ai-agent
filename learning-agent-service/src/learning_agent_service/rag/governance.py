@@ -1,8 +1,8 @@
 ﻿from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Sequence, Tuple
 
 from .models import GovernanceAction, KnowledgeChunk, KnowledgeGovernanceDecision
 
@@ -56,17 +56,17 @@ class KnowledgeGovernanceService:
             reason=reason,
         )
 
-    def deduplicate_chunks(self, chunks: Iterable[KnowledgeChunk]) -> Tuple[KnowledgeChunk, ...]:
-        kept: List[KnowledgeChunk] = []
+    def deduplicate_chunks(self, chunks: Iterable[KnowledgeChunk]) -> tuple[KnowledgeChunk, ...]:
+        kept: list[KnowledgeChunk] = []
         for chunk in chunks:
             if any(self._similarity(chunk.text, existing.text) >= self._config.duplicate_similarity_threshold for existing in kept):
                 continue
             kept.append(chunk)
         return tuple(kept)
 
-    def _find_duplicate_ids(self, chunks: Sequence[KnowledgeChunk]) -> Tuple[str, ...]:
-        duplicates: List[str] = []
-        kept: List[KnowledgeChunk] = []
+    def _find_duplicate_ids(self, chunks: Sequence[KnowledgeChunk]) -> tuple[str, ...]:
+        duplicates: list[str] = []
+        kept: list[KnowledgeChunk] = []
         for chunk in chunks:
             if any(self._similarity(chunk.text, existing.text) >= self._config.duplicate_similarity_threshold for existing in kept):
                 duplicates.append(chunk.chunk_id)

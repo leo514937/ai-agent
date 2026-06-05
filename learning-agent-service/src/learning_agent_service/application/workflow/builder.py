@@ -20,8 +20,12 @@ from .subgraphs import (
     route_after_understand,
 )
 
+StateGraph: Any = None
+END: Any = "__end__"
 try:
-    from langgraph.graph import END, StateGraph
+    from langgraph.graph import END as _END, StateGraph as _StateGraph  # type: ignore[import-not-found, import]
+    END = _END
+    StateGraph = _StateGraph
 except ImportError:  # pragma: no cover - optional dependency
     END = "__end__"
     StateGraph = None
@@ -92,7 +96,7 @@ class LangGraphWorkflowRunner(SequentialWorkflowRunner):
         self,
         services: WorkflowServices,
         workflow_version: str = "learn-agent/v1",
-        checkpointer: object | None = None,
+        checkpointer: Any = None,
     ) -> None:
         super().__init__(services=services, workflow_version=workflow_version, runner_kind="langgraph")
         self._checkpointer = checkpointer
@@ -205,11 +209,11 @@ def export_langgraph_mermaid() -> str:
     return "\n".join(lines)
 
 
-def _build_langgraph_runner(services: WorkflowServices, checkpointer: object | None = None):
+def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None):
     if not LANGGRAPH_AVAILABLE:
         raise RuntimeError("langgraph is not installed")
 
-    graph = StateGraph(dict)
+    graph = StateGraph(dict)  # type: ignore[type-var]
     graph.add_node("load_context", lambda state: services.load_context(state))
     graph.add_node("understand_turn", lambda state: run_understand_turn(state, services.understand_turn))
     graph.add_node("route_gate", lambda state: route_gate(state))
@@ -267,7 +271,16 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: object | N
     graph.add_edge("compose_answer", "persist_session")
     graph.add_edge("persist_session", "emit_final")
     graph.add_edge("emit_final", END)
-    return graph.compile(checkpointer=checkpointer)
+    compiled = graph.compile(checkpointer=checkpointer)
+    try:
+        mermaid = compiled.get_graph().draw_mermaid()
+        print(mermaid)
+        png_bytes = compiled.get_graph().draw_mermaid_png()
+        with open("graph.png", "wb") as f:
+            f.write(png_bytes)
+    except Exception:
+        pass
+    return compiled
 
 
 
@@ -275,7 +288,7 @@ def create_workflow_runner(
     services: WorkflowServices,
     prefer_langgraph: bool = True,
     workflow_version: str = "learn-agent/v1",
-    checkpointer: object | None = None,
+    checkpointer: Any = None,
 ):
     if prefer_langgraph and LANGGRAPH_AVAILABLE:
         return LangGraphWorkflowRunner(

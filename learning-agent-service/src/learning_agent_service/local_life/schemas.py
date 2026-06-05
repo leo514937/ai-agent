@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -24,53 +23,53 @@ class LocalLifeIntentType(str, Enum):
 
 class LocationNorm(LocalLifeModel):
     type: str = "near_user"
-    city: Optional[str] = None
-    lat: Optional[float] = None
-    lng: Optional[float] = None
+    city: str | None = None
+    lat: float | None = None
+    lng: float | None = None
     radius_km: float = 3.0
 
 
 class TimeNorm(LocalLifeModel):
-    type: Optional[str] = None
-    date: Optional[str] = None
-    meal_period: Optional[str] = None
-    preferred_time: Optional[str] = None
+    type: str | None = None
+    date: str | None = None
+    meal_period: str | None = None
+    preferred_time: str | None = None
 
 
 class PriceNorm(LocalLifeModel):
-    per_person_min: Optional[float] = None
-    per_person_max: Optional[float] = None
-    target: Optional[float] = None
+    per_person_min: float | None = None
+    per_person_max: float | None = None
+    target: float | None = None
 
 
 class QueryUnderstandingResult(LocalLifeModel):
     normalized_query: str
     semantic_query: str
     keyword_query: str
-    time_norm: Optional[TimeNorm] = None
-    location_norm: Optional[LocationNorm] = None
-    rewritten_constraints: List[str] = Field(default_factory=list)
+    time_norm: TimeNorm | None = None
+    location_norm: LocationNorm | None = None
+    rewritten_constraints: list[str] = Field(default_factory=list)
     confidence: float = 0.0
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class LocalLifeSlots(LocalLifeModel):
     domain: str = "local_life"
-    category: Optional[str] = None
-    city: Optional[str] = None
+    category: str | None = None
+    city: str | None = None
     location: LocationNorm = Field(default_factory=LocationNorm)
     time: TimeNorm = Field(default_factory=TimeNorm)
     price: PriceNorm = Field(default_factory=PriceNorm)
-    scene: Optional[str] = None
-    companions: List[str] = Field(default_factory=list)
-    preferences: List[str] = Field(default_factory=list)
-    avoid: List[str] = Field(default_factory=list)
-    action: Optional[LocalLifeIntentType] = None
-    tool_name: Optional[str] = None
-    tool_input: Dict[str, Any] = Field(default_factory=dict)
-    shop_query: Optional[str] = None
-    shop_ids: List[int] = Field(default_factory=list)
-    page: Optional[str] = None
+    scene: str | None = None
+    companions: list[str] = Field(default_factory=list)
+    preferences: list[str] = Field(default_factory=list)
+    avoid: list[str] = Field(default_factory=list)
+    action: LocalLifeIntentType | None = None
+    tool_name: str | None = None
+    tool_input: dict[str, Any] = Field(default_factory=dict)
+    shop_query: str | None = None
+    shop_ids: list[int] = Field(default_factory=list)
+    page: str | None = None
 
 
 class RequiredFacet(LocalLifeModel):
@@ -86,7 +85,7 @@ class RequiredFacet(LocalLifeModel):
         "mixed",
     ]
     freshness: Literal["static_ok", "near_realtime_required"]
-    entity_keys: List[str] = Field(default_factory=list)
+    entity_keys: list[str] = Field(default_factory=list)
     missing_policy: Literal[
         "partial_grounded",
         "ask_clarification",
@@ -96,8 +95,8 @@ class RequiredFacet(LocalLifeModel):
 
 class ContextRef(LocalLifeModel):
     type: str
-    id: Optional[str] = None
-    name: Optional[str] = None
+    id: str | None = None
+    name: str | None = None
     source: str
     confidence: float = 1.0
 
@@ -107,22 +106,22 @@ class UserNeed(LocalLifeModel):
     raw_query: str
     resolved_query: str
     slots: LocalLifeSlots
-    constraints: Dict[str, Any] = Field(default_factory=dict)
-    required_facets: List[RequiredFacet] = Field(default_factory=list)
-    optional_facets: List[RequiredFacet] = Field(default_factory=list)
-    missing_slots: List[str] = Field(default_factory=list)
-    context_refs: List[ContextRef] = Field(default_factory=list)
+    constraints: dict[str, Any] = Field(default_factory=dict)
+    required_facets: list[RequiredFacet] = Field(default_factory=list)
+    optional_facets: list[RequiredFacet] = Field(default_factory=list)
+    missing_slots: list[str] = Field(default_factory=list)
+    context_refs: list[ContextRef] = Field(default_factory=list)
     recommendation_count: int = 3
 
 
 
 class RouteExecutionRequirement(LocalLifeModel):
-    required_facets: List[str] = Field(default_factory=list)
-    execute_tools: List[str] = Field(default_factory=list)
+    required_facets: list[str] = Field(default_factory=list)
+    execute_tools: list[str] = Field(default_factory=list)
     execute_rag: bool = False
     reference_needed: bool = False
-    resolved_shop_id: Optional[int] = None
-    candidate_shop_ids: List[int] = Field(default_factory=list)
+    resolved_shop_id: int | None = None
+    candidate_shop_ids: list[int] = Field(default_factory=list)
 
 
 class RouteReviewResult(LocalLifeModel):
@@ -130,45 +129,45 @@ class RouteReviewResult(LocalLifeModel):
     execution_requirements: RouteExecutionRequirement
     review_reason: str
     intercepted: bool = False
-    clarification: Optional[ClarificationDecision] = None
-    reviewed_clarification: Optional[ClarificationDecision] = None
-    resolved_shop_id: Optional[int] = None
-    candidate_shop_ids: List[int] = Field(default_factory=list)
+    clarification: ClarificationDecision | None = None
+    reviewed_clarification: ClarificationDecision | None = None
+    resolved_shop_id: int | None = None
+    candidate_shop_ids: list[int] = Field(default_factory=list)
 
 
 class ClarificationDecision(LocalLifeModel):
     need_clarification: bool = False
-    question: Optional[str] = None
-    options: List["SuggestedReply"] = Field(default_factory=list)
-    ambiguity_type: Optional[str] = None
+    question: str | None = None
+    options: list[SuggestedReply] = Field(default_factory=list)
+    ambiguity_type: str | None = None
 
 
 class ShopTypeRecord(LocalLifeModel):
     id: int
     name: str
-    icon: Optional[str] = None
+    icon: str | None = None
     sort: int = 0
 
 
 class VoucherRecord(LocalLifeModel):
     id: int
     shop_id: int
-    shop_name: Optional[str] = None
+    shop_name: str | None = None
     title: str
-    sub_title: Optional[str] = None
-    rules: Optional[str] = None
-    pay_value: Optional[float] = None
-    actual_value: Optional[float] = None
-    stock: Optional[int] = None
-    begin_time: Optional[str] = None
-    end_time: Optional[str] = None
+    sub_title: str | None = None
+    rules: str | None = None
+    pay_value: float | None = None
+    actual_value: float | None = None
+    stock: int | None = None
+    begin_time: str | None = None
+    end_time: str | None = None
     source: str = "catalog"
 
 
 class BlogRecord(LocalLifeModel):
     id: int
-    shop_id: Optional[int] = None
-    user_id: Optional[int] = None
+    shop_id: int | None = None
+    user_id: int | None = None
     title: str
     content: str
     liked: int = 0
@@ -179,50 +178,50 @@ class BlogRecord(LocalLifeModel):
 class ShopRecord(LocalLifeModel):
     id: int
     name: str
-    type_id: Optional[int] = None
-    type_name: Optional[str] = None
-    area: Optional[str] = None
-    address: Optional[str] = None
-    x: Optional[float] = None
-    y: Optional[float] = None
-    avg_price: Optional[float] = None
-    sold: Optional[int] = None
-    comments: Optional[int] = None
-    score: Optional[float] = None
-    open_hours: Optional[str] = None
-    image: Optional[str] = None
-    distance_km: Optional[float] = None
+    type_id: int | None = None
+    type_name: str | None = None
+    area: str | None = None
+    address: str | None = None
+    x: float | None = None
+    y: float | None = None
+    avg_price: float | None = None
+    sold: int | None = None
+    comments: int | None = None
+    score: float | None = None
+    open_hours: str | None = None
+    image: str | None = None
+    distance_km: float | None = None
     parking: bool = False
     quiet_score: float = 0.0
     family_friendly: bool = False
     elder_friendly: bool = False
-    tags: List[str] = Field(default_factory=list)
-    review_summary: Optional[str] = None
-    evidence_texts: List[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    review_summary: str | None = None
+    evidence_texts: list[str] = Field(default_factory=list)
     source: str = "catalog"
 
 
 class EvidenceClaim(LocalLifeModel):
     chunk_id: str
-    shop_id: Optional[int] = None
+    shop_id: int | None = None
     claim: str
     support_text: str
     source_type: str
     confidence: float = 0.0
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class CandidateProfile(LocalLifeModel):
     shop_id: int
     name: str
-    matched_requirements: List[str] = Field(default_factory=list)
-    structured_features: Dict[str, Any] = Field(default_factory=dict)
-    evidence_features: Dict[str, float] = Field(default_factory=dict)
-    risk_flags: List[str] = Field(default_factory=list)
-    explainable_reasons: List[str] = Field(default_factory=list)
-    vouchers: List[Dict[str, Any]] = Field(default_factory=list)
-    blog_snippets: List[str] = Field(default_factory=list)
-    score_breakdown: Dict[str, float] = Field(default_factory=dict)
+    matched_requirements: list[str] = Field(default_factory=list)
+    structured_features: dict[str, Any] = Field(default_factory=dict)
+    evidence_features: dict[str, float] = Field(default_factory=dict)
+    risk_flags: list[str] = Field(default_factory=list)
+    explainable_reasons: list[str] = Field(default_factory=list)
+    vouchers: list[dict[str, Any]] = Field(default_factory=list)
+    blog_snippets: list[str] = Field(default_factory=list)
+    score_breakdown: dict[str, float] = Field(default_factory=dict)
     rank_score: float = 0.0
 
 
@@ -233,7 +232,7 @@ class RankedCandidate(CandidateProfile):
 class CardAction(LocalLifeModel):
     type: str
     label: str
-    payload: Dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class ShopCard(LocalLifeModel):
@@ -241,9 +240,9 @@ class ShopCard(LocalLifeModel):
     shop_id: int
     title: str
     subtitle: str
-    badges: List[str] = Field(default_factory=list)
+    badges: list[str] = Field(default_factory=list)
     reason: str
-    actions: List[CardAction] = Field(default_factory=list)
+    actions: list[CardAction] = Field(default_factory=list)
 
 
 class VoucherCard(LocalLifeModel):
@@ -251,12 +250,12 @@ class VoucherCard(LocalLifeModel):
     voucher_id: int
     shop_id: int
     title: str
-    subtitle: Optional[str] = None
-    pay_value: Optional[float] = None
-    actual_value: Optional[float] = None
-    stock: Optional[int] = None
-    rules: Optional[str] = None
-    actions: List[CardAction] = Field(default_factory=list)
+    subtitle: str | None = None
+    pay_value: float | None = None
+    actual_value: float | None = None
+    stock: int | None = None
+    rules: str | None = None
+    actions: list[CardAction] = Field(default_factory=list)
 
 
 class SuggestedReply(LocalLifeModel):
@@ -268,35 +267,35 @@ class LocalLifeResponseBundle(LocalLifeModel):
     answer_text: str
     mode: str
     source: str = "local-life-agent"
-    source_mode: Optional[str] = None
-    degraded_reason: Optional[str] = None
-    knowledge_freshness: Dict[str, Any] = Field(default_factory=dict)
+    source_mode: str | None = None
+    degraded_reason: str | None = None
+    knowledge_freshness: dict[str, Any] = Field(default_factory=dict)
     fallback: bool = False
-    page: Optional[str] = None
-    current_topic: Optional[str] = None
-    selected_shop_id: Optional[int] = None
-    route_decision: Optional[str] = None
-    route_reason: Optional[str] = None
-    current_stage: Optional[str] = None
-    stage_status: Optional[str] = None
-    stage_timeline: List[Dict[str, Any]] = Field(default_factory=list)
-    cards: List[Dict[str, Any]] = Field(default_factory=list)
-    shops: List[Dict[str, Any]] = Field(default_factory=list)
-    vouchers: List[Dict[str, Any]] = Field(default_factory=list)
-    suggested_replies: List[Dict[str, Any]] = Field(default_factory=list)
-    next_steps: List[str] = Field(default_factory=list)
-    task_chain: List[Dict[str, Any]] = Field(default_factory=list)
-    ranked_candidates: List[Dict[str, Any]] = Field(default_factory=list)
-    citations: List[Dict[str, Any]] = Field(default_factory=list)
-    retrieval_summary: Dict[str, Any] = Field(default_factory=dict)
+    page: str | None = None
+    current_topic: str | None = None
+    selected_shop_id: int | None = None
+    route_decision: str | None = None
+    route_reason: str | None = None
+    current_stage: str | None = None
+    stage_status: str | None = None
+    stage_timeline: list[dict[str, Any]] = Field(default_factory=list)
+    cards: list[dict[str, Any]] = Field(default_factory=list)
+    shops: list[dict[str, Any]] = Field(default_factory=list)
+    vouchers: list[dict[str, Any]] = Field(default_factory=list)
+    suggested_replies: list[dict[str, Any]] = Field(default_factory=list)
+    next_steps: list[str] = Field(default_factory=list)
+    task_chain: list[dict[str, Any]] = Field(default_factory=list)
+    ranked_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    citations: list[dict[str, Any]] = Field(default_factory=list)
+    retrieval_summary: dict[str, Any] = Field(default_factory=dict)
     grounding_status: str = "not_grounded"
     confidence: float = 0.0
     approval_required: bool = False
-    approval_request: Dict[str, Any] = Field(default_factory=dict)
-    transaction_draft: Dict[str, Any] = Field(default_factory=dict)
-    safety_result: Dict[str, Any] = Field(default_factory=dict)
-    metrics: Dict[str, Any] = Field(default_factory=dict)
-    context: Dict[str, Any] = Field(default_factory=dict)
+    approval_request: dict[str, Any] = Field(default_factory=dict)
+    transaction_draft: dict[str, Any] = Field(default_factory=dict)
+    safety_result: dict[str, Any] = Field(default_factory=dict)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    context: dict[str, Any] = Field(default_factory=dict)
 
 
 class LocalLifeTurnState(LocalLifeModel):
@@ -304,39 +303,45 @@ class LocalLifeTurnState(LocalLifeModel):
     session_id: str
     turn_id: str
     user_id: str
-    page: Optional[str] = None
+    page: str | None = None
     raw_query: str
-    client_context: Dict[str, Any] = Field(default_factory=dict)
-    persistent_context: Dict[str, Any] = Field(default_factory=dict)
-    understanding: Optional[QueryUnderstandingResult] = None
+    input_context: dict[str, Any] = Field(default_factory=dict)
+    client_context: dict[str, Any] = Field(default_factory=dict)
+    persistent_context: dict[str, Any] = Field(default_factory=dict)
+    perception_context: dict[str, Any] = Field(default_factory=dict)
+    memory_arbitration: dict[str, Any] = Field(default_factory=dict)
+    understanding: QueryUnderstandingResult | None = None
     slots: LocalLifeSlots = Field(default_factory=LocalLifeSlots)
     clarification: ClarificationDecision = Field(default_factory=ClarificationDecision)
     intent: LocalLifeIntentType = LocalLifeIntentType.RESTAURANT_RECOMMENDATION
-    tool_results: List[Dict[str, Any]] = Field(default_factory=list)
-    structured_candidates: List[ShopRecord] = Field(default_factory=list)
-    evidence_claims: List[EvidenceClaim] = Field(default_factory=list)
-    candidate_profiles: List[CandidateProfile] = Field(default_factory=list)
-    ranked_candidates: List[RankedCandidate] = Field(default_factory=list)
-    answer_text: Optional[str] = None
-    cards: List[Dict[str, Any]] = Field(default_factory=list)
-    suggested_replies: List[Dict[str, Any]] = Field(default_factory=list)
-    selected_shop_id: Optional[int] = None
+    tool_results: list[dict[str, Any]] = Field(default_factory=list)
+    structured_candidates: list[ShopRecord] = Field(default_factory=list)
+    evidence_claims: list[EvidenceClaim] = Field(default_factory=list)
+    candidate_profiles: list[CandidateProfile] = Field(default_factory=list)
+    ranked_candidates: list[RankedCandidate] = Field(default_factory=list)
+    answer_text: str | None = None
+    cards: list[dict[str, Any]] = Field(default_factory=list)
+    suggested_replies: list[dict[str, Any]] = Field(default_factory=list)
+    selected_shop_id: int | None = None
     mode: str = "recommend"
     source: str = "local-life-agent"
-    current_topic: Optional[str] = None
-    route_decision: Optional[str] = None
-    route_reason: Optional[str] = None
-    current_stage: Optional[str] = None
-    stage_status: Optional[str] = None
-    stage_timeline: List[Dict[str, Any]] = Field(default_factory=list)
+    current_topic: str | None = None
+    route_decision: str | None = None
+    route_reason: str | None = None
+    current_stage: str | None = None
+    stage_status: str | None = None
+    stage_timeline: list[dict[str, Any]] = Field(default_factory=list)
+    state_diff: dict[str, Any] = Field(default_factory=dict)
+    illegal_state_mutation: list[dict[str, Any]] = Field(default_factory=list)
+    node_writes: list[dict[str, Any]] = Field(default_factory=list)
     approval_required: bool = False
-    approval_request: Dict[str, Any] = Field(default_factory=dict)
-    transaction_draft: Dict[str, Any] = Field(default_factory=dict)
-    safety_result: Dict[str, Any] = Field(default_factory=dict)
-    metrics: Dict[str, Any] = Field(default_factory=dict)
-    raw_result: Dict[str, Any] = Field(default_factory=dict)
-    user_need: Optional[UserNeed] = None
-    route_review: Optional[RouteReviewResult] = None
+    approval_request: dict[str, Any] = Field(default_factory=dict)
+    transaction_draft: dict[str, Any] = Field(default_factory=dict)
+    safety_result: dict[str, Any] = Field(default_factory=dict)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    raw_result: dict[str, Any] = Field(default_factory=dict)
+    user_need: UserNeed | None = None
+    route_review: RouteReviewResult | None = None
 
 
 ClarificationDecision.model_rebuild()

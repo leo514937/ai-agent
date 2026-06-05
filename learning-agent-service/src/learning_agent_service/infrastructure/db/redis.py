@@ -7,7 +7,7 @@ from typing import Any
 
 from learning_agent_service.config.settings import RedisSettings
 
-from .errors import require_dependency
+from .errors import InfrastructureConfigurationError, require_dependency
 
 try:
     from redis import Redis
@@ -56,4 +56,10 @@ def build_redis_runtime(settings: RedisSettings) -> RedisRuntime:
     if Redis is None:
         require_dependency("redis", "short-term session storage")
     client = Redis.from_url(settings.url, socket_timeout=settings.socket_timeout_seconds, decode_responses=True)
+    try:
+        client.ping()
+    except Exception as exc:
+        raise InfrastructureConfigurationError(
+            "Redis endpoint is unavailable for short-term session storage: %s" % settings.url
+        ) from exc
     return RedisRuntime(client=client, keys=RedisKeySpace(prefix=settings.key_prefix))

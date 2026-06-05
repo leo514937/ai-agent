@@ -3,19 +3,23 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, is_dataclass
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 from learning_agent_service.adapters.java_business import JavaBusinessClient
 from learning_agent_service.application.dependencies import OpenAIEmbeddingAdapter
 from learning_agent_service.config import get_settings
 from learning_agent_service.infrastructure.db.openai_client import build_openai_runtime
 from learning_agent_service.infrastructure.db.qdrant import build_qdrant_runtime
-from learning_agent_service.local_life.query_router import LocalLifeQueryRouter
 from learning_agent_service.local_life.query_rewriter import normalize_query
+from learning_agent_service.local_life.query_router import LocalLifeQueryRouter
 from learning_agent_service.local_life.slot_extractor import extract_slots
-
-from learning_agent_service.rag.local_life_retrieval import LocalLifeParentChildRetriever, build_arg_parser as _build_retrieval_arg_parser
+from learning_agent_service.rag.local_life import LocalLifeParentChildRetriever
+from learning_agent_service.rag.local_life import (
+    build_arg_parser as _build_retrieval_arg_parser,
+)
+from learning_agent_service.domain.utils import as_mapping as _as_mapping
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -23,16 +27,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.description = "Debug local life hybrid retrieval and parent-child evidence packs."
     parser.add_argument("--json", action="store_true", help="Print the debug pack as JSON.")
     return parser
-
-
-def _as_mapping(value: Any) -> dict[str, Any]:
-    if isinstance(value, Mapping):
-        return dict(value)
-    if hasattr(value, "model_dump"):
-        dumped = value.model_dump(mode="json")
-        if isinstance(dumped, Mapping):
-            return dict(dumped)
-    return {}
 
 
 def _pack_to_dict(pack: Any) -> dict[str, Any]:

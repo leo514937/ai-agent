@@ -637,7 +637,7 @@ class AnswerPlanChainTestCase(unittest.TestCase):
                 risks=["高峰排队"],
                 coupon_summary="有券且值得领",
                 scene_fit=SceneFitSummary(scene="family_dinner", fit="high", reason="适合带爸妈"),
-                evidence_used=["evidence-review-1", "evidence-coupon-1"],
+                evidence_used=["evidence-review-1", "evidence-scene-1"],
             ),
             candidate_reasons=[
                 CandidateEvidenceSummary(
@@ -649,7 +649,7 @@ class AnswerPlanChainTestCase(unittest.TestCase):
                     risks=["高峰排队"],
                     coupon_summary="有券且值得领",
                     scene_fit=SceneFitSummary(scene="family_dinner", fit="high", reason="适合带爸妈"),
-                    evidence_used=["evidence-review-1", "evidence-coupon-1"],
+                    evidence_used=["evidence-review-1", "evidence-scene-1"],
                 )
             ],
             scene_fit_summary=SceneFitSummary(scene="family_dinner", fit="high", reason="适合带爸妈"),
@@ -658,7 +658,7 @@ class AnswerPlanChainTestCase(unittest.TestCase):
             missing_info=[],
             next_actions=[NextAction(label="看详情", action="view_detail", shop_id=1)],
             suggested_replies=["帮我对比前两家", "只看有停车的"],
-            evidence_used=["evidence-review-1", "evidence-coupon-1"],
+            evidence_used=["evidence-review-1", "evidence-scene-1"],
             confidence="high",
             source_mode="mixed",
             degraded_reason=None,

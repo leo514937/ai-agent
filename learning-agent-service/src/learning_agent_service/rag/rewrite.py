@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import logging
 import json
-import time
+import logging
 import re
+import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping, Optional, Tuple
+from typing import Any
 
 from .models import RetrievalFilters, RetrievalPlan, coerce_tuple
 
@@ -35,10 +36,10 @@ _SOURCE_HINTS = {
 @dataclass(frozen=True)
 class QueryRewriteContext:
     raw_query: str
-    intent: Optional[str] = None
-    resolved_topic: Optional[str] = None
-    session_topic: Optional[str] = None
-    requested_output_style: Optional[str] = None
+    intent: str | None = None
+    resolved_topic: str | None = None
+    session_topic: str | None = None
+    requested_output_style: str | None = None
     filters: RetrievalFilters = field(default_factory=RetrievalFilters)
     user_preferences: Mapping[str, Any] = field(default_factory=dict)
     extra: Mapping[str, Any] = field(default_factory=dict)
@@ -51,20 +52,20 @@ class QueryRewriteConfig:
     short_query_max_chars: int = 6
     low_confidence_threshold: float = 0.5
     llm_retry_limit: int = 1
-    llm_model: Optional[str] = None
+    llm_model: str | None = None
     llm_temperature: float = 0.0
     hyde_enabled: bool = False
-    hyde_model: Optional[str] = None
+    hyde_model: str | None = None
     hyde_temperature: float = 0.0
 
 
 class QueryRewriteService:
     def __init__(
         self,
-        config: Optional[QueryRewriteConfig] = None,
+        config: QueryRewriteConfig | None = None,
         *,
-        llm_rewriter: Optional[Callable[[QueryRewriteContext, RetrievalPlan, str], Mapping[str, Any]]] = None,
-        hyde_rewriter: Optional[Callable[[QueryRewriteContext, RetrievalPlan, str], Mapping[str, Any]]] = None,
+        llm_rewriter: Callable[[QueryRewriteContext, RetrievalPlan, str], Mapping[str, Any]] | None = None,
+        hyde_rewriter: Callable[[QueryRewriteContext, RetrievalPlan, str], Mapping[str, Any]] | None = None,
     ) -> None:
         self._config = config or QueryRewriteConfig()
         self._llm_rewriter = llm_rewriter
@@ -176,7 +177,7 @@ class QueryRewriteService:
         self,
         plan_or_context: RetrievalPlan | QueryRewriteContext,
         fallback_reason: str = "",
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         if not self._config.hyde_enabled or self._hyde_rewriter is None:
             return None
 
@@ -286,7 +287,7 @@ class QueryRewriteService:
         payload: Mapping[str, Any] | str | None,
         context: QueryRewriteContext,
         plan: RetrievalPlan,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         if payload is None:
             return None
         if isinstance(payload, str):
@@ -309,7 +310,7 @@ class QueryRewriteService:
             "base_plan": plan.extra,
         }
 
-    def _normalize_hyde_payload(self, payload: Mapping[str, Any] | str | None) -> Optional[Dict[str, Any]]:
+    def _normalize_hyde_payload(self, payload: Mapping[str, Any] | str | None) -> dict[str, Any] | None:
         if payload is None:
             return None
         if isinstance(payload, str):
@@ -341,7 +342,7 @@ class QueryRewriteService:
         if not isinstance(raw_filters, Mapping):
             return base_filters
 
-        def coerce(value: Any) -> Tuple[str, ...]:
+        def coerce(value: Any) -> tuple[str, ...]:
             if not value:
                 return ()
             if isinstance(value, str):
@@ -403,11 +404,11 @@ class QueryRewriteService:
             ordered.append(token)
         return " ".join(ordered[:10])
 
-    def _preferred_chunk_types(self, context: QueryRewriteContext) -> Tuple[str, ...]:
+    def _preferred_chunk_types(self, context: QueryRewriteContext) -> tuple[str, ...]:
         intent = (context.intent or "").strip().lower()
         return INTENT_CHUNK_MAP.get(intent, INTENT_CHUNK_MAP["explain"])
 
-    def _build_filters(self, context: QueryRewriteContext, preferred_chunk_types: Tuple[str, ...]) -> RetrievalFilters:
+    def _build_filters(self, context: QueryRewriteContext, preferred_chunk_types: tuple[str, ...]) -> RetrievalFilters:
         base = context.filters
         semantic_query = self._build_semantic_query(context).lower()
 
@@ -446,7 +447,7 @@ class QueryRewriteService:
         )
 
     @staticmethod
-    def _normalize_queries(*queries: Any) -> Tuple[str, ...]:
+    def _normalize_queries(*queries: Any) -> tuple[str, ...]:
         normalized = []
         seen = set()
         for query in queries:
@@ -464,7 +465,7 @@ class QueryRewriteService:
         return tuple(normalized)
 
     @staticmethod
-    def _infer_mapping_value(text: str, mapping: Mapping[str, Tuple[str, ...]]) -> Optional[str]:
+    def _infer_mapping_value(text: str, mapping: Mapping[str, tuple[str, ...]]) -> str | None:
         for value, keywords in mapping.items():
             if any(keyword in text for keyword in keywords):
                 return value

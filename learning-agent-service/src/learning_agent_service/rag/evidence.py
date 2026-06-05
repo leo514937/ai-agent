@@ -2,10 +2,18 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
-from typing import Dict, List, Optional, Sequence, Tuple
 
-from .models import EvidenceItem, EvidencePack, EvidenceStatus, RecallHit, RetrievalPlan, RetrievalTrace, RetrievalTraceItem
+from .models import (
+    EvidenceItem,
+    EvidencePack,
+    EvidenceStatus,
+    RecallHit,
+    RetrievalPlan,
+    RetrievalTrace,
+    RetrievalTraceItem,
+)
 
 _TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_+#.:-]+|[\u4e00-\u9fff]+")
 
@@ -28,11 +36,11 @@ class EvidenceGovernanceService:
         self,
         plan: RetrievalPlan,
         hits: Sequence[RecallHit],
-        trace: Optional[RetrievalTrace] = None,
+        trace: RetrievalTrace | None = None,
     ) -> EvidencePack:
         original_count = len(hits)
-        kept: List[RecallHit] = list(hits)
-        rejected: List[RetrievalTraceItem] = []
+        kept: list[RecallHit] = list(hits)
+        rejected: list[RetrievalTraceItem] = []
 
         kept, low_score_rejected = self._low_score_filter(kept)
         rejected.extend(low_score_rejected)
@@ -50,9 +58,9 @@ class EvidenceGovernanceService:
         limit_rejected = tuple(self._to_trace_item(hit, rejected_reason="chunk_type_mismatch") for hit in kept[limit:])
         rejected.extend(limit_rejected)
 
-        strong_items: List[EvidenceItem] = []
-        weak_items: List[EvidenceItem] = []
-        evidence_items: List[EvidenceItem] = []
+        strong_items: list[EvidenceItem] = []
+        weak_items: list[EvidenceItem] = []
+        evidence_items: list[EvidenceItem] = []
         for hit in final_hits:
             tier = self._classify_tier(hit)
             item = EvidenceItem(
@@ -207,7 +215,7 @@ class EvidenceGovernanceService:
     def _source_chunk_id(hit: RecallHit) -> str:
         return str(hit.source_chunk_id or hit.metadata.get("source_chunk_id") or hit.chunk.chunk_id)
 
-    def _policy_snapshot(self) -> Dict[str, float | int]:
+    def _policy_snapshot(self) -> dict[str, float | int]:
         return {
             "low_score_threshold": self._config.low_score_threshold,
             "strong_score_threshold": self._config.strong_score_threshold,
@@ -217,9 +225,9 @@ class EvidenceGovernanceService:
             "max_items": self._config.max_items,
         }
 
-    def _low_score_filter(self, hits: Sequence[RecallHit]) -> tuple[List[RecallHit], List[RetrievalTraceItem]]:
-        kept: List[RecallHit] = []
-        rejected: List[RetrievalTraceItem] = []
+    def _low_score_filter(self, hits: Sequence[RecallHit]) -> tuple[list[RecallHit], list[RetrievalTraceItem]]:
+        kept: list[RecallHit] = []
+        rejected: list[RetrievalTraceItem] = []
         for hit in hits:
             if hit.score >= self._config.low_score_threshold:
                 kept.append(hit)
@@ -227,9 +235,9 @@ class EvidenceGovernanceService:
                 rejected.append(self._to_trace_item(hit, rejected_reason="low_score"))
         return kept, rejected
 
-    def _deduplicate(self, hits: Sequence[RecallHit]) -> tuple[List[RecallHit], List[RetrievalTraceItem]]:
-        kept: List[RecallHit] = []
-        rejected: List[RetrievalTraceItem] = []
+    def _deduplicate(self, hits: Sequence[RecallHit]) -> tuple[list[RecallHit], list[RetrievalTraceItem]]:
+        kept: list[RecallHit] = []
+        rejected: list[RetrievalTraceItem] = []
         for hit in hits:
             if any(self._text_similarity(hit.chunk.text, other.chunk.text) >= self._config.dedup_similarity_threshold for other in kept):
                 rejected.append(self._to_trace_item(hit, rejected_reason="duplicate"))
@@ -241,7 +249,7 @@ class EvidenceGovernanceService:
         self,
         plan: RetrievalPlan,
         hits: Sequence[RecallHit],
-    ) -> tuple[List[RecallHit], List[RetrievalTraceItem]]:
+    ) -> tuple[list[RecallHit], list[RetrievalTraceItem]]:
         query_text = " ".join(
             filter(
                 None,
@@ -258,8 +266,8 @@ class EvidenceGovernanceService:
         if not query_tokens:
             return list(hits), []
 
-        kept: List[RecallHit] = []
-        rejected: List[RetrievalTraceItem] = []
+        kept: list[RecallHit] = []
+        rejected: list[RetrievalTraceItem] = []
         for hit in hits:
             if bool(hit.metadata.get("expanded_from_parent")) and hit.metadata.get("expanded_from_chunk_id"):
                 kept.append(hit)
@@ -272,22 +280,22 @@ class EvidenceGovernanceService:
                 rejected.append(self._to_trace_item(hit, rejected_reason="topic_mismatch"))
         return kept or list(hits[: self._config.min_items]), rejected
 
-    def _version_filter(self, plan: RetrievalPlan, hits: Sequence[RecallHit]) -> tuple[List[RecallHit], List[RetrievalTraceItem]]:
+    def _version_filter(self, plan: RetrievalPlan, hits: Sequence[RecallHit]) -> tuple[list[RecallHit], list[RetrievalTraceItem]]:
         if plan.retrieval_filters.version:
             allowed = set(plan.retrieval_filters.version)
             kept = [hit for hit in hits if hit.chunk.version in allowed]
             rejected = [self._to_trace_item(hit, rejected_reason="old_version") for hit in hits if hit.chunk.version not in allowed]
             return kept, rejected
 
-        latest_by_document: Dict[str, str] = {}
+        latest_by_document: dict[str, str] = {}
         for hit in hits:
             version = hit.chunk.version or ""
             current = latest_by_document.get(hit.chunk.document_id)
             if current is None or version > current:
                 latest_by_document[hit.chunk.document_id] = version
 
-        kept: List[RecallHit] = []
-        rejected: List[RetrievalTraceItem] = []
+        kept: list[RecallHit] = []
+        rejected: list[RetrievalTraceItem] = []
         for hit in hits:
             latest_version = latest_by_document.get(hit.chunk.document_id)
             if not latest_version or (hit.chunk.version or "") == latest_version:
@@ -296,25 +304,25 @@ class EvidenceGovernanceService:
                 rejected.append(self._to_trace_item(hit, rejected_reason="old_version"))
         return kept, rejected
 
-    def _answer_view_filter(self, plan: RetrievalPlan, hits: Sequence[RecallHit]) -> tuple[List[RecallHit], List[RetrievalTraceItem]]:
+    def _answer_view_filter(self, plan: RetrievalPlan, hits: Sequence[RecallHit]) -> tuple[list[RecallHit], list[RetrievalTraceItem]]:
         if not plan.preferred_chunk_types:
             return list(hits), []
 
         preferred = [hit for hit in hits if hit.chunk.chunk_type in plan.preferred_chunk_types]
         fallback = [hit for hit in hits if hit.chunk.chunk_type not in plan.preferred_chunk_types]
         merged = preferred + fallback
-        rejected: List[RetrievalTraceItem] = []
+        rejected: list[RetrievalTraceItem] = []
         if fallback and len(preferred) < len(merged):
             for hit in fallback:
                 if hit not in merged[: self._config.max_items]:
                     rejected.append(self._to_trace_item(hit, rejected_reason="chunk_type_mismatch"))
         return merged[: self._config.max_items], rejected
 
-    def _to_trace_item(self, hit: RecallHit, rejected_reason: Optional[str] = None) -> RetrievalTraceItem:
+    def _to_trace_item(self, hit: RecallHit, rejected_reason: str | None = None) -> RetrievalTraceItem:
         return RetrievalTraceItem.from_hit(hit, rejected_reason=rejected_reason)
 
     @staticmethod
-    def _tokenize(text: str) -> Tuple[str, ...]:
+    def _tokenize(text: str) -> tuple[str, ...]:
         return tuple(token.lower() for token in _TOKEN_PATTERN.findall(text or ""))
 
     @classmethod

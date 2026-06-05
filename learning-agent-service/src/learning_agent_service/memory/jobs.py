@@ -1,18 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime
+from typing import Any
 
-from learning_agent_service.domain.memory import MemoryDeletionStatus, MemoryTargetStore
-from learning_agent_service.infrastructure.repositories.memory_record_repository import MemoryRecordRepository
+from learning_agent_service.domain.memory import MemoryTargetStore
+from learning_agent_service.domain.utils import utcnow as _utcnow
+from learning_agent_service.infrastructure.repositories.memory_record_repository import (
+    MemoryRecordRepository,
+)
 
 from .orchestrator import MemoryOrchestrator
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
-
 @dataclass
 class MemoryDeletionWorker:
     """幂等删除 worker，负责把删除任务同步到各个存储层。"""
@@ -22,7 +20,7 @@ class MemoryDeletionWorker:
     redis_runtime: Any = None
     short_term_store: Any = None
 
-    def run_once(self, limit: int = 50) -> Dict[str, Any]:
+    def run_once(self, limit: int = 50) -> dict[str, Any]:
         claimed = self.repository.claim_deletion_jobs(limit=limit)
         succeeded = 0
         failed = 0
@@ -40,7 +38,7 @@ class MemoryDeletionWorker:
             "failed": failed,
         }
 
-    def _execute(self, target_store: Any, memory_id: str, session_id: Optional[str], vector_id: Optional[str]) -> None:
+    def _execute(self, target_store: Any, memory_id: str, session_id: str | None, vector_id: str | None) -> None:
         target_value = target_store.value if hasattr(target_store, "value") else str(target_store)
         if target_value == MemoryTargetStore.POSTGRES.value:
             return
@@ -67,7 +65,7 @@ class MemoryDeletionWorker:
             return
         raise RuntimeError("qdrant_index does not support delete operations")
 
-    def _delete_redis(self, session_id: Optional[str]) -> None:
+    def _delete_redis(self, session_id: str | None) -> None:
         if not session_id:
             return
         deleted = False
@@ -100,7 +98,7 @@ class MemoryOutboxWorker:
 
     long_term_store: Any
 
-    def run_once(self, limit: int = 50) -> Dict[str, Any]:
+    def run_once(self, limit: int = 50) -> dict[str, Any]:
         if self.long_term_store is None or not hasattr(self.long_term_store, "process_memory_outbox_once"):
             return {"claimed": 0, "published": 0, "failed": 0, "skipped": 0}
         return dict(self.long_term_store.process_memory_outbox_once(limit=limit))
@@ -111,12 +109,12 @@ class MemoryMaintenanceJob:
     """轻量维护入口，供外部调度器周期性调用。"""
 
     orchestrator: MemoryOrchestrator
-    deletion_worker: Optional[MemoryDeletionWorker] = None
-    outbox_worker: Optional[MemoryOutboxWorker] = None
+    deletion_worker: MemoryDeletionWorker | None = None
+    outbox_worker: MemoryOutboxWorker | None = None
     deletion_batch_size: int = 50
     outbox_batch_size: int = 50
 
-    def run(self, user_id: Optional[str] = None) -> dict[str, Any]:
+    def run(self, user_id: str | None = None) -> dict[str, Any]:
         merged = self.orchestrator.consolidate(user_id=user_id)
         deletion_summary = None
         if self.deletion_worker is not None:

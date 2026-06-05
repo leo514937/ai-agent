@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import logging
 import queue
-import time
 import threading
-from datetime import datetime, timezone
-from typing import Any, Iterable, Mapping, Optional, Protocol
+import time
+from collections.abc import Iterable, Mapping
+from datetime import UTC, datetime
+from typing import Any, Protocol
 
 from ...domain.contracts import (
     ChatTurnCommand,
@@ -15,19 +16,19 @@ from ...domain.contracts import (
 )
 from ...domain.errors import TerminalEvent, WorkflowErrorCode, build_error
 from ...domain.state import GraphState, build_initial_state, clone_graph_state
+from ..router import _looks_like_unserviceable_location, _pending_clarification_matches_query
 from .services import WorkflowServices
 from .subgraphs import (
+    route_after_rag,
+    route_after_understand,
+    route_decider,
+    route_gate,
     run_plan_execute_subgraph,
     run_rag_subgraph,
     run_recommendation_subgraph,
     run_tool_subgraph,
     run_understand_turn,
-    route_decider,
-    route_gate,
-    route_after_rag,
-    route_after_understand,
 )
-from ..routing import _looks_like_unserviceable_location, _pending_clarification_matches_query
 
 _LOGGER = logging.getLogger(__name__)
 _STREAM_STOP = object()
@@ -56,14 +57,14 @@ class WorkflowRunner(Protocol):
     def run(
         self,
         command: ChatTurnCommand,
-        persistent_context: Optional[PersistentSessionContext] = None,
+        persistent_context: PersistentSessionContext | None = None,
     ) -> GraphState:
         ...
 
     def run_stream(
         self,
         command: ChatTurnCommand,
-        persistent_context: Optional[PersistentSessionContext] = None,
+        persistent_context: PersistentSessionContext | None = None,
     ) -> Iterable[SseEnvelope]:
         ...
 
@@ -83,7 +84,7 @@ class SequentialWorkflowRunner:
     def run(
         self,
         command: ChatTurnCommand,
-        persistent_context: Optional[PersistentSessionContext] = None,
+        persistent_context: PersistentSessionContext | None = None,
     ) -> GraphState:
         initial = build_initial_state(
             command=command,
@@ -276,7 +277,7 @@ class SequentialWorkflowRunner:
     def run_stream(
         self,
         command: ChatTurnCommand,
-        persistent_context: Optional[PersistentSessionContext] = None,
+        persistent_context: PersistentSessionContext | None = None,
     ) -> Iterable[SseEnvelope]:
         state = build_initial_state(
             command=command,
@@ -842,7 +843,7 @@ class SequentialWorkflowRunner:
                 trace_id=runtime.trace_id,
                 session_id=runtime.session_id,
                 turn_id=runtime.turn_id,
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 workflow_version=runtime.workflow_version,
                 payload=payload,
             )
@@ -946,7 +947,7 @@ class SequentialWorkflowRunner:
                 trace_id=runtime.trace_id,
                 session_id=runtime.session_id,
                 turn_id=runtime.turn_id,
-                timestamp=datetime.now(timezone.utc),
+                timestamp=datetime.now(UTC),
                 workflow_version=runtime.workflow_version,
                 payload=payload,
             )
@@ -986,6 +987,11 @@ class SequentialWorkflowRunner:
         elif stage_name == "rag_subgraph":
             metrics["retrieval_bundle_ms"] = round(elapsed_ms, 3)
         result["runtime"] = runtime.model_copy(update={"metrics": metrics})
+        phase5_trace = dict(metrics.get(_PHASE5_TRACE_KEY, {}) or {})
+        nodes_visited = list(phase5_trace.get("nodes_visited") or [])
+        if metric_stage not in nodes_visited:
+            nodes_visited.append(metric_stage)
+        result = _update_phase5_trace(result, nodes_visited=nodes_visited)
         _LOGGER.info(
             "workflow_stage_event trace_id=%s session_id=%s turn_id=%s stage=%s status=done elapsed_ms=%.1f degrade_to=%s error=",
             runtime.trace_id,
@@ -998,7 +1004,7 @@ class SequentialWorkflowRunner:
         return result
 
     def _invoke_stage_streaming(self, stage_name: str, handler, state: GraphState):
-        event_queue: "queue.Queue[object]" = queue.Queue()
+        event_queue: queue.Queue[object] = queue.Queue()
         runtime = state["runtime"]
         runtime_extra = dict(runtime.extra)
         runtime_extra["stream_event_sink"] = event_queue
@@ -1088,7 +1094,7 @@ class SequentialWorkflowRunner:
     def _finalize_terminal(
         self,
         state: GraphState,
-        default_terminal: Optional[TerminalEvent] = None,
+        default_terminal: TerminalEvent | None = None,
     ) -> GraphState:
         runtime = state["runtime"]
         if runtime.terminal_event is None and default_terminal is not None:

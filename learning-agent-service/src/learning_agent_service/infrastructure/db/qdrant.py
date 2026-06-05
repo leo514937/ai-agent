@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import Any
 
 from learning_agent_service.config.settings import QdrantSettings
 
@@ -33,7 +33,7 @@ class QdrantRuntime:
     memory_vector_size: int | None
     memory_distance: str
 
-    def collection_map(self) -> Dict[str, str]:
+    def collection_map(self) -> dict[str, str]:
         return {
             "knowledge": self.knowledge_collection,
             "memory": self.memory_collection,

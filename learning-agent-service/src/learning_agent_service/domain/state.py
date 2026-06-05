@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from datetime import datetime, timezone
-from typing import Optional, TypedDict
+from datetime import UTC, datetime
+from typing import TypedDict
 
 from .contracts import ChatTurnCommand, GraphRuntimeMeta, PersistentSessionContext, TurnRuntimeState
 
@@ -16,9 +16,9 @@ class GraphState(TypedDict):
 def build_initial_state(
     command: ChatTurnCommand,
     workflow_version: str = "learn-agent/v1",
-    persistent: Optional[PersistentSessionContext] = None,
+    persistent: PersistentSessionContext | None = None,
 ) -> GraphState:
-    request_ts = datetime.now(timezone.utc)
+    request_ts = datetime.now(UTC)
     base_persistent = persistent or PersistentSessionContext()
     if command.history_summary and not base_persistent.history_summary:
         base_persistent = base_persistent.model_copy(update={"history_summary": command.history_summary})

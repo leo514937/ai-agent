@@ -1,12 +1,10 @@
 ﻿from __future__ import annotations
 
-from typing import List, Sequence, Tuple
-
 from .models import Citation, EvidenceItem, EvidencePack
 
 
 class CitationBuilder:
-    def build(self, evidence: EvidencePack) -> Tuple[Citation, ...]:
+    def build(self, evidence: EvidencePack) -> tuple[Citation, ...]:
         return tuple(self._build_single(item) for item in evidence.items)
 
     def _build_single(self, item: EvidenceItem) -> Citation:

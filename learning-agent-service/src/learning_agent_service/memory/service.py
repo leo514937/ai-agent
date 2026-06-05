@@ -4,9 +4,9 @@ import logging
 import queue
 import threading
 import time
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
+from typing import Any
 
 from learning_agent_service.config import Settings
 from learning_agent_service.domain import (
@@ -18,23 +18,28 @@ from learning_agent_service.domain import (
     MemoryWriteTargetResult,
     PersistSessionCommand,
     PersistSessionResult,
+)
+from learning_agent_service.domain import (
     PersistentSessionContext as DomainPersistentSessionContext,
 )
 from learning_agent_service.domain.errors import WorkflowErrorCode
 from learning_agent_service.domain.guards import validate_memory_write_boundary
 
 from .canonical import CanonicalTopicResolver
-from .preference_registry import DEFAULT_PREFERENCE_REGISTRY
 from .models import (
     AsyncLogEvent,
     ExplicitUserSignals,
     MemoryCapabilityError,
     MemoryPromotionInput,
-    PersistentSessionContext as MemoryPersistentSessionContext,
+    PersistSessionPlan,
     PreferenceProfileWrite,
     SessionPersistenceContext,
     UserPreferenceProfile,
 )
+from .models import (
+    PersistentSessionContext as MemoryPersistentSessionContext,
+)
+from .preference_registry import DEFAULT_PREFERENCE_REGISTRY
 from .promotion import MemoryPromotionPolicy
 from .protocols import (
     AsyncLogStore,
@@ -45,7 +50,6 @@ from .protocols import (
     SupportsLoadAny,
 )
 
-
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -55,7 +59,7 @@ class MemoryService:
     async_log_store: AsyncLogStore
     settings: Settings
     mastery_store: Any = None
-    preference_store: Optional[PreferenceStore] = None
+    preference_store: PreferenceStore | None = None
     profile_projection_store: Any = None
     semantic_memory_store: SemanticMemoryStore = field(default_factory=NoOpSemanticMemoryStore)
     promotion_policy: MemoryPromotionPolicy = field(default_factory=MemoryPromotionPolicy)
@@ -120,7 +124,7 @@ class MemoryService:
             updated_context = updated_context.model_copy(update={"selected_shop_name": updated_context.current_shop})
         if not updated_context.current_topic and updated_context.current_shop:
             updated_context = updated_context.model_copy(update={"current_topic": updated_context.current_shop})
-        preserved_updates: Dict[str, Any] = {}
+        preserved_updates: dict[str, Any] = {}
         if persistent.pending_clarification is not None and updated_context.pending_clarification is None:
             # 短期澄清态必须跟随 session 一起落盘，否则下一轮无法消费“北京”这类短答。
             preserved_updates["pending_clarification"] = persistent.pending_clarification
@@ -262,10 +266,10 @@ class MemoryService:
                 memory_write=memory_write,
             )
 
-        diagnostics: Dict[str, Any] = {}
+        diagnostics: dict[str, Any] = {}
         session_backend = type(self.session_store).__name__
         session_status = "degraded" if self._is_fallback_backend_name(session_backend) else "success"
-        target_summaries: list[Dict[str, Any]] = [
+        target_summaries: list[dict[str, Any]] = [
             {
                 "target": "session_context",
                 "status": session_status,
@@ -423,7 +427,7 @@ class MemoryService:
             "memory_updates": command.memory_updates.model_dump(mode="json"),
         }
 
-        target_summaries: list[Dict[str, Any]] = []
+        target_summaries: list[dict[str, Any]] = []
         if self.mastery_store is None:
             target_summaries.append(
                 {
@@ -556,8 +560,8 @@ class MemoryService:
 
     def _resolve_topic(
         self,
-        resolved_topic: Optional[str],
-        current_topic: Optional[str],
+        resolved_topic: str | None,
+        current_topic: str | None,
         raw_query: str,
     ) -> str:
         resolved = self._canonicalize_topic_candidate(resolved_topic)
@@ -569,7 +573,7 @@ class MemoryService:
 
         return self._canonicalize_topic_candidate(raw_query)
 
-    def _canonicalize_topic_candidate(self, candidate: Optional[str]) -> str:
+    def _canonicalize_topic_candidate(self, candidate: str | None) -> str:
         text = (candidate or "").strip()
         if not text:
             return ""
@@ -626,7 +630,7 @@ class MemoryService:
         user_id: str,
         updated_context: DomainPersistentSessionContext,
         preference_patch: Mapping[str, Any],
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if self.preference_store is None or not preference_patch:
             if not preference_patch:
                 return {
@@ -687,7 +691,7 @@ class MemoryService:
         user_id: str,
         facts: Sequence[Any],
         runtime: SessionPersistenceContext,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         upserted: list[str] = []
         failures: list[str] = []
         if isinstance(self.semantic_memory_store, NoOpSemanticMemoryStore):
@@ -748,7 +752,7 @@ class MemoryService:
         user_id: str,
         updates: Sequence[Mapping[str, Any]],
         runtime: SessionPersistenceContext,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         if not updates:
             return {
                 "target": "profile_projection",
@@ -801,7 +805,7 @@ class MemoryService:
         self,
         runtime: SessionPersistenceContext,
         write_plan: PersistSessionPlan,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         failures: list[str] = []
         events_written = 0
         backend_name = type(self.async_log_store).__name__
@@ -989,7 +993,7 @@ class MemoryService:
         planned_targets: Sequence[str],
         target_summaries: Sequence[Mapping[str, Any]],
         decision_reasons: Sequence[Any],
-        extra: Optional[Mapping[str, Any]] = None,
+        extra: Mapping[str, Any] | None = None,
     ) -> MemoryWriteResult:
         target_results = [self._make_target_result(summary) for summary in target_summaries]
         write_targets = list(dict.fromkeys(str(target) for target in planned_targets if str(target)))
@@ -1025,7 +1029,7 @@ class MemoryService:
             extra=dict(extra or {}),
         )
 
-    def _policy_snapshot(self) -> Dict[str, Any]:
+    def _policy_snapshot(self) -> dict[str, Any]:
         promotion = self.promotion_policy.config
         return {
             "promotion": {
@@ -1037,7 +1041,7 @@ class MemoryService:
         self.async_log_store.append(event.as_mapping())
 
     def _preference_profile(self, user_id: str, user_preferences: Mapping[str, Any]) -> UserPreferenceProfile:
-        stored_preferences: Dict[str, Any] = {}
+        stored_preferences: dict[str, Any] = {}
         if self.profile_projection_store is not None and hasattr(self.profile_projection_store, "list_active"):
             try:
                 rows = self._call_with_timeout(
@@ -1086,7 +1090,7 @@ class MemoryService:
 
     @staticmethod
     def _call_with_timeout(handler, *, timeout_seconds: float):
-        result_queue: "queue.Queue[tuple[str, Any]]" = queue.Queue(maxsize=1)
+        result_queue: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
 
         def _run() -> None:
             try:
@@ -1108,7 +1112,7 @@ class MemoryService:
     def _merge_user_preferences(
         current: Mapping[str, Any],
         projected: Mapping[str, Any],
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         merged = dict(projected)
         merged.update(dict(current))
         return merged

@@ -1,36 +1,35 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import List, Optional
 from uuid import uuid4
 
 from learning_agent_service.domain.memory import (
     MemoryCandidate,
     MemoryRecord,
-    MemoryScope,
-    MemoryStatus,
     MemoryRetrievalMode,
+    MemoryScope,
     MemorySensitivity,
     MemorySource,
+    MemoryStatus,
     MemoryTargetStore,
     MemoryType,
 )
-from learning_agent_service.memory.models import ExplicitUserSignals, MemoryPromotionInput, PersistentSessionContext
+from learning_agent_service.memory.models import ExplicitUserSignals, MemoryPromotionInput
 
 
 @dataclass
 class RuleBasedMemoryExtractor:
     """从显式用户信号和会话状态中抽取候选记忆。"""
 
-    def extract(self, payload: MemoryPromotionInput) -> List[MemoryCandidate]:
-        candidates: List[MemoryCandidate] = []
+    def extract(self, payload: MemoryPromotionInput) -> list[MemoryCandidate]:
+        candidates: list[MemoryCandidate] = []
         candidates.extend(self._extract_preference_candidates(payload))
         candidates.extend(self._extract_session_candidates(payload))
         return candidates
 
-    def _extract_preference_candidates(self, payload: MemoryPromotionInput) -> List[MemoryCandidate]:
+    def _extract_preference_candidates(self, payload: MemoryPromotionInput) -> list[MemoryCandidate]:
         signals = payload.explicit_signals or ExplicitUserSignals()
-        candidates: List[MemoryCandidate] = []
+        candidates: list[MemoryCandidate] = []
         topic = payload.resolved_topic or payload.current_session.current_topic or payload.query or "global"
         query = payload.query or ""
         normalized_query = query.lower()
@@ -125,7 +124,7 @@ class RuleBasedMemoryExtractor:
 
         return candidates
 
-    def _extract_session_candidates(self, payload: MemoryPromotionInput) -> List[MemoryCandidate]:
+    def _extract_session_candidates(self, payload: MemoryPromotionInput) -> list[MemoryCandidate]:
         if not payload.answer_text and not payload.query:
             return []
         topic = payload.resolved_topic or payload.current_session.current_topic or payload.query or "session"
@@ -205,7 +204,7 @@ class RuleBasedMemoryExtractor:
         scope: MemoryScope = MemoryScope.USER,
         status: MemoryStatus = MemoryStatus.ACTIVE,
         ttl_seconds: int | None = None,
-        tags: List[str],
+        tags: list[str],
     ) -> MemoryRecord:
         return MemoryRecord(
             memory_id=f"{payload.user_id}:{payload.turn_id}:{memory_type.value}:{uuid4().hex[:12]}",
@@ -243,5 +242,5 @@ class LLMMemoryExtractor:
 
     enabled: bool = False
 
-    def extract(self, payload: MemoryPromotionInput) -> List[MemoryCandidate]:
+    def extract(self, payload: MemoryPromotionInput) -> list[MemoryCandidate]:
         return []

@@ -4,12 +4,14 @@ import hashlib
 import math
 import re
 import uuid
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from datetime import datetime
+from typing import Any
 
-from learning_agent_service.domain.memory import MemoryRecord, MemoryScope, MemorySource, MemoryStatus, MemoryType
-from learning_agent_service.memory.gates import MemoryVectorizationGate, MemoryVectorizationGateDecision
+from learning_agent_service.domain.memory import MemoryRecord
+from learning_agent_service.domain.utils import utcnow_iso as _utcnow_iso
+from learning_agent_service.memory.gates import MemoryVectorizationGate
 
 try:  # pragma: no cover - optional runtime dependency
     from qdrant_client.http.models import (
@@ -34,15 +36,11 @@ except Exception:  # pragma: no cover - import-tolerant fallback
     BoolIndexParams = DatetimeIndexParams = Distance = FieldCondition = Filter = FloatIndexParams = IntegerIndexParams = KeywordIndexParams = MatchAny = MatchValue = PayloadSchemaType = PointIdsList = PointStruct = TextIndexParams = UuidIndexParams = VectorParams = None
 
 
-def _utcnow_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _tokenize(text: str) -> List[str]:
+def _tokenize(text: str) -> list[str]:
     return [token for token in re.findall(r"[\w\u4e00-\u9fff]+", text.lower()) if token]
 
 
-def _embed_text(text: str, vector_size: int) -> List[float]:
+def _embed_text(text: str, vector_size: int) -> list[float]:
     tokens = _tokenize(text)
     if not tokens:
         return [0.0] * vector_size
@@ -105,11 +103,11 @@ def _payload_field(value: Any) -> Any:
     return value
 
 
-def _json_utc(value: Optional[datetime]) -> Optional[str]:
+def _json_utc(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
 
 
-def _payload_from_record(record: MemoryRecord) -> Dict[str, Any]:
+def _payload_from_record(record: MemoryRecord) -> dict[str, Any]:
     return {
         "memory_id": record.memory_id,
         "user_id": record.user_id,
@@ -183,7 +181,7 @@ def _payload_is_searchable(payload: Mapping[str, Any]) -> bool:
     return True
 
 
-def _normalize_memory_types(memory_types: Optional[Sequence[Any]]) -> Optional[list[str]]:
+def _normalize_memory_types(memory_types: Sequence[Any] | None) -> list[str] | None:
     if not memory_types:
         return None
     normalized: list[str] = []
@@ -195,7 +193,7 @@ def _normalize_memory_types(memory_types: Optional[Sequence[Any]]) -> Optional[l
     return normalized or None
 
 
-def _build_filter(user_id: str, memory_types: Optional[Sequence[Any]] = None) -> Any:
+def _build_filter(user_id: str, memory_types: Sequence[Any] | None = None) -> Any:
     if Filter is None or FieldCondition is None or MatchValue is None or MatchAny is None:
         return None
     must = [
@@ -264,14 +262,14 @@ class QdrantLongTermMemoryIndex:
 
     client: Any
     collection_name: str
-    vector_size: Optional[int] = None
+    vector_size: int | None = None
     vector_name: str = "embedding"
     distance: Any = field(default_factory=lambda: Distance.COSINE if Distance is not None else "cosine")
     embedding_adapter: Any = None
     vectorization_gate: MemoryVectorizationGate = field(default_factory=MemoryVectorizationGate)
-    fallback_points: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    last_error: Optional[str] = None
-    last_operation: Optional[str] = None
+    fallback_points: dict[str, dict[str, Any]] = field(default_factory=dict)
+    last_error: str | None = None
+    last_operation: str | None = None
     _collection_ready: bool = field(default=False, init=False, repr=False)
 
     def ensure_collection(self) -> None:
@@ -352,7 +350,7 @@ class QdrantLongTermMemoryIndex:
             except Exception:
                 self.last_error = "delete_failed"
 
-    def soft_deactivate(self, point_id: str, *, payload: Optional[Mapping[str, Any]] = None) -> None:
+    def soft_deactivate(self, point_id: str, *, payload: Mapping[str, Any] | None = None) -> None:
         self.last_operation = "soft_deactivate"
         self.last_error = None
         normalized_id = _normalize_point_id(point_id)
@@ -380,7 +378,7 @@ class QdrantLongTermMemoryIndex:
         if not callable(update_payload):
             update_payload = getattr(self.client, "overwrite_payload", None)
         if callable(update_payload):
-            kwargs: Dict[str, Any] = {
+            kwargs: dict[str, Any] = {
                 "collection_name": self.collection_name,
                 "payload": {
                     "status": "superseded",
@@ -404,7 +402,7 @@ class QdrantLongTermMemoryIndex:
         query: str,
         user_id: str,
         limit: int = 10,
-        memory_types: Optional[Sequence[Any]] = None,
+        memory_types: Sequence[Any] | None = None,
     ) -> Sequence[MemoryRecord]:
         self.last_operation = "search"
         self.last_error = None
@@ -461,10 +459,10 @@ class QdrantLongTermMemoryIndex:
         vector: Sequence[float],
         user_id: str,
         limit: int,
-        memory_types: Optional[Sequence[Any]] = None,
+        memory_types: Sequence[Any] | None = None,
     ) -> Sequence[MemoryRecord]:
         normalized_types = set(_normalize_memory_types(memory_types) or [])
-        scored: List[tuple[float, Dict[str, Any]]] = []
+        scored: list[tuple[float, dict[str, Any]]] = []
         for point in self.fallback_points.values():
             payload = point.get("payload", {})
             if payload.get("user_id") != user_id:
@@ -580,14 +578,14 @@ class QdrantLongTermMemoryIndex:
                 continue
             _create_payload_index(self.client, self.collection_name, field_name, schema)
 
-    def _embed(self, record: MemoryRecord, text: str) -> List[float]:
+    def _embed(self, record: MemoryRecord, text: str) -> list[float]:
         vector = self._embed_payload(text)
         if self.embedding_adapter is not None:
             vector = list(self.embedding_adapter.embed(text))
         self._validate_embedding(vector)
         return vector
 
-    def _embed_query(self, text: str) -> Optional[List[float]]:
+    def _embed_query(self, text: str) -> list[float] | None:
         if not text and self.embedding_adapter is None and self.vector_size is None:
             return None
         vector = self._embed_payload(text)
@@ -596,7 +594,7 @@ class QdrantLongTermMemoryIndex:
         self._validate_embedding(vector)
         return vector
 
-    def _embed_payload(self, text: str) -> List[float]:
+    def _embed_payload(self, text: str) -> list[float]:
         if self.vector_size is None:
             raise RuntimeError(
                 f"Memory collection {self.collection_name} requires an explicit vector_size before embedding"
@@ -635,10 +633,10 @@ class QdrantLongTermMemoryIndex:
         *,
         user_id: str,
         limit: int,
-        memory_types: Optional[Sequence[Any]] = None,
+        memory_types: Sequence[Any] | None = None,
     ) -> Sequence[MemoryRecord]:
         normalized_types = set(_normalize_memory_types(memory_types) or [])
-        records: List[MemoryRecord] = []
+        records: list[MemoryRecord] = []
         for point in points or []:
             payload = getattr(point, "payload", None)
             if payload is None and isinstance(point, Mapping):

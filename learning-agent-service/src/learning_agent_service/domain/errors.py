@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any
 
 
 class WorkflowErrorCode(str, Enum):
@@ -38,8 +38,8 @@ class ErrorInfo:
     stage: str
     message: str
     retryable: bool = False
-    degraded_to: Optional[str] = None
-    details: Dict[str, Any] = field(default_factory=dict)
+    degraded_to: str | None = None
+    details: dict[str, Any] = field(default_factory=dict)
     is_terminal: bool = False
 
 
@@ -49,8 +49,8 @@ def build_error(
     stage: str,
     message: str,
     retryable: bool = False,
-    degraded_to: Optional[str] = None,
-    details: Optional[Dict[str, Any]] = None,
+    degraded_to: str | None = None,
+    details: dict[str, Any] | None = None,
     is_terminal: bool = False
 ) -> ErrorInfo:
     return ErrorInfo(

@@ -2,34 +2,34 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Type
+from typing import Any
 
 from pydantic import AliasChoices, BaseModel, Field
 
 from learning_agent_service.domain.contracts import (
-    PlanExecutionSummary,
-    PlanStep,
-    Citation,
     ClarificationCard,
+    Citation,
     ErrorPayload,
     FinalPayload,
     MemoryUsedSummary,
-    StepResult,
+    PlanExecutionSummary,
+    PlanStep,
     RetrievalSummary,
+    StepResult,
 )
 
 
 class ApiResponse(BaseModel):
     ok: bool = True
-    data: Optional[Any] = None
-    error: Optional[str] = None
+    data: Any | None = None
+    error: str | None = None
 
     @classmethod
-    def success(cls, data: Any = None) -> "ApiResponse":
+    def success(cls, data: Any = None) -> ApiResponse:
         return cls(ok=True, data=data)
 
     @classmethod
-    def failure(cls, error: str) -> "ApiResponse":
+    def failure(cls, error: str) -> ApiResponse:
         return cls(ok=False, error=error)
 
 
@@ -73,80 +73,80 @@ class EventType(str, Enum):
 class AckPayload(BaseModel):
     message: str
     accepted_at: datetime
-    current_stage: Optional[str] = None
-    stage_status: Optional[str] = None
-    route_decision: Optional[str] = None
-    route_reason: Optional[str] = None
+    current_stage: str | None = None
+    stage_status: str | None = None
+    route_decision: str | None = None
+    route_reason: str | None = None
 
 
 class AnswerDeltaPayload(BaseModel):
     delta: str
     answer_text: str
-    current_stage: Optional[str] = None
-    stage_status: Optional[str] = None
-    route_decision: Optional[str] = None
-    route_reason: Optional[str] = None
+    current_stage: str | None = None
+    stage_status: str | None = None
+    route_decision: str | None = None
+    route_reason: str | None = None
 
 
 class StageStatusPayload(BaseModel):
     stage: str
     status: str
-    elapsed_ms: Optional[float] = None
-    degrade_to: Optional[str] = None
-    error: Optional[str] = None
-    metrics: Dict[str, Any] = Field(default_factory=dict)
-    current_stage: Optional[str] = None
-    stage_status: Optional[str] = None
-    route_decision: Optional[str] = None
-    route_reason: Optional[str] = None
-    message: Optional[str] = None
-    details: Dict[str, Any] = Field(default_factory=dict)
+    elapsed_ms: float | None = None
+    degrade_to: str | None = None
+    error: str | None = None
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    current_stage: str | None = None
+    stage_status: str | None = None
+    route_decision: str | None = None
+    route_reason: str | None = None
+    message: str | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
 
 
 class ClarificationOptionPayload(BaseModel):
     id: str
     label: str
-    value: Optional[str] = None
-    description: Optional[str] = None
+    value: str | None = None
+    description: str | None = None
 
 
 class ClarificationCardPayload(BaseModel):
     card_id: str
     question: str
-    options: List[ClarificationOptionPayload] = Field(default_factory=list)
-    ambiguity_type: Optional[str] = None
+    options: list[ClarificationOptionPayload] = Field(default_factory=list)
+    ambiguity_type: str | None = None
 
     @classmethod
-    def from_domain(cls, card: ClarificationCard) -> "ClarificationCardPayload":
+    def from_domain(cls, card: ClarificationCard) -> ClarificationCardPayload:
         return cls.model_validate(card.model_dump(mode="json"))
 
 
 class RetrievalStartedPayload(BaseModel):
-    stage: Optional[str] = None
-    status: Optional[str] = None
-    elapsed_ms: Optional[float] = None
-    degrade_to: Optional[str] = None
-    error: Optional[str] = None
-    metrics: Dict[str, Any] = Field(default_factory=dict)
-    semantic_query: Optional[str] = None
-    keyword_query: Optional[str] = None
-    retrieval_filters: Dict[str, Any] = Field(default_factory=dict)
-    current_stage: Optional[str] = None
-    stage_status: Optional[str] = None
-    route_decision: Optional[str] = None
-    route_reason: Optional[str] = None
-    message: Optional[str] = None
-    details: Dict[str, Any] = Field(default_factory=dict)
+    stage: str | None = None
+    status: str | None = None
+    elapsed_ms: float | None = None
+    degrade_to: str | None = None
+    error: str | None = None
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    semantic_query: str | None = None
+    keyword_query: str | None = None
+    retrieval_filters: dict[str, Any] = Field(default_factory=dict)
+    current_stage: str | None = None
+    stage_status: str | None = None
+    route_decision: str | None = None
+    route_reason: str | None = None
+    message: str | None = None
+    details: dict[str, Any] = Field(default_factory=dict)
 
 
 class RetrievalResultPayload(BaseModel):
     retrieval_strategy: str
     retrieval_hit_count: int = Field(ge=0)
     evidence_used_count: int = Field(ge=0)
-    current_stage: Optional[str] = None
-    stage_status: Optional[str] = None
-    route_decision: Optional[str] = None
-    route_reason: Optional[str] = None
+    current_stage: str | None = None
+    stage_status: str | None = None
+    route_decision: str | None = None
+    route_reason: str | None = None
 
 
 class MemoryRetrievalStartedPayload(BaseModel):
@@ -155,7 +155,7 @@ class MemoryRetrievalStartedPayload(BaseModel):
     turn_id: str
     user_id: str
     query: str
-    current_topic: Optional[str] = None
+    current_topic: str | None = None
     retrieval_budget: int = Field(default=0, ge=0)
 
 
@@ -163,37 +163,37 @@ class MemoryRetrievalResultPayload(BaseModel):
     trace_id: str
     session_id: str
     turn_id: str
-    retrieved: List[str] = Field(default_factory=list)
-    injected: List[str] = Field(default_factory=list)
-    skipped: List[str] = Field(default_factory=list)
-    candidates: List[str] = Field(default_factory=list)
-    retrieval_reason: Optional[str] = None
+    retrieved: list[str] = Field(default_factory=list)
+    injected: list[str] = Field(default_factory=list)
+    skipped: list[str] = Field(default_factory=list)
+    candidates: list[str] = Field(default_factory=list)
+    retrieval_reason: str | None = None
     total_token_estimate: int = Field(default=0, ge=0)
-    trace_summary: Dict[str, Any] = Field(default_factory=dict)
+    trace_summary: dict[str, Any] = Field(default_factory=dict)
 
 
 class MemoryPromotionResultPayload(BaseModel):
     trace_id: str
     session_id: str
     turn_id: str
-    candidate_ids: List[str] = Field(default_factory=list)
-    promoted_ids: List[str] = Field(default_factory=list)
-    rejected_ids: List[str] = Field(default_factory=list)
-    governed_actions: Dict[str, str] = Field(default_factory=dict)
-    conflict_ids: List[str] = Field(default_factory=list)
-    deletion_job_ids: List[str] = Field(default_factory=list)
-    governance_summary: Dict[str, Any] = Field(default_factory=dict)
-    memory_trace: Dict[str, Any] = Field(default_factory=dict)
+    candidate_ids: list[str] = Field(default_factory=list)
+    promoted_ids: list[str] = Field(default_factory=list)
+    rejected_ids: list[str] = Field(default_factory=list)
+    governed_actions: dict[str, str] = Field(default_factory=dict)
+    conflict_ids: list[str] = Field(default_factory=list)
+    deletion_job_ids: list[str] = Field(default_factory=list)
+    governance_summary: dict[str, Any] = Field(default_factory=dict)
+    memory_trace: dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolCallPayload(BaseModel):
     tool_name: str
     tool_call_id: str
-    input_summary: Dict[str, Any] = Field(default_factory=dict)
-    current_stage: Optional[str] = None
-    stage_status: Optional[str] = None
-    route_decision: Optional[str] = None
-    route_reason: Optional[str] = None
+    input_summary: dict[str, Any] = Field(default_factory=dict)
+    current_stage: str | None = None
+    stage_status: str | None = None
+    route_decision: str | None = None
+    route_reason: str | None = None
 
 
 class ToolResultPayload(BaseModel):
@@ -202,69 +202,69 @@ class ToolResultPayload(BaseModel):
     status: str
     degraded: bool = False
     retryable: bool = False
-    error_code: Optional[str] = None
-    error_message: Optional[str] = None
-    degraded_to: Optional[str] = None
-    output: Dict[str, Any] = Field(default_factory=dict)
-    current_stage: Optional[str] = None
-    stage_status: Optional[str] = None
-    route_decision: Optional[str] = None
-    route_reason: Optional[str] = None
+    error_code: str | None = None
+    error_message: str | None = None
+    degraded_to: str | None = None
+    output: dict[str, Any] = Field(default_factory=dict)
+    current_stage: str | None = None
+    stage_status: str | None = None
+    route_decision: str | None = None
+    route_reason: str | None = None
     approval_required: bool = False
-    approval_status: Optional[str] = None
-    approval_request: Dict[str, Any] = Field(default_factory=dict)
+    approval_status: str | None = None
+    approval_request: dict[str, Any] = Field(default_factory=dict)
 
 
 class PlanExecutionStartedPayload(BaseModel):
-    plan: List[PlanStep] = Field(default_factory=list)
+    plan: list[PlanStep] = Field(default_factory=list)
     total_steps: int = Field(default=0, ge=0)
     current_step_index: int = Field(default=0, ge=0)
-    execution_mode: Optional[str] = None
-    risk_level: Optional[str] = None
-    current_stage: Optional[str] = None
-    stage_status: Optional[str] = None
-    route_decision: Optional[str] = None
-    route_reason: Optional[str] = None
+    execution_mode: str | None = None
+    risk_level: str | None = None
+    current_stage: str | None = None
+    stage_status: str | None = None
+    route_decision: str | None = None
+    route_reason: str | None = None
 
 
 class PlanStepResultPayload(BaseModel):
     step_result: StepResult
     current_step_index: int = Field(default=0, ge=0)
     total_steps: int = Field(default=0, ge=0)
-    current_stage: Optional[str] = None
-    stage_status: Optional[str] = None
-    route_decision: Optional[str] = None
-    route_reason: Optional[str] = None
+    current_stage: str | None = None
+    stage_status: str | None = None
+    route_decision: str | None = None
+    route_reason: str | None = None
 
 
 class ApprovalRequiredPayload(BaseModel):
     step_id: str
     reason: str
-    approval_request: Dict[str, Any] = Field(default_factory=dict)
-    risk_level: Optional[str] = None
-    current_stage: Optional[str] = None
-    stage_status: Optional[str] = None
-    route_decision: Optional[str] = None
-    route_reason: Optional[str] = None
+    approval_request: dict[str, Any] = Field(default_factory=dict)
+    risk_level: str | None = None
+    current_stage: str | None = None
+    stage_status: str | None = None
+    route_decision: str | None = None
+    route_reason: str | None = None
 
 
 class PlanReplannedPayload(BaseModel):
     reason: str
     previous_steps: int = Field(default=0, ge=0)
     total_steps: int = Field(default=0, ge=0)
-    plan: List[PlanStep] = Field(default_factory=list)
-    current_stage: Optional[str] = None
-    stage_status: Optional[str] = None
-    route_decision: Optional[str] = None
-    route_reason: Optional[str] = None
+    plan: list[PlanStep] = Field(default_factory=list)
+    current_stage: str | None = None
+    stage_status: str | None = None
+    route_decision: str | None = None
+    route_reason: str | None = None
 
 
 class PlanExecutionSummaryPayload(BaseModel):
     summary: PlanExecutionSummary
-    current_stage: Optional[str] = None
-    stage_status: Optional[str] = None
-    route_decision: Optional[str] = None
-    route_reason: Optional[str] = None
+    current_stage: str | None = None
+    stage_status: str | None = None
+    route_decision: str | None = None
+    route_reason: str | None = None
 
 
 class ChatStreamRequest(BaseModel):
@@ -272,34 +272,34 @@ class ChatStreamRequest(BaseModel):
     session_id: str = Field(min_length=1)
     trace_id: str = Field(min_length=1)
     message: str = Field(min_length=1)
-    turn_id: Optional[str] = None
-    page: Optional[str] = None
-    response_mode: Optional[str] = None
-    topic_hint: Optional[str] = None
-    history_summary: Optional[str] = None
-    client_context: Dict[str, Any] = Field(default_factory=dict, validation_alias=AliasChoices("context", "client_context"))
+    turn_id: str | None = None
+    page: str | None = None
+    response_mode: str | None = None
+    topic_hint: str | None = None
+    history_summary: str | None = None
+    client_context: dict[str, Any] = Field(default_factory=dict, validation_alias=AliasChoices("context", "client_context"))
 
 
 class SessionStateResponse(BaseModel):
     session_id: str
-    current_topic: Optional[str] = None
-    current_shop: Optional[str] = None
-    recent_entities: List[str] = Field(default_factory=list)
-    clarification_result: Optional[Dict[str, Any]] = None
-    user_preferences: Dict[str, Any] = Field(default_factory=dict)
-    last_retrieval_topic: Optional[str] = None
-    history_summary: Optional[str] = None
-    open_questions: List[str] = Field(default_factory=list)
-    confirmed_facts: List[str] = Field(default_factory=list)
-    next_steps: List[str] = Field(default_factory=list)
+    current_topic: str | None = None
+    current_shop: str | None = None
+    recent_entities: list[str] = Field(default_factory=list)
+    clarification_result: dict[str, Any] | None = None
+    user_preferences: dict[str, Any] = Field(default_factory=dict)
+    last_retrieval_topic: str | None = None
+    history_summary: str | None = None
+    open_questions: list[str] = Field(default_factory=list)
+    confirmed_facts: list[str] = Field(default_factory=list)
+    next_steps: list[str] = Field(default_factory=list)
     summary_version: int = 0
-    summary_updated_at: Optional[datetime] = None
-    route_decision: Optional[str] = None
-    route_reason: Optional[str] = None
-    current_stage: Optional[str] = None
-    stage_status: Optional[str] = None
-    stage_timeline: List[Dict[str, Any]] = Field(default_factory=list)
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    summary_updated_at: datetime | None = None
+    route_decision: str | None = None
+    route_reason: str | None = None
+    current_stage: str | None = None
+    stage_status: str | None = None
+    stage_timeline: list[dict[str, Any]] = Field(default_factory=list)
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class ApprovalSubmitRequest(BaseModel):
@@ -307,10 +307,10 @@ class ApprovalSubmitRequest(BaseModel):
     session_id: str = Field(min_length=1)
     trace_id: str = Field(min_length=1)
     turn_id: str = Field(min_length=1)
-    approval_id: Optional[str] = None
+    approval_id: str | None = None
     decision: str = Field(min_length=1)
-    approval_request: Dict[str, Any] = Field(default_factory=dict)
-    context: Dict[str, Any] = Field(default_factory=dict)
+    approval_request: dict[str, Any] = Field(default_factory=dict)
+    context: dict[str, Any] = Field(default_factory=dict)
 
 
 class ApprovalSubmitResponse(BaseModel):
@@ -320,8 +320,8 @@ class ApprovalSubmitResponse(BaseModel):
     approval_state: str
     accepted: bool = True
     pending_approval: bool = False
-    approval_request: Dict[str, Any] = Field(default_factory=dict)
-    message: Optional[str] = None
+    approval_request: dict[str, Any] = Field(default_factory=dict)
+    message: str | None = None
 
 
 class FeedbackIssueType(str, Enum):
@@ -336,16 +336,16 @@ class FeedbackReportRequest(BaseModel):
     user_id: str = Field(min_length=1)
     session_id: str = Field(min_length=1)
     turn_id: str = Field(min_length=1)
-    thread_id: Optional[str] = None
-    trace_id: Optional[str] = None
+    thread_id: str | None = None
+    trace_id: str | None = None
     issue_type: FeedbackIssueType = FeedbackIssueType.HELPFUL
-    is_helpful: Optional[bool] = None
-    comment: Optional[str] = None
-    final_payload: Dict[str, Any] = Field(default_factory=dict)
-    timeline: List[Dict[str, Any]] = Field(default_factory=list)
-    retrieval_summary: Dict[str, Any] = Field(default_factory=dict)
-    memory_used_summary: Dict[str, Any] = Field(default_factory=dict)
-    context: Dict[str, Any] = Field(default_factory=dict)
+    is_helpful: bool | None = None
+    comment: str | None = None
+    final_payload: dict[str, Any] = Field(default_factory=dict)
+    timeline: list[dict[str, Any]] = Field(default_factory=list)
+    retrieval_summary: dict[str, Any] = Field(default_factory=dict)
+    memory_used_summary: dict[str, Any] = Field(default_factory=dict)
+    context: dict[str, Any] = Field(default_factory=dict)
 
 
 class FeedbackReportResponse(BaseModel):
@@ -353,7 +353,7 @@ class FeedbackReportResponse(BaseModel):
     status: str
     recorded_at: datetime
     dedupe_key: str
-    payload: Dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class FeedbackSampleItem(BaseModel):
@@ -362,76 +362,76 @@ class FeedbackSampleItem(BaseModel):
     aggregate_id: str
     event_type: str
     status: str
-    trace_id: Optional[str] = None
-    available_at: Optional[datetime] = None
-    published_at: Optional[datetime] = None
-    payload: Dict[str, Any] = Field(default_factory=dict)
+    trace_id: str | None = None
+    available_at: datetime | None = None
+    published_at: datetime | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
     attempts: int = 0
-    last_error: Optional[str] = None
+    last_error: str | None = None
 
 
 class FeedbackSampleResponse(BaseModel):
-    records: List[FeedbackSampleItem] = Field(default_factory=list)
+    records: list[FeedbackSampleItem] = Field(default_factory=list)
     total: int = 0
 
 
 class MemoryRecordSummary(BaseModel):
     memory_id: str
     user_id: str
-    session_id: Optional[str] = None
-    project_id: Optional[str] = None
-    topic: Optional[str] = None
-    memory_type: Optional[str] = None
-    scope: Optional[str] = None
-    status: Optional[str] = None
-    source: Optional[str] = None
-    summary: Optional[str] = None
+    session_id: str | None = None
+    project_id: str | None = None
+    topic: str | None = None
+    memory_type: str | None = None
+    scope: str | None = None
+    status: str | None = None
+    source: str | None = None
+    summary: str | None = None
     confidence: float = 0.0
     importance: float = 0.0
     stability: float = 0.0
-    sensitivity: Optional[str] = None
-    retrieval_mode: Optional[str] = None
+    sensitivity: str | None = None
+    retrieval_mode: str | None = None
     should_vectorize: bool = True
-    ttl_seconds: Optional[int] = None
-    valid_until: Optional[datetime] = None
-    tags: List[str] = Field(default_factory=list)
-    entities: List[str] = Field(default_factory=list)
-    source_turn_id: Optional[str] = None
-    source_message_ids: List[str] = Field(default_factory=list)
-    last_accessed_at: Optional[datetime] = None
+    ttl_seconds: int | None = None
+    valid_until: datetime | None = None
+    tags: list[str] = Field(default_factory=list)
+    entities: list[str] = Field(default_factory=list)
+    source_turn_id: str | None = None
+    source_message_ids: list[str] = Field(default_factory=list)
+    last_accessed_at: datetime | None = None
     access_count: int = 0
-    supersedes: Optional[str] = None
-    superseded_by: Optional[str] = None
-    embedding_id: Optional[str] = None
-    raw_evidence: Dict[str, Any] = Field(default_factory=dict)
-    schema_version: Optional[str] = None
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    supersedes: str | None = None
+    superseded_by: str | None = None
+    embedding_id: str | None = None
+    raw_evidence: dict[str, Any] = Field(default_factory=dict)
+    schema_version: str | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class MemoryCandidateSummary(BaseModel):
     candidate_id: str
-    memory_id: Optional[str] = None
+    memory_id: str | None = None
     user_id: str
-    session_id: Optional[str] = None
-    project_id: Optional[str] = None
-    topic: Optional[str] = None
-    memory_type: Optional[str] = None
-    scope: Optional[str] = None
-    status: Optional[str] = None
-    source: Optional[str] = None
-    summary: Optional[str] = None
+    session_id: str | None = None
+    project_id: str | None = None
+    topic: str | None = None
+    memory_type: str | None = None
+    scope: str | None = None
+    status: str | None = None
+    source: str | None = None
+    summary: str | None = None
     confidence: float = 0.0
     importance: float = 0.0
     stability: float = 0.0
-    governance_action: Optional[str] = None
+    governance_action: str | None = None
     require_confirmation: bool = False
-    approval_notes: List[str] = Field(default_factory=list)
-    decision_reason: Optional[str] = None
-    conflict_ids: List[str] = Field(default_factory=list)
-    deletion_job_ids: List[str] = Field(default_factory=list)
-    skip_reason: Optional[str] = None
-    record: Optional[MemoryRecordSummary] = None
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    approval_notes: list[str] = Field(default_factory=list)
+    decision_reason: str | None = None
+    conflict_ids: list[str] = Field(default_factory=list)
+    deletion_job_ids: list[str] = Field(default_factory=list)
+    skip_reason: str | None = None
+    record: MemoryRecordSummary | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class MemoryTraceSummary(BaseModel):
@@ -439,88 +439,88 @@ class MemoryTraceSummary(BaseModel):
     user_id: str
     session_id: str
     turn_id: str
-    retrieved: List[str] = Field(default_factory=list)
-    injected: List[str] = Field(default_factory=list)
-    skipped: List[str] = Field(default_factory=list)
-    candidates: List[str] = Field(default_factory=list)
-    promoted: List[str] = Field(default_factory=list)
-    rejected: List[str] = Field(default_factory=list)
-    decision_reasons: Dict[str, str] = Field(default_factory=dict)
-    conflict_ids: List[str] = Field(default_factory=list)
-    deletion_job_ids: List[str] = Field(default_factory=list)
-    skip_reasons: Dict[str, str] = Field(default_factory=dict)
-    conflict_resolutions: List[Dict[str, Any]] = Field(default_factory=list)
+    retrieved: list[str] = Field(default_factory=list)
+    injected: list[str] = Field(default_factory=list)
+    skipped: list[str] = Field(default_factory=list)
+    candidates: list[str] = Field(default_factory=list)
+    promoted: list[str] = Field(default_factory=list)
+    rejected: list[str] = Field(default_factory=list)
+    decision_reasons: dict[str, str] = Field(default_factory=dict)
+    conflict_ids: list[str] = Field(default_factory=list)
+    deletion_job_ids: list[str] = Field(default_factory=list)
+    skip_reasons: dict[str, str] = Field(default_factory=dict)
+    conflict_resolutions: list[dict[str, Any]] = Field(default_factory=list)
     total_memory_tokens: int = 0
     qdrant_degraded: bool = False
-    created_at: Optional[datetime] = None
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class MemoryAccessLogSummary(BaseModel):
     access_log_id: str
     memory_id: str
     user_id: str
-    session_id: Optional[str] = None
-    turn_id: Optional[str] = None
+    session_id: str | None = None
+    turn_id: str | None = None
     action: str = "read"
     accessed_at: datetime
-    trace_id: Optional[str] = None
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    trace_id: str | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class MemoryDeletionJobSummary(BaseModel):
     deletion_job_id: str
     memory_id: str
     user_id: str
-    session_id: Optional[str] = None
-    target_store: Optional[str] = None
-    status: Optional[str] = None
-    reason: Optional[str] = None
-    scheduled_at: Optional[datetime] = None
-    executed_at: Optional[datetime] = None
-    error_message: Optional[str] = None
-    vector_id: Optional[str] = None
-    extra: Dict[str, Any] = Field(default_factory=dict)
+    session_id: str | None = None
+    target_store: str | None = None
+    status: str | None = None
+    reason: str | None = None
+    scheduled_at: datetime | None = None
+    executed_at: datetime | None = None
+    error_message: str | None = None
+    vector_id: str | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class MemoryListResponse(BaseModel):
-    records: List[MemoryRecordSummary] = Field(default_factory=list)
+    records: list[MemoryRecordSummary] = Field(default_factory=list)
     total: int = 0
 
 
 class MemoryCandidateListResponse(BaseModel):
-    records: List[MemoryCandidateSummary] = Field(default_factory=list)
+    records: list[MemoryCandidateSummary] = Field(default_factory=list)
     total: int = 0
 
 
 class MemoryTraceListResponse(BaseModel):
-    records: List[MemoryTraceSummary] = Field(default_factory=list)
+    records: list[MemoryTraceSummary] = Field(default_factory=list)
     total: int = 0
 
 
 class MemoryAccessLogListResponse(BaseModel):
-    records: List[MemoryAccessLogSummary] = Field(default_factory=list)
+    records: list[MemoryAccessLogSummary] = Field(default_factory=list)
     total: int = 0
 
 
 class MemoryDeletionJobListResponse(BaseModel):
-    records: List[MemoryDeletionJobSummary] = Field(default_factory=list)
+    records: list[MemoryDeletionJobSummary] = Field(default_factory=list)
     total: int = 0
 
 
 class MemoryActionRequest(BaseModel):
-    reason: Optional[str] = None
-    superseded_by: Optional[str] = None
-    target_memory_id: Optional[str] = None
+    reason: str | None = None
+    superseded_by: str | None = None
+    target_memory_id: str | None = None
 
 
 class MemoryActionResponse(BaseModel):
     status: str
     action: str
-    message: Optional[str] = None
-    record: Optional[MemoryRecordSummary] = None
-    candidate: Optional[MemoryCandidateSummary] = None
-    trace: Optional[MemoryTraceSummary] = None
+    message: str | None = None
+    record: MemoryRecordSummary | None = None
+    candidate: MemoryCandidateSummary | None = None
+    trace: MemoryTraceSummary | None = None
 
 
 class SseEnvelope(BaseModel):
@@ -530,10 +530,10 @@ class SseEnvelope(BaseModel):
     turn_id: str
     timestamp: datetime
     workflow_version: str
-    payload: Dict[str, Any] = Field(default_factory=dict)
+    payload: dict[str, Any] = Field(default_factory=dict)
 
 
-EVENT_PAYLOAD_MODELS: Dict[EventType, Type[BaseModel]] = {
+EVENT_PAYLOAD_MODELS: dict[EventType, type[BaseModel]] = {
     EventType.ACK: AckPayload,
     EventType.HEARTBEAT: StageStatusPayload,
     EventType.LOAD_CONTEXT_STARTED: StageStatusPayload,
@@ -571,7 +571,7 @@ EVENT_PAYLOAD_MODELS: Dict[EventType, Type[BaseModel]] = {
 }
 
 
-def validate_event_payload(event_type: EventType | str, payload: Dict[str, Any]) -> Dict[str, Any]:
+def validate_event_payload(event_type: EventType | str, payload: dict[str, Any]) -> dict[str, Any]:
     normalized_event = event_type if isinstance(event_type, EventType) else EventType(event_type)
     model = EVENT_PAYLOAD_MODELS[normalized_event]
     return model.model_validate(payload).model_dump(mode="json")

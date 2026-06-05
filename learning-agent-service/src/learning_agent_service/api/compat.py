@@ -1,8 +1,9 @@
 ﻿from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Any, Callable, Dict, Iterable, List, Optional, Set
+from typing import Any
 
 try:
     from fastapi import APIRouter, FastAPI, HTTPException
@@ -11,7 +12,7 @@ except ImportError:
     @dataclass
     class _StubRoute:
         path: str
-        methods: Set[str]
+        methods: set[str]
         endpoint: Callable[..., Any]
         name: str
 
@@ -23,7 +24,7 @@ except ImportError:
 
     class APIRouter:
         def __init__(self) -> None:
-            self.routes: List[_StubRoute] = []
+            self.routes: list[_StubRoute] = []
 
         def _register(
             self,
@@ -54,7 +55,7 @@ except ImportError:
 
             return decorator
 
-        def include_router(self, router: "APIRouter") -> None:
+        def include_router(self, router: APIRouter) -> None:
             self.routes.extend(router.routes)
 
     class FastAPI(APIRouter):
@@ -66,8 +67,8 @@ except ImportError:
         def __init__(
             self,
             content: Iterable[str],
-            media_type: Optional[str] = None,
-            headers: Optional[Dict[str, str]] = None,
+            media_type: str | None = None,
+            headers: dict[str, str] | None = None,
             status_code: int = 200,
         ) -> None:
             self.body_iterator = content

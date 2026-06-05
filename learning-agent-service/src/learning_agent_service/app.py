@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass, field
 from json import dumps
 from threading import Lock
 from time import perf_counter
-from typing import Any, Awaitable, Callable, Iterable, Optional
+from typing import Any
 
 from learning_agent_service import __version__
-from learning_agent_service.api.contracts import ChatStreamRequest, SseEnvelope
 from learning_agent_service.api.compat import FastAPI as CompatFastAPI
+from learning_agent_service.api.contracts import ChatStreamRequest, SseEnvelope
 from learning_agent_service.api.dependencies import LearningAgentService
+from learning_agent_service.application.bootstrap import _register_qdrant_knowledge_warmup
 from learning_agent_service.config import get_settings
 
-FASTAPI_IMPORT_ERROR: Optional[Exception] = None
+FASTAPI_IMPORT_ERROR: Exception | None = None
 
 try:
     from fastapi import FastAPI
@@ -304,7 +306,7 @@ def _evaluate_readiness(app: Any) -> dict[str, Any]:
     }
 
 
-def _build_fastapi_app(service: Optional[LearningAgentService] = None, app_cls: Any = None) -> Any:
+def _build_fastapi_app(service: LearningAgentService | None = None, app_cls: Any = None) -> Any:
     app_factory = app_cls or FastAPI or CompatFastAPI
     kwargs = {
         "title": "Local Life Agent Service",
@@ -328,6 +330,7 @@ def _build_fastapi_app(service: Optional[LearningAgentService] = None, app_cls: 
     observed_service = InstrumentedLearningAgentService(service, app.state.service_metrics)
     app.state.learning_service = observed_service
     app.include_router(create_api_router(observed_service))
+    _register_qdrant_knowledge_warmup(app)
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
@@ -428,7 +431,7 @@ def _build_fallback_asgi() -> AsgiApp:
     return fallback_app
 
 
-def create_app(service: Optional[LearningAgentService] = None) -> Any:
+def create_app(service: LearningAgentService | None = None) -> Any:
     if FastAPI is None and service is None:
         return _build_fallback_asgi()
     return _build_fastapi_app(service=service, app_cls=FastAPI or CompatFastAPI)

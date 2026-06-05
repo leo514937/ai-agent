@@ -327,12 +327,14 @@ class ReactStepExecutor:
                     status="success",
                     observations=[f"步骤 {step.step_id} 不依赖额外工具，直接基于现有上下文整理结果。"],
                     result={"summary": step.goal},
+                    error=None,
                     next_action="next_step",
                 )
             return StepResult(
                 step_id=step.step_id,
                 status="failed",
                 observations=[f"步骤 {step.step_id} 没有可执行工具。"],
+                result=None,
                 error="没有可用工具",
                 next_action="replan",
             )
@@ -387,6 +389,7 @@ class ReactStepExecutor:
                     tools_used=tools_used,
                     observations=observations,
                     result=last_output,
+                    error=None,
                     next_action="next_step",
                 )
 
@@ -471,7 +474,7 @@ class ReactStepExecutor:
         if not final_decision:
             final_decision = "等待人工审批" if turn.need_human_approval else "计划已完成"
         return PlanExecutionSummary(
-            status=status,
+            status=status,  # type: ignore[arg-type]
             completed_steps=completed_steps,
             total_steps=total_steps,
             key_findings=key_findings[:5],

@@ -1,50 +1,52 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from learning_agent_service.domain import (
     GraphState,
+    LongTermMemoryStore,
     MemoryCandidate,
+    MemoryEdgeType,
     MemoryInjectionPlan,
-    MemoryRecord,
     MemoryPersistenceScope,
-    MemoryRetrievalPlan,
+    MemoryRecord,
     MemoryScope,
     MemorySource,
     MemoryStatus,
     MemoryTargetStore,
-    MemoryEdgeType,
-    MemoryType,
     MemoryTrace,
+    MemoryType,
     MemoryWritePlan,
-    LongTermMemoryStore,
     RetrievedMemoryPack,
 )
 from learning_agent_service.domain.contracts import (
-    MemoryUpdateSummary,
     PersistentSessionContext as DomainPersistentSessionContext,
+)
+from learning_agent_service.domain.contracts import (
     StepResult,
     TurnRuntimeState,
 )
-from learning_agent_service.domain.enums import IntentType
-from learning_agent_service.memory.models import (
-    ExplicitUserSignals,
-    MemoryPromotionInput,
-    MemoryPromotionResult,
-    MemoryRecallSignals,
-    PersistentSessionContext as MemoryPersistentSessionContext,
-    PreferenceProfileWrite,
-    SemanticMemoryFact,
-    UserPreferenceProfile,
-)
-from learning_agent_service.memory.injection import MemoryInjectionPolicy
+from learning_agent_service.domain.utils import utcnow as _utcnow
 from learning_agent_service.memory.conflict import (
     ConflictResolutionAction,
     MemoryConflictResolutionStrategy,
     MemoryConflictResolver,
 )
+from learning_agent_service.memory.consolidation import MemoryConsolidationJob
+from learning_agent_service.memory.injection import MemoryInjectionPolicy
+from learning_agent_service.memory.models import (
+    ExplicitUserSignals,
+    MemoryPromotionInput,
+    MemoryPromotionResult,
+    MemoryRecallSignals,
+    UserPreferenceProfile,
+)
+from learning_agent_service.memory.models import (
+    PersistentSessionContext as MemoryPersistentSessionContext,
+)
+from learning_agent_service.memory.promotion import MemoryPromotionPolicy
 from learning_agent_service.memory.retrieval import MemoryRetrievalPolicy
 from learning_agent_service.memory.stores import (
     InMemoryEntityMemoryStore,
@@ -53,19 +55,11 @@ from learning_agent_service.memory.stores import (
     InMemoryShortTermMemoryStore,
 )
 from learning_agent_service.memory.summary import SessionSummaryService
-from learning_agent_service.memory.promotion import MemoryPromotionPolicy
-from learning_agent_service.memory.consolidation import MemoryConsolidationJob
 
 
 @dataclass(frozen=True)
 class MemoryOrchestratorPolicyConfig:
     confirmed_confidence_threshold: float = 0.8
-
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
-
 @dataclass
 class MemoryOrchestrator:
     session_store: Any
@@ -352,7 +346,6 @@ class MemoryOrchestrator:
 
     def summarize_session(self, state: GraphState) -> GraphState:
         persistent = state["persistent"]
-        turn = state["turn"]
         updated = self.summary_service.summarize(
             persistent,
             current_topic=self._resolved_topic(state),
@@ -364,11 +357,11 @@ class MemoryOrchestrator:
         state["persistent"] = updated
         return state
 
-    def consolidate(self, user_id: Optional[str] = None, scope: MemoryScope = MemoryScope.USER) -> List[MemoryRecord]:
+    def consolidate(self, user_id: str | None = None, scope: MemoryScope = MemoryScope.USER) -> list[MemoryRecord]:
         if user_id is not None and hasattr(self.long_term_store, "list_by_scope"):
             records = list(self.long_term_store.list_by_scope(user_id, scope))
         elif hasattr(self.long_term_store, "records"):
-            records = list(getattr(self.long_term_store, "records").values())
+            records = list(self.long_term_store.records.values())
         else:
             records = []
         original_records = {record.memory_id: record for record in records}
@@ -385,8 +378,8 @@ class MemoryOrchestrator:
                 self.long_term_store.supersede(loser_id, conflict.winner_memory_id, conflict.reason)
         return merged
 
-    def _persist_candidates(self, candidates: List[MemoryCandidate]) -> Dict[str, Any]:
-        trace_updates: Dict[str, Any] = {
+    def _persist_candidates(self, candidates: list[MemoryCandidate]) -> dict[str, Any]:
+        trace_updates: dict[str, Any] = {
             "decision_reasons": {},
             "conflict_ids": [],
             "deletion_job_ids": [],
@@ -495,9 +488,10 @@ class MemoryOrchestrator:
                                 resolution.reason,
                                 edge_type=edge_type,
                             )
-                    if getattr(self.long_term_store, "last_qdrant_error", None):
+                    last_qdrant_error = getattr(self.long_term_store, "last_qdrant_error", None)
+                    if last_qdrant_error:
                         trace_updates["qdrant_degraded"] = True
-                        trace_updates.setdefault("qdrant_errors", []).append(str(self.long_term_store.last_qdrant_error))
+                        trace_updates.setdefault("qdrant_errors", []).append(str(last_qdrant_error))
             else:
                 self.entity_store.upsert(record)
         trace_updates["conflict_ids"] = list(dict.fromkeys(trace_updates["conflict_ids"]))
@@ -510,11 +504,11 @@ class MemoryOrchestrator:
         state: GraphState,
         promotion_input: MemoryPromotionInput,
         promotion_result: MemoryPromotionResult,
-    ) -> List[MemoryCandidate]:
+    ) -> list[MemoryCandidate]:
         turn = state["turn"]
         persistent = state["persistent"]
         runtime = state["runtime"]
-        candidates: List[MemoryCandidate] = []
+        candidates: list[MemoryCandidate] = []
 
         if promotion_result.preference_patch:
             candidates.append(
@@ -732,7 +726,8 @@ class MemoryOrchestrator:
 
         if turn.step_results:
             step_summaries = [self._step_brief(step) for step in turn.step_results]
-            procedural_title = topic or turn.final_task_summary.final_decision or turn.final_answer or turn.raw_query
+            final_task_summary = turn.final_task_summary
+            procedural_title = topic or (final_task_summary.final_decision if final_task_summary else None) or turn.final_answer or turn.raw_query
             procedural_steps = [
                 {
                     "step_index": index + 1,
@@ -854,7 +849,7 @@ class MemoryOrchestrator:
         return f"{step_result.step_id}:{step_result.status}" + (f"({observations})" if observations else "")
 
     @staticmethod
-    def _resolved_topic(state: GraphState) -> Optional[str]:
+    def _resolved_topic(state: GraphState) -> str | None:
         persistent = state["persistent"]
         turn = state["turn"]
         if persistent.current_topic:
@@ -864,7 +859,7 @@ class MemoryOrchestrator:
         return turn.slots.get("topic") or turn.raw_query or None
 
     @staticmethod
-    def _current_preferences(context: DomainPersistentSessionContext, user_id: str) -> Optional[UserPreferenceProfile]:
+    def _current_preferences(context: DomainPersistentSessionContext, user_id: str) -> UserPreferenceProfile | None:
         preferences = dict(context.user_preferences)
         if not preferences:
             return None
@@ -899,8 +894,6 @@ class MemoryOrchestrator:
 
     @staticmethod
     def _explicit_signals(turn: TurnRuntimeState, persistent: DomainPersistentSessionContext) -> ExplicitUserSignals:
-        query = turn.raw_query or ""
-        normalized = query.lower()
         return ExplicitUserSignals(
             preferred_output_style=turn.requested_output_style.value if turn.requested_output_style else None,
             confirmed_output_style=False,
@@ -943,7 +936,7 @@ class MemoryOrchestrator:
             turn_id=runtime.turn_id,
         )
 
-    def _persist_trace(self, trace: Optional[MemoryTrace]) -> None:
+    def _persist_trace(self, trace: MemoryTrace | None) -> None:
         if trace is None or self.trace_repository is None:
             return
         try:
@@ -962,14 +955,14 @@ class MemoryOrchestrator:
             trace.extra = {**dict(trace.extra), "qdrant_error": str(qdrant_error), "qdrant_degraded": True}
 
     @staticmethod
-    def _unique_extend(items: List[str], values: List[str]) -> List[str]:
+    def _unique_extend(items: list[str], values: list[str]) -> list[str]:
         merged = list(items)
         for value in values:
             if value and value not in merged:
                 merged.append(value)
         return merged
 
-    def _policy_snapshot(self) -> Dict[str, Any]:
+    def _policy_snapshot(self) -> dict[str, Any]:
         retrieval = self.retrieval_policy.config
         injection = self.injection_policy.config
         promotion = getattr(self.promotion_policy, "config", None)
@@ -1026,8 +1019,8 @@ class MemoryOrchestrator:
         }
 
     @staticmethod
-    def _dedupe_candidates(candidates: List[MemoryCandidate]) -> List[MemoryCandidate]:
-        merged: List[MemoryCandidate] = []
+    def _dedupe_candidates(candidates: list[MemoryCandidate]) -> list[MemoryCandidate]:
+        merged: list[MemoryCandidate] = []
         seen: set[str] = set()
         for candidate in candidates:
             key = candidate.candidate_id or candidate.dedupe_key or candidate.record.memory_id
@@ -1063,7 +1056,7 @@ class MemoryOrchestrator:
         return str(content.get("persistence_scope") or content.get("temporal_scope") or "")
 
     @staticmethod
-    def _normalized_key_from_record(record: MemoryRecord) -> Optional[str]:
+    def _normalized_key_from_record(record: MemoryRecord) -> str | None:
         content = record.content if isinstance(record.content, dict) else {}
         return (
             record.normalized_key
@@ -1071,7 +1064,7 @@ class MemoryOrchestrator:
             or None
         )
 
-    def _sync_profile_projection(self, *, user_id: str, record: MemoryRecord, source_session_id: Optional[str]) -> None:
+    def _sync_profile_projection(self, *, user_id: str, record: MemoryRecord, source_session_id: str | None) -> None:
         if self.profile_projection_store is None or not record.normalized_key:
             return
         try:

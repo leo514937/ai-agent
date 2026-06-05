@@ -1,30 +1,30 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from datetime import UTC, datetime
+from typing import Any
 
 from learning_agent_service.domain.memory import (
     EntityMemoryStore,
+    LongTermMemoryStore,
     MemoryEdge,
     MemoryEdgeType,
-    LongTermMemoryStore,
     MemoryRecord,
     MemoryScope,
     MemoryStatus,
+    MemoryType,
     SensoryMemoryBuffer,
     ShortTermMemoryStore,
 )
 
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+from learning_agent_service.domain.utils import utcnow as _utcnow
 
 
 @dataclass
 class InMemorySensoryMemoryBuffer(SensoryMemoryBuffer):
-    buffers: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    buffers: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def ingest(self, turn_id: str, payload: Mapping[str, Any]) -> None:
         self.buffers[turn_id] = deepcopy(dict(payload))
@@ -38,8 +38,8 @@ class InMemorySensoryMemoryBuffer(SensoryMemoryBuffer):
 
 @dataclass
 class InMemoryShortTermMemoryStore(ShortTermMemoryStore):
-    windows: Dict[str, List[Dict[str, Any]]] = field(default_factory=dict)
-    task_contexts: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    windows: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    task_contexts: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     def append_messages(self, session_id: str, messages: Sequence[Mapping[str, Any]]) -> None:
         window = self.windows.setdefault(session_id, [])
@@ -61,7 +61,7 @@ class InMemoryShortTermMemoryStore(ShortTermMemoryStore):
 
 @dataclass
 class InMemoryLongTermMemoryStore(LongTermMemoryStore):
-    records: Dict[str, MemoryRecord] = field(default_factory=dict)
+    records: dict[str, MemoryRecord] = field(default_factory=dict)
 
     def upsert(self, record: MemoryRecord) -> MemoryRecord:
         stored = record.model_copy(
@@ -75,7 +75,7 @@ class InMemoryLongTermMemoryStore(LongTermMemoryStore):
         self.records[stored.memory_id] = deepcopy(stored)
         return deepcopy(stored)
 
-    def get(self, memory_id: str) -> Optional[MemoryRecord]:
+    def get(self, memory_id: str) -> MemoryRecord | None:
         record = self.records.get(memory_id)
         return deepcopy(record) if record is not None else None
 
@@ -84,12 +84,12 @@ class InMemoryLongTermMemoryStore(LongTermMemoryStore):
         query: str,
         user_id: str,
         limit: int = 10,
-        memory_types: Optional[Sequence[MemoryType]] = None,
+        memory_types: Sequence[MemoryType] | None = None,
     ) -> Sequence[MemoryRecord]:
         needle = (query or "").lower().strip()
         allowed_types = {item.value if hasattr(item, "value") else str(item or "").strip().lower() for item in memory_types or []}
         allowed_types = {item for item in allowed_types if item}
-        matches: List[MemoryRecord] = []
+        matches: list[MemoryRecord] = []
         now = _utcnow()
         for record in self.records.values():
             if record.user_id and record.user_id != user_id:
@@ -104,11 +104,14 @@ class InMemoryLongTermMemoryStore(LongTermMemoryStore):
                 continue
             if not getattr(record, "is_active", True):
                 continue
-            if getattr(record, "effective_from", None) and record.effective_from > _utcnow():
+            effective_from = getattr(record, "effective_from", None)
+            if effective_from is not None and effective_from > _utcnow():
                 continue
-            if getattr(record, "effective_to", None) and record.effective_to <= _utcnow():
+            effective_to = getattr(record, "effective_to", None)
+            if effective_to is not None and effective_to <= _utcnow():
                 continue
-            if getattr(record, "valid_until", None) and record.valid_until <= now:
+            valid_until = getattr(record, "valid_until", None)
+            if valid_until is not None and valid_until <= now:
                 continue
             haystack = " ".join(
                 [
@@ -133,10 +136,20 @@ class InMemoryLongTermMemoryStore(LongTermMemoryStore):
             and record.status in {MemoryStatus.ACTIVE, MemoryStatus.CONFIRMED}
             and getattr(record, "should_vectorize", True)
             and getattr(record, "is_active", True)
-            and (getattr(record, "effective_from", None) is None or record.effective_from <= now)
-            and (getattr(record, "effective_to", None) is None or record.effective_to > now)
-            and (getattr(record, "valid_until", None) is None or record.valid_until > now)
         ]
+        filtered: list[MemoryRecord] = []
+        for record in records:
+            effective_from = getattr(record, "effective_from", None)
+            effective_to = getattr(record, "effective_to", None)
+            valid_until = getattr(record, "valid_until", None)
+            if effective_from is not None and effective_from > now:
+                continue
+            if effective_to is not None and effective_to <= now:
+                continue
+            if valid_until is not None and valid_until <= now:
+                continue
+            filtered.append(record)
+        records = filtered
         records.sort(key=lambda item: (item.updated_at, item.importance), reverse=True)
         return deepcopy(records)
 
@@ -183,7 +196,7 @@ class InMemoryLongTermMemoryStore(LongTermMemoryStore):
 
 @dataclass
 class InMemoryEntityMemoryStore(EntityMemoryStore):
-    records: Dict[Tuple[str, str], MemoryRecord] = field(default_factory=dict)
+    records: dict[tuple[str, str], MemoryRecord] = field(default_factory=dict)
 
     def upsert(self, record: MemoryRecord) -> MemoryRecord:
         if not record.memory_id:
@@ -191,11 +204,11 @@ class InMemoryEntityMemoryStore(EntityMemoryStore):
         self.records[(record.user_id, record.memory_id)] = deepcopy(record.model_copy(update={"updated_at": _utcnow()}))
         return deepcopy(self.records[(record.user_id, record.memory_id)])
 
-    def get(self, entity_id: str, user_id: str) -> Optional[MemoryRecord]:
+    def get(self, entity_id: str, user_id: str) -> MemoryRecord | None:
         record = self.records.get((user_id, entity_id))
         return deepcopy(record) if record is not None else None
 
-    def list_by_user(self, user_id: str, entity_type: Optional[str] = None) -> Sequence[MemoryRecord]:
+    def list_by_user(self, user_id: str, entity_type: str | None = None) -> Sequence[MemoryRecord]:
         records = [record for (stored_user, _), record in self.records.items() if stored_user == user_id]
         if entity_type:
             records = [record for record in records if record.type.value == entity_type]
@@ -211,9 +224,9 @@ class InMemoryEntityMemoryStore(EntityMemoryStore):
                 records.append(record)
         return records[:limit]
 
-    def merge(self, target_entity_id: str, source_entity_ids: List[str], reason: str) -> MemoryRecord:
+    def merge(self, target_entity_id: str, source_entity_ids: list[str], reason: str) -> MemoryRecord:
         target = None
-        target_key = None
+        target_key: tuple[str, str] | None = None
         for key, record in self.records.items():
             if key[1] == target_entity_id:
                 target = record
@@ -243,6 +256,7 @@ class InMemoryEntityMemoryStore(EntityMemoryStore):
                 "updated_at": _utcnow(),
             }
         )
+        assert target_key is not None
         self.records[target_key] = deepcopy(merged)
         return deepcopy(merged)
 
@@ -251,7 +265,7 @@ class InMemoryEntityMemoryStore(EntityMemoryStore):
 class InMemoryMasteryMemoryStore:
     """兼容壳：保留旧测试/导入入口，不再参与运行时装配。"""
 
-    records: Dict[Tuple[str, str], Dict[str, Any]] = field(default_factory=dict)
+    records: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
 
     def get(self, user_id: str, topic: str) -> Mapping[str, Any]:
         return deepcopy(self.records.get((user_id, topic), {}))

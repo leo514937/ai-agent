@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import re
-from typing import Any, Callable, Mapping, Optional, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import Any
 
 from learning_agent_service.domain.enums import IntentType, OutputStyle
-
+from learning_agent_service.domain.utils import as_mapping as _as_mapping
 
 RagVoteValue = str
 
@@ -104,15 +105,15 @@ _PUNCTUATION_RE = re.compile(r"^[\s\W_]+$", re.UNICODE)
 @dataclass(frozen=True)
 class RagGateRequest:
     raw_query: str
-    intent: Optional[IntentType] = None
+    intent: IntentType | None = None
     intent_confidence: float = 0.0
-    requested_output_style: Optional[OutputStyle] = None
-    current_topic: Optional[str] = None
+    requested_output_style: OutputStyle | None = None
+    current_topic: str | None = None
     recent_entities: Sequence[str] = field(default_factory=tuple)
-    history_summary: Optional[str] = None
-    pending_clarification: Optional[Mapping[str, Any]] = None
-    reference_confidence: Optional[float] = None
-    reference_resolved: Optional[bool] = None
+    history_summary: str | None = None
+    pending_clarification: Mapping[str, Any] | None = None
+    reference_confidence: float | None = None
+    reference_resolved: bool | None = None
     client_context: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -137,7 +138,7 @@ class RagGateDecision:
     allowed: bool
     reason: str
     rule_vote: RagGateVote
-    llm_vote: Optional[RagGateVote] = None
+    llm_vote: RagGateVote | None = None
     confidence: float = 0.0
     response_kind: str = "fallback"
     precheck_skip_memory: bool = False
@@ -160,16 +161,6 @@ class RagGateDecision:
 
 def normalize_rag_gate_request(request: RagGateRequest) -> str:
     return " ".join((request.raw_query or "").strip().split())
-
-
-def _as_mapping(value: Any) -> Mapping[str, Any] | None:
-    if isinstance(value, Mapping):
-        return dict(value)
-    if hasattr(value, "model_dump"):
-        dumped = value.model_dump(mode="json")
-        if isinstance(dumped, Mapping):
-            return dict(dumped)
-    return None
 
 
 def classify_rag_rule(request: RagGateRequest) -> RagGateVote:
@@ -274,7 +265,7 @@ def classify_rag_rule(request: RagGateRequest) -> RagGateVote:
     )
 
 
-def compose_direct_response_text(raw_query: str, response_kind: Optional[str], reason: Optional[str] = None) -> str:
+def compose_direct_response_text(raw_query: str, response_kind: str | None, reason: str | None = None) -> str:
     kind = (response_kind or "").strip().lower()
     if kind == "greeting":
         return "你好，我在。你可以直接告诉我想查什么、想解释什么，或者把问题贴出来。"
@@ -336,7 +327,7 @@ def _matches_pending_clarification(text: str, pending_clarification: Mapping[str
     return False
 
 
-def _combine_votes(rule_vote: RagVoteValue, llm_vote: Optional[RagVoteValue]) -> RagVoteValue:
+def _combine_votes(rule_vote: RagVoteValue, llm_vote: RagVoteValue | None) -> RagVoteValue:
     if llm_vote is None:
         return rule_vote if rule_vote != UNCERTAIN else DENY
     if DENY in {rule_vote, llm_vote}:
@@ -346,7 +337,7 @@ def _combine_votes(rule_vote: RagVoteValue, llm_vote: Optional[RagVoteValue]) ->
     return DENY
 
 
-def _resolve_reason(rule: RagGateVote, llm: Optional[RagGateVote], final_vote: RagVoteValue) -> str:
+def _resolve_reason(rule: RagGateVote, llm: RagGateVote | None, final_vote: RagVoteValue) -> str:
     if final_vote == ALLOW:
         if llm is not None and llm.vote == ALLOW and llm.reason:
             return llm.reason
@@ -360,7 +351,7 @@ def _resolve_reason(rule: RagGateVote, llm: Optional[RagGateVote], final_vote: R
     return rule.reason
 
 
-def _resolve_response_kind(rule: RagGateVote, llm: Optional[RagGateVote]) -> str:
+def _resolve_response_kind(rule: RagGateVote, llm: RagGateVote | None) -> str:
     if rule.vote == DENY and rule.response_kind != "fallback":
         return rule.response_kind
     if llm is not None and llm.vote == DENY and llm.response_kind != "fallback":
@@ -368,7 +359,7 @@ def _resolve_response_kind(rule: RagGateVote, llm: Optional[RagGateVote]) -> str
     return rule.response_kind if rule.response_kind != "fallback" else (llm.response_kind if llm else "fallback")
 
 
-def _aggregate_confidence(rule: RagGateVote, llm: Optional[RagGateVote], final_vote: RagVoteValue) -> float:
+def _aggregate_confidence(rule: RagGateVote, llm: RagGateVote | None, final_vote: RagVoteValue) -> float:
     if llm is None:
         return rule.confidence
     if final_vote == ALLOW:
@@ -380,7 +371,7 @@ def _aggregate_confidence(rule: RagGateVote, llm: Optional[RagGateVote], final_v
 
 @dataclass
 class RagRouteGate:
-    llm_judge: Optional[Callable[[RagGateRequest], RagGateVote]] = None
+    llm_judge: Callable[[RagGateRequest], RagGateVote] | None = None
 
     def precheck(self, request: RagGateRequest) -> RagGateVote:
         return classify_rag_rule(request)

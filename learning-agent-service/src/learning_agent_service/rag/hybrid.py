@@ -14,9 +14,9 @@ from .retrieval import (
     ParentChildResolver,
     QdrantOnlineDenseRetriever,
     QdrantOnlineSparseRetriever,
-    RRFConfig,
     ReciprocalRankFusion,
     RemoteReranker,
+    RRFConfig,
 )
 
 

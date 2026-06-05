@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Tuple
+from datetime import UTC, datetime
+from typing import Any
 
 from learning_agent_service.domain import GraphRuntimeMeta, PersistentSessionContext
 from learning_agent_service.domain.protocols import SessionContextPort
@@ -16,7 +16,7 @@ from learning_agent_service.infrastructure.observability.outbox import (
 
 @dataclass
 class InMemorySessionContextStore(SessionContextPort):
-    sessions: Dict[Tuple[str, str], PersistentSessionContext] = field(default_factory=dict)
+    sessions: dict[tuple[str, str], PersistentSessionContext] = field(default_factory=dict)
 
     def load(self, session_id: str, user_id: str) -> PersistentSessionContext:
         return deepcopy(self.sessions.get((session_id, user_id), PersistentSessionContext()))
@@ -35,28 +35,28 @@ class InMemorySessionContextStore(SessionContextPort):
 class InMemoryTopicMasteryStore:
     """兼容壳：保留旧测试/导入入口，不再参与运行时装配。"""
 
-    records: Dict[Tuple[str, str], Dict[str, Any]] = field(default_factory=dict)
+    records: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
 
-    def get(self, user_id: str, topic: str) -> Dict[str, Any]:
+    def get(self, user_id: str, topic: str) -> dict[str, Any]:
         return deepcopy(self.records.get((user_id, topic), {"topic": topic}))
 
-    def upsert(self, user_id: str, topic: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def upsert(self, user_id: str, topic: str, payload: dict[str, Any]) -> dict[str, Any]:
         merged = self.get(user_id, topic)
         merged.update(payload)
-        merged["updated_at"] = datetime.now(timezone.utc).isoformat()
+        merged["updated_at"] = datetime.now(UTC).isoformat()
         self.records[(user_id, topic)] = deepcopy(merged)
         return deepcopy(merged)
 
-    def list_for_user(self, user_id: str) -> List[Dict[str, Any]]:
+    def list_for_user(self, user_id: str) -> list[dict[str, Any]]:
         items = [value for (stored_user_id, _), value in self.records.items() if stored_user_id == user_id]
         return deepcopy(sorted(items, key=lambda item: item.get("updated_at", ""), reverse=True))
 
 
 @dataclass
 class InMemoryAsyncLogStore:
-    entries: List[Dict[str, Any]] = field(default_factory=list)
+    entries: list[dict[str, Any]] = field(default_factory=list)
 
-    def append(self, entry: Dict[str, Any] | AsyncLogWriteRequest | TypedAsyncLogEvent) -> None:
+    def append(self, entry: dict[str, Any] | AsyncLogWriteRequest | TypedAsyncLogEvent) -> None:
         normalized = normalize_async_log_request(entry)
         self.entries.append(
             deepcopy(

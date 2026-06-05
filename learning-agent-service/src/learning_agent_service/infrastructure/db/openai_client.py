@@ -27,7 +27,7 @@ class OpenAIRuntime:
 
 
 class _FailoverResourceProxy:
-    def __init__(self, parent: "FailoverOpenAIClient", resource_name: str) -> None:
+    def __init__(self, parent: FailoverOpenAIClient, resource_name: str) -> None:
         self._parent = parent
         self._resource_name = resource_name
 
@@ -39,7 +39,7 @@ class _FailoverResourceProxy:
 
 
 class _FailoverStreamManager:
-    def __init__(self, parent: "FailoverOpenAIClient", resource_name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
+    def __init__(self, parent: FailoverOpenAIClient, resource_name: str, args: tuple[Any, ...], kwargs: dict[str, Any]) -> None:
         self._parent = parent
         self._resource_name = resource_name
         self._args = args
@@ -51,7 +51,7 @@ class _FailoverStreamManager:
         for index, client in self._parent.iter_clients():
             try:
                 resource = getattr(client, self._resource_name)
-                manager = getattr(resource, "stream")(*self._args, **self._kwargs)
+                manager = resource.stream(*self._args, **self._kwargs)
                 stream = manager.__enter__()
             except Exception as exc:
                 if self._parent._is_fallback_error(exc):
@@ -134,6 +134,7 @@ class FailoverOpenAIClient:
         return getattr(self._clients[self._active_index], name)
 
 import httpx
+
 
 class OpenRouterFilterTransport(httpx.HTTPTransport):
     def handle_request(self, request: httpx.Request) -> httpx.Response:

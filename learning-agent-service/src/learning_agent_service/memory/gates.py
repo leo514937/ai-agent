@@ -1,13 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import re
-from datetime import datetime, timezone
-from typing import Any, Mapping, Optional
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import Any
 
-from learning_agent_service.domain.memory import MemoryRecord, MemoryScope, MemorySource, MemoryStatus, MemoryType
+from learning_agent_service.domain.memory import (
+    MemoryRecord,
+    MemoryScope,
+    MemorySource,
+    MemoryStatus,
+    MemoryType,
+)
 from learning_agent_service.memory.models import MemoryPromotionInput, SemanticMemoryFact
-
 
 _CLARIFICATION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"问题还不够具体"),
@@ -65,7 +71,7 @@ class MemoryPromotionGateDecision:
     should_vectorize: bool
     scope: MemoryScope
     status: MemoryStatus
-    ttl_seconds: Optional[int]
+    ttl_seconds: int | None
     reason: str
 
 
@@ -259,7 +265,7 @@ class MemoryVectorizationGate:
             return MemoryVectorizationGateDecision(False, "inactive_status")
         if not getattr(record, "is_active", True):
             return MemoryVectorizationGateDecision(False, "record_inactive")
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         if record.effective_to is not None and record.effective_to <= now:
             return MemoryVectorizationGateDecision(False, "effective_to_expired")
         if record.valid_until is not None and record.valid_until <= now:

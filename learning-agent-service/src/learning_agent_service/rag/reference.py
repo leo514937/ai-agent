@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Iterable, List
+from collections.abc import Iterable
 
 from learning_agent_service.domain import ReferenceResolutionResult
 
@@ -49,7 +49,7 @@ class ReferenceResolver:
         )
 
     def _candidate_entities(self, request: ReferenceResolutionRequest) -> tuple[str, ...]:
-        candidates: List[str] = []
+        candidates: list[str] = []
         candidates.extend(request.pending_clarification_values)
         if request.clarification_result:
             selected = request.clarification_result.get("selected_topic") or request.clarification_result.get("value")
@@ -73,9 +73,9 @@ def _contains_reference_token(message: str, lowered: str) -> bool:
     )
 
 
-def _unique(values: Iterable[str]) -> List[str]:
+def _unique(values: Iterable[str]) -> list[str]:
     seen = set()
-    ordered: List[str] = []
+    ordered: list[str] = []
     for value in values:
         normalized = value.strip()
         if not normalized or normalized in seen:

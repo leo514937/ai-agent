@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Iterable, Optional, Sequence, Tuple
+from collections.abc import Iterable, Sequence
+from typing import Any
 
 from learning_agent_service.config import Settings
 from learning_agent_service.domain import (
@@ -21,10 +22,18 @@ from .defaults import DEFAULT_KNOWLEDGE_CHUNKS
 from .domain_adapter import DomainRagAdapter
 from .evidence import EvidenceGovernanceService
 from .governance import GovernanceConfig, KnowledgeGovernanceService
-from .retrieval import HeuristicDenseRetriever, HeuristicMetadataRetriever, HeuristicReranker, HybridRetrieverService, LocalBM25SparseRetriever, ParentChildResolver, ReciprocalRankFusion
 from .models import KnowledgeChunk, KnowledgeGovernanceDecision, RetrievalTrace, latest_version
 from .protocols import DenseRetriever, HybridRetriever, MetadataRetriever, Reranker, SparseRetriever
 from .reference import ReferenceResolver
+from .retrieval import (
+    HeuristicDenseRetriever,
+    HeuristicMetadataRetriever,
+    HeuristicReranker,
+    HybridRetrieverService,
+    LocalBM25SparseRetriever,
+    ParentChildResolver,
+    ReciprocalRankFusion,
+)
 from .rewrite import QueryRewriteService
 from .search import KnowledgeSearchConfig, KnowledgeSearchFacade
 
@@ -36,18 +45,18 @@ class HybridRAGOrchestrator:
         self,
         settings: Settings,
         *,
-        knowledge_chunks: Optional[Iterable[KnowledgeChunk]] = None,
-        dense_retriever: Optional[DenseRetriever] = None,
-        sparse_retriever: Optional[SparseRetriever] = None,
-        metadata_retriever: Optional[MetadataRetriever] = None,
-        reranker: Optional[Reranker] = None,
-        hybrid_retriever: Optional[HybridRetriever] = None,
-        evidence_service: Optional[EvidenceGovernanceService] = None,
-        citation_builder: Optional[CitationBuilder] = None,
-        governance_service: Optional[KnowledgeGovernanceService] = None,
-        reference_resolver: Optional[ReferenceResolver] = None,
-        parent_child_resolver: Optional[ParentChildResolver] = None,
-        rewrite_service: Optional[QueryRewriteService] = None,
+        knowledge_chunks: Iterable[KnowledgeChunk] | None = None,
+        dense_retriever: DenseRetriever | None = None,
+        sparse_retriever: SparseRetriever | None = None,
+        metadata_retriever: MetadataRetriever | None = None,
+        reranker: Reranker | None = None,
+        hybrid_retriever: HybridRetriever | None = None,
+        evidence_service: EvidenceGovernanceService | None = None,
+        citation_builder: CitationBuilder | None = None,
+        governance_service: KnowledgeGovernanceService | None = None,
+        reference_resolver: ReferenceResolver | None = None,
+        parent_child_resolver: ParentChildResolver | None = None,
+        rewrite_service: QueryRewriteService | None = None,
         runtime_mode: str = "snapshot",
     ) -> None:
         self.settings = settings
@@ -100,8 +109,47 @@ class HybridRAGOrchestrator:
         )
 
     @property
-    def knowledge_chunks(self) -> Tuple[KnowledgeChunk, ...]:
+    def knowledge_chunks(self) -> tuple[KnowledgeChunk, ...]:
         return self._chunks
+
+    def replace_knowledge_chunks(self, chunks: Iterable[KnowledgeChunk]) -> int:
+        """Replace the in-memory knowledge snapshot without blocking startup."""
+        refreshed_chunks = self._governance.deduplicate_chunks(tuple(chunks))
+        if not refreshed_chunks:
+            return 0
+
+        self._chunks = refreshed_chunks
+        self._parent_child_resolver = ParentChildResolver(self._chunks)
+        self._dense_retriever = HeuristicDenseRetriever(self._chunks, self._parent_child_resolver)
+        self._sparse_retriever = LocalBM25SparseRetriever(
+            self._chunks,
+            self._parent_child_resolver,
+            enabled=self.settings.enable_bm25_sparse_retrieval,
+            k1=self.settings.bm25_k1,
+            b=self.settings.bm25_b,
+        )
+        self._metadata_retriever = HeuristicMetadataRetriever(self._chunks, self._parent_child_resolver)
+        self._retriever = HybridRetrieverService(
+            dense_retriever=self._dense_retriever,
+            sparse_retriever=self._sparse_retriever,
+            metadata_retriever=self._metadata_retriever,
+            reranker=self._reranker,
+            config=self._policy.hybrid_retriever,
+            fusion=ReciprocalRankFusion(self._policy.rrf),
+            parent_child_resolver=self._parent_child_resolver,
+            rewrite_service=self._rewrite,
+            llm_rewrite_enabled=self._policy.query_rewrite.llm_enabled,
+            llm_rewrite_retry_limit=self._policy.query_rewrite.llm_retry_limit,
+            hyde_enabled=self._policy.query_rewrite.hyde_enabled,
+        )
+        self._search = KnowledgeSearchFacade(
+            rewrite_service=self._rewrite,
+            retriever=self._retriever,
+            evidence_service=self._evidence,
+            citation_builder=self._citation_builder,
+            config=KnowledgeSearchConfig(runtime_mode=self.runtime_mode),
+        )
+        return len(self._chunks)
 
     def resolve_reference(self, request: ReferenceResolutionRequest) -> ReferenceResolutionResult:
         internal_request = self._adapter.build_reference_request(request)
@@ -151,13 +199,13 @@ class HybridRAGOrchestrator:
         internal_pack = self._adapter.to_internal_evidence_pack(request)
         return [self._adapter.to_domain_citation(item) for item in self._citation_builder.build(internal_pack)]
 
-    def deduplicate_chunks(self, chunks: Iterable[KnowledgeChunk]) -> Tuple[KnowledgeChunk, ...]:
+    def deduplicate_chunks(self, chunks: Iterable[KnowledgeChunk]) -> tuple[KnowledgeChunk, ...]:
         return self._governance.deduplicate_chunks(tuple(chunks))
 
     def plan_duplicate_cleanup(
         self,
         document_id: str,
-        chunks: Optional[Sequence[KnowledgeChunk]] = None,
+        chunks: Sequence[KnowledgeChunk] | None = None,
     ) -> KnowledgeGovernanceDecision:
         candidate_chunks = tuple(chunks) if chunks is not None else self.active_chunks(document_id=document_id)
         return self._governance.plan_duplicate_cleanup(document_id=document_id, chunks=candidate_chunks)
@@ -184,9 +232,9 @@ class HybridRAGOrchestrator:
     def active_chunks(
         self,
         *,
-        document_id: Optional[str] = None,
-        version: Optional[str] = None,
-    ) -> Tuple[KnowledgeChunk, ...]:
+        document_id: str | None = None,
+        version: str | None = None,
+    ) -> tuple[KnowledgeChunk, ...]:
         chunks = tuple(chunk for chunk in self._chunks if document_id is None or chunk.document_id == document_id)
         if not chunks:
             return ()

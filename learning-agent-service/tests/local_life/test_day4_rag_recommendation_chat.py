@@ -112,6 +112,9 @@ class Day4RagRecommendationTestCase(unittest.TestCase):
         answer = result.final_answer
         metrics = result.metrics or {}
         self.assertEqual(metrics.get("rag_mode"), "recommendation_rag")
+        self.assertNotIn("附近商家A", answer)
+        self.assertNotIn("附近商家B", answer)
+        self.assertNotIn("附近商家C", answer)
 
         # Extract numbered items (e.g. 1. 2. 3.) to see how many shops are recommended
         shop_items = re.findall(r"\d+\.\s+([^\n，,。]+)", answer)

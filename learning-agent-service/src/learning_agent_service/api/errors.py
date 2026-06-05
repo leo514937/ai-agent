@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any
 
 from .compat import HTTPException
 from .contracts import ErrorPayload
 
 
 def build_error_payload(
-    exc: Exception | Dict[str, Any],
+    exc: Exception | dict[str, Any],
     *,
     default_code: str,
     stage: str,
@@ -42,7 +42,7 @@ def build_error_payload(
 
 
 def raise_http_error(
-    exc: Exception | Dict[str, Any],
+    exc: Exception | dict[str, Any],
     *,
     status_code: int,
     default_code: str,

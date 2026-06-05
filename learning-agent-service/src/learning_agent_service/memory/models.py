@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Mapping, Optional, Tuple
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -17,8 +18,8 @@ class SessionPersistenceContext:
 @dataclass(frozen=True)
 class PreferenceProfileWrite:
     user_id: str
-    answer_style: Optional[str] = None
-    explanation_depth: Optional[str] = None
+    answer_style: str | None = None
+    explanation_depth: str | None = None
     extra: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -29,11 +30,11 @@ class AsyncLogEvent:
     event_type: str
     dedupe_key: str
     payload: Mapping[str, Any] = field(default_factory=dict)
-    trace_id: Optional[str] = None
-    available_at: Optional[datetime] = None
+    trace_id: str | None = None
+    available_at: datetime | None = None
 
     def as_mapping(self) -> Mapping[str, Any]:
-        payload = {
+        payload: dict[str, Any] = {
             "aggregate_type": self.aggregate_type,
             "aggregate_id": self.aggregate_id,
             "event_type": self.event_type,
@@ -49,7 +50,7 @@ class AsyncLogEvent:
 @dataclass(frozen=True)
 class UserPreferenceProfile:
     user_id: str
-    preferred_output_style: Optional[str] = None
+    preferred_output_style: str | None = None
     answer_style_counter: Mapping[str, int] = field(default_factory=dict)
     extra: Mapping[str, Any] = field(default_factory=dict)
 
@@ -61,27 +62,27 @@ class TopicMasteryRecord:
     topic: str
     mastery_score: float = 0.0
     review_priority: int = 0
-    updated_at: Optional[datetime] = None
+    updated_at: datetime | None = None
     extra: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class PersistentSessionContext:
-    current_topic: Optional[str] = None
-    current_shop: Optional[str] = None
+    current_topic: str | None = None
+    current_shop: str | None = None
     current_shop_anchor: Mapping[str, Any] = field(default_factory=dict)
-    recent_entities: Tuple[str, ...] = ()
+    recent_entities: tuple[str, ...] = ()
     pending_user_need: Mapping[str, Any] = field(default_factory=dict)
     clarification_result: Mapping[str, Any] = field(default_factory=dict)
     user_preferences: Mapping[str, Any] = field(default_factory=dict)
-    last_retrieval_topic: Optional[str] = None
-    history_summary: Optional[str] = None
-    open_questions: Tuple[str, ...] = ()
-    confirmed_facts: Tuple[str, ...] = ()
-    next_steps: Tuple[str, ...] = ()
+    last_retrieval_topic: str | None = None
+    history_summary: str | None = None
+    open_questions: tuple[str, ...] = ()
+    confirmed_facts: tuple[str, ...] = ()
+    next_steps: tuple[str, ...] = ()
     summary_version: int = 0
-    summary_updated_at: Optional[datetime] = None
-    pending_clarification: Optional[Mapping[str, Any]] = None
+    summary_updated_at: datetime | None = None
+    pending_clarification: Mapping[str, Any] | None = None
     extra: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -92,39 +93,39 @@ class SemanticMemoryFact:
     content: str
     fact_type: str
     strength: float = 0.5
-    created_at: Optional[datetime] = None
-    last_referenced_at: Optional[datetime] = None
+    created_at: datetime | None = None
+    last_referenced_at: datetime | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class ExplicitUserSignals:
-    preferred_output_style: Optional[str] = None
+    preferred_output_style: str | None = None
     confirmed_output_style: bool = False
     wants_code_examples: bool = False
     confirmed_code_examples: bool = False
-    focus_topics: Tuple[str, ...] = ()
+    focus_topics: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class MemoryRecallSignals:
-    intent: Optional[str] = None
+    intent: str | None = None
     raw_query: str = ""
-    current_topic: Optional[str] = None
-    current_shop: Optional[str] = None
-    history_summary: Optional[str] = None
-    recent_entities: Tuple[str, ...] = ()
-    active_plan_id: Optional[str] = None
-    execution_mode: Optional[str] = None
-    task_complexity: Optional[str] = None
-    final_task_summary: Optional[Mapping[str, Any]] = None
-    open_questions: Tuple[str, ...] = ()
-    confirmed_facts: Tuple[str, ...] = ()
-    next_steps: Tuple[str, ...] = ()
-    summary_updated_at: Optional[datetime] = None
-    response_mode: Optional[str] = None
-    session_id: Optional[str] = None
-    turn_id: Optional[str] = None
+    current_topic: str | None = None
+    current_shop: str | None = None
+    history_summary: str | None = None
+    recent_entities: tuple[str, ...] = ()
+    active_plan_id: str | None = None
+    execution_mode: str | None = None
+    task_complexity: str | None = None
+    final_task_summary: Mapping[str, Any] | None = None
+    open_questions: tuple[str, ...] = ()
+    confirmed_facts: tuple[str, ...] = ()
+    next_steps: tuple[str, ...] = ()
+    summary_updated_at: datetime | None = None
+    response_mode: str | None = None
+    session_id: str | None = None
+    turn_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -144,18 +145,18 @@ class MemoryRecallPlan:
 
 @dataclass(frozen=True)
 class SessionUpdate:
-    current_topic: Optional[str] = None
-    current_shop: Optional[str] = None
-    recent_entities: Tuple[str, ...] = ()
+    current_topic: str | None = None
+    current_shop: str | None = None
+    recent_entities: tuple[str, ...] = ()
     clarification_result: Mapping[str, Any] = field(default_factory=dict)
-    last_retrieval_topic: Optional[str] = None
-    history_summary: Optional[str] = None
-    open_questions: Tuple[str, ...] = ()
-    confirmed_facts: Tuple[str, ...] = ()
-    next_steps: Tuple[str, ...] = ()
+    last_retrieval_topic: str | None = None
+    history_summary: str | None = None
+    open_questions: tuple[str, ...] = ()
+    confirmed_facts: tuple[str, ...] = ()
+    next_steps: tuple[str, ...] = ()
     summary_version: int = 0
-    summary_updated_at: Optional[datetime] = None
-    pending_clarification: Optional[Mapping[str, Any]] = None
+    summary_updated_at: datetime | None = None
+    pending_clarification: Mapping[str, Any] | None = None
     extra: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -166,15 +167,15 @@ class MemoryPromotionInput:
     user_id: str
     query: str
     answer_text: str
-    resolved_topic: Optional[str] = None
-    intent: Optional[str] = None
-    output_style: Optional[str] = None
-    tool_name: Optional[str] = None
+    resolved_topic: str | None = None
+    intent: str | None = None
+    output_style: str | None = None
+    tool_name: str | None = None
     explicit_signals: ExplicitUserSignals = field(default_factory=ExplicitUserSignals)
     current_session: PersistentSessionContext = field(default_factory=PersistentSessionContext)
-    current_mastery: Optional[Any] = None
-    current_preferences: Optional[UserPreferenceProfile] = None
-    current_time: Optional[datetime] = None
+    current_mastery: Any | None = None
+    current_preferences: UserPreferenceProfile | None = None
+    current_time: datetime | None = None
     extra: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -189,11 +190,12 @@ class MemoryPromotionResult:
     session_update: SessionUpdate
     preference_patch: Mapping[str, Any] = field(default_factory=dict)
     session_preference_patch: Mapping[str, Any] = field(default_factory=dict)
-    profile_updates: Tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
-    semantic_facts: Tuple[SemanticMemoryFact, ...] = ()
-    reasons: Tuple[str, ...] = ()
-    durable_fact_requests: Tuple[DurableFactRequest, ...] = ()
-    outbox_events: Tuple[Mapping[str, Any], ...] = ()
+    profile_updates: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
+    semantic_facts: tuple[SemanticMemoryFact, ...] = ()
+    weak_topics: tuple[str, ...] = ()
+    reasons: tuple[str, ...] = ()
+    durable_fact_requests: tuple[DurableFactRequest, ...] = ()
+    outbox_events: tuple[Mapping[str, Any], ...] = ()
     extra: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -202,10 +204,10 @@ class PersistSessionPlan:
     updated_context: PersistentSessionContext
     preference_patch: Mapping[str, Any] = field(default_factory=dict)
     session_preference_patch: Mapping[str, Any] = field(default_factory=dict)
-    profile_updates: Tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
-    semantic_facts: Tuple[SemanticMemoryFact, ...] = ()
-    durable_fact_requests: Tuple[DurableFactRequest, ...] = ()
-    outbox_events: Tuple[Mapping[str, Any], ...] = ()
+    profile_updates: tuple[Mapping[str, Any], ...] = field(default_factory=tuple)
+    semantic_facts: tuple[SemanticMemoryFact, ...] = ()
+    durable_fact_requests: tuple[DurableFactRequest, ...] = ()
+    outbox_events: tuple[Mapping[str, Any], ...] = ()
     memory_updates: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -217,7 +219,7 @@ class MemoryCapabilityError(RuntimeError):
         stage: str,
         message: str,
         retryable: bool = True,
-        degraded_to: Optional[str] = None,
+        degraded_to: str | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code

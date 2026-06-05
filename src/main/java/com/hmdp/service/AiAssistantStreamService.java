@@ -31,6 +31,8 @@ public class AiAssistantStreamService {
     @Resource
     private AiBusinessQueryFacade aiBusinessQueryFacade;
     @Resource
+    private AiInternalBusinessService aiInternalBusinessService;
+    @Resource
     private AiRemoteClient aiRemoteClient;
     @Resource
     private AiRemoteStreamProxyClient aiRemoteStreamProxyClient;
@@ -46,7 +48,8 @@ public class AiAssistantStreamService {
             return;
         }
 
-        AiQueryContext queryContext = aiBusinessQueryFacade.resolveContext(normalizedRequest.getContext(), user);
+        Map<String, Object> enrichedContext = aiInternalBusinessService.enrichRealtimeContext(normalizedRequest.getContext());
+        AiQueryContext queryContext = aiBusinessQueryFacade.resolveContext(enrichedContext, user);
         AiRouteType route = aiBusinessQueryFacade.resolveRoute(normalizedRequest.getMessage(), queryContext);
 
         try {

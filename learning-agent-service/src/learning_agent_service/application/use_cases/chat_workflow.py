@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import logging
-from typing import Iterable, Optional
+from collections.abc import Iterable
+
+from learning_agent_service.config import Settings
 
 from learning_agent_service.domain import ChatTurnCommand, PersistentSessionContext, SseEnvelope
-from learning_agent_service.local_life.subgraph import LocalLifeSubgraph
+
 from ..workflow.adapters import WorkflowNodeAdapter
 from ..workflow.builder import create_workflow_runner
 from ..workflow.services import (
@@ -14,34 +15,24 @@ from ..workflow.services import (
     UnderstandTurnServices,
     WorkflowServices,
 )
-
-_LOGGER = logging.getLogger(__name__)
-
-
 class ChatWorkflowService:
     def __init__(self, container) -> None:
         self._container = container
-        session_context_store = getattr(container, "session_context_store", None)
-        self._workflow = LocalLifeSubgraph(
-            settings=container.settings,
-            business_client=getattr(container, "java_business_client", None),
-            model_assistant=getattr(container, "local_life_assistant", None),
-            local_life_retriever=getattr(container, "local_life_retriever", None),
-            session_context_store=session_context_store,
-        )
+        self._settings = getattr(container, "settings", None) or Settings()
         self._workflow_services = self._build_workflow_services()
         self._workflow_runner = create_workflow_runner(
             services=self._workflow_services,
-            workflow_version=container.settings.workflow_version,
-            prefer_langgraph=bool(getattr(container.settings, "local_life_use_langgraph", True)),
+            workflow_version=self._settings.workflow_version,
+            prefer_langgraph=bool(getattr(self._settings, "local_life_use_langgraph", True)),
             checkpointer=getattr(container, "workflow_checkpointer", None),
         )
 
     def run(
         self,
         command: ChatTurnCommand,
-        persistent_context: Optional[PersistentSessionContext] = None,
+        persistent_context: PersistentSessionContext | None = None,
     ) -> Iterable[SseEnvelope]:
+        settings = getattr(self, "_settings", None) or getattr(self._container, "settings", None) or Settings()
         session_context_store = getattr(self._container, "session_context_store", None)
         if persistent_context is not None:
             persistent = persistent_context
@@ -50,8 +41,8 @@ class ChatWorkflowService:
         else:
             persistent = PersistentSessionContext()
 
-        use_langgraph = bool(getattr(self._container.settings, "local_life_use_langgraph", True))
-        fallback_legacy = bool(getattr(self._container.settings, "local_life_langgraph_fallback_legacy", True))
+        use_langgraph = bool(getattr(settings, "local_life_use_langgraph", True))
+        fallback_legacy = bool(getattr(settings, "local_life_langgraph_fallback_legacy", True))
 
         def _stream():
             if not use_langgraph:
@@ -116,7 +107,7 @@ class ChatWorkflowService:
     @staticmethod
     def _should_use_local_life_subgraph(
         command: ChatTurnCommand,
-        persistent: Optional[PersistentSessionContext] = None,
+        persistent: PersistentSessionContext | None = None,
     ) -> bool:
         message = str(getattr(command, "message", "") or "")
         compact = message.replace(" ", "")

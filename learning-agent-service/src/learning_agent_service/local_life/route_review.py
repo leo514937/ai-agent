@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import dataclasses
-from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence
+from collections.abc import Mapping
+from typing import Any
 
 from .query_router import LocalLifeRouteDecision
-from .schemas import ClarificationDecision, RouteExecutionRequirement, RouteReviewResult, UserNeed, SuggestedReply
+from .schemas import ClarificationDecision, RouteExecutionRequirement, RouteReviewResult, UserNeed
 
 
 class RouteReview:
@@ -25,12 +26,13 @@ class RouteReview:
         )
         
         # 优先使用 TargetShopPolicy 从 session 继承实体
-        from .target_shop_policy import TargetShopPolicy
         from .entity_resolver import _explicit_entity_from_query
+        from .target_shop_policy import TargetShopPolicy
         explicit_entity = _explicit_entity_from_query(user_need.raw_query)
         target_shop = TargetShopPolicy().resolve_target(
             raw_query=user_need.raw_query,
             slots=user_need.slots,
+            client_context=client_context,
             session_context=session_context,
             explicit_entity=explicit_entity
         )
@@ -68,12 +70,16 @@ class RouteReview:
 
             if inferred_facet_names:
                 required_facet_names = inferred_facet_names
-        print(f"[DEBUG RouteReview] resolved_shop_id={resolved_shop_id}, required_facet_names={required_facet_names}, session_context={session_context}, target_shop={target_shop}, explicit_entity={explicit_entity}")
         # DAY3 HARDENING: Front-end Routing Interception for Coupon queries without explicit target shops
         is_coupon_query = "coupon" in required_facet_names or any(x in user_need.raw_query for x in ["券", "优惠", "代金券", "团购"])
+        is_generic_search = (
+            user_need.slots.category is not None
+            or user_need.slots.scene is not None
+            or any(x in user_need.raw_query for x in ["附近", "推荐", "找个", "搜", "查附近", "有什么"])
+        )
         has_no_target_shop = not resolved_shop_id and not (target_shop and (target_shop.shop_id or target_shop.shop_name)) and not explicit_entity
         
-        if is_coupon_query and has_no_target_shop:
+        if is_coupon_query and has_no_target_shop and not is_generic_search:
             new_clarification = ClarificationDecision(
                 need_clarification=True,
                 question="你想查询哪家店的优惠券？请告诉我具体门店名称。",
@@ -130,6 +136,29 @@ class RouteReview:
         session_ctx = session_context or {}
         normalized_query = user_need.raw_query.strip().lower()
 
+        # Resolve explicit target shop early in _review_impl
+        from .entity_resolver import _explicit_entity_from_query
+        from .target_shop_policy import TargetShopPolicy
+        explicit_entity = _explicit_entity_from_query(user_need.raw_query)
+        target_shop = TargetShopPolicy().resolve_target(
+            raw_query=user_need.raw_query,
+            slots=user_need.slots,
+            client_context=client_context,
+            session_context=session_ctx,
+            explicit_entity=explicit_entity
+        )
+        resolved_shop_id = None
+        if target_shop.shop_id:
+            resolved_shop_id = target_shop.shop_id
+        elif user_need.context_refs:
+            for ref in user_need.context_refs:
+                if ref.type == "shop" and ref.id:
+                    try:
+                        resolved_shop_id = int(ref.id)
+                        break
+                    except (ValueError, TypeError):
+                        pass
+
         # Extract facets for easier checking
         required_facet_names = [f.name for f in user_need.required_facets]
         has_dynamic_facet = any(name in required_facet_names for name in ("coupon", "open_status", "distance_eta"))
@@ -150,12 +179,13 @@ class RouteReview:
         # 1. Rule: Pronoun reference failure (Case 6)
         # 如果有指代词，但是 context_refs 为空，且利用 TargetShopPolicy 也没能从 Session 继承实体，才触发澄清
         if has_pronoun:
-            from .target_shop_policy import TargetShopPolicy
             from .entity_resolver import _explicit_entity_from_query
+            from .target_shop_policy import TargetShopPolicy
             explicit_entity = _explicit_entity_from_query(user_need.raw_query)
             target_shop = TargetShopPolicy().resolve_target(
                 raw_query=user_need.raw_query,
                 slots=user_need.slots,
+                client_context=client_context,
                 session_context=session_ctx,
                 explicit_entity=explicit_entity
             )
@@ -238,25 +268,37 @@ class RouteReview:
             
             # Case 5: Retain slot clarification for vague nearby queries without location
             elif not has_location_ctx:
-                new_clarification = ClarificationDecision(need_clarification=False)
+                from .schemas import SuggestedReply
+                question = clarification.question or "你现在在哪个城市或位置附近？"
+                if "位置" not in question:
+                    question = "你现在在哪个城市或位置附近？"
+                new_clarification = ClarificationDecision(
+                    need_clarification=True,
+                    question=question,
+                    ambiguity_type="slot_clarify",
+                    options=clarification.options or [
+                        SuggestedReply(label="发位置", prompt="我在北京朝阳"),
+                        SuggestedReply(label="给城市", prompt="北京"),
+                    ],
+                )
                 reviewed_route = LocalLifeRouteDecision(
-                    route="structured_first",
-                    retrieval_strategy="business_candidates->parent_child_rag->shop_rerank",
+                    route="clarify",
+                    retrieval_strategy="clarification_only",
                     route_reason="default_nearby_recommendation",
                     candidate_shop_ids=(),
-                    use_business_candidates=True,
-                    use_qdrant=True,
+                    use_business_candidates=False,
+                    use_qdrant=False,
                 )
                 exec_reqs = RouteExecutionRequirement(
                     required_facets=[],
                     execute_tools=[],
-                    execute_rag=True,
+                    execute_rag=False,
                     reference_needed=False,
                 )
                 return RouteReviewResult(
                     reviewed_route=reviewed_route,
                     execution_requirements=exec_reqs,
-                    review_reason="Vague nearby recommendation query without location context defaults to broad recommendation search.",
+                    review_reason="Vague nearby recommendation query without location context triggers slot clarification.",
                     intercepted=True,
                     clarification=new_clarification,
                     reviewed_clarification=new_clarification,
@@ -273,24 +315,29 @@ class RouteReview:
             if "distance_eta" in required_facet_names:
                 tools_to_run.append("get_distance_eta")
 
+            use_qdrant_flag = bool(
+                resolved_shop_id is not None 
+                or (explicit_entity is not None and explicit_entity.strip() not in ("他", "她", "它", "这家", "这店", "这间", "刚才那家", "这个店", "刚才那个", "这几家", "第一家", "第二家"))
+            )
+            execute_rag_flag = use_qdrant_flag
             reviewed_route = LocalLifeRouteDecision(
                 route="realtime_tool",
                 retrieval_strategy="java_business_tool_only",
                 route_reason="dynamic_single_facet_query",
                 candidate_shop_ids=initial_route.candidate_shop_ids,
-                parent_top_k=0,
-                child_top_k=0,
-                sibling_limit_per_parent=0,
-                preferred_roles=(),
+                parent_top_k=0 if not use_qdrant_flag else 5,
+                child_top_k=0 if not use_qdrant_flag else 30,
+                sibling_limit_per_parent=0 if not use_qdrant_flag else 6,
+                preferred_roles=() if not use_qdrant_flag else ("merchant_profile", "merchant_review_summary", "merchant_scene_fit"),
                 use_business_candidates=True,
-                use_qdrant=False,  # Exclude Qdrant retrieval for pure dynamic facet
+                use_qdrant=use_qdrant_flag,  # Exclude Qdrant retrieval for pure dynamic facet unless explicit shop
                 extra=initial_route.extra,
             )
 
             exec_reqs = RouteExecutionRequirement(
                 required_facets=required_facet_names,
                 execute_tools=tools_to_run,
-                execute_rag=False,
+                execute_rag=execute_rag_flag,
                 reference_needed=has_pronoun,
             )
 

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from ..compat import APIRouter
 from ..contracts import (
+    MemoryAccessLogListResponse,
     MemoryActionRequest,
     MemoryActionResponse,
-    MemoryAccessLogListResponse,
     MemoryCandidateListResponse,
     MemoryDeletionJobListResponse,
     MemoryListResponse,

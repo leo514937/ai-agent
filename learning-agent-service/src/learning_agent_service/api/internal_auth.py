@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from hmac import compare_digest
-from typing import Optional
 
 try:
     from fastapi import Header
@@ -18,7 +17,7 @@ def internal_token_header():
     return Header(default=None, alias="X-Internal-Token")
 
 
-def verify_internal_token(token: Optional[str]) -> None:
+def verify_internal_token(token: str | None) -> None:
     if token is not None and not isinstance(token, str):
         token = None
     settings = get_settings()
@@ -37,5 +36,5 @@ def verify_internal_token(token: Optional[str]) -> None:
     )
 
 
-def require_internal_token(token: Optional[str]) -> None:
+def require_internal_token(token: str | None) -> None:
     verify_internal_token(token)

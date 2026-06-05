@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Mapping, Optional
+from collections.abc import Mapping
+from typing import Any
+
+from learning_agent_service.domain.utils import as_mapping as _as_mapping, clean_text as _clean_text
 
 from .catalog import get_default_catalog
-from .facet_execution_plan import FacetExecutionPlan, FacetExecutionItem
+from .facet_execution_plan import FacetExecutionItem, FacetExecutionPlan
 from .schemas import LocalLifeSlots
 from .target_shop_policy import TargetShopPolicy
 
@@ -40,24 +43,7 @@ _EXPLICIT_SUFFIXES = (
 
 
 
-def _as_mapping(value: Any) -> dict[str, Any]:
-    if isinstance(value, Mapping):
-        return dict(value)
-    if hasattr(value, "model_dump"):
-        dumped = value.model_dump(mode="json")
-        if isinstance(dumped, Mapping):
-            return dict(dumped)
-    return {}
-
-
-def _clean_text(value: Any) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
-
-
-def _first_int(value: Any) -> Optional[int]:
+def _first_int(value: Any) -> int | None:
     if value in (None, ""):
         return None
     try:
@@ -106,13 +92,17 @@ def _explicit_entity_from_query(raw_query: str) -> str | None:
         return None
     compact = text.rstrip("？?。.!！")
     generic_query_tokens = ("附近", "推荐", "餐厅", "餐馆", "美食", "店铺", "店家", "一家", "几家")
+    has_entity_shape = any(token in compact for token in ("(", "（", "）", ")", "店", "馆", "城", "街", "路"))
     if compact.startswith("那"):
         compact = re.sub(r"^那[，,\s]?", "", compact).strip()
     for pronoun in _PRONOUNS:
         idx = compact.find(pronoun)
         if idx > 0:
             prefix = compact[:idx].strip(" ，,;；")
-            if prefix and prefix not in _PRONOUNS and not any(token in prefix for token in generic_query_tokens):
+            if prefix and prefix not in _PRONOUNS and (
+                not any(token in prefix for token in generic_query_tokens)
+                or has_entity_shape
+            ):
                 return _strip_facet_suffixes(prefix)
     for suffix in _EXPLICIT_SUFFIXES:
         if compact.endswith(suffix):
@@ -121,7 +111,7 @@ def _explicit_entity_from_query(raw_query: str) -> str | None:
                 # Guard: If prefix contains or is a pronoun, it must not be treated as an explicit merchant entity.
                 if any(pronoun in prefix for pronoun in _PRONOUNS) or prefix in _PRONOUNS:
                     continue
-                if any(token in prefix for token in generic_query_tokens):
+                if any(token in prefix for token in generic_query_tokens) and not has_entity_shape:
                     continue
                 return _strip_facet_suffixes(prefix)
     match = re.match(r"^(?P<name>.+?)(?:\s+)?(什么|哪家|哪个好|行不行|可以吗)$", compact)
@@ -130,7 +120,7 @@ def _explicit_entity_from_query(raw_query: str) -> str | None:
         if prefix:
             if any(pronoun in prefix for pronoun in _PRONOUNS) or prefix in _PRONOUNS:
                 return None
-            if any(token in prefix for token in generic_query_tokens):
+            if any(token in prefix for token in generic_query_tokens) and not has_entity_shape:
                 return None
             return _strip_facet_suffixes(prefix)
     return None
@@ -166,8 +156,17 @@ class EntityResolver:
         target_shop = TargetShopPolicy().resolve_target(
             raw_query=raw_query,
             slots=slots,
+            client_context=client_context_map,
             session_context=session_context_map,
             explicit_entity=explicit_entity
+        )
+        nearby_recommendation_like = any(
+            token in (raw_query or "")
+            for token in ("附近", "周边", "推荐", "几家", "多推荐", "适合约会", "家庭聚餐", "安静", "不吵")
+        )
+        skip_session_shop_fallback = (
+            target_shop.source == "rag_fallback"
+            or (nearby_recommendation_like and not explicit_entity and not pronoun_only)
         )
 
         if explicit_entity and target_shop.confidence > 0.0 and target_shop.shop_id is None:
@@ -176,24 +175,45 @@ class EntityResolver:
                 catalog_matches = catalog.search_shops(query=explicit_entity, slots=slots, limit=5)
                 if catalog_matches:
                     best_match = catalog_matches[0]
-                    matched_ids = []
-                    for item in catalog_matches:
-                        if getattr(item, "id", None) is not None:
-                            matched_ids.append(int(item.id))
-                    target_shop = target_shop.model_copy(
-                        update={
-                            "shop_id": int(best_match.id),
-                            "shop_name": best_match.name,
-                            "candidate_shop_ids": matched_ids or [int(best_match.id)],
-                        }
-                    )
+                    # Verify best_match is actually relevant to explicit_entity
+                    from .catalog import _tokenize
+                    query_tokens = _tokenize(explicit_entity)
+                    # Filter out very generic tokens
+                    generic_shop_tokens = {"ktv", "spa", "店", "馆", "餐厅", "美食", "家", "分店", "分店）", "）", "（"}
+                    meaningful_tokens = {t for t in query_tokens if t not in generic_shop_tokens}
+                    
+                    best_blob = ((best_match.name or "") + " " + (best_match.review_summary or "")).lower()
+                    
+                    has_match = False
+                    if meaningful_tokens:
+                        has_match = any(token in best_blob for token in meaningful_tokens)
+                    else:
+                        has_match = any(token in best_blob for token in query_tokens)
+                        
+                    ee_lower = explicit_entity.lower()
+                    bm_name_lower = (best_match.name or "").lower()
+                    if ee_lower in bm_name_lower or bm_name_lower in ee_lower:
+                        has_match = True
+                        
+                    if has_match:
+                        matched_ids = []
+                        for item in catalog_matches:
+                            if getattr(item, "id", None) is not None:
+                                matched_ids.append(int(item.id))
+                        target_shop = target_shop.model_copy(
+                            update={
+                                "shop_id": int(best_match.id),
+                                "shop_name": best_match.name,
+                                "candidate_shop_ids": matched_ids or [int(best_match.id)],
+                            }
+                        )
             except Exception:
                 pass
 
-        resolved_shop_id: Optional[int] = None
-        resolved_shop_name: Optional[str] = None
+        resolved_shop_id: int | None = None
+        resolved_shop_name: str | None = None
         candidate_shop_ids: list[int] = []
-        shop_context_source: Optional[str] = None
+        shop_context_source: str | None = None
 
         def add_candidate(value: Any) -> None:
             shop_id = _first_int(value)
@@ -209,6 +229,8 @@ class EntityResolver:
             for value in target_shop.candidate_shop_ids:
                 add_candidate(value)
         else:
+            if skip_session_shop_fallback:
+                shop_context_source = target_shop.source or "rag_fallback"
             # 1. 物理隔离高优先级代词指代解析：优先扫描并绑定用户显式口头提问 (ref_source == "explicit_entity") 的引用，防止静态页面默认抢占
             explicit_refs = [r for r in context_refs if _clean_text(_get_val(r, "source")) == "explicit_entity"]
             other_refs = [r for r in context_refs if _clean_text(_get_val(r, "source")) != "explicit_entity"]
@@ -261,7 +283,7 @@ class EntityResolver:
                     resolved_shop_id = _first_int(slots.shop_ids[0])
                     shop_context_source = "slot"
 
-            if resolved_shop_id is None and not explicit_entity:
+            if resolved_shop_id is None and not explicit_entity and not skip_session_shop_fallback:
                 selected_shop_id = _first_int(session_context_map.get("selected_shop_id") or session_context_map.get("current_shop_id"))
                 current_shop_name = _clean_text(session_context_map.get("selected_shop_name") or session_context_map.get("current_shop"))
                 if selected_shop_id is not None:
@@ -273,7 +295,7 @@ class EntityResolver:
                     resolved_shop_name = resolved_shop_name or current_shop_name
                     shop_context_source = shop_context_source or "session"
 
-            if not explicit_entity:
+            if not explicit_entity and not skip_session_shop_fallback:
                 for item in session_context_map.get("last_candidates") or []:
                     if isinstance(item, Mapping):
                         add_candidate(item.get("shop_id") or item.get("id"))
@@ -314,7 +336,7 @@ class EntityResolver:
         if category and resolved_shop_name:
             category_lower = str(category).lower()
             shop_name_lower = str(resolved_shop_name).lower()
-            leisure_words = {"ktv", "唱歌", "足疗", "spa", "按摩", "酒店", "机票", "电影院", "洗浴", "唱歌"}
+            leisure_words = {"ktv", "唱歌", "足疗", "spa", "按摩", "酒店", "机票", "电影院", "洗浴"}
             if any(w in category_lower for w in leisure_words) and not any(w in shop_name_lower for w in leisure_words):
                 resolved_shop_id = None
                 resolved_shop_name = None

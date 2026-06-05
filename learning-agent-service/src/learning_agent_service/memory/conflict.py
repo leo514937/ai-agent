@@ -1,21 +1,23 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import Enum
-from datetime import datetime, timezone
-from typing import Iterable, List, Optional, Sequence
 
 from learning_agent_service.domain.memory import (
     MemoryEdge,
     MemoryEdgeType,
     MemoryPersistenceScope,
     MemoryRecord,
-    MemoryScope,
     MemorySensitivity,
     MemoryStatus,
     MemoryType,
 )
-from learning_agent_service.memory.preference_registry import DEFAULT_PREFERENCE_REGISTRY, PreferenceRegistry
+from learning_agent_service.memory.preference_registry import (
+    DEFAULT_PREFERENCE_REGISTRY,
+    PreferenceRegistry,
+)
 
 
 class MemoryConflictResolutionStrategy(str, Enum):
@@ -38,25 +40,25 @@ class ConflictResolutionAction(str, Enum):
 class MemoryConflictResolutionResult:
     strategy: MemoryConflictResolutionStrategy
     winner: MemoryRecord
-    losers: List[MemoryRecord] = field(default_factory=list)
-    merged_record: Optional[MemoryRecord] = None
+    losers: list[MemoryRecord] = field(default_factory=list)
+    merged_record: MemoryRecord | None = None
     requires_confirmation: bool = False
     reason: str = ""
-    edges: List[MemoryEdge] = field(default_factory=list)
+    edges: list[MemoryEdge] = field(default_factory=list)
 
 
 @dataclass
 class ConflictResolutionDecision:
     action: ConflictResolutionAction
-    old_memory_id: Optional[str]
+    old_memory_id: str | None
     new_memory: MemoryRecord
     reason: str
     confidence: float
     should_update_profile: bool
     should_update_qdrant: bool
-    effective_from: Optional[datetime] = None
-    effective_to: Optional[datetime] = None
-    normalized_key: Optional[str] = None
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+    normalized_key: str | None = None
     requires_clarification: bool = False
 
 
@@ -78,7 +80,7 @@ class MemoryConflictResolver:
         incoming: MemoryRecord,
         existing_records: Sequence[MemoryRecord],
         *,
-        temporal_scope: Optional[str] = None,
+        temporal_scope: str | None = None,
     ) -> ConflictResolutionDecision:
         normalized_key = incoming.normalized_key or self._normalize_key_from_record(incoming)
         if not normalized_key:
@@ -112,7 +114,7 @@ class MemoryConflictResolver:
                 confidence=float(incoming.confidence or 0.0),
                 should_update_profile=False,
                 should_update_qdrant=False,
-                effective_from=datetime.now(timezone.utc),
+                effective_from=datetime.now(UTC),
                 normalized_key=normalized_key,
                 requires_clarification=temporal_scope == "ambiguous" and "最近" in (incoming.summary or ""),
             )
@@ -151,7 +153,7 @@ class MemoryConflictResolver:
                     "status": best_existing.status,
                     "effective_from": best_existing.effective_from,
                     "effective_to": best_existing.effective_to,
-                    "last_seen_at": datetime.now(timezone.utc),
+                    "last_seen_at": datetime.now(UTC),
                     "confidence": max(float(incoming.confidence or 0.0), float(best_existing.confidence or 0.0)),
                 }
             )
@@ -185,7 +187,7 @@ class MemoryConflictResolver:
                 confidence=float(incoming.confidence or 0.0),
                 should_update_profile=False,
                 should_update_qdrant=False,
-                effective_from=datetime.now(timezone.utc),
+                effective_from=datetime.now(UTC),
                 normalized_key=normalized_key,
             )
 
@@ -195,7 +197,7 @@ class MemoryConflictResolver:
                 "normalized_value": incoming_value,
                 "persistence_scope": MemoryPersistenceScope.LONG_TERM,
                 "is_active": True,
-                "effective_from": incoming.effective_from or datetime.now(timezone.utc),
+                "effective_from": incoming.effective_from or datetime.now(UTC),
                 "status": MemoryStatus.ACTIVE,
             }
         )
@@ -317,8 +319,8 @@ class MemoryConflictResolver:
         self,
         incoming: MemoryRecord,
         existing_records: Sequence[MemoryRecord],
-    ) -> List[MemoryRecord]:
-        conflicts: List[MemoryRecord] = []
+    ) -> list[MemoryRecord]:
+        conflicts: list[MemoryRecord] = []
         for record in existing_records:
             if record.user_id != incoming.user_id:
                 continue
@@ -359,20 +361,20 @@ class MemoryConflictResolver:
         return bool(getattr(record, "is_active", True))
 
     @staticmethod
-    def _same_key(record: MemoryRecord, normalized_key: Optional[str]) -> bool:
+    def _same_key(record: MemoryRecord, normalized_key: str | None) -> bool:
         if not normalized_key:
             return False
         return (record.normalized_key or record.topic or "").strip().lower() == normalized_key.strip().lower()
 
     @staticmethod
-    def _first_conflict(records: Sequence[MemoryRecord], normalized_key: Optional[str]) -> Optional[MemoryRecord]:
+    def _first_conflict(records: Sequence[MemoryRecord], normalized_key: str | None) -> MemoryRecord | None:
         for record in records:
             if normalized_key and MemoryConflictResolver._same_key(record, normalized_key):
                 return record
         return None
 
     @staticmethod
-    def _normalize_key_from_record(record: MemoryRecord) -> Optional[str]:
+    def _normalize_key_from_record(record: MemoryRecord) -> str | None:
         normalized_key = record.normalized_key or ""
         if normalized_key:
             return normalized_key
@@ -389,7 +391,7 @@ class MemoryConflictResolver:
             return value
         content = record.content if isinstance(record.content, dict) else {}
         raw = str(content.get("normalized_value") or content.get("value") or record.summary or "")
-        return DEFAULT_PREFERENCE_REGISTRY.normalize_value(normalized_key, raw)
+        return DEFAULT_PREFERENCE_REGISTRY.normalize_value(normalized_key, raw) or "unknown"
 
     @staticmethod
     def _temporal_scope_from_record(record: MemoryRecord) -> str:
@@ -397,7 +399,7 @@ class MemoryConflictResolver:
         return str(content.get("temporal_scope") or getattr(record, "persistence_scope", "") or "")
 
     @staticmethod
-    def _is_session_only(record: MemoryRecord, temporal_scope: Optional[str]) -> bool:
+    def _is_session_only(record: MemoryRecord, temporal_scope: str | None) -> bool:
         scope = (temporal_scope or "").lower()
         if scope in {"turn", "session"}:
             return True
@@ -405,7 +407,7 @@ class MemoryConflictResolver:
         return DEFAULT_PREFERENCE_REGISTRY.infer_scope(text) == MemoryPersistenceScope.SESSION
 
     @staticmethod
-    def _is_long_term_change(record: MemoryRecord, temporal_scope: Optional[str]) -> bool:
+    def _is_long_term_change(record: MemoryRecord, temporal_scope: str | None) -> bool:
         scope = (temporal_scope or "").lower()
         if scope in {"long_term", "profile", "user"}:
             return True
@@ -413,7 +415,7 @@ class MemoryConflictResolver:
         return DEFAULT_PREFERENCE_REGISTRY.is_long_term_intent(text)
 
     @staticmethod
-    def _build_edges(incoming: MemoryRecord, losers: Sequence[MemoryRecord]) -> List[MemoryEdge]:
+    def _build_edges(incoming: MemoryRecord, losers: Sequence[MemoryRecord]) -> list[MemoryEdge]:
         return [
             MemoryEdge(
                 edge_id=f"{loser.memory_id}:superseded_by:{incoming.memory_id}",

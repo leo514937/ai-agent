@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import List
-
 from learning_agent_service.infrastructure.db.models import ClarificationRecordModel
 
 from .base import SqlAlchemyRepositoryBase
@@ -38,7 +36,7 @@ class ClarificationRecordRepository(SqlAlchemyRepositoryBase):
             session.flush()
             return instance
 
-    def list_for_session(self, session_id: str, limit: int = 20) -> List[ClarificationRecordModel]:
+    def list_for_session(self, session_id: str, limit: int = 20) -> list[ClarificationRecordModel]:
         self._require_sqlalchemy()
         with self.session_scope() as session:
             return list(

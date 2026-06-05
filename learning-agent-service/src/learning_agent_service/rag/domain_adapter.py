@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Iterable, Mapping, Optional, Tuple
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any
+
+# TODO: 模型收敛到 domain/contracts.py 后此文件可删除（653 行纯转换逻辑）。
+# 依赖关系：rag/service.py 中的 DomainRagAdapter 需同步改造。
 
 from learning_agent_service.domain import (
     Citation,
@@ -9,30 +13,46 @@ from learning_agent_service.domain import (
     EvidenceItem,
     EvidencePack,
     HybridRecallCandidate,
-    HybridRecallResult as DomainHybridRecallResult,
     HybridRetrieveRequest,
-    KnowledgeSearchRequest as DomainKnowledgeSearchRequest,
-    KnowledgeSearchResult as DomainKnowledgeSearchResult,
     QueryRewriteRequest,
-    ReferenceResolutionRequest as DomainReferenceResolutionRequest,
     ReferenceResolutionResult,
     RetrievalPlan,
+)
+from learning_agent_service.domain import (
+    HybridRecallResult as DomainHybridRecallResult,
+)
+from learning_agent_service.domain import (
+    KnowledgeSearchRequest as DomainKnowledgeSearchRequest,
+)
+from learning_agent_service.domain import (
+    KnowledgeSearchResult as DomainKnowledgeSearchResult,
+)
+from learning_agent_service.domain import (
+    ReferenceResolutionRequest as DomainReferenceResolutionRequest,
 )
 from learning_agent_service.domain.enums import IntentType, OutputStyle
 
 from .models import (
     Citation as InternalCitation,
+)
+from .models import (
     EvidenceItem as InternalEvidenceItem,
+)
+from .models import (
     EvidencePack as InternalEvidencePack,
+)
+from .models import (
     HybridRecallResult,
     KnowledgeChunk,
     KnowledgeSearchRequest,
     KnowledgeSearchResult,
     RecallHit,
     ReferenceResolutionRequest,
+    RetrievalFilters,
     RetrievalTrace,
     RetrievalTraceItem,
-    RetrievalFilters,
+)
+from .models import (
     RetrievalPlan as InternalRetrievalPlan,
 )
 from .rewrite import QueryRewriteContext
@@ -175,7 +195,7 @@ class DomainRagAdapter:
             },
         )
 
-    def to_internal_hits(self, candidates: Iterable[HybridRecallCandidate]) -> Tuple[RecallHit, ...]:
+    def to_internal_hits(self, candidates: Iterable[HybridRecallCandidate]) -> tuple[RecallHit, ...]:
         hits = []
         for index, candidate in enumerate(candidates, start=1):
             metadata = dict(self._candidate_mapping(candidate, "metadata", {}))
@@ -458,7 +478,7 @@ class DomainRagAdapter:
 
     @staticmethod
     def to_internal_filters(raw_filters: Mapping[str, Any]) -> RetrievalFilters:
-        def coerce(value: Any) -> Tuple[str, ...]:
+        def coerce(value: Any) -> tuple[str, ...]:
             if not value:
                 return ()
             if isinstance(value, str):
@@ -486,7 +506,7 @@ class DomainRagAdapter:
         )
 
     @staticmethod
-    def retrieval_strategy(strategy: Optional[str]) -> str:
+    def retrieval_strategy(strategy: str | None) -> str:
         if isinstance(strategy, str) and strategy:
             return strategy if strategy.endswith("->evidence") else strategy + "->evidence"
         return "dense+sparse+metadata->rrf->rerank->evidence"
@@ -530,21 +550,21 @@ class DomainRagAdapter:
         ]
 
     @staticmethod
-    def _intent_value(intent: Optional[IntentType]) -> Optional[str]:
+    def _intent_value(intent: IntentType | None) -> str | None:
         return intent.value if intent is not None else None
 
     @staticmethod
-    def _style_value(style: Optional[OutputStyle]) -> Optional[str]:
+    def _style_value(style: OutputStyle | None) -> str | None:
         return style.value if style is not None else None
 
     @staticmethod
-    def _optional_str(value: Any) -> Optional[str]:
+    def _optional_str(value: Any) -> str | None:
         if value is None or value == "":
             return None
         return str(value)
 
     @staticmethod
-    def _coerce_query_list(value: Any) -> Tuple[str, ...]:
+    def _coerce_query_list(value: Any) -> tuple[str, ...]:
         if not value:
             return ()
         if isinstance(value, str):

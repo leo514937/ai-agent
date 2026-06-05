@@ -6,12 +6,12 @@ import contextvars
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from .settings import ObservabilitySettings
 
-_LOG_CONTEXT = contextvars.ContextVar("learning_agent_log_context", default={})
+_LOG_CONTEXT = contextvars.ContextVar("learning_agent_log_context", default=None)
 _STANDARD_LOG_RECORD_FIELDS = set(logging.LogRecord("", 0, "", 0, "", (), None).__dict__.keys())
 
 
@@ -19,12 +19,12 @@ _STANDARD_LOG_RECORD_FIELDS = set(logging.LogRecord("", 0, "", 0, "", (), None).
 class ServiceLogContext:
     """Trace identifiers that should follow a single request across adapters."""
 
-    trace_id: Optional[str] = None
-    session_id: Optional[str] = None
-    turn_id: Optional[str] = None
-    user_id: Optional[str] = None
+    trace_id: str | None = None
+    session_id: str | None = None
+    turn_id: str | None = None
+    user_id: str | None = None
 
-    def as_dict(self) -> Dict[str, str]:
+    def as_dict(self) -> dict[str, str]:
         return {key: value for key, value in self.__dict__.items() if value}
 
 
@@ -37,7 +37,7 @@ class StructuredJsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
         payload = {
-            "ts": datetime.now(timezone.utc).isoformat(),
+            "ts": datetime.now(UTC).isoformat(),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
@@ -74,10 +74,10 @@ class PlainTextFormatter(logging.Formatter):
         return base
 
 
-def bind_log_context(**values: Optional[str]) -> None:
+def bind_log_context(**values: str | None) -> None:
     """Merge per-request identifiers into the active log context."""
 
-    current = dict(_LOG_CONTEXT.get())
+    current = dict(_LOG_CONTEXT.get() or {})
     for key, value in values.items():
         if value:
             current[key] = value
@@ -87,13 +87,13 @@ def bind_log_context(**values: Optional[str]) -> None:
 def clear_log_context() -> None:
     """Clear the active request-scoped log context."""
 
-    _LOG_CONTEXT.set({})
+    _LOG_CONTEXT.set(None)
 
 
-def get_log_context() -> Dict[str, Any]:
+def get_log_context() -> dict[str, Any]:
     """Return the current logging context snapshot."""
 
-    return dict(_LOG_CONTEXT.get())
+    return dict(_LOG_CONTEXT.get() or {})
 
 
 def configure_logging(settings: ObservabilitySettings) -> None:

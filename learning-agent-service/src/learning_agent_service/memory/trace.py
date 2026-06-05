@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Iterable, List, Optional
+from typing import Any
 from uuid import uuid4
 
 from learning_agent_service.domain.memory import MemoryTrace
@@ -13,7 +14,7 @@ class MemoryTraceRecorder:
 
     session_id: str
     turn_id: str
-    trace_id: Optional[str] = None
+    trace_id: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
     trace: MemoryTrace = field(init=False)
 
@@ -60,7 +61,7 @@ class MemoryTraceRecorder:
     def snapshot(self) -> MemoryTrace:
         return self.trace
 
-    def _extend_unique(self, target: List[str], values: Iterable[str]) -> None:
+    def _extend_unique(self, target: list[str], values: Iterable[str]) -> None:
         for value in values:
             if value and value not in target:
                 target.append(value)

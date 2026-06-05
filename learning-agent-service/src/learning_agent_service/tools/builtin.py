@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, time
-from typing import Any, Callable, Dict, Mapping, Optional, Sequence
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -16,26 +17,24 @@ from ..local_life.schemas import (
     ShopTypeRecord,
     VoucherRecord,
 )
-from .transaction_store import InMemoryTransactionStore
 from .models import RegisteredTool, SideEffectLevel, ToolSpec
 from .registry import ToolRegistry
-
-
+from .transaction_store import InMemoryTransactionStore
 
 
 class SearchRestaurantsToolInput(BaseModel):
     query: str = Field(default="")
-    city: Optional[str] = None
-    lat: Optional[float] = None
-    lng: Optional[float] = None
+    city: str | None = None
+    lat: float | None = None
+    lng: float | None = None
     radius_km: float = Field(default=3.0)
-    category: Optional[str] = None
-    shop_query: Optional[str] = None
+    category: str | None = None
+    shop_query: str | None = None
     shop_ids: list[int] = Field(default_factory=list)
-    price_min: Optional[float] = None
-    price_max: Optional[float] = None
-    target_price: Optional[float] = None
-    scene: Optional[str] = None
+    price_min: float | None = None
+    price_max: float | None = None
+    target_price: float | None = None
+    scene: str | None = None
     scene_tags: list[str] = Field(default_factory=list)
     companions: list[str] = Field(default_factory=list)
     preferences: list[str] = Field(default_factory=list)
@@ -46,15 +45,15 @@ class SearchRestaurantsToolInput(BaseModel):
     need_family_friendly: bool = False
     need_elder_friendly: bool = False
     limit: int = Field(default=5)
-    page: Optional[str] = None
+    page: str | None = None
 
 
 class ShopDetailToolInput(BaseModel):
-    shop_id: Optional[int] = None
-    shop_name: Optional[str] = None
+    shop_id: int | None = None
+    shop_name: str | None = None
     query: str = Field(default="")
-    lat: Optional[float] = None
-    lng: Optional[float] = None
+    lat: float | None = None
+    lng: float | None = None
     current: int = Field(default=1)
 
 
@@ -63,80 +62,80 @@ class ShopTypeListToolInput(BaseModel):
 
 
 class CouponListToolInput(BaseModel):
-    shop_id: Optional[int] = None
-    shop_name: Optional[str] = None
+    shop_id: int | None = None
+    shop_name: str | None = None
     limit: int = Field(default=10)
 
 
 class BlogListToolInput(BaseModel):
-    shop_id: Optional[int] = None
-    user_id: Optional[int] = None
-    shop_name: Optional[str] = None
+    shop_id: int | None = None
+    user_id: int | None = None
+    shop_name: str | None = None
     current: int = Field(default=1)
     limit: int = Field(default=5)
 
 
 class DistanceEtaToolInput(BaseModel):
-    shop_id: Optional[int] = None
-    shop_name: Optional[str] = None
-    lat: Optional[float] = None
-    lng: Optional[float] = None
-    shop_lat: Optional[float] = None
-    shop_lng: Optional[float] = None
+    shop_id: int | None = None
+    shop_name: str | None = None
+    lat: float | None = None
+    lng: float | None = None
+    shop_lat: float | None = None
+    shop_lng: float | None = None
     mode: str = Field(default="drive")
-    speed_kmh: Optional[float] = None
+    speed_kmh: float | None = None
 
 
 class OpenStatusToolInput(BaseModel):
-    shop_id: Optional[int] = None
-    shop_name: Optional[str] = None
-    open_hours: Optional[str] = None
+    shop_id: int | None = None
+    shop_name: str | None = None
+    open_hours: str | None = None
 
 
 class BookingToolInput(BaseModel):
-    shop_id: Optional[int] = None
-    shop_name: Optional[str] = None
-    booking_time: Optional[str] = None
-    party_size: Optional[int] = None
-    contact_name: Optional[str] = None
-    contact_phone: Optional[str] = None
-    note: Optional[str] = None
-    idempotency_key: Optional[str] = None
+    shop_id: int | None = None
+    shop_name: str | None = None
+    booking_time: str | None = None
+    party_size: int | None = None
+    contact_name: str | None = None
+    contact_phone: str | None = None
+    note: str | None = None
+    idempotency_key: str | None = None
     current: int = Field(default=1)
 
 
 class OrderToolInput(BaseModel):
-    shop_id: Optional[int] = None
-    shop_name: Optional[str] = None
-    amount: Optional[float] = None
-    note: Optional[str] = None
-    contact_name: Optional[str] = None
-    contact_phone: Optional[str] = None
-    idempotency_key: Optional[str] = None
+    shop_id: int | None = None
+    shop_name: str | None = None
+    amount: float | None = None
+    note: str | None = None
+    contact_name: str | None = None
+    contact_phone: str | None = None
+    idempotency_key: str | None = None
     current: int = Field(default=1)
 
 
 class CancelOrderToolInput(BaseModel):
-    order_id: Optional[str] = None
-    reason: Optional[str] = None
-    idempotency_key: Optional[str] = None
+    order_id: str | None = None
+    reason: str | None = None
+    idempotency_key: str | None = None
 
 
 class RefundOrderToolInput(BaseModel):
-    order_id: Optional[str] = None
-    reason: Optional[str] = None
-    idempotency_key: Optional[str] = None
+    order_id: str | None = None
+    reason: str | None = None
+    idempotency_key: str | None = None
 
 
 class OrderStatusToolInput(BaseModel):
-    order_id: Optional[str] = None
+    order_id: str | None = None
 
 
 class GenericToolOutput(BaseModel):
-    data: Dict[str, Any] = Field(default_factory=dict)
+    data: dict[str, Any] = Field(default_factory=dict)
 
 
-def _tool_output(data: Dict[str, Any]) -> Dict[str, Any]:
+def _tool_output(data: dict[str, Any]) -> dict[str, Any]:
     return {"data": data}
 
 
@@ -150,7 +149,7 @@ def _dump_model(value: Any) -> Any:
     return value
 
 
-def _transaction_payload(record: Any, transaction_type: str) -> Dict[str, Any]:
+def _transaction_payload(record: Any, transaction_type: str) -> dict[str, Any]:
     if hasattr(record, "to_payload"):
         payload = record.to_payload()
     elif isinstance(record, Mapping):
@@ -174,7 +173,7 @@ def _transaction_tool_output(
     record: Any,
     source_mode: str,
     degraded_reason: str | None = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     payload = _transaction_payload(record, transaction_type)
     source = "java" if source_mode == "java_business" else "transaction_store"
     result = {
@@ -267,7 +266,7 @@ def _make_topic_text(payload: Any) -> str:
     return "general-topic"
 
 
-def _parse_open_window(value: Optional[str]) -> tuple[Optional[time], Optional[time]]:
+def _parse_open_window(value: str | None) -> tuple[time | None, time | None]:
     if not isinstance(value, str) or "-" not in value:
         return None, None
     start_text, end_text = value.split("-", 1)
@@ -284,19 +283,19 @@ def _parse_open_window(value: Optional[str]) -> tuple[Optional[time], Optional[t
 
 
 
-def _shop_payload(shop: ShopRecord) -> Dict[str, Any]:
+def _shop_payload(shop: ShopRecord) -> dict[str, Any]:
     return _dump_model(shop)
 
 
-def _voucher_payload(voucher: VoucherRecord) -> Dict[str, Any]:
+def _voucher_payload(voucher: VoucherRecord) -> dict[str, Any]:
     return _dump_model(voucher)
 
 
-def _blog_payload(blog: BlogRecord) -> Dict[str, Any]:
+def _blog_payload(blog: BlogRecord) -> dict[str, Any]:
     return _dump_model(blog)
 
 
-def _shop_type_payload(shop_type: ShopTypeRecord) -> Dict[str, Any]:
+def _shop_type_payload(shop_type: ShopTypeRecord) -> dict[str, Any]:
     return _dump_model(shop_type)
 
 
@@ -304,8 +303,8 @@ def _resolve_catalog_shop(
     *,
     client: Any,
     catalog: LocalLifeCatalog,
-    shop_id: Optional[int] = None,
-    shop_name: Optional[str] = None,
+    shop_id: int | None = None,
+    shop_name: str | None = None,
     query: str = "",
     current: int = 1,
 ) -> ShopRecord | None:
@@ -364,7 +363,7 @@ def build_builtin_tool_registry(
     transaction_store = transaction_store or InMemoryTransactionStore()
 
 
-    def _search_restaurants(payload: SearchRestaurantsToolInput) -> Dict[str, Any]:
+    def _search_restaurants(payload: SearchRestaurantsToolInput) -> dict[str, Any]:
         slots = _build_local_life_slots(payload)
         query = payload.query or payload.shop_query or payload.category or _make_topic_text(payload)
         if local_life_client is not None and hasattr(local_life_client, "recommend_shops"):
@@ -403,7 +402,7 @@ def build_builtin_tool_registry(
         }
         return _tool_output(data)
 
-    def _search_shop_types(payload: ShopTypeListToolInput) -> Dict[str, Any]:
+    def _search_shop_types(payload: ShopTypeListToolInput) -> dict[str, Any]:
         if local_life_client is not None and hasattr(local_life_client, "list_shop_types"):
             try:
                 shop_types = list(local_life_client.list_shop_types())
@@ -422,7 +421,7 @@ def build_builtin_tool_registry(
             }
         )
 
-    def _search_shop_detail(payload: ShopDetailToolInput) -> Dict[str, Any]:
+    def _search_shop_detail(payload: ShopDetailToolInput) -> dict[str, Any]:
         shop = _resolve_catalog_shop(
             client=local_life_client,
             catalog=catalog,
@@ -454,7 +453,7 @@ def build_builtin_tool_registry(
             }
         )
 
-    def _search_coupons(payload: CouponListToolInput) -> Dict[str, Any]:
+    def _search_coupons(payload: CouponListToolInput) -> dict[str, Any]:
         shop = _resolve_catalog_shop(
             client=local_life_client,
             catalog=catalog,
@@ -484,7 +483,7 @@ def build_builtin_tool_registry(
             }
         )
 
-    def _search_blogs(payload: BlogListToolInput) -> Dict[str, Any]:
+    def _search_blogs(payload: BlogListToolInput) -> dict[str, Any]:
         blogs: list[BlogRecord]
         scope = "hot"
         if payload.shop_id is not None or payload.shop_name:
@@ -543,10 +542,10 @@ def build_builtin_tool_registry(
         catalog: LocalLifeCatalog,
         *,
         shop: ShopRecord | None = None,
-        shop_id: Optional[int] = None,
-        shop_name: Optional[str] = None,
-        open_hours: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        shop_id: int | None = None,
+        shop_name: str | None = None,
+        open_hours: str | None = None,
+    ) -> dict[str, Any]:
         resolved_shop = shop or _resolve_catalog_shop(
             client=client,
             catalog=catalog,
@@ -579,15 +578,15 @@ def build_builtin_tool_registry(
         catalog: LocalLifeCatalog,
         *,
         shop: ShopRecord | None = None,
-        shop_id: Optional[int] = None,
-        shop_name: Optional[str] = None,
-        lat: Optional[float] = None,
-        lng: Optional[float] = None,
-        shop_lat: Optional[float] = None,
-        shop_lng: Optional[float] = None,
+        shop_id: int | None = None,
+        shop_name: str | None = None,
+        lat: float | None = None,
+        lng: float | None = None,
+        shop_lat: float | None = None,
+        shop_lng: float | None = None,
         mode: str = "drive",
-        speed_kmh: Optional[float] = None,
-    ) -> Dict[str, Any]:
+        speed_kmh: float | None = None,
+    ) -> dict[str, Any]:
         resolved_shop = shop or _resolve_catalog_shop(
             client=client,
             catalog=catalog,
@@ -635,7 +634,7 @@ def build_builtin_tool_registry(
             "source": _detect_source(client),
         }
 
-    def _open_status_handler(payload: OpenStatusToolInput) -> Dict[str, Any]:
+    def _open_status_handler(payload: OpenStatusToolInput) -> dict[str, Any]:
         shop = _resolve_catalog_shop(
             client=local_life_client,
             catalog=catalog,
@@ -656,7 +655,7 @@ def build_builtin_tool_registry(
             }
         )
 
-    def _distance_eta_handler(payload: DistanceEtaToolInput) -> Dict[str, Any]:
+    def _distance_eta_handler(payload: DistanceEtaToolInput) -> dict[str, Any]:
         shop = _resolve_catalog_shop(
             client=local_life_client,
             catalog=catalog,
@@ -679,7 +678,7 @@ def build_builtin_tool_registry(
             )
         )
 
-    def _create_booking(payload: BookingToolInput) -> Dict[str, Any]:
+    def _create_booking(payload: BookingToolInput) -> dict[str, Any]:
         record, source_mode, degraded_reason = _run_transaction_action(
             client=local_life_client,
             transaction_type="booking",
@@ -717,7 +716,7 @@ def build_builtin_tool_registry(
             degraded_reason=degraded_reason,
         )
 
-    def _create_order(payload: OrderToolInput) -> Dict[str, Any]:
+    def _create_order(payload: OrderToolInput) -> dict[str, Any]:
         record, source_mode, degraded_reason = _run_transaction_action(
             client=local_life_client,
             transaction_type="order",
@@ -753,7 +752,7 @@ def build_builtin_tool_registry(
             degraded_reason=degraded_reason,
         )
 
-    def _cancel_order(payload: CancelOrderToolInput) -> Dict[str, Any]:
+    def _cancel_order(payload: CancelOrderToolInput) -> dict[str, Any]:
         record, source_mode, degraded_reason = _run_transaction_action(
             client=local_life_client,
             transaction_type="order",
@@ -775,7 +774,7 @@ def build_builtin_tool_registry(
             degraded_reason=degraded_reason,
         )
 
-    def _refund_order(payload: RefundOrderToolInput) -> Dict[str, Any]:
+    def _refund_order(payload: RefundOrderToolInput) -> dict[str, Any]:
         record, source_mode, degraded_reason = _run_transaction_action(
             client=local_life_client,
             transaction_type="order",
@@ -797,7 +796,7 @@ def build_builtin_tool_registry(
             degraded_reason=degraded_reason,
         )
 
-    def _get_order_status(payload: OrderStatusToolInput) -> Dict[str, Any]:
+    def _get_order_status(payload: OrderStatusToolInput) -> dict[str, Any]:
         record, source_mode, degraded_reason = _run_transaction_action(
             client=local_life_client,
             transaction_type="order",

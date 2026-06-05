@@ -1,0 +1,7 @@
+from .helpers import *
+from .stages_front_a import WorkflowNodeAdapterStagesFrontAMixin
+from .stages_front_b import WorkflowNodeAdapterStagesFrontBMixin
+
+
+class WorkflowNodeAdapterStagesFrontMixin(WorkflowNodeAdapterStagesFrontAMixin, WorkflowNodeAdapterStagesFrontBMixin):
+    pass

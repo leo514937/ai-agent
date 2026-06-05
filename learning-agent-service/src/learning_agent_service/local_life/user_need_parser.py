@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import re
-from typing import Any, Dict, List, Literal, Mapping, Optional, Sequence
+from collections.abc import Mapping
+from typing import Any
 
 from .schemas import ContextRef, LocalLifeSlots, RequiredFacet, UserNeed
 
@@ -47,7 +47,7 @@ class UserNeedParser:
 
         # 1. Resolve Pronouns / Context References
         # 规则：显式实体（slots.shop_query 含非代词店名）的优先级 > 代词历史解析
-        context_refs: List[ContextRef] = []
+        context_refs: list[ContextRef] = []
         has_pronoun = any(p in normalized_query for p in PRONOUNS)
         has_explicit_entity = _has_explicit_entity_in_query(normalized_query, slots)
 
@@ -129,8 +129,8 @@ class UserNeedParser:
                                     break
 
         # 2. Extract Required and Optional Facets
-        required_facets: List[RequiredFacet] = []
-        optional_facets: List[RequiredFacet] = []
+        required_facets: list[RequiredFacet] = []
+        optional_facets: list[RequiredFacet] = []
 
         # Location Facet
         has_location_ctx = (
@@ -266,11 +266,11 @@ class UserNeedParser:
         )
 
         # 3. Missing slots determination
-        missing_slots: List[str] = []
+        missing_slots: list[str] = []
         if (has_location_keyword or intent == "restaurant_recommendation") and not has_location_ctx:
             missing_slots.append("location")
 
-        constraints: Dict[str, Any] = {}
+        constraints: dict[str, Any] = {}
         if slots.scene:
             constraints["scene"] = slots.scene
         if slots.preferences:

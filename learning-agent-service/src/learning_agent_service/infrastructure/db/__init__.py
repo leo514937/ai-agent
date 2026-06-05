@@ -1,6 +1,10 @@
 ﻿"""Database and client factories owned by Workstream A."""
 
-from .errors import InfrastructureConfigurationError, InfrastructureDependencyError, InfrastructureError
+from .errors import (
+    InfrastructureConfigurationError,
+    InfrastructureDependencyError,
+    InfrastructureError,
+)
 from .factories import InfrastructureClients, build_infrastructure_clients
 from .models import Base
 from .openai_client import OpenAIRuntime, build_openai_runtime

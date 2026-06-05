@@ -1,9 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
 import hashlib
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
+from typing import Any
+
+# TODO: 以下类型与 domain/contracts.py 重复，应在第三阶段收敛到 domain/contracts.py：
+#   EvidenceItem, EvidencePack, Citation, RetrievalPlan, HybridRecallResult,
+#   ReferenceResolutionRequest, KnowledgeSearchRequest, KnowledgeSearchResult
+# domain/contracts.py 为权威来源，rag/models.py 仅保留 RAG 特有类型（KnowledgeChunk 等）
 
 
 class ChunkType(str, Enum):
@@ -47,26 +53,26 @@ class KnowledgeChunk:
     document_id: str
     text: str
     title: str = ""
-    summary: Optional[str] = None
-    category: Optional[str] = None
-    subcategory: Optional[str] = None
-    difficulty: Optional[str] = None
-    source_type: Optional[str] = None
-    chunk_type: Optional[str] = None
-    version: Optional[str] = None
-    chunk_level: Optional[str] = None
-    parent_id: Optional[str] = None
-    parent_title: Optional[str] = None
-    parent_chunk_id: Optional[str] = None
-    child_chunk_ids: Tuple[str, ...] = ()
-    child_roles: Tuple[str, ...] = ()
-    chunk_role: Optional[str] = None
-    entity_type: Optional[str] = None
-    entity_id: Optional[str] = None
+    summary: str | None = None
+    category: str | None = None
+    subcategory: str | None = None
+    difficulty: str | None = None
+    source_type: str | None = None
+    chunk_type: str | None = None
+    version: str | None = None
+    chunk_level: str | None = None
+    parent_id: str | None = None
+    parent_title: str | None = None
+    parent_chunk_id: str | None = None
+    child_chunk_ids: tuple[str, ...] = ()
+    child_roles: tuple[str, ...] = ()
+    chunk_role: str | None = None
+    entity_type: str | None = None
+    entity_id: str | None = None
     is_latest: bool = True
     is_active: bool = True
-    hash: Optional[str] = None
-    tags: Tuple[str, ...] = ()
+    hash: str | None = None
+    tags: tuple[str, ...] = ()
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def searchable_text(self) -> str:
@@ -117,7 +123,7 @@ class KnowledgeChunk:
     def doc_id(self) -> str:
         return self.document_id
 
-    def to_payload(self) -> Dict[str, Any]:
+    def to_payload(self) -> dict[str, Any]:
         payload = {
             "doc_id": self.document_id,
             "document_id": self.document_id,
@@ -153,9 +159,9 @@ class KnowledgeChunk:
         cls,
         payload: Mapping[str, Any],
         *,
-        fallback_chunk_id: Optional[str] = None,
-        fallback_document_id: Optional[str] = None,
-    ) -> Optional["KnowledgeChunk"]:
+        fallback_chunk_id: str | None = None,
+        fallback_document_id: str | None = None,
+    ) -> KnowledgeChunk | None:
         chunk_id = payload.get("chunk_id") or fallback_chunk_id
         document_id = payload.get("document_id") or payload.get("doc_id") or payload.get("source_id") or fallback_document_id
         text = payload.get("text") or payload.get("content")
@@ -165,7 +171,7 @@ class KnowledgeChunk:
         summary = payload.get("summary") or payload.get("excerpt")
         hash_value = payload.get("hash")
         if not hash_value:
-            hash_value = hashlib.sha1(f"{document_id}:{chunk_id}:{text}".encode("utf-8")).hexdigest()
+            hash_value = hashlib.sha1(f"{document_id}:{chunk_id}:{text}".encode()).hexdigest()
 
         ignored = {
             "doc_id",
@@ -233,13 +239,13 @@ class KnowledgeChunk:
         )
 
     @staticmethod
-    def _normalize_optional(value: Any) -> Optional[str]:
+    def _normalize_optional(value: Any) -> str | None:
         if value is None or value == "":
             return None
         return str(value)
 
     @staticmethod
-    def _coerce_tags(value: Any) -> Tuple[str, ...]:
+    def _coerce_tags(value: Any) -> tuple[str, ...]:
         if value is None or value == "":
             return ()
         if isinstance(value, str):
@@ -251,16 +257,16 @@ class KnowledgeChunk:
 
 @dataclass(frozen=True)
 class RetrievalFilters:
-    category: Tuple[str, ...] = ()
-    subcategory: Tuple[str, ...] = ()
-    difficulty: Tuple[str, ...] = ()
-    source_type: Tuple[str, ...] = ()
-    chunk_type: Tuple[str, ...] = ()
-    version: Tuple[str, ...] = ()
-    tags: Tuple[str, ...] = ()
+    category: tuple[str, ...] = ()
+    subcategory: tuple[str, ...] = ()
+    difficulty: tuple[str, ...] = ()
+    source_type: tuple[str, ...] = ()
+    chunk_type: tuple[str, ...] = ()
+    version: tuple[str, ...] = ()
+    tags: tuple[str, ...] = ()
     extra: Mapping[str, Any] = field(default_factory=dict)
 
-    def as_dict(self) -> Dict[str, Tuple[str, ...]]:
+    def as_dict(self) -> dict[str, tuple[str, ...]]:
         return {
             "category": self.category,
             "subcategory": self.subcategory,
@@ -274,7 +280,7 @@ class RetrievalFilters:
     def has_constraints(self) -> bool:
         return any(self.as_dict().values()) or bool(self.extra)
 
-    def soft_fields(self) -> Dict[str, Tuple[str, ...]]:
+    def soft_fields(self) -> dict[str, tuple[str, ...]]:
         return {
             "category": self.category,
             "subcategory": self.subcategory,
@@ -284,7 +290,7 @@ class RetrievalFilters:
             "tags": self.tags,
         }
 
-    def hard_fields(self) -> Dict[str, Tuple[str, ...]]:
+    def hard_fields(self) -> dict[str, tuple[str, ...]]:
         return {
             "version": self.version,
         }
@@ -295,12 +301,12 @@ class RetrievalPlan:
     semantic_query: str
     keyword_query: str
     retrieval_filters: RetrievalFilters = field(default_factory=RetrievalFilters)
-    preferred_chunk_types: Tuple[str, ...] = ()
-    step_back_query: Optional[str] = None
-    rewritten_queries: Tuple[str, ...] = ()
-    supplemental_queries: Tuple[str, ...] = ()
-    hyde_passage: Optional[str] = None
-    hyde_trigger_reason: Optional[str] = None
+    preferred_chunk_types: tuple[str, ...] = ()
+    step_back_query: str | None = None
+    rewritten_queries: tuple[str, ...] = ()
+    supplemental_queries: tuple[str, ...] = ()
+    hyde_passage: str | None = None
+    hyde_trigger_reason: str | None = None
     hyde_applied: bool = False
     metadata_filter_mode: str = "soft"
     dense_top_k: int = 10
@@ -319,16 +325,16 @@ class RecallHit:
     rank: int
     route_scores: Mapping[str, float] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
-    matched_routes: Tuple[str, ...] = ()
+    matched_routes: tuple[str, ...] = ()
     fused_score: float = 0.0
     rrf_score: float = 0.0
-    rerank_score: Optional[float] = None
-    rerank_rank: Optional[int] = None
-    rerank_model: Optional[str] = None
-    source_chunk_id: Optional[str] = None
-    citation_chunk_id: Optional[str] = None
+    rerank_score: float | None = None
+    rerank_rank: int | None = None
+    rerank_model: str | None = None
+    source_chunk_id: str | None = None
+    citation_chunk_id: str | None = None
     score_breakdown: Mapping[str, float] = field(default_factory=dict)
-    rejected_reason: Optional[str] = None
+    rejected_reason: str | None = None
     retrieval_kind: str = ""
     collection_name: str = ""
     source_domain: str = ""
@@ -342,28 +348,28 @@ class RetrievalTraceItem:
     score: float = 0.0
     route: str = ""
     rank: int = 0
-    parent_id: Optional[str] = None
-    summary: Optional[str] = None
-    chunk_type: Optional[str] = None
-    source_type: Optional[str] = None
-    version: Optional[str] = None
-    matched_routes: Tuple[str, ...] = ()
+    parent_id: str | None = None
+    summary: str | None = None
+    chunk_type: str | None = None
+    source_type: str | None = None
+    version: str | None = None
+    matched_routes: tuple[str, ...] = ()
     fused_score: float = 0.0
     rrf_score: float = 0.0
-    rerank_score: Optional[float] = None
-    rerank_rank: Optional[int] = None
-    rerank_model: Optional[str] = None
-    source_chunk_id: Optional[str] = None
-    citation_chunk_id: Optional[str] = None
+    rerank_score: float | None = None
+    rerank_rank: int | None = None
+    rerank_model: str | None = None
+    source_chunk_id: str | None = None
+    citation_chunk_id: str | None = None
     score_breakdown: Mapping[str, float] = field(default_factory=dict)
-    rejected_reason: Optional[str] = None
+    rejected_reason: str | None = None
     retrieval_kind: str = ""
     collection_name: str = ""
     source_domain: str = ""
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_chunk(cls, chunk: KnowledgeChunk, **kwargs: Any) -> "RetrievalTraceItem":
+    def from_chunk(cls, chunk: KnowledgeChunk, **kwargs: Any) -> RetrievalTraceItem:
         return cls(
             chunk_id=chunk.chunk_id,
             document_id=chunk.document_id,
@@ -378,7 +384,7 @@ class RetrievalTraceItem:
         )
 
     @classmethod
-    def from_hit(cls, hit: RecallHit, **kwargs: Any) -> "RetrievalTraceItem":
+    def from_hit(cls, hit: RecallHit, **kwargs: Any) -> RetrievalTraceItem:
         rejected_reason = kwargs.pop("rejected_reason", hit.rejected_reason)
         return cls.from_chunk(
             hit.chunk,
@@ -401,7 +407,7 @@ class RetrievalTraceItem:
             **kwargs,
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         return {key: value for key, value in data.items() if value is not None}
 
@@ -413,20 +419,20 @@ class RetrievalTrace:
     keyword_query: str = ""
     retrieval_filters: RetrievalFilters = field(default_factory=RetrievalFilters)
     final_retrieval_filters: Mapping[str, Any] = field(default_factory=dict)
-    preferred_chunk_types: Tuple[str, ...] = ()
-    dense_hits: Tuple[RetrievalTraceItem, ...] = ()
-    sparse_hits: Tuple[RetrievalTraceItem, ...] = ()
-    metadata_hits: Tuple[RetrievalTraceItem, ...] = ()
-    fused_hits: Tuple[RetrievalTraceItem, ...] = ()
-    reranked_hits: Tuple[RetrievalTraceItem, ...] = ()
-    evidence_kept: Tuple[RetrievalTraceItem, ...] = ()
-    evidence_rejected: Tuple[RetrievalTraceItem, ...] = ()
+    preferred_chunk_types: tuple[str, ...] = ()
+    dense_hits: tuple[RetrievalTraceItem, ...] = ()
+    sparse_hits: tuple[RetrievalTraceItem, ...] = ()
+    metadata_hits: tuple[RetrievalTraceItem, ...] = ()
+    fused_hits: tuple[RetrievalTraceItem, ...] = ()
+    reranked_hits: tuple[RetrievalTraceItem, ...] = ()
+    evidence_kept: tuple[RetrievalTraceItem, ...] = ()
+    evidence_rejected: tuple[RetrievalTraceItem, ...] = ()
     degraded: bool = False
     empty: bool = False
     metrics: Mapping[str, Any] = field(default_factory=dict)
     extra: Mapping[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "raw_query": self.raw_query,
             "semantic_query": self.semantic_query,
@@ -453,47 +459,47 @@ RetrievalDebugInfo = RetrievalTrace
 
 @dataclass(frozen=True)
 class HybridRecallResult:
-    hits: Tuple[RecallHit, ...]
+    hits: tuple[RecallHit, ...]
     retrieval_strategy: str
     retrieval_kind: str = "hybrid"
     collection_name: str = ""
     source_domain: str = ""
-    dense_hits: Tuple[RecallHit, ...] = ()
-    sparse_hits: Tuple[RecallHit, ...] = ()
-    metadata_hits: Tuple[RecallHit, ...] = ()
-    fused_hits: Tuple[RecallHit, ...] = ()
-    reranked_hits: Tuple[RecallHit, ...] = ()
-    degraded_routes: Tuple[str, ...] = ()
+    dense_hits: tuple[RecallHit, ...] = ()
+    sparse_hits: tuple[RecallHit, ...] = ()
+    metadata_hits: tuple[RecallHit, ...] = ()
+    fused_hits: tuple[RecallHit, ...] = ()
+    reranked_hits: tuple[RecallHit, ...] = ()
+    degraded_routes: tuple[str, ...] = ()
     metrics: Mapping[str, Any] = field(default_factory=dict)
-    query_plan: Optional[RetrievalPlan] = None
-    debug_trace: Optional[RetrievalTrace] = None
+    query_plan: RetrievalPlan | None = None
+    debug_trace: RetrievalTrace | None = None
 
 
 @dataclass(frozen=True)
 class EvidenceItem:
     chunk: KnowledgeChunk
     score: float
-    routes: Tuple[str, ...]
-    reasons: Tuple[str, ...]
+    routes: tuple[str, ...]
+    reasons: tuple[str, ...]
     tier: str = "strong"
-    citation_chunk_id: Optional[str] = None
-    source_chunk_id: Optional[str] = None
-    parent_chunk_id: Optional[str] = None
+    citation_chunk_id: str | None = None
+    source_chunk_id: str | None = None
+    parent_chunk_id: str | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class EvidencePack:
-    items: Tuple[EvidenceItem, ...]
+    items: tuple[EvidenceItem, ...]
     status: str
     evidence_status: EvidenceStatus = EvidenceStatus.EMPTY
-    strong_items: Tuple[EvidenceItem, ...] = ()
-    weak_items: Tuple[EvidenceItem, ...] = ()
+    strong_items: tuple[EvidenceItem, ...] = ()
+    weak_items: tuple[EvidenceItem, ...] = ()
     filtered_out: int = 0
-    rationale: Tuple[str, ...] = ()
+    rationale: tuple[str, ...] = ()
     metrics: Mapping[str, Any] = field(default_factory=dict)
-    rejected_items: Tuple[RetrievalTraceItem, ...] = ()
-    debug_trace: Optional[RetrievalTrace] = None
+    rejected_items: tuple[RetrievalTraceItem, ...] = ()
+    debug_trace: RetrievalTrace | None = None
 
 
 @dataclass(frozen=True)
@@ -501,8 +507,8 @@ class Citation:
     chunk_id: str
     document_id: str
     title: str
-    source_type: Optional[str]
-    version: Optional[str]
+    source_type: str | None
+    version: str | None
     score: float
     excerpt: str
     metadata: Mapping[str, Any] = field(default_factory=dict)
@@ -513,8 +519,8 @@ class KnowledgeGovernanceDecision:
     action: GovernanceAction
     document_id: str
     reason: str
-    target_version: Optional[str] = None
-    affected_chunk_ids: Tuple[str, ...] = ()
+    target_version: str | None = None
+    affected_chunk_ids: tuple[str, ...] = ()
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -522,10 +528,10 @@ class KnowledgeGovernanceDecision:
 class ReferenceResolutionRequest:
     message: str
     lowered_message: str
-    current_topic: Optional[str] = None
-    last_retrieval_topic: Optional[str] = None
-    recent_entities: Tuple[str, ...] = ()
-    pending_clarification_values: Tuple[str, ...] = ()
+    current_topic: str | None = None
+    last_retrieval_topic: str | None = None
+    recent_entities: tuple[str, ...] = ()
+    pending_clarification_values: tuple[str, ...] = ()
     clarification_result: Mapping[str, Any] = field(default_factory=dict)
     follow_up_intent: bool = False
 
@@ -534,8 +540,8 @@ class ReferenceResolutionRequest:
 class ReferenceResolution:
     resolved: bool
     confidence: float
-    resolved_entity: Optional[str] = None
-    candidate_entities: Tuple[str, ...] = ()
+    resolved_entity: str | None = None
+    candidate_entities: tuple[str, ...] = ()
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -543,7 +549,7 @@ class ReferenceResolution:
 class KnowledgeSearchRequest:
     query: str
     limit: int = 5
-    category: Optional[str] = None
+    category: str | None = None
     query_context: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -551,7 +557,7 @@ class KnowledgeSearchRequest:
 class KnowledgeSearchMatch:
     chunk: KnowledgeChunk
     score: float
-    citation: Optional[Citation] = None
+    citation: Citation | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -563,18 +569,18 @@ class KnowledgeSearchResult:
     plan: RetrievalPlan
     recall: HybridRecallResult
     evidence: EvidencePack
-    citations: Tuple[Citation, ...]
-    matches: Tuple[KnowledgeSearchMatch, ...]
+    citations: tuple[Citation, ...]
+    matches: tuple[KnowledgeSearchMatch, ...]
     metrics: Mapping[str, Any] = field(default_factory=dict)
     extra: Mapping[str, Any] = field(default_factory=dict)
 
 
-def coerce_tuple(values: Optional[Iterable[str]]) -> Tuple[str, ...]:
+def coerce_tuple(values: Iterable[str] | None) -> tuple[str, ...]:
     if not values:
         return ()
     return tuple(value for value in values if value)
 
 
-def latest_version(chunks: Sequence[KnowledgeChunk]) -> Optional[str]:
+def latest_version(chunks: Sequence[KnowledgeChunk]) -> str | None:
     versions = sorted({chunk.version for chunk in chunks if chunk.version})
     return versions[-1] if versions else None

@@ -1,18 +1,11 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Callable, Mapping, Sequence
+from typing import Any
 
-
-def _as_mapping(value: Any) -> Mapping[str, Any]:
-    if isinstance(value, Mapping):
-        return value
-    if hasattr(value, "model_dump"):
-        dumped = value.model_dump(mode="json")
-        if isinstance(dumped, Mapping):
-            return dumped
-    return {}
+from learning_agent_service.domain.utils import as_mapping as _as_mapping
 
 
 def _nested_mapping(*sources: Mapping[str, Any], key: str) -> dict[str, Any]:
@@ -254,11 +247,11 @@ class ReplayHarness:
         baseline = self.run_case(case, baseline_executor)
         candidate = self.run_case(case, candidate_executor)
         differences: dict[str, tuple[Any, Any]] = {}
-        for field in comparison_fields:
-            baseline_value = self._comparison_value(baseline, field)
-            candidate_value = self._comparison_value(candidate, field)
+        for field_name in comparison_fields:
+            baseline_value = self._comparison_value(baseline, field_name)
+            candidate_value = self._comparison_value(candidate, field_name)
             if baseline_value != candidate_value:
-                differences[field] = (baseline_value, candidate_value)
+                differences[field_name] = (baseline_value, candidate_value)
         failures: list[str] = []
         if not differences:
             failures.append("no_trace_diff")
@@ -356,9 +349,9 @@ class EvaluationHarness:
             graph_runtime_counts[graph_runtime] += 1
             graph_fallback = str(trace.get("graph_fallback") or phase5_trace.get("graph_fallback") or "none").strip() or "none"
             graph_fallback_counts[graph_fallback] += 1
-            for field in ("initial_routing_decision", "evidence_quality", "final_response_mode"):
-                if not phase0_trace.get(field):
-                    missing_trace_field_counts[field] += 1
+            for field_name in ("initial_routing_decision", "evidence_quality", "final_response_mode"):
+                if not phase0_trace.get(field_name):
+                    missing_trace_field_counts[field_name] += 1
             if phase4_trace:
                 verifier_status = "passed" if phase4_trace.get("verifier_passed") else "failed"
                 verifier_status_counts[verifier_status] += 1
@@ -395,8 +388,8 @@ class EvaluationHarness:
         for result in results:
             case_status = "changed" if result.passed and result.differences else "unchanged"
             case_status_counts[case_status] += 1
-            for field in result.differences:
-                changed_field_counts[str(field)] += 1
+            for field_name in result.differences:
+                changed_field_counts[str(field_name)] += 1
 
         return ReplayComparisonReport(
             total_cases=total_cases,

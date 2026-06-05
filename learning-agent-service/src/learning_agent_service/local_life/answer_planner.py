@@ -1,8 +1,14 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from learning_agent_service.domain.utils import as_mapping as _as_mapping, clean_text as _clean_text
+
+from .answer_depth_policy import build_answer_structure_requirements, derive_answer_depth_policy
+from .answer_linter import prune_context_for_contract
 
 _DECISION_TYPES = {
     "recommend",
@@ -24,23 +30,6 @@ _WORTH_LEVELS = {"high", "medium", "low", "unknown"}
 
 class LocalLifeModel(BaseModel):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
-
-
-def _as_mapping(value: Any) -> dict[str, Any]:
-    if isinstance(value, Mapping):
-        return dict(value)
-    if hasattr(value, "model_dump"):
-        dumped = value.model_dump(mode="json")
-        if isinstance(dumped, Mapping):
-            return dict(dumped)
-    return {}
-
-
-def _clean_text(value: Any) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
 
 
 def _string_list(value: Any) -> list[str]:
@@ -110,11 +99,11 @@ class EvidenceItem(LocalLifeModel):
     evidence_id: str
     chunk_id: str
     source_type: str
-    shop_id: Optional[int] = None
+    shop_id: int | None = None
     claim: str
     confidence: float = 0.0
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-    chunk_type: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    chunk_type: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -152,7 +141,7 @@ class SceneFitSummary(LocalLifeModel):
 
 
 class CouponAdvice(LocalLifeModel):
-    has_coupon: Optional[bool] = None
+    has_coupon: bool | None = None
     worth_it: str = "unknown"
     reason: str = ""
     risk: str = ""
@@ -176,7 +165,7 @@ class CouponAdvice(LocalLifeModel):
 
 
 class CandidateEvidenceSummary(LocalLifeModel):
-    shop_id: Optional[int] = None
+    shop_id: int | None = None
     name: str
     rank: int = 0
     fit_score: float = 0.0
@@ -215,8 +204,8 @@ class CandidateEvidenceSummary(LocalLifeModel):
 class NextAction(LocalLifeModel):
     label: str
     action: str
-    shop_id: Optional[int] = None
-    query: Optional[str] = None
+    shop_id: int | None = None
+    query: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -232,18 +221,27 @@ class NextAction(LocalLifeModel):
 
 class EvidencePack(LocalLifeModel):
     raw_query: str = ""
-    slots: Dict[str, Any] = Field(default_factory=dict)
+    slots: dict[str, Any] = Field(default_factory=dict)
+    rag_mode: str = "single_shop_rag"
+    target_shop_id: int | None = None
     ranked_candidates: list[CandidateEvidenceSummary] = Field(default_factory=list)
     items: list[EvidenceItem] = Field(default_factory=list)
-    shop_evidence_map: Dict[str, list[str]] = Field(default_factory=dict)
-    source_summary: Dict[str, Any] = Field(default_factory=dict)
-    safety_result: Dict[str, Any] = Field(default_factory=dict)
+    shop_evidence_map: dict[str, list[str]] = Field(default_factory=dict)
+    grouped_by_shop: dict[str, list[EvidenceItem]] = Field(default_factory=dict)
+    dropped_cross_shop_evidence: list[EvidenceItem] = Field(default_factory=list)
+    source_summary: dict[str, Any] = Field(default_factory=dict)
+    safety_result: dict[str, Any] = Field(default_factory=dict)
     notes: list[str] = Field(default_factory=list)
+    empty_reason: str | None = None
     truncated: bool = False
 
     @property
     def candidate_summaries(self) -> list[CandidateEvidenceSummary]:
         return list(self.ranked_candidates)
+
+    @property
+    def evidence_items(self) -> list[EvidenceItem]:
+        return list(self.items)
 
     @model_validator(mode="before")
     @classmethod
@@ -252,6 +250,14 @@ class EvidencePack(LocalLifeModel):
             return data
         next_data = dict(data)
         next_data["slots"] = _as_mapping(next_data.get("slots"))
+        next_data["rag_mode"] = _clean_text(next_data.get("rag_mode")) or "single_shop_rag"
+        if next_data.get("target_shop_id") in ("", None):
+            next_data["target_shop_id"] = None
+        else:
+            try:
+                next_data["target_shop_id"] = int(next_data.get("target_shop_id"))
+            except Exception:
+                next_data["target_shop_id"] = None
         next_data["source_summary"] = _as_mapping(next_data.get("source_summary"))
         next_data["safety_result"] = _as_mapping(next_data.get("safety_result"))
         next_data["notes"] = _string_list(next_data.get("notes"))
@@ -261,6 +267,12 @@ class EvidencePack(LocalLifeModel):
             str(key): _string_list(value)
             for key, value in _as_mapping(next_data.get("shop_evidence_map")).items()
         }
+        next_data["grouped_by_shop"] = {
+            str(key): [item for item in value or []]
+            for key, value in _as_mapping(next_data.get("grouped_by_shop")).items()
+        }
+        next_data["dropped_cross_shop_evidence"] = [item for item in next_data.get("dropped_cross_shop_evidence") or []]
+        next_data["empty_reason"] = _clean_text(next_data.get("empty_reason"))
         return next_data
 
 
@@ -268,7 +280,7 @@ class LocalLifeAnswerPlan(LocalLifeModel):
     answer_text: str = ""
     decision_type: str = "fallback"
     recommendation_summary: str = ""
-    top_choice: Optional[CandidateEvidenceSummary] = None
+    top_choice: CandidateEvidenceSummary | None = None
     candidate_reasons: list[CandidateEvidenceSummary] = Field(default_factory=list)
     scene_fit_summary: SceneFitSummary = Field(default_factory=SceneFitSummary)
     coupon_advice: CouponAdvice = Field(default_factory=CouponAdvice)
@@ -278,9 +290,9 @@ class LocalLifeAnswerPlan(LocalLifeModel):
     suggested_replies: list[str] = Field(default_factory=list)
     evidence_used: list[str] = Field(default_factory=list)
     confidence: str = "medium"
-    source_mode: Optional[str] = None
-    degraded_reason: Optional[str] = None
-    knowledge_freshness: Dict[str, Any] = Field(default_factory=dict)
+    source_mode: str | None = None
+    degraded_reason: str | None = None
+    knowledge_freshness: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod
@@ -327,8 +339,8 @@ class GroundedVerificationResult(LocalLifeModel):
     issues: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     suggested_response_mode: str = "grounded"
-    degraded_reason: Optional[str] = None
-    normalized_plan: Dict[str, Any] = Field(default_factory=dict)
+    degraded_reason: str | None = None
+    normalized_plan: dict[str, Any] = Field(default_factory=dict)
     evidence_pack_item_count: int = 0
     confidence: str = "medium"
 
@@ -357,6 +369,7 @@ def build_answer_planner_request(
     slots: Mapping[str, Any] | Any,
     ranked_candidates: Sequence[Mapping[str, Any] | Any],
     evidence_pack: EvidencePack | Mapping[str, Any] | None,
+    evidence_claims: Sequence[Mapping[str, Any] | Any] | None = None,
     safety_result: Mapping[str, Any] | Any,
     source_mode: str | None = None,
     degraded_reason: str | None = None,
@@ -367,15 +380,46 @@ def build_answer_planner_request(
     approval_required: bool = False,
     answer_contract: Any | None = None,
 ) -> dict[str, Any]:
+    pruned_context = prune_context_for_contract(
+        answer_contract,
+        ranked_candidates=ranked_candidates,
+        evidence_pack=evidence_pack,
+        evidence_claims=None,
+    )
+    pruned_claims: list[dict[str, Any]] = []
+    if evidence_claims:
+        pruned_claims = prune_context_for_contract(
+            answer_contract,
+            ranked_candidates=ranked_candidates,
+            evidence_pack=evidence_pack,
+            evidence_claims=evidence_claims,
+        )["evidence_claims"]
+    clean_evidence_count = len(pruned_context["evidence_pack"].get("items") or pruned_claims)
+    strong_evidence_count = sum(
+        1
+        for item in pruned_claims
+        if float((item or {}).get("confidence") or 0.0) >= 0.7
+    )
+    medium_evidence_count = sum(
+        1
+        for item in pruned_claims
+        if 0.4 <= float((item or {}).get("confidence") or 0.0) < 0.7
+    )
+    answer_depth_policy = derive_answer_depth_policy(
+        answer_contract,
+        clean_evidence_count=clean_evidence_count,
+        strong_evidence_count=strong_evidence_count,
+        medium_evidence_count=medium_evidence_count,
+    )
+    answer_structure_requirements = {
+        answer_depth_policy.answer_style: build_answer_structure_requirements(answer_contract, answer_depth_policy)
+    }
     prompt = {
         "stage": "answer_planning",
         "raw_query": raw_query,
         "slots": _as_mapping(slots),
-        "ranked_candidates": [
-            _as_mapping(item)
-            for item in ranked_candidates
-        ],
-        "evidence_pack": _as_mapping(evidence_pack) if evidence_pack is not None else {},
+        "ranked_candidates": pruned_context["ranked_candidates"],
+        "evidence_pack": pruned_context["evidence_pack"],
         "safety_result": _as_mapping(safety_result),
         "source_mode": source_mode,
         "degraded_reason": degraded_reason,
@@ -385,8 +429,27 @@ def build_answer_planner_request(
         "clarification": _as_mapping(clarification),
         "approval_required": approval_required,
         "answer_contract": _as_mapping(answer_contract) if answer_contract is not None else {},
+        "answer_depth_policy": {
+            "answer_style": answer_depth_policy.answer_style,
+            "depth_level": answer_depth_policy.depth_level,
+            "min_sections": answer_depth_policy.min_sections,
+            "max_sections": answer_depth_policy.max_sections,
+            "min_bullets_per_section": answer_depth_policy.min_bullets_per_section,
+            "min_chars": answer_depth_policy.min_chars,
+            "require_summary": answer_depth_policy.require_summary,
+            "require_evidence_reasoning": answer_depth_policy.require_evidence_reasoning,
+            "require_risk_or_caveat": answer_depth_policy.require_risk_or_caveat,
+            "require_next_step": answer_depth_policy.require_next_step,
+            "depth_limited_by_evidence": answer_depth_policy.depth_limited_by_evidence,
+            "clean_evidence_count": answer_depth_policy.clean_evidence_count,
+            "strong_evidence_count": answer_depth_policy.strong_evidence_count,
+            "medium_evidence_count": answer_depth_policy.medium_evidence_count,
+            "reason": answer_depth_policy.reason,
+        },
+        "answer_structure_requirements": answer_structure_requirements,
+        "context_pruning": pruned_context["summary"],
         "instructions": {
-            "must_use_only": ["evidence_pack", "ranked_candidates", "slots", "safety_result"],
+            "must_use_only": ["evidence_pack", "ranked_candidates", "slots", "safety_result", "context_pruning"],
             "do_not_invent": [
                 "coupon",
                 "score",
@@ -396,8 +459,11 @@ def build_answer_planner_request(
             ],
             "output_must_be_json": True,
             "answer_contract_constraints": _as_mapping(answer_contract) if answer_contract is not None else {},
+            "answer_structure_requirements": answer_structure_requirements,
         },
     }
+    if pruned_claims:
+        prompt["evidence_claims"] = pruned_claims
     return prompt
 
 

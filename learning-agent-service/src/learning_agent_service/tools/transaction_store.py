@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
+from learning_agent_service.domain.utils import utcnow as _utcnow
 
 
 @dataclass
@@ -16,15 +14,15 @@ class TransactionRecord:
     transaction_type: str
     status: str
     approval_state: str = "approved"
-    idempotency_key: Optional[str] = None
-    shop_id: Optional[int] = None
-    shop_name: Optional[str] = None
-    payload: Dict[str, Any] = field(default_factory=dict)
-    history: list[Dict[str, Any]] = field(default_factory=list)
-    created_at: datetime = field(default_factory=_now)
-    updated_at: datetime = field(default_factory=_now)
+    idempotency_key: str | None = None
+    shop_id: int | None = None
+    shop_name: str | None = None
+    payload: dict[str, Any] = field(default_factory=dict)
+    history: list[dict[str, Any]] = field(default_factory=list)
+    created_at: datetime = field(default_factory=_utcnow)
+    updated_at: datetime = field(default_factory=_utcnow)
 
-    def to_payload(self) -> Dict[str, Any]:
+    def to_payload(self) -> dict[str, Any]:
         key = "booking_id" if self.transaction_type == "booking" else "order_id"
         return {
             key: self.transaction_id,
@@ -44,15 +42,15 @@ class TransactionRecord:
 
 @dataclass
 class InMemoryTransactionStore:
-    _records: Dict[str, TransactionRecord] = field(default_factory=dict)
-    _idempotency_index: Dict[tuple[str, str], str] = field(default_factory=dict)
+    _records: dict[str, TransactionRecord] = field(default_factory=dict)
+    _idempotency_index: dict[tuple[str, str], str] = field(default_factory=dict)
 
     def create_booking(
         self,
         *,
         shop_id: int | None = None,
         shop_name: str | None = None,
-        payload: Dict[str, Any] | None = None,
+        payload: dict[str, Any] | None = None,
         idempotency_key: str | None = None,
     ) -> TransactionRecord:
         return self._create_record(
@@ -70,7 +68,7 @@ class InMemoryTransactionStore:
         *,
         shop_id: int | None = None,
         shop_name: str | None = None,
-        payload: Dict[str, Any] | None = None,
+        payload: dict[str, Any] | None = None,
         idempotency_key: str | None = None,
     ) -> TransactionRecord:
         return self._create_record(
@@ -132,7 +130,7 @@ class InMemoryTransactionStore:
         status: str,
         shop_id: int | None = None,
         shop_name: str | None = None,
-        payload: Dict[str, Any] | None = None,
+        payload: dict[str, Any] | None = None,
         approval_state: str = "approved",
         idempotency_key: str | None = None,
     ) -> TransactionRecord:
@@ -158,7 +156,7 @@ class InMemoryTransactionStore:
                 {
                     "state": status,
                     "approval_state": approval_state,
-                    "timestamp": _now().isoformat(),
+                    "timestamp": _utcnow().isoformat(),
                     "payload": dict(payload or {}),
                 }
                 ],
@@ -174,7 +172,7 @@ class InMemoryTransactionStore:
         *,
         status: str,
         transaction_type: str,
-        payload: Dict[str, Any] | None = None,
+        payload: dict[str, Any] | None = None,
         idempotency_key: str | None = None,
     ) -> TransactionRecord:
         operation_key = f"{transaction_type}:{status}"
@@ -198,7 +196,7 @@ class InMemoryTransactionStore:
                     {
                         "state": "not_found",
                         "approval_state": "unknown",
-                        "timestamp": _now().isoformat(),
+                        "timestamp": _utcnow().isoformat(),
                         "payload": dict(payload or {}),
                     }
                 ],
@@ -220,7 +218,7 @@ class InMemoryTransactionStore:
                     {
                         "state": "not_found",
                         "approval_state": "unknown",
-                        "timestamp": _now().isoformat(),
+                        "timestamp": _utcnow().isoformat(),
                         "payload": dict(payload or {}),
                     }
                 ],
@@ -234,7 +232,7 @@ class InMemoryTransactionStore:
             record.idempotency_key = normalized_key
             self._idempotency_index[(operation_key, normalized_key)] = key
         record.status = status
-        record.updated_at = _now()
+        record.updated_at = _utcnow()
         if payload:
             record.payload.update(payload)
         record.history.append(

@@ -204,7 +204,7 @@ wait_for_port() {
 
     echo -e "    正在等待 ${label} 就绪..."
     for _ in $(seq 1 "$max_attempts"); do
-        if netstat -ano | grep -q -E ":${port}[[:space:]]"; then
+        if netstat -ano | grep -i listening | grep -q -E ":${port}[[:space:]]"; then
             echo -e "    ${GREEN}[OK] ${label} 已就绪。${NC}"
             return 0
         fi
@@ -288,9 +288,11 @@ echo -e "${YELLOW}>>> 正在清理并停止旧的运行服务...${NC}"
 echo -e "    正在关闭 3001 端口 (Vue 前端) 以及相关僵尸进程..."
 powershell.exe -NoProfile -Command '$p = Get-NetTCPConnection -LocalPort 3001 -ErrorAction SilentlyContinue; if($p) { foreach($conn in $p) { if($conn.OwningProcess -ne 0) { Stop-Process -Id $conn.OwningProcess -Force -ErrorAction SilentlyContinue } } }; Get-CimInstance Win32_Process | ? { $_.CommandLine -match "vite" -or $_.CommandLine -match "npm run dev" } | % { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }'
 
-# 2. 停止 AI 服务 (8000)
-echo -e "    正在关闭 8000 端口 (Python AI 服务) 以及相关僵尸进程..."
+# 2. 停止 AI 服务 (8000) 和 tail 进程
+echo -e "    正在关闭 8000 端口 (Python AI 服务) 及其相关僵尸进程、日志跟随进程(tail)..."
 powershell.exe -NoProfile -Command '$p = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue; if($p) { foreach($conn in $p) { if($conn.OwningProcess -ne 0) { Stop-Process -Id $conn.OwningProcess -Force -ErrorAction SilentlyContinue } } }; Get-CimInstance Win32_Process | ? { $_.CommandLine -match "uvicorn" -or $_.CommandLine -match "local_life" } | % { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }'
+powershell.exe -NoProfile -Command 'Stop-Process -Name tail -Force -ErrorAction SilentlyContinue'
+taskkill /F /IM tail.exe >/dev/null 2>&1 || true
 
 # 3. 停止 Qdrant (6333) —— 仅当不健康时才重启，保留健康中的实例（与 Redis/MySQL 策略保持一致）
 echo -e "    检查 6333 端口 (Qdrant)..."
@@ -303,7 +305,7 @@ fi
 
 # 4. 停止 Redis (6379)
 echo -e "    检查 6379 端口 (Redis)..."
-if netstat -ano | grep -q -E ":6379[[:space:]]"; then
+if netstat -ano | grep -i listening | grep -q -E ":6379[[:space:]]"; then
     echo -e "    ${BLUE}[跳过] Redis 已在运行，保留现有实例。${NC}"
 else
     echo -e "    Redis 未运行，无需停止。"
@@ -311,7 +313,7 @@ fi
 
 # 5. 停止 MySQL (3306)
 echo -e "    检查 MySQL 数据库服务 ($MYSQL_SERVICE_NAME)..."
-if netstat -ano | grep -q -E ":3306[[:space:]]"; then
+if netstat -ano | grep -i listening | grep -q -E ":3306[[:space:]]"; then
     echo -e "    ${BLUE}[跳过] MySQL 已在运行，保留现有实例。${NC}"
 else
     echo -e "    MySQL 未运行，无需停止。"
@@ -319,7 +321,7 @@ fi
 
 # 6. 停止 PostgreSQL (5432)
 echo -e "    检查 PostgreSQL 数据库 (5432)..."
-if netstat -ano | grep -q -E ":5432[[:space:]]"; then
+if netstat -ano | grep -i listening | grep -q -E ":5432[[:space:]]"; then
     echo -e "    ${BLUE}[跳过] PostgreSQL 已在监听 5432 端口，保留现有实例。${NC}"
 else
     echo -e "    PostgreSQL 5432 端口未监听，正在清理可能残留的僵尸进程与锁文件..."
@@ -338,7 +340,7 @@ echo -e "    说明：.env 配置优先；如果 .env 没有可用 key，或请�
 
 # 1. 启动 PostgreSQL
 echo -e "${BLUE}[1/6] 检查 PostgreSQL (5432)...${NC}"
-if ! netstat -ano | grep -q -E ":5432[[:space:]]"; then
+if ! netstat -ano | grep -i listening | grep -q -E ":5432[[:space:]]"; then
     if [ -n "$POSTGRES_DATA_DIR" ] && [ -d "$POSTGRES_DATA_DIR" ]; then
         POSTMASTER_PID_FILE="$POSTGRES_DATA_DIR/postmaster.pid"
         
@@ -369,7 +371,7 @@ echo -e "    ${GREEN}[OK] PostgreSQL 已就绪。${NC}"
 
 # 2. 启动 MySQL
 echo -e "${BLUE}[2/6] 检查 MySQL (3306)...${NC}"
-if ! netstat -ano | grep -q -E ":3306[[:space:]]"; then
+if ! netstat -ano | grep -i listening | grep -q -E ":3306[[:space:]]"; then
     powershell.exe -NoProfile -Command "Start-Process cmd -ArgumentList '/c net start $MYSQL_SERVICE_NAME' -Verb RunAs"
     sleep 3
 fi
@@ -377,7 +379,7 @@ echo -e "    ${GREEN}[OK] MySQL 已就绪。${NC}"
 
 # 3. 启动 Redis
 echo -e "${BLUE}[3/6] 检查 Redis (6379)...${NC}"
-if ! netstat -ano | grep -q -E ":6379[[:space:]]"; then
+if ! netstat -ano | grep -i listening | grep -q -E ":6379[[:space:]]"; then
     if [ -n "$REDIS_DIR" ] && [ -x "$REDIS_DIR/redis-server.exe" ]; then
         powershell.exe -NoProfile -Command "Start-Process '$REDIS_DIR/redis-server.exe' -ArgumentList 'redis.windows.conf' -WorkingDirectory '$REDIS_DIR' -WindowStyle Hidden"
         sleep 2
@@ -415,9 +417,11 @@ log_health_status "Qdrant" "$QDRANT_HEALTH_URL" "$qdrant_degraded_reason"
 
 # 5. 启动 AI 服务
 echo -e "${BLUE}[5/6] 检查 AI 服务 (8000)...${NC}"
-if ! netstat -ano | grep -q -E ":8000[[:space:]]"; then
+if ! netstat -ano | grep -i listening | grep -q -E ":8000[[:space:]]"; then
     mkdir -p "$AI_SERVICE_LOG_DIR"
-    : > "$AI_SERVICE_LOG"
+    # 尝试删除并重新创建日志文件以释放可能的文件锁，失败则尝试重定向清空，并做容错处理
+    rm -f "$AI_SERVICE_LOG" >/dev/null 2>&1 || true
+    touch "$AI_SERVICE_LOG" >/dev/null 2>&1 || : > "$AI_SERVICE_LOG" 2>/dev/null || true
     echo -e "    ${BLUE}正在启动 AI 服务...${NC}"
     powershell.exe -NoProfile -Command "Start-Process cmd -ArgumentList '/c start_python.bat' -WorkingDirectory '$AI_SERVICE_DIR' -WindowStyle Hidden"
     sleep 2
@@ -437,7 +441,7 @@ if [ -d "$FRONTEND_DIR" ]; then
         # 启动前端
         powershell.exe -NoProfile -Command "Start-Process cmd -ArgumentList '/c npm run dev' -WorkingDirectory '$FRONTEND_DIR' -WindowStyle Hidden"
         sleep 3
-        if netstat -ano | grep -q -E ":3001[[:space:]]"; then
+        if netstat -ano | grep -i listening | grep -q -E ":3001[[:space:]]"; then
             echo -e "    ${GREEN}[OK] 前端已在后台启动。${NC}"
         else
             echo -e "    ${YELLOW}[Warn] 已发起前端启动，但端口 3001 还未监听，请检查 frontend 依赖或控制台日志。${NC}"

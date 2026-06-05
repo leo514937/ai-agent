@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from typing import Optional
-
 from .compat import APIRouter
 from .dependencies import LearningAgentService, UnavailableLearningAgentService
 from .routes import (
@@ -14,7 +12,7 @@ from .routes import (
 
 
 def create_api_router(
-    service: Optional[LearningAgentService] = None,
+    service: LearningAgentService | None = None,
 ) -> APIRouter:
     router = APIRouter()
     bound_service = service or UnavailableLearningAgentService()

@@ -1,12 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Mapping, Optional
+from datetime import UTC, datetime
+from typing import Any
 
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+from learning_agent_service.domain.utils import utcnow as _utcnow
 
 
 @dataclass
@@ -17,11 +16,11 @@ class SessionSummaryService:
         self,
         current: Any,
         *,
-        current_topic: Optional[str] = None,
-        open_questions: Optional[list[str]] = None,
-        confirmed_facts: Optional[list[str]] = None,
-        next_steps: Optional[list[str]] = None,
-        extra: Optional[Mapping[str, Any]] = None,
+        current_topic: str | None = None,
+        open_questions: list[str] | None = None,
+        confirmed_facts: list[str] | None = None,
+        next_steps: list[str] | None = None,
+        extra: Mapping[str, Any] | None = None,
     ) -> Any:
         topic = self._canonical_topic(current_topic or getattr(current, "current_topic", None))
         current_summary = getattr(current, "history_summary", None)
@@ -41,7 +40,7 @@ class SessionSummaryService:
         if next_steps:
             segments.append("下一步:" + "，".join(next_steps[:2]))
 
-        update = {
+        update: dict[str, Any] = {
             "current_topic": topic or getattr(current, "current_topic", None),
             "recent_entities": self._merge_unique(
                 list(getattr(current, "recent_entities", []) or []),
@@ -60,12 +59,13 @@ class SessionSummaryService:
             "summary_updated_at": _utcnow() if topic or open_questions or confirmed_facts or next_steps else getattr(current, "summary_updated_at", None),
         }
         if extra:
-            update.setdefault("extra", dict(getattr(current, "extra", {}) or {}))
-            update["extra"].update(dict(extra))
+            extra_update = dict(getattr(current, "extra", {}) or {})
+            extra_update.update(dict(extra))
+            update["extra"] = extra_update
         return self._apply_update(current, update)
 
     @staticmethod
-    def _canonical_topic(value: Optional[str]) -> Optional[str]:
+    def _canonical_topic(value: str | None) -> str | None:
         if not value:
             return None
         return str(value).strip() or None

@@ -1,21 +1,14 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
-from .schemas import CandidateProfile, EvidenceClaim, LocalLifeSlots, RankedCandidate, ShopRecord, VoucherRecord
-from learning_agent_service.rag.local_life_retrieval import LocalLifeEvidencePack
+from learning_agent_service.domain.utils import as_mapping as _as_mapping
 
+from learning_agent_service.rag.local_life import LocalLifeEvidencePack
 
-def _as_mapping(value: Any) -> Mapping[str, Any]:
-    if isinstance(value, Mapping):
-        return value
-    if hasattr(value, "model_dump"):
-        dumped = value.model_dump(mode="json")
-        if isinstance(dumped, Mapping):
-            return dumped
-    return {}
-
+from .schemas import CandidateProfile, EvidenceClaim, LocalLifeSlots, ShopRecord, VoucherRecord
 
 def _candidate_base_features(shop: ShopRecord) -> dict[str, Any]:
     return {

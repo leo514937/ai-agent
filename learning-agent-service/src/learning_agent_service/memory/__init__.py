@@ -1,5 +1,16 @@
 from .canonical import CANONICAL_TOPIC_ALIASES, CanonicalTopicResolver
+from .conflict import (
+    ConflictResolutionAction,
+    ConflictResolutionDecision,
+    MemoryConflictPolicyConfig,
+    MemoryConflictResolutionStrategy,
+    MemoryConflictResolver,
+)
 from .consolidation import ConsolidationPolicyConfig, MemoryConsolidationJob
+from .extraction import LLMMemoryExtractor, RuleBasedMemoryExtractor
+from .governance import MemoryGovernancePolicy, MemoryGovernancePolicyConfig
+from .injection import MemoryInjectionPolicy, MemoryInjectionPolicyConfig
+from .jobs import MemoryDeletionWorker, MemoryMaintenanceJob, MemoryOutboxWorker
 from .models import (
     AsyncLogEvent,
     ExplicitUserSignals,
@@ -15,15 +26,16 @@ from .models import (
     SessionUpdate,
     UserPreferenceProfile,
 )
-from .promotion import DurableMemoryWritePlan, MemoryPromotionPolicy, PromotionConfig, SessionMemoryUpdater
+from .orchestrator import MemoryOrchestrator, MemoryOrchestratorPolicyConfig
+from .promotion import (
+    DurableMemoryWritePlan,
+    MemoryPromotionPolicy,
+    PromotionConfig,
+    SessionMemoryUpdater,
+)
+from .protocols import NoOpSemanticMemoryStore, PreferenceStore, SemanticMemoryStore, SessionStore
 from .retrieval import MemoryRetrievalPolicy, RetrievalPolicyConfig
-from .injection import MemoryInjectionPolicy, MemoryInjectionPolicyConfig
-from .summary import SessionSummaryService
-from .extraction import LLMMemoryExtractor, RuleBasedMemoryExtractor
-from .governance import MemoryGovernancePolicy, MemoryGovernancePolicyConfig
-from .trace import MemoryTraceRecorder
-from .conflict import ConflictResolutionAction, ConflictResolutionDecision
-from .conflict import MemoryConflictPolicyConfig, MemoryConflictResolutionStrategy, MemoryConflictResolver
+from .service import MemoryService
 from .stores import (
     InMemoryEntityMemoryStore,
     InMemoryLongTermMemoryStore,
@@ -31,11 +43,8 @@ from .stores import (
     InMemorySensoryMemoryBuffer,
     InMemoryShortTermMemoryStore,
 )
-from .orchestrator import MemoryOrchestrator, MemoryOrchestratorPolicyConfig
-from .jobs import MemoryDeletionWorker, MemoryMaintenanceJob
-from .jobs import MemoryOutboxWorker
-from .protocols import NoOpSemanticMemoryStore, PreferenceStore, SemanticMemoryStore, SessionStore
-from .service import MemoryService
+from .summary import SessionSummaryService
+from .trace import MemoryTraceRecorder
 
 __all__ = [
     "AsyncLogEvent",

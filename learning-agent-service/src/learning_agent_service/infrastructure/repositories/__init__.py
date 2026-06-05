@@ -3,10 +3,9 @@
 from .clarification import ClarificationRecordRepository
 from .knowledge_governance import KnowledgeGovernanceRepository
 from .memory_outbox import MemoryOutboxRepository
-from .outbox import OutboxRepository
-from .preferences import UserPreferenceRepository
-from .preferences import UserProfileProjectionRepository
 from .memory_trace_repository import MemoryTraceRepository
+from .outbox import OutboxRepository
+from .preferences import UserPreferenceRepository, UserProfileProjectionRepository
 from .records import (
     ClarificationRecordEntry,
     KnowledgeDocumentRecord,
@@ -41,6 +40,7 @@ __all__ = [
     "KnowledgeGovernanceRepository",
     "MemoryTraceRepository",
     "MemoryOutboxRepository",
+    "MemoryOutboxRecord",
     "NoOpSemanticMemoryStore",
     "OutboxAsyncLogStore",
     "OutboxEventRecord",

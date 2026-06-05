@@ -1,20 +1,23 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import List, Sequence
+from datetime import UTC, datetime
 
-from learning_agent_service.domain.memory import MemoryConflict, MemoryConsolidationPlan, MemoryRecord, MemorySource, MemoryStatus, MemoryType
-
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+from learning_agent_service.domain.memory import (
+    MemoryConflict,
+    MemoryConsolidationPlan,
+    MemoryRecord,
+    MemorySource,
+    MemoryStatus,
+)
+from learning_agent_service.domain.utils import utcnow as _utcnow
 
 
 def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 @dataclass(frozen=True)
@@ -30,17 +33,17 @@ class ConsolidationPolicyConfig:
 class MemoryConsolidationJob:
     config: ConsolidationPolicyConfig = field(default_factory=ConsolidationPolicyConfig)
 
-    def consolidate(self, records: Sequence[MemoryRecord]) -> tuple[List[MemoryRecord], List[MemoryConflict], List[MemoryConsolidationPlan]]:
-        grouped: dict[tuple[str, str, str], List[MemoryRecord]] = {}
+    def consolidate(self, records: Sequence[MemoryRecord]) -> tuple[list[MemoryRecord], list[MemoryConflict], list[MemoryConsolidationPlan]]:
+        grouped: dict[tuple[str, str, str], list[MemoryRecord]] = {}
         for record in records:
             if record.status in {MemoryStatus.DELETED, MemoryStatus.EXPIRED, MemoryStatus.SUPERSEDED}:
                 continue
             key = (record.user_id, record.type.value, record.summary or record.memory_id)
             grouped.setdefault(key, []).append(record)
 
-        merged: List[MemoryRecord] = []
-        conflicts: List[MemoryConflict] = []
-        plans: List[MemoryConsolidationPlan] = []
+        merged: list[MemoryRecord] = []
+        conflicts: list[MemoryConflict] = []
+        plans: list[MemoryConsolidationPlan] = []
         for _, items in grouped.items():
             if len(items) < self.config.minimum_duplicate_group_size:
                 merged.append(items[0])
@@ -69,8 +72,8 @@ class MemoryConsolidationJob:
             )
         return merged, conflicts[: self.config.max_conflicts], plans
 
-    def expire_or_supersede(self, records: Sequence[MemoryRecord]) -> List[MemoryRecord]:
-        updated: List[MemoryRecord] = []
+    def expire_or_supersede(self, records: Sequence[MemoryRecord]) -> list[MemoryRecord]:
+        updated: list[MemoryRecord] = []
         for record in records:
             expires_at = _as_utc(record.expires_at) if record.expires_at else None
             if expires_at and expires_at < _utcnow():

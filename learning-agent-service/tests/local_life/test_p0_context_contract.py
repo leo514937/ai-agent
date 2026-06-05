@@ -34,6 +34,7 @@ from learning_agent_service.local_life.schemas import (
 from learning_agent_service.local_life.slot_extractor import extract_slots
 from learning_agent_service.local_life.subgraph import LocalLifeSubgraph
 from learning_agent_service.local_life.user_need_parser import UserNeedParser
+from learning_agent_service.local_life.schemas import UserNeed
 from learning_agent_service.rag.local_life_retrieval import LocalLifeEvidencePack, ParentEvidence, RetrievedChunk
 
 
@@ -328,6 +329,41 @@ class P0ContextContractTestCase(unittest.TestCase):
         self.assertEqual(contract.candidate_shop_ids[:1], [5])
         self.assertEqual(contract.reason, "pronoun_reference")
 
+    def test_nearby_recommendation_does_not_inherit_session_shop(self) -> None:
+        query = "附近有没有适合约会、有券、现在还营业的餐厅？推荐几家。"
+        session_context = {
+            "current_shop": "海底捞火锅(水晶城购物中心店）",
+            "selected_shop_id": 5,
+            "selected_shop_name": "海底捞火锅(水晶城购物中心店）",
+            "current_city": "北京",
+        }
+        slots = LocalLifeSlots.model_validate({
+            "city": "北京",
+            "location": {"city": "北京"},
+        })
+        user_need = UserNeed.model_validate({
+            "raw_query": query,
+            "resolved_query": query,
+            "intent": "restaurant_recommendation",
+            "slots": slots.model_dump(mode="json"),
+            "constraints": {},
+            "required_facets": [],
+            "context_refs": [],
+        })
+
+        contract = EntityResolver().resolve(
+            raw_query=query,
+            slots=slots,
+            user_need=user_need,
+            session_context=session_context,
+            client_context={"city": "北京"},
+        )
+
+        self.assertIsNone(contract.resolved_shop_id)
+        self.assertNotEqual(contract.resolved_shop_name, session_context["current_shop"])
+        self.assertNotEqual(contract.source, "session")
+        self.assertEqual(contract.candidate_shop_ids, [])
+
     def test_sanitizer_rewrites_internal_ids_and_status_words(self) -> None:
         text = "shop:5 / shop_id=5 / open / closed / 0.49000000000000005"
         sanitized = sanitize_local_life_text(text, shop_lookup={5: "海底捞火锅(水晶城购物中心店）"})
@@ -337,6 +373,19 @@ class P0ContextContractTestCase(unittest.TestCase):
         self.assertIn("营业中", sanitized)
         self.assertIn("未营业", sanitized)
         self.assertIn("0.5", sanitized)
+
+    def test_sanitizer_removes_internal_citation_markers(self) -> None:
+        text = (
+            "目前只能先给你一个部分判断。"
+            " 根据知识库中的证据，可以得到以下结论："
+            "- 示例内容 [local-life:shop:5:merchant-review-summary:chunk-001:口碑摘要]"
+        )
+        sanitized = sanitize_local_life_text(text)
+
+        self.assertNotIn("local-life:shop:5", sanitized)
+        self.assertNotIn("chunk-001", sanitized)
+        self.assertIn("示例内容", sanitized)
+        self.assertIn("根据知识库中的证据", sanitized)
 
     def test_pending_user_need_is_restored_by_context_arbitration(self) -> None:
         query = "北京"

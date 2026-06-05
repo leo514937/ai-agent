@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
 
 from ...domain.contracts import PersistentSessionContext, RoutingDecision
-
 
 _LEGACY_DIRECT_RESPONSE_TO_ACTION = {
     "greeting": "direct_answer",

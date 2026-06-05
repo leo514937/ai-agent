@@ -1,13 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping, Optional, Sequence
 
 from .citation import CitationBuilder
 from .evidence import EvidenceGovernanceService
 from .models import (
-    Citation,
-    EvidencePack,
     KnowledgeSearchMatch,
     KnowledgeSearchRequest,
     KnowledgeSearchResult,
@@ -30,7 +27,7 @@ class KnowledgeSearchFacade:
         retriever: HybridRetriever,
         evidence_service: EvidenceGovernanceService,
         citation_builder: CitationBuilder,
-        config: Optional[KnowledgeSearchConfig] = None,
+        config: KnowledgeSearchConfig | None = None,
     ) -> None:
         self._rewrite = rewrite_service
         self._retriever = retriever

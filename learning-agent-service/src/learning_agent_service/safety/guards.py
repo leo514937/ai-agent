@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 from ..local_life.schemas import EvidenceClaim, LocalLifeIntentType, LocalLifeSlots, RankedCandidate
 from .fact_check import evaluate_fact_check
 from .policy import ApprovalRequest, SafetyDecision, SafetyPolicy, TransactionDraft
-
 
 _BOOKING_KEYWORDS = ("订座", "预约", "预订", "订位")
 _ORDER_KEYWORDS = ("下单", "购买", "买单", "支付")

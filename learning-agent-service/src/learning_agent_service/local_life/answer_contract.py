@@ -1,15 +1,27 @@
 from __future__ import annotations
 
-from typing import List, Literal, Optional
+from collections.abc import Mapping
+from typing import Any, Literal
+
 from pydantic import BaseModel, Field
 
+
 class AnswerContract(BaseModel):
-    allowed_facets: List[str]
-    forbidden_facets: List[str]
-    required_sections: List[str] = Field(default_factory=list)
-    forbidden_sections: List[str] = Field(default_factory=list)
-    allowed_cards: List[str] = Field(default_factory=list)
-    forbidden_cards: List[str] = Field(default_factory=list)
+    original_query: str = ""
+    allowed_facets: list[str]
+    forbidden_facets: list[str]
+    required_sections: list[str] = Field(default_factory=list)
+    forbidden_sections: list[str] = Field(default_factory=list)
+    allowed_cards: list[str] = Field(default_factory=list)
+    forbidden_cards: list[str] = Field(default_factory=list)
+    allowed_tools: list[str] = Field(default_factory=list)
+    allowed_rag_facets: list[str] = Field(default_factory=list)
+    forbidden_rag_facets: list[str] = Field(default_factory=list)
+    realtime_facets: list[str] = Field(default_factory=list)
+    allow_recommendation: bool = False
+    allow_extra_context: bool = False
+    realtime_required: bool = False
+    evidence_policy: Literal["strict", "balanced", "lenient"] = "balanced"
     answer_style: Literal[
         "coupon_only",
         "open_status_only",
@@ -26,12 +38,35 @@ class AnswerContract(BaseModel):
         "partial_answer",
     ] = "say_unknown"
 
+    def facet_set(self) -> set[str]:
+        return {str(facet).strip() for facet in self.allowed_facets if str(facet).strip()}
+
+    def forbidden_facet_set(self) -> set[str]:
+        return {str(facet).strip() for facet in self.forbidden_facets if str(facet).strip()}
+
+    def as_pruning_hint(self) -> dict[str, Any]:
+        return {
+            "allowed_facets": list(self.allowed_facets),
+            "forbidden_facets": list(self.forbidden_facets),
+            "allowed_tools": list(self.allowed_tools),
+            "allowed_rag_facets": list(self.allowed_rag_facets),
+            "forbidden_rag_facets": list(self.forbidden_rag_facets),
+            "realtime_facets": list(self.realtime_facets),
+            "allow_recommendation": bool(self.allow_recommendation),
+            "allow_extra_context": bool(self.allow_extra_context),
+            "realtime_required": bool(self.realtime_required),
+            "evidence_policy": self.evidence_policy,
+            "answer_style": self.answer_style,
+            "missing_info_policy": self.missing_info_policy,
+        }
+
     @classmethod
     def build_contract(cls, user_need, target_shop=None) -> AnswerContract:
         req_facet_names = [f.name for f in getattr(user_need, "required_facets", []) or []]
         user_focused_facets = [f for f in req_facet_names if f not in ("location", "category")]
         raw_query = str(getattr(user_need, "raw_query", "") or "")
         compact_query = raw_query.replace(" ", "")
+        intent_name = str(getattr(user_need, "intent", "") or "").strip()
         inferred_coupon = any(token in compact_query for token in ("券", "优惠", "领券", "打折", "代金券", "折扣", "有券", "团购"))
         inferred_open = any(token in compact_query for token in ("营业", "开门", "开着", "营业时间", "现在营业吗", "现在开吗", "营业吗"))
         inferred_distance = any(token in compact_query for token in ("距离", "有多远", "导航", "路线", "怎么走", "怎么去"))
@@ -67,9 +102,18 @@ class AnswerContract(BaseModel):
             forbidden_facets = ["environment", "taste", "service", "recommendation", "coupon", "open_status", "distance_eta", "price"]
             answer_style = "clarification"
         elif len([name for name in user_focused_facets if name in {"coupon", "open_status", "distance_eta"}]) > 1:
-            allowed_facets = ["coupon", "open_status", "distance_eta", "distance", "price", "shop_detail", "recommendation_reason"]
-            forbidden_facets = ["recommendation"]
-            answer_style = "facet_multi"
+            if intent_name == "restaurant_recommendation" and target_shop is None:
+                allowed_facets = ["coupon", "open_status", "distance_eta", "distance", "price", "scene_fit", "recommendation_reason", "shop_detail"]
+                forbidden_facets = []
+                answer_style = "multi_shop_recommendation"
+            else:
+                allowed_facets = ["environment", "taste", "service", "coupon", "open_status", "distance_eta", "distance", "price", "shop_detail", "recommendation_reason"]
+                forbidden_facets = ["recommendation"]
+                answer_style = "facet_multi"
+        elif intent_name == "restaurant_recommendation" and target_shop is None:
+            allowed_facets = ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "distance_eta", "price", "shop_detail", "recommendation_reason"]
+            forbidden_facets = []
+            answer_style = "multi_shop_recommendation"
         elif "shop_detail" in user_focused_facets or "recommendation_reason" in user_focused_facets or not user_focused_facets:
             allowed_facets = ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "distance_eta", "price", "shop_detail", "recommendation_reason"]
             forbidden_facets = []
@@ -85,9 +129,44 @@ class AnswerContract(BaseModel):
             else:
                 answer_style = "multi_shop_recommendation"
 
+        realtime_facet_set = {"coupon", "open_status", "distance_eta"}
+        allowed_rag_facets = [facet for facet in allowed_facets if facet not in realtime_facet_set]
+        realtime_facets = [facet for facet in allowed_facets if facet in realtime_facet_set]
+        forbidden_rag_facets = list(
+            dict.fromkeys(
+                [
+                    *forbidden_facets,
+                    *realtime_facets,
+                ]
+            )
+        )
+        allowed_tools: list[str] = []
+        if "coupon" in allowed_facets:
+            allowed_tools.append("get_coupon_list")
+        if "open_status" in allowed_facets:
+            allowed_tools.extend(["check_open_status", "getShopDetail", "getBusinessStatus"])
+        if "distance_eta" in allowed_facets:
+            allowed_tools.append("get_distance_eta")
+        if "recommendation" in allowed_facets or answer_style in {"multi_shop_recommendation", "comparison", "facet_multi"}:
+            allowed_tools.extend(["search_restaurants", "getShopDetail", "recommendShops"])
+        allowed_tools = list(dict.fromkeys(allowed_tools))
+        allow_recommendation = answer_style in {"multi_shop_recommendation", "comparison", "facet_multi"}
+        allow_extra_context = allow_recommendation or answer_style == "single_shop_review"
+        realtime_required = any(facet in {"coupon", "open_status", "distance_eta"} for facet in allowed_facets)
+        evidence_policy = "strict" if not allow_extra_context else "balanced"
+
         return cls(
+            original_query=raw_query,
             allowed_facets=allowed_facets,
             forbidden_facets=forbidden_facets,
+            allowed_tools=allowed_tools,
+            allowed_rag_facets=allowed_rag_facets,
+            forbidden_rag_facets=forbidden_rag_facets,
+            realtime_facets=realtime_facets,
+            allow_recommendation=allow_recommendation,
+            allow_extra_context=allow_extra_context,
+            realtime_required=realtime_required,
+            evidence_policy=evidence_policy,
             answer_style=answer_style,
             missing_info_policy="say_unknown"
         )

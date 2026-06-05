@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any
+
+from learning_agent_service.domain.utils import clean_text as _clean_text
 
 _OPEN_PATTERNS = (
     (re.compile(r"\bopen\b", re.IGNORECASE), "营业中"),
     (re.compile(r"\bclosed\b", re.IGNORECASE), "未营业"),
 )
 
-
-def _clean_text(value: Any) -> str:
-    return "" if value is None else str(value)
+_INTERNAL_CITATION_PATTERNS = (
+    re.compile(r"\s*\[(?:local-life|chunk)[^\]]+\]"),
+    re.compile(r"\s*\[[^\]]*(?:local-life:|chunk-\d+)[^\]]*\]"),
+)
 
 
 def _shop_lookup_text(shop_lookup: Mapping[int, str] | None, shop_id: int | str | None) -> str | None:
@@ -34,10 +38,14 @@ def sanitize_local_life_text(
     result = result.replace("0.49000000000000005", "0.5")
     for pattern, replacement in _OPEN_PATTERNS:
         result = pattern.sub(replacement, result)
+    for pattern in _INTERNAL_CITATION_PATTERNS:
+        result = pattern.sub("", result)
+    result = re.sub(r"\s{2,}", " ", result)
+    result = re.sub(r"[ \t]+\n", "\n", result)
     result = re.sub(r"\bshop[:_ ]?(\d+)\b", lambda match: _shop_lookup_text(shop_lookup, match.group(1)) or fallback_shop_name, result, flags=re.IGNORECASE)
     result = re.sub(r"\bshop_id\s*=\s*(\d+)\b", lambda match: _shop_lookup_text(shop_lookup, match.group(1)) or fallback_shop_name, result, flags=re.IGNORECASE)
     result = re.sub(r"\bshop_id[:：]\s*(\d+)\b", lambda match: _shop_lookup_text(shop_lookup, match.group(1)) or fallback_shop_name, result, flags=re.IGNORECASE)
-    return result
+    return result.strip()
 
 
 def sanitize_local_life_output(
@@ -65,4 +73,3 @@ def sanitize_local_life_output(
         except Exception:
             return sanitized
     return value
-

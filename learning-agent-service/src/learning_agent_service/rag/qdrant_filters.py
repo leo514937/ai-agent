@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Optional, Sequence, Tuple
+from typing import Any
 
 try:  # pragma: no cover - optional dependency fallback
     from qdrant_client.http.models import FieldCondition, Filter, MatchAny, MatchValue
@@ -35,9 +36,9 @@ _RUNTIME_FILTER_KEYS = {
 @dataclass(frozen=True)
 class QdrantFilterContext:
     retrieval_filters: RetrievalFilters = field(default_factory=RetrievalFilters)
-    tenant_id: Optional[str] = None
-    permission_tags: Tuple[str, ...] = ()
-    is_active: Optional[bool] = True
+    tenant_id: str | None = None
+    permission_tags: tuple[str, ...] = ()
+    is_active: bool | None = True
     runtime_context: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -50,7 +51,7 @@ class QdrantFilterBuilder:
         *,
         tenant_id: Any = None,
         permission_tags: Sequence[Any] | None = None,
-        is_active: Optional[bool] = True,
+        is_active: bool | None = True,
         runtime_context: Mapping[str, Any] | None = None,
     ) -> Filter | None:
         context = self._build_context(
@@ -71,7 +72,7 @@ class QdrantFilterBuilder:
         *,
         tenant_id: Any = None,
         permission_tags: Sequence[Any] | None = None,
-        is_active: Optional[bool] = True,
+        is_active: bool | None = True,
         runtime_context: Mapping[str, Any] | None = None,
     ) -> Filter | None:
         return self.build(
@@ -89,7 +90,7 @@ class QdrantFilterBuilder:
         *,
         tenant_id: Any = None,
         permission_tags: Sequence[Any] | None = None,
-        is_active: Optional[bool] = True,
+        is_active: bool | None = True,
         runtime_context: Mapping[str, Any] | None = None,
         ) -> bool:
         context = self._build_context(
@@ -111,7 +112,7 @@ class QdrantFilterBuilder:
         *,
         tenant_id: Any = None,
         permission_tags: Sequence[Any] | None = None,
-        is_active: Optional[bool] = True,
+        is_active: bool | None = True,
         runtime_context: Mapping[str, Any] | None = None,
     ) -> bool:
         context = self._build_context(
@@ -136,7 +137,7 @@ class QdrantFilterBuilder:
         *,
         tenant_id: Any,
         permission_tags: Sequence[Any] | None,
-        is_active: Optional[bool],
+        is_active: bool | None,
         runtime_context: Mapping[str, Any] | None,
     ) -> QdrantFilterContext:
         normalized_filters = self._normalize_filters(filters)
@@ -220,7 +221,7 @@ class QdrantFilterBuilder:
                 return False
         return True
 
-    def _build_field_condition(self, key: str, values: Tuple[str, ...]) -> FieldCondition:
+    def _build_field_condition(self, key: str, values: tuple[str, ...]) -> FieldCondition:
         normalized = tuple(value for value in values if value)
         if key == "is_active" and normalized:
             bool_value = self._normalize_bool(normalized[0])
@@ -237,7 +238,7 @@ class QdrantFilterBuilder:
         if not isinstance(filters, Mapping):
             return RetrievalFilters()
 
-        def coerce(value: Any) -> Tuple[str, ...]:
+        def coerce(value: Any) -> tuple[str, ...]:
             return self._normalize_values(value)
 
         extra = dict(filters.get("extra", {}))
@@ -260,7 +261,7 @@ class QdrantFilterBuilder:
         )
 
     @staticmethod
-    def _normalize_values(value: Any) -> Tuple[str, ...]:
+    def _normalize_values(value: Any) -> tuple[str, ...]:
         if value is None or value == "":
             return ()
         if isinstance(value, str):
@@ -272,12 +273,12 @@ class QdrantFilterBuilder:
         return (str(value),)
 
     @staticmethod
-    def _normalize_single(value: Any) -> Optional[str]:
+    def _normalize_single(value: Any) -> str | None:
         values = QdrantFilterBuilder._normalize_values(value)
         return values[0] if values else None
 
     @staticmethod
-    def _normalize_bool(value: Any) -> Optional[bool]:
+    def _normalize_bool(value: Any) -> bool | None:
         if value is None or value == "":
             return None
         if isinstance(value, bool):
@@ -298,7 +299,7 @@ class QdrantFilterBuilder:
         return None
 
     @staticmethod
-    def _permission_intersection(chunk: KnowledgeChunk, expected_tags: Tuple[str, ...]) -> bool:
+    def _permission_intersection(chunk: KnowledgeChunk, expected_tags: tuple[str, ...]) -> bool:
         actual_tags = QdrantFilterBuilder._normalize_values(_metadata_value_for_key(chunk, "permission_tags"))
         if not actual_tags:
             actual_tags = QdrantFilterBuilder._normalize_values(chunk.tags)

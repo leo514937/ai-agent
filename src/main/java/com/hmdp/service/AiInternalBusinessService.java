@@ -27,16 +27,66 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.time.OffsetDateTime;
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.stream.Collectors;
 
 @Service
 @Transactional(readOnly = true)
 public class AiInternalBusinessService {
 
+    private static final ZoneId DEFAULT_TIME_ZONE = ZoneId.of("Asia/Shanghai");
+    private static final String DEFAULT_LOCATION_NAME = "北京邮电大学海淀校区";
+    private static final String DEFAULT_LOCATION_ADDRESS = "北京市海淀区西土城路10号";
+    private static final String DEFAULT_LOCATION_CITY = "北京";
+    private static final String DEFAULT_LOCATION_DISTRICT = "海淀区";
+    private static final Double DEFAULT_LOCATION_LAT = 39.961554d;
+    private static final Double DEFAULT_LOCATION_LNG = 116.358104d;
+
     @Resource
     private AiBusinessQueryFacade aiBusinessQueryFacade;
     @Resource
     private IVoucherOrderService voucherOrderService;
+
+    public Map<String, Object> buildCurrentTimeContext() {
+        OffsetDateTime now = OffsetDateTime.now(DEFAULT_TIME_ZONE);
+        Map<String, Object> context = new LinkedHashMap<>();
+        String timestamp = now.format(DateTimeFormatter.ISO_OFFSET_DATE_TIME);
+        context.put("timestamp", timestamp);
+        context.put("current_time", timestamp);
+        context.put("request_ts", timestamp);
+        context.put("epoch_millis", now.toInstant().toEpochMilli());
+        context.put("timezone", DEFAULT_TIME_ZONE.getId());
+        context.put("source", "java_system_clock");
+        return context;
+    }
+
+    public Map<String, Object> buildDefaultLocationContext() {
+        Map<String, Object> context = new LinkedHashMap<>();
+        context.put("location", DEFAULT_LOCATION_NAME);
+        context.put("location_name", DEFAULT_LOCATION_NAME);
+        context.put("current_location", DEFAULT_LOCATION_ADDRESS + " " + DEFAULT_LOCATION_NAME);
+        context.put("address", DEFAULT_LOCATION_ADDRESS);
+        context.put("city", DEFAULT_LOCATION_CITY);
+        context.put("current_city", DEFAULT_LOCATION_CITY);
+        context.put("area", DEFAULT_LOCATION_DISTRICT);
+        context.put("district", DEFAULT_LOCATION_DISTRICT);
+        context.put("lat", DEFAULT_LOCATION_LAT);
+        context.put("latitude", DEFAULT_LOCATION_LAT);
+        context.put("lng", DEFAULT_LOCATION_LNG);
+        context.put("longitude", DEFAULT_LOCATION_LNG);
+        context.put("radius_km", 3.0d);
+        context.put("source", "amap_public_place");
+        return context;
+    }
+
+    public Map<String, Object> enrichRealtimeContext(Map<String, Object> context) {
+        Map<String, Object> result = context == null ? new LinkedHashMap<>() : new LinkedHashMap<>(context);
+        mergeContext(result, buildCurrentTimeContext(), "time_source");
+        mergeContext(result, buildDefaultLocationContext(), "location_source");
+        return result;
+    }
 
     public AiInternalShopSearchResponse searchShops(AiInternalShopSearchRequest request) {
         AiInternalShopSearchRequest safeRequest = request == null ? new AiInternalShopSearchRequest() : request;
@@ -123,6 +173,32 @@ public class AiInternalBusinessService {
         response.setVoucherId(order.getVoucherId());
         response.setUserId(order.getUserId());
         return response;
+    }
+
+    private void mergeContext(Map<String, Object> target, Map<String, Object> source, String sourceKeyAlias) {
+        if (target == null || source == null) {
+            return;
+        }
+        Object sourceValue = source.get("source");
+        if (sourceKeyAlias != null && sourceValue != null && !target.containsKey(sourceKeyAlias)) {
+            target.put(sourceKeyAlias, sourceValue);
+        }
+        for (Map.Entry<String, Object> entry : source.entrySet()) {
+            String key = entry.getKey();
+            if (StrUtil.equals(key, "source")) {
+                continue;
+            }
+            Object value = entry.getValue();
+            if (value == null) {
+                continue;
+            }
+            if (value instanceof String && StrUtil.isBlank((String) value)) {
+                continue;
+            }
+            if (!target.containsKey(key) || target.get(key) == null || (target.get(key) instanceof String && StrUtil.isBlank((String) target.get(key)))) {
+                target.put(key, value);
+            }
+        }
     }
 
     private AiInternalOrderStateResponse noResult(Long orderId, String message) {

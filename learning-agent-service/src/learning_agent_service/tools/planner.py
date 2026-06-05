@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 from .models import ToolSelection
 
 
-def _normalize_intent_key(value: Any) -> Optional[str]:
+def _normalize_intent_key(value: Any) -> str | None:
     if value is None:
         return None
     raw_value = getattr(value, "value", value)
@@ -50,7 +50,7 @@ class ToolPlanner:
         "local_life_order_status": "get_shop_detail",
     }
 
-    def __init__(self, intent_tool_map: Optional[Dict[str, str]] = None) -> None:
+    def __init__(self, intent_tool_map: dict[str, str] | None = None) -> None:
         self._intent_tool_map = dict(self.DEFAULT_INTENT_TOOL_MAP)
         if intent_tool_map:
             for key, value in intent_tool_map.items():
@@ -60,10 +60,10 @@ class ToolPlanner:
 
     def plan(
         self,
-        intent: Optional[str],
+        intent: str | None,
         need_tool: bool,
-        slots: Optional[Dict[str, object]] = None,
-    ) -> Optional[ToolSelection]:
+        slots: dict[str, object] | None = None,
+    ) -> ToolSelection | None:
         if not need_tool:
             return None
 

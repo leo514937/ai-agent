@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
 from learning_agent_service.domain.memory import (
@@ -11,21 +12,24 @@ from learning_agent_service.domain.memory import (
     MemoryEdge,
     MemoryEdgeType,
     MemoryRecord,
-    MemoryScope,
-    MemorySource,
     MemoryRetrievalMode,
+    MemoryScope,
     MemorySensitivity,
+    MemorySource,
     MemoryStatus,
     MemoryType,
 )
 from learning_agent_service.infrastructure.db.models import LongTermMemoryModel
-from learning_agent_service.infrastructure.repositories.memory_record_repository import MemoryRecordRepository
 from learning_agent_service.infrastructure.repositories.memory_outbox import MemoryOutboxRepository
+from learning_agent_service.infrastructure.repositories.memory_record_repository import (
+    MemoryRecordRepository,
+)
 from learning_agent_service.infrastructure.repositories.records import MemoryOutboxRecord
-
-from learning_agent_service.memory.models import SemanticMemoryFact
 from learning_agent_service.memory.gates import MemoryVectorizationGate
+from learning_agent_service.memory.models import SemanticMemoryFact
 from learning_agent_service.memory.protocols import SemanticMemoryStore
+
+from learning_agent_service.domain.utils import utcnow as _utcnow
 
 from .qdrant_store import QdrantLongTermMemoryIndex
 
@@ -33,10 +37,6 @@ try:  # pragma: no cover - optional runtime dependency
     from sqlalchemy import select
 except Exception:  # pragma: no cover - import-tolerant fallback
     select = None
-
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 def _json_ready(value: Any) -> Any:
@@ -58,7 +58,7 @@ def _enum_or_default(enum_cls: Any, value: Any, default: Any) -> Any:
         return default
 
 
-def _record_to_model_fields(record: MemoryRecord) -> Dict[str, Any]:
+def _record_to_model_fields(record: MemoryRecord) -> dict[str, Any]:
     return {
         "memory_id": record.memory_id or f"{record.user_id}:{record.source_turn_id}:{record.type.value}:{uuid4().hex[:12]}",
         "user_id": record.user_id,
@@ -151,7 +151,7 @@ def _record_to_semantic_fact(record: MemoryRecord) -> SemanticMemoryFact:
     )
 
 
-def _payload_for_qdrant(record: MemoryRecord) -> Dict[str, Any]:
+def _payload_for_qdrant(record: MemoryRecord) -> dict[str, Any]:
     return {
         "memory_id": record.memory_id,
         "user_id": record.user_id,
@@ -270,10 +270,10 @@ class DurableLongTermMemoryStore(LongTermMemoryStore):
     """Composite long-term memory adapter that writes metadata to Postgres and vectors to Qdrant."""
 
     repository: LongTermMemoryRepository
-    index: Optional[QdrantLongTermMemoryIndex] = None
-    memory_outbox_repository: Optional[MemoryOutboxRepository] = None
+    index: QdrantLongTermMemoryIndex | None = None
+    memory_outbox_repository: MemoryOutboxRepository | None = None
     vectorization_gate: MemoryVectorizationGate = field(default_factory=MemoryVectorizationGate)
-    last_qdrant_error: Optional[str] = None
+    last_qdrant_error: str | None = None
 
     @property
     def collection_name(self) -> str:
@@ -335,7 +335,7 @@ class DurableLongTermMemoryStore(LongTermMemoryStore):
                         stored_record = self.repository.upsert(stored_record)
         return stored_record
 
-    def get(self, memory_id: str) -> Optional[MemoryRecord]:
+    def get(self, memory_id: str) -> MemoryRecord | None:
         return self.repository.get(memory_id)
 
     def search(
@@ -343,7 +343,7 @@ class DurableLongTermMemoryStore(LongTermMemoryStore):
         query: str,
         user_id: str,
         limit: int = 10,
-        memory_types: Optional[Sequence[MemoryType]] = None,
+        memory_types: Sequence[MemoryType] | None = None,
     ) -> Sequence[MemoryRecord]:
         self.last_qdrant_error = None
         if self.index is not None:
@@ -356,7 +356,7 @@ class DurableLongTermMemoryStore(LongTermMemoryStore):
                 if getattr(self.index, "last_error", None):
                     self.last_qdrant_error = str(self.index.last_error)
             if indexed:
-                hydrated: List[MemoryRecord] = []
+                hydrated: list[MemoryRecord] = []
                 memory_types_set = {item.value if hasattr(item, "value") else str(item or "").strip().lower() for item in memory_types or []}
                 memory_types_set = {item for item in memory_types_set if item}
                 for candidate in indexed:
@@ -439,7 +439,7 @@ class DurableLongTermMemoryStore(LongTermMemoryStore):
                 if getattr(self.index, "last_error", None):
                     self.last_qdrant_error = str(self.index.last_error)
 
-    def process_memory_outbox_once(self, limit: int = 50) -> Dict[str, Any]:
+    def process_memory_outbox_once(self, limit: int = 50) -> dict[str, Any]:
         if self.memory_outbox_repository is None or self.index is None:
             return {"claimed": 0, "published": 0, "failed": 0, "skipped": 0}
         claimed = self.memory_outbox_repository.claim_pending(limit=limit)
@@ -462,7 +462,7 @@ class DurableLongTermMemoryStore(LongTermMemoryStore):
             "skipped": skipped,
         }
 
-    def _enqueue_memory_outbox(self, *, event_type: str, record: MemoryRecord, payload: Dict[str, Any]) -> None:
+    def _enqueue_memory_outbox(self, *, event_type: str, record: MemoryRecord, payload: dict[str, Any]) -> None:
         if self.memory_outbox_repository is None:
             return
         event = MemoryOutboxRecord(
@@ -535,11 +535,11 @@ class DurableSemanticMemoryStore(SemanticMemoryStore):
     """Semantic memory adapter that persists facts as long-term memory records."""
 
     long_term_store: DurableLongTermMemoryStore
-    indexed_topics: Dict[tuple[str, str], bool] = field(default_factory=dict)
+    indexed_topics: dict[tuple[str, str], bool] = field(default_factory=dict)
 
     def search(self, user_id: str, query: str, limit: int = 5) -> Sequence[SemanticMemoryFact]:
         records = self.long_term_store.search(query, user_id=user_id, limit=limit, memory_types=(MemoryType.SEMANTIC,))
-        facts: List[SemanticMemoryFact] = []
+        facts: list[SemanticMemoryFact] = []
         for record in records:
             if record.type != MemoryType.SEMANTIC:
                 continue

@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Any, Iterable, Mapping, Optional, Sequence
+from datetime import UTC, datetime
+from typing import Any
 
 from learning_agent_service.domain.memory import MemoryPersistenceScope
-
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+from learning_agent_service.domain.utils import utcnow as _utcnow
 
 
 def _normalize_text(text: str) -> str:
@@ -67,10 +65,10 @@ class PreferenceMemorySignal:
     requires_clarification: bool = False
     confidence: float = 0.0
     reason: str = ""
-    effective_from: Optional[datetime] = None
-    effective_to: Optional[datetime] = None
-    source_session_id: Optional[str] = None
-    source_turn_id: Optional[str] = None
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+    source_session_id: str | None = None
+    source_turn_id: str | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
 
@@ -87,14 +85,17 @@ class PreferenceRegistry:
     """集中管理偏好 key / value / scope / session hint 规则。"""
 
     def __init__(self, rules: Iterable[PreferenceRule] | None = None) -> None:
-        self._rules = tuple(rules or PreferenceRule(key=key, tokens=tokens) for key, tokens in _RULES)
+        if rules is None:
+            self._rules = tuple(PreferenceRule(key=key, tokens=tokens) for key, tokens in _RULES)
+        else:
+            self._rules = tuple(rules)
         self._rule_index = {rule.key: rule for rule in self._rules}
 
     @property
     def rules(self) -> tuple[PreferenceRule, ...]:
         return self._rules
 
-    def normalize_key(self, text: str) -> Optional[str]:
+    def normalize_key(self, text: str) -> str | None:
         normalized = _normalize_text(text)
         if not normalized:
             return None
@@ -103,7 +104,7 @@ class PreferenceRegistry:
                 return rule.key
         return None
 
-    def normalize_value(self, key: str, text: str) -> Optional[str]:
+    def normalize_value(self, key: str, text: str) -> str | None:
         normalized = _normalize_text(text)
         if not normalized:
             return "unknown"
@@ -153,7 +154,7 @@ class PreferenceRegistry:
 
         return normalized or "unknown"
 
-    def infer_scope(self, text: str, *, key: Optional[str] = None) -> MemoryPersistenceScope:
+    def infer_scope(self, text: str, *, key: str | None = None) -> MemoryPersistenceScope:
         normalized = _normalize_text(text)
         if _contains_any(normalized, _SESSION_CUES):
             return MemoryPersistenceScope.SESSION
@@ -178,7 +179,7 @@ class PreferenceRegistry:
             return True
         return False
 
-    def is_long_term_intent(self, text: str, *, key: Optional[str] = None) -> bool:
+    def is_long_term_intent(self, text: str, *, key: str | None = None) -> bool:
         normalized = _normalize_text(text)
         if _contains_any(normalized, _PROFILE_CUES):
             return True
@@ -253,10 +254,10 @@ class PreferenceRegistry:
         self,
         *,
         text: str,
-        session_id: Optional[str] = None,
-        turn_id: Optional[str] = None,
-        answer_text: Optional[str] = None,
-    ) -> Optional[PreferenceMemorySignal]:
+        session_id: str | None = None,
+        turn_id: str | None = None,
+        answer_text: str | None = None,
+    ) -> PreferenceMemorySignal | None:
         combined = " ".join(part for part in [text, answer_text or ""] if part).strip()
         key = self.normalize_key(combined)
         if key is None:

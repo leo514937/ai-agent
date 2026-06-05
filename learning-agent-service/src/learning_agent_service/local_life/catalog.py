@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import re
-from math import asin, cos, radians, sin, sqrt
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from collections.abc import Sequence
+
+from learning_agent_service.domain.utils import haversine_km as _haversine_km
 
 from .schemas import (
     BlogRecord,
@@ -95,14 +96,6 @@ _CITY_NAMES = (
     "宁波",
     "郑州",
 )
-
-
-def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
-    radius = 6371.0
-    d_lat = radians(lat2 - lat1)
-    d_lng = radians(lng2 - lng1)
-    a = sin(d_lat / 2) ** 2 + cos(radians(lat1)) * cos(radians(lat2)) * sin(d_lng / 2) ** 2
-    return 2 * radius * asin(sqrt(max(0.0, min(1.0, a))))
 
 
 def _shop_search_blob(shop: ShopRecord) -> str:
@@ -353,6 +346,19 @@ DEFAULT_VOUCHERS: list[VoucherRecord] = [
         begin_time="2026-05-01 00:00:00",
         end_time="2026-06-30 23:59:59",
     ),
+    VoucherRecord(
+        id=21,
+        shop_id=5,
+        shop_name="海底捞火锅(水晶城购物中心店）",
+        title="150元家庭聚餐券",
+        sub_title="海底捞水晶城店专享",
+        rules="仅限海底捞火锅(水晶城购物中心店）使用\n需提前一天预约\n适合4-6人家庭聚餐\n仅限堂食\n不可与其他优惠叠加\n不兑现、不找零",
+        pay_value=120,
+        actual_value=150,
+        stock=1,
+        begin_time="2026-05-01 00:00:00",
+        end_time="2026-06-30 23:59:59",
+    ),
 ]
 
 
@@ -391,10 +397,10 @@ class LocalLifeCatalog:
     def __init__(
         self,
         *,
-        shop_types: Optional[Sequence[ShopTypeRecord]] = None,
-        shops: Optional[Sequence[ShopRecord]] = None,
-        vouchers: Optional[Sequence[VoucherRecord]] = None,
-        blogs: Optional[Sequence[BlogRecord]] = None,
+        shop_types: Sequence[ShopTypeRecord] | None = None,
+        shops: Sequence[ShopRecord] | None = None,
+        vouchers: Sequence[VoucherRecord] | None = None,
+        blogs: Sequence[BlogRecord] | None = None,
     ) -> None:
         self._shop_types = list(shop_types or DEFAULT_SHOP_TYPES)
         self._shops = list(shops or DEFAULT_SHOPS)
@@ -410,11 +416,11 @@ class LocalLifeCatalog:
     def list_shop_types(self) -> list[ShopTypeRecord]:
         return [item.model_copy() for item in sorted(self._shop_types, key=lambda shop_type: shop_type.sort)]
 
-    def get_shop(self, shop_id: int) -> Optional[ShopRecord]:
+    def get_shop(self, shop_id: int) -> ShopRecord | None:
         shop = self._shop_index.get(int(shop_id))
         return shop.model_copy() if shop is not None else None
 
-    def get_shop_type(self, type_id: Optional[int]) -> Optional[ShopTypeRecord]:
+    def get_shop_type(self, type_id: int | None) -> ShopTypeRecord | None:
         if type_id is None:
             return None
         item = self._type_index.get(int(type_id))
@@ -449,10 +455,10 @@ class LocalLifeCatalog:
         self,
         *,
         query: str = "",
-        slots: Optional[LocalLifeSlots] = None,
+        slots: LocalLifeSlots | None = None,
         limit: int = 5,
-        shop_ids: Optional[Sequence[int]] = None,
-        type_id: Optional[int] = None,
+        shop_ids: Sequence[int] | None = None,
+        type_id: int | None = None,
     ) -> list[ShopRecord]:
         slots = slots or LocalLifeSlots()
         limit = max(1, int(limit or 1))
@@ -551,7 +557,7 @@ class LocalLifeCatalog:
         *,
         query: str,
         shop_ids: Sequence[int],
-        slots: Optional[LocalLifeSlots] = None,
+        slots: LocalLifeSlots | None = None,
         limit: int = 6,
     ) -> list[EvidenceClaim]:
         slots = slots or LocalLifeSlots()

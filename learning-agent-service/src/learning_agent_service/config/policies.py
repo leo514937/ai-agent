@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from learning_agent_service.memory.consolidation import ConsolidationPolicyConfig
 from learning_agent_service.memory.conflict import MemoryConflictPolicyConfig
+from learning_agent_service.memory.consolidation import ConsolidationPolicyConfig
 from learning_agent_service.memory.governance import MemoryGovernancePolicyConfig
 from learning_agent_service.memory.injection import MemoryInjectionPolicyConfig
 from learning_agent_service.memory.orchestrator import MemoryOrchestratorPolicyConfig

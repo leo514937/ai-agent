@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Literal, List, Optional
+from typing import Literal
+
 from pydantic import BaseModel
 
 
@@ -20,7 +21,7 @@ class CouponResult(BaseModel):
     shop_id: int
     realtime_available_count: int
     realtime_total_count: int
-    items: List[CouponItem]
+    items: list[CouponItem]
     query_success: bool
     source: Literal["realtime_tool", "fallback", "rag_history"]
     error_message: str | None = None

@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from learning_agent_service.config.settings import PostgresSettings
 
 from .errors import InfrastructureConfigurationError, require_dependency
-from .models import Base, SQLALCHEMY_AVAILABLE
+from .models import SQLALCHEMY_AVAILABLE, Base
 
 try:
     from sqlalchemy import create_engine
@@ -43,7 +43,7 @@ def build_engine(settings: PostgresSettings) -> Any:
     )
 
 
-def build_session_factory(settings: PostgresSettings, engine: Optional[Any] = None) -> Any:
+def build_session_factory(settings: PostgresSettings, engine: Any | None = None) -> Any:
     """Create a SQLAlchemy session factory bound to the configured engine."""
 
     if not SQLALCHEMY_AVAILABLE or sessionmaker is None:
@@ -56,6 +56,13 @@ def build_postgres_runtime(settings: PostgresSettings) -> PostgresRuntime:
     """Build the full Postgres runtime bundle."""
 
     engine = build_engine(settings)
+    try:
+        with engine.connect() as connection:
+            connection.exec_driver_sql("SELECT 1")
+    except Exception as exc:
+        raise InfrastructureConfigurationError(
+            "Postgres unavailable during bootstrap; falling back to in-memory adapters"
+        ) from exc
     return PostgresRuntime(engine=engine, session_factory=build_session_factory(settings, engine=engine))
 
 

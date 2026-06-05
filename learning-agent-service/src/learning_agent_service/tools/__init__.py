@@ -1,4 +1,5 @@
-﻿from .executor import ToolExecutor
+from .composer import AnswerComposer, Finalizer
+from .executor import ToolExecutor
 from .models import (
     NormalizedToolResult,
     RegisteredTool,
@@ -13,6 +14,7 @@ from .registry import ToolRegistry
 from .transaction_store import InMemoryTransactionStore
 
 __all__ = [
+    "AnswerComposer",
     "NormalizedToolResult",
     "RegisteredTool",
     "SideEffectLevel",
@@ -24,4 +26,5 @@ __all__ = [
     "ToolSelection",
     "ToolSpec",
     "InMemoryTransactionStore",
+    "Finalizer",
 ]

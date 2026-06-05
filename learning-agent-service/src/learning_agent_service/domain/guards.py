@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 from .enums import IntentType
 from .memory import MemoryRecord, MemoryStatus
@@ -22,8 +21,8 @@ class ClarificationDecision:
 def evaluate_clarification(
     *,
     intent_confidence: float,
-    reference_confidence: Optional[float],
-    intent: Optional[IntentType],
+    reference_confidence: float | None,
+    intent: IntentType | None,
     intent_threshold: float = 0.5,
     reference_threshold: float = 0.5,
 ) -> ClarificationDecision:
@@ -42,8 +41,8 @@ def validate_memory_write_boundary(
     *,
     user_id: str,
     runtime_user_id: str,
-    session_id: Optional[str],
-    turn_id: Optional[str],
+    session_id: str | None,
+    turn_id: str | None,
 ) -> GuardDecision:
     if not user_id or not runtime_user_id or runtime_user_id != user_id:
         return GuardDecision(False, "reject_cross_user_write")

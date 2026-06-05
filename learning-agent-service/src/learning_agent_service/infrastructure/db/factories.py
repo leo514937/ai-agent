@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 from learning_agent_service.config.settings import ServiceSettings
 
@@ -18,10 +17,10 @@ from .redis import RedisRuntime, build_redis_runtime
 class InfrastructureClients:
     """Container for optionally assembled infrastructure adapters."""
 
-    postgres: Optional[PostgresRuntime] = None
-    redis: Optional[RedisRuntime] = None
-    qdrant: Optional[QdrantRuntime] = None
-    openai: Optional[OpenAIRuntime] = None
+    postgres: PostgresRuntime | None = None
+    redis: RedisRuntime | None = None
+    qdrant: QdrantRuntime | None = None
+    openai: OpenAIRuntime | None = None
     bootstrap_errors: tuple = ()
 
 

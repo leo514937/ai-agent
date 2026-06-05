@@ -1,15 +1,13 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import timedelta
-from typing import Iterable, List
 
 from learning_agent_service.domain.memory import (
     MemoryCandidate,
-    MemoryDeletionStatus,
     MemoryScope,
     MemorySensitivity,
-    MemoryStatus,
 )
 
 
@@ -31,7 +29,7 @@ class MemoryGovernancePolicy:
     config: MemoryGovernancePolicyConfig = field(default_factory=MemoryGovernancePolicyConfig)
 
     def evaluate(self, candidate: MemoryCandidate) -> MemoryCandidate:
-        notes: List[str] = list(candidate.approval_notes)
+        notes: list[str] = list(candidate.approval_notes)
         should_promote = bool(candidate.should_promote)
         action = "approve"
         require_confirmation = False
@@ -82,5 +80,5 @@ class MemoryGovernancePolicy:
             }
         )
 
-    def evaluate_many(self, candidates: Iterable[MemoryCandidate]) -> List[MemoryCandidate]:
+    def evaluate_many(self, candidates: Iterable[MemoryCandidate]) -> list[MemoryCandidate]:
         return [self.evaluate(candidate) for candidate in candidates]

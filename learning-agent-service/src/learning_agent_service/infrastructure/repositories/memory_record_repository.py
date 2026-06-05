@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Sequence
+from collections.abc import Sequence
+from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
 from learning_agent_service.domain.memory import (
-    MemoryCandidate,
     MemoryAccessLog,
+    MemoryCandidate,
     MemoryDeletionJob,
     MemoryDeletionStatus,
     MemoryEdge,
@@ -27,6 +28,7 @@ from learning_agent_service.infrastructure.db.models import (
     MemoryEdgeModel,
     MemoryRecordModel,
 )
+from learning_agent_service.domain.utils import utcnow as _utcnow
 
 from .base import SqlAlchemyRepositoryBase
 
@@ -38,16 +40,12 @@ except ImportError:  # pragma: no cover - depends on runtime installation.
     IntegrityError = Exception
 
 
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
-
-
-def _ensure_aware(dt: Optional[datetime]) -> Optional[datetime]:
+def _ensure_aware(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone(timezone.utc)
+        return dt.replace(tzinfo=UTC)
+    return dt.astimezone(UTC)
 
 
 def _enum_value(value: Any) -> str:
@@ -85,7 +83,7 @@ def _default_memory_id(record: MemoryRecord) -> str:
     return f"{record.user_id}:{topic}:{record.memory_type.value}:{source_turn_id or uuid4().hex[:12]}"
 
 
-def _record_to_model_fields(record: MemoryRecord) -> Dict[str, Any]:
+def _record_to_model_fields(record: MemoryRecord) -> dict[str, Any]:
     normalized = record.model_copy(
         update={
             "memory_id": record.memory_id or _default_memory_id(record),
@@ -345,7 +343,7 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
     def upsert(self, record: MemoryRecord) -> MemoryRecord:
         return self.create(record)
 
-    def get(self, memory_id: str) -> Optional[MemoryRecord]:
+    def get(self, memory_id: str) -> MemoryRecord | None:
         self._require_sqlalchemy()
         with self.session_scope() as session:
             model = session.execute(
@@ -353,7 +351,7 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
             ).scalar_one_or_none()
             return _model_to_record(model) if model is not None else None
 
-    def find_active_by_user(self, user_id: str) -> List[MemoryRecord]:
+    def find_active_by_user(self, user_id: str) -> list[MemoryRecord]:
         self._require_sqlalchemy()
         now = _utcnow()
         with self.session_scope() as session:
@@ -389,7 +387,7 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
             and (_ensure_aware(model.effective_to) is None or _ensure_aware(model.effective_to) > now)
         ]
 
-    def iter_reindexable_records(self) -> List[MemoryRecord]:
+    def iter_reindexable_records(self) -> list[MemoryRecord]:
         self._require_sqlalchemy()
         now = _utcnow()
         with self.session_scope() as session:
@@ -410,7 +408,7 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
                 ).scalars()
             )
         models.sort(key=lambda item: (item.importance, item.confidence, item.updated_at), reverse=True)
-        records: List[MemoryRecord] = []
+        records: list[MemoryRecord] = []
         for model in models:
             if (_ensure_aware(model.effective_from) is not None and _ensure_aware(model.effective_from) > now):
                 continue
@@ -421,7 +419,7 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
             records.append(_model_to_record(model))
         return records
 
-    def list_by_scope(self, user_id: str, scope: MemoryScope) -> List[MemoryRecord]:
+    def list_by_scope(self, user_id: str, scope: MemoryScope) -> list[MemoryRecord]:
         self._require_sqlalchemy()
         now = _utcnow()
         with self.session_scope() as session:
@@ -455,14 +453,14 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
         query: str,
         user_id: str,
         limit: int = 10,
-        memory_types: Optional[Sequence[MemoryType]] = None,
-    ) -> List[MemoryRecord]:
+        memory_types: Sequence[MemoryType] | None = None,
+    ) -> list[MemoryRecord]:
         self._require_sqlalchemy()
         needle = (query or "").lower().strip()
         allowed_types = {item.value if hasattr(item, "value") else str(item or "").strip().lower() for item in memory_types or []}
         allowed_types = {item for item in allowed_types if item}
         records = self.find_active_by_user(user_id)
-        scored: List[tuple[float, MemoryRecord]] = []
+        scored: list[tuple[float, MemoryRecord]] = []
         for record in records:
             if record.status in {MemoryStatus.DELETED, MemoryStatus.EXPIRED, MemoryStatus.SUPERSEDED, MemoryStatus.INACTIVE}:
                 continue
@@ -493,10 +491,10 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
         *,
         user_id: str,
         scope: MemoryScope,
-        topic: Optional[str],
+        topic: str | None,
         memory_type: MemoryType,
-        normalized_key: Optional[str] = None,
-    ) -> List[MemoryRecord]:
+        normalized_key: str | None = None,
+    ) -> list[MemoryRecord]:
         self._require_sqlalchemy()
         with self.session_scope() as session:
             models = list(
@@ -533,7 +531,7 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
         candidates.sort(key=lambda item: (item.updated_at, item.confidence, item.importance), reverse=True)
         return candidates
 
-    def update_status(self, memory_id: str, status: MemoryStatus) -> Optional[MemoryRecord]:
+    def update_status(self, memory_id: str, status: MemoryStatus) -> MemoryRecord | None:
         self._require_sqlalchemy()
         with self.session_scope() as session:
             model = session.execute(
@@ -556,7 +554,7 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
         superseded_by: str,
         reason: str,
         edge_type: MemoryEdgeType = MemoryEdgeType.SUPERSEDES,
-    ) -> Optional[MemoryEdge]:
+    ) -> MemoryEdge | None:
         self._require_sqlalchemy()
         with self.session_scope() as session:
             source = session.execute(
@@ -589,7 +587,7 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
             session.flush()
             return _memory_edge_to_domain(edge)
 
-    def soft_delete(self, memory_id: str, reason: str) -> Optional[MemoryRecord]:
+    def soft_delete(self, memory_id: str, reason: str) -> MemoryRecord | None:
         self._require_sqlalchemy()
         with self.session_scope() as session:
             model = session.execute(
@@ -616,7 +614,7 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
             session.flush()
             return _model_to_record(model)
 
-    def increment_access_count(self, memory_id: str) -> Optional[MemoryRecord]:
+    def increment_access_count(self, memory_id: str) -> MemoryRecord | None:
         self._require_sqlalchemy()
         with self.session_scope() as session:
             model = session.execute(
@@ -643,14 +641,14 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
             session.flush()
             return _model_to_record(model)
 
-    def mark_accessed(self, memory_id: str) -> Optional[MemoryRecord]:
+    def mark_accessed(self, memory_id: str) -> MemoryRecord | None:
         return self.increment_access_count(memory_id)
 
     def list_deletion_jobs(
         self,
         *,
-        status: Optional[MemoryDeletionStatus] = None,
-    ) -> List[MemoryDeletionJob]:
+        status: MemoryDeletionStatus | None = None,
+    ) -> list[MemoryDeletionJob]:
         self._require_sqlalchemy()
         with self.session_scope() as session:
             query = select(MemoryDeletionJobModel)
@@ -660,7 +658,7 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
         models.sort(key=lambda item: item.scheduled_at, reverse=True)
         return [_deletion_job_to_domain(model) for model in models]
 
-    def list_access_logs(self, memory_id: str) -> List[MemoryAccessLog]:
+    def list_access_logs(self, memory_id: str) -> list[MemoryAccessLog]:
         self._require_sqlalchemy()
         with self.session_scope() as session:
             models = list(
@@ -703,7 +701,7 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
             session.flush()
             return instance
 
-    def get_candidate(self, candidate_id: str) -> Optional[MemoryCandidate]:
+    def get_candidate(self, candidate_id: str) -> MemoryCandidate | None:
         self._require_sqlalchemy()
         with self.session_scope() as session:
             model = session.execute(
@@ -715,15 +713,15 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
         self,
         candidate_id: str,
         *,
-        status: Optional[str] = None,
-        governance_action: Optional[str] = None,
-        require_confirmation: Optional[bool] = None,
-        decision_reason: Optional[str] = None,
-        conflict_ids: Optional[List[str]] = None,
-        deletion_job_ids: Optional[List[str]] = None,
-        skip_reason: Optional[str] = None,
-        extra: Optional[Dict[str, Any]] = None,
-    ) -> Optional[MemoryCandidate]:
+        status: str | None = None,
+        governance_action: str | None = None,
+        require_confirmation: bool | None = None,
+        decision_reason: str | None = None,
+        conflict_ids: list[str] | None = None,
+        deletion_job_ids: list[str] | None = None,
+        skip_reason: str | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> MemoryCandidate | None:
         self._require_sqlalchemy()
         with self.session_scope() as session:
             model = session.execute(
@@ -752,7 +750,7 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
             session.flush()
             return _candidate_to_domain(model)
 
-    def list_candidates(self, user_id: Optional[str] = None) -> List[MemoryCandidate]:
+    def list_candidates(self, user_id: str | None = None) -> list[MemoryCandidate]:
         self._require_sqlalchemy()
         with self.session_scope() as session:
             query = select(MemoryCandidateModel)
@@ -762,10 +760,10 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
         models.sort(key=lambda item: (item.updated_at, item.created_at), reverse=True)
         return [_candidate_to_domain(model) for model in models]
 
-    def mark_deletion_job_running(self, deletion_job_id: str) -> Optional[MemoryDeletionJob]:
+    def mark_deletion_job_running(self, deletion_job_id: str) -> MemoryDeletionJob | None:
         return self._update_deletion_job_status(deletion_job_id, MemoryDeletionStatus.RUNNING)
 
-    def mark_deletion_job_succeeded(self, deletion_job_id: str) -> Optional[MemoryDeletionJob]:
+    def mark_deletion_job_succeeded(self, deletion_job_id: str) -> MemoryDeletionJob | None:
         self._require_sqlalchemy()
         with self.session_scope() as session:
             model = session.execute(
@@ -780,7 +778,7 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
             session.flush()
             return _deletion_job_to_domain(model)
 
-    def mark_deletion_job_failed(self, deletion_job_id: str, error_message: str) -> Optional[MemoryDeletionJob]:
+    def mark_deletion_job_failed(self, deletion_job_id: str, error_message: str) -> MemoryDeletionJob | None:
         self._require_sqlalchemy()
         with self.session_scope() as session:
             model = session.execute(
@@ -795,7 +793,7 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
             session.flush()
             return _deletion_job_to_domain(model)
 
-    def claim_deletion_jobs(self, limit: int = 20) -> List[MemoryDeletionJob]:
+    def claim_deletion_jobs(self, limit: int = 20) -> list[MemoryDeletionJob]:
         self._require_sqlalchemy()
         with self.session_scope() as session:
             models = list(
@@ -826,8 +824,8 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
         target_memory_id: str,
         edge_type: MemoryEdgeType,
         reason: str,
-        extra: Optional[Dict[str, Any]] = None,
-        edge_id: Optional[str] = None,
+        extra: dict[str, Any] | None = None,
+        edge_id: str | None = None,
     ) -> MemoryEdgeModel:
         return self._create_edge_row(
             source_memory_id=source_memory_id,
@@ -843,11 +841,11 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
         *,
         memory_id: str,
         user_id: str,
-        session_id: Optional[str],
-        vector_id: Optional[str],
+        session_id: str | None,
+        vector_id: str | None,
         reason: str,
-    ) -> List[MemoryDeletionJobModel]:
-        jobs: List[MemoryDeletionJobModel] = []
+    ) -> list[MemoryDeletionJobModel]:
+        jobs: list[MemoryDeletionJobModel] = []
         for target_store in (
             MemoryTargetStore.POSTGRES,
             MemoryTargetStore.QDRANT,
@@ -875,8 +873,8 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
         target_memory_id: str,
         edge_type: MemoryEdgeType,
         reason: str,
-        extra: Optional[Dict[str, Any]] = None,
-        edge_id: Optional[str] = None,
+        extra: dict[str, Any] | None = None,
+        edge_id: str | None = None,
     ) -> MemoryEdgeModel:
         return MemoryEdgeModel(
             edge_id=edge_id or f"edge:{uuid4().hex}",
@@ -891,7 +889,7 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
         self,
         deletion_job_id: str,
         status: MemoryDeletionStatus,
-    ) -> Optional[MemoryDeletionJob]:
+    ) -> MemoryDeletionJob | None:
         self._require_sqlalchemy()
         with self.session_scope() as session:
             model = session.execute(

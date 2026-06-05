@@ -1,29 +1,29 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from datetime import UTC, datetime
+from typing import Any
 
-from learning_agent_service.domain.memory import MemoryCandidate
-from learning_agent_service.domain.memory import MemorySource
+from learning_agent_service.domain.memory import MemoryCandidate, MemorySource
 from learning_agent_service.memory.preferences import extract_preference_signal
 
 from .canonical import CanonicalTopicResolver
+from .extraction import LLMMemoryExtractor, RuleBasedMemoryExtractor
 from .gates import MemoryPromotionGate
+from .governance import MemoryGovernancePolicy
 from .models import (
     DurableFactRequest,
     MemoryPromotionInput,
     MemoryPromotionResult,
-    PersistSessionPlan,
     PersistentSessionContext,
+    PersistSessionPlan,
     SemanticMemoryFact,
     SessionUpdate,
 )
-from .extraction import LLMMemoryExtractor, RuleBasedMemoryExtractor
-from .governance import MemoryGovernancePolicy
 
 
-def _mapping_dict(value: Any) -> Dict[str, Any]:
+def _mapping_dict(value: Any) -> dict[str, Any]:
     if isinstance(value, Mapping):
         return dict(value)
     return {}
@@ -39,23 +39,23 @@ class DurableMemoryWritePlan:
     session_update: SessionUpdate
     preference_patch: Mapping[str, Any]
     session_preference_patch: Mapping[str, Any]
-    profile_updates: Tuple[Mapping[str, Any], ...]
-    semantic_facts: Tuple[SemanticMemoryFact, ...]
-    weak_topics: Tuple[str, ...]
-    durable_fact_requests: Tuple[DurableFactRequest, ...]
-    outbox_events: Tuple[Mapping[str, Any], ...]
+    profile_updates: tuple[Mapping[str, Any], ...]
+    semantic_facts: tuple[SemanticMemoryFact, ...]
+    weak_topics: tuple[str, ...]
+    durable_fact_requests: tuple[DurableFactRequest, ...]
+    outbox_events: tuple[Mapping[str, Any], ...]
 
 
 class SessionMemoryUpdater:
-    def __init__(self, resolver: Optional[CanonicalTopicResolver] = None) -> None:
+    def __init__(self, resolver: CanonicalTopicResolver | None = None) -> None:
         self._resolver = resolver or CanonicalTopicResolver()
 
     def build_update(
         self,
         current: PersistentSessionContext,
-        resolved_topic: Optional[str],
-        clarification_result: Optional[Mapping[str, Any]] = None,
-        summary_payload: Optional[Mapping[str, Any]] = None,
+        resolved_topic: str | None,
+        clarification_result: Mapping[str, Any] | None = None,
+        summary_payload: Mapping[str, Any] | None = None,
     ) -> SessionUpdate:
         topic = self._resolver.canonicalize(resolved_topic) if resolved_topic else current.current_topic
         entities = list(current.recent_entities)
@@ -90,7 +90,7 @@ class SessionMemoryUpdater:
             confirmed_facts=confirmed_facts,
             next_steps=next_steps,
             summary_version=current.summary_version + (1 if summary_changed else 0),
-            summary_updated_at=datetime.now(timezone.utc) if summary_changed else current.summary_updated_at,
+            summary_updated_at=datetime.now(UTC) if summary_changed else current.summary_updated_at,
             pending_clarification=_mapping_dict(clarification_result) or current.pending_clarification,
         )
 
@@ -116,13 +116,13 @@ class SessionMemoryUpdater:
 
     def _build_history_summary(
         self,
-        current_summary: Optional[str],
-        topic: Optional[str],
+        current_summary: str | None,
+        topic: str | None,
         *,
-        open_questions: Tuple[str, ...] = (),
-        confirmed_facts: Tuple[str, ...] = (),
-        next_steps: Tuple[str, ...] = (),
-    ) -> Optional[str]:
+        open_questions: tuple[str, ...] = (),
+        confirmed_facts: tuple[str, ...] = (),
+        next_steps: tuple[str, ...] = (),
+    ) -> str | None:
         canonical_topic = self._resolver.canonicalize(topic) if topic else ""
         segments = [segment.strip() for segment in (current_summary or "").split(" -> ") if segment.strip()]
         if canonical_topic:
@@ -143,12 +143,12 @@ class SessionMemoryUpdater:
 class MemoryPromotionPolicy:
     def __init__(
         self,
-        config: PromotionConfig = None,
-        resolver: Optional[CanonicalTopicResolver] = None,
-        extractor: Optional[RuleBasedMemoryExtractor] = None,
-        llm_extractor: Optional[LLMMemoryExtractor] = None,
-        governance: Optional[MemoryGovernancePolicy] = None,
-        promotion_gate: Optional[MemoryPromotionGate] = None,
+        config: PromotionConfig | None = None,
+        resolver: CanonicalTopicResolver | None = None,
+        extractor: RuleBasedMemoryExtractor | None = None,
+        llm_extractor: LLMMemoryExtractor | None = None,
+        governance: MemoryGovernancePolicy | None = None,
+        promotion_gate: MemoryPromotionGate | None = None,
     ) -> None:
         self.config = config or PromotionConfig()
         self._resolver = resolver or CanonicalTopicResolver()
@@ -158,11 +158,11 @@ class MemoryPromotionPolicy:
         self._governance = governance or MemoryGovernancePolicy()
         self._promotion_gate = promotion_gate or MemoryPromotionGate()
 
-    def govern_candidates(self, candidates: List[MemoryCandidate]) -> List[MemoryCandidate]:
+    def govern_candidates(self, candidates: list[MemoryCandidate]) -> list[MemoryCandidate]:
         return self._governance.evaluate_many(candidates)
 
     def evaluate(self, payload: MemoryPromotionInput) -> MemoryPromotionResult:
-        now = payload.current_time or datetime.now(timezone.utc)
+        now = payload.current_time or datetime.now(UTC)
         topic = self._resolver.canonicalize(payload.resolved_topic) if payload.resolved_topic else None
         session_update = self._updater.build_update(
             current=payload.current_session,
@@ -171,13 +171,13 @@ class MemoryPromotionPolicy:
             summary_payload=payload.extra,
         )
 
-        reasons: List[str] = []
-        preference_patch: Dict[str, Any] = {}
-        session_preference_patch: Dict[str, Any] = {}
-        profile_updates: List[Dict[str, Any]] = []
-        durable_fact_requests: List[DurableFactRequest] = []
-        semantic_facts: List[SemanticMemoryFact] = []
-        outbox_events: List[Mapping[str, Any]] = []
+        reasons: list[str] = []
+        preference_patch: dict[str, Any] = {}
+        session_preference_patch: dict[str, Any] = {}
+        profile_updates: list[dict[str, Any]] = []
+        durable_fact_requests: list[DurableFactRequest] = []
+        semantic_facts: list[SemanticMemoryFact] = []
+        outbox_events: list[Mapping[str, Any]] = []
 
         profile = payload.current_preferences
         counters = dict(profile.answer_style_counter) if profile else {}
@@ -432,6 +432,7 @@ class MemoryPromotionPolicy:
             session_preference_patch=result.session_preference_patch,
             profile_updates=result.profile_updates,
             semantic_facts=result.semantic_facts,
+            weak_topics=result.weak_topics,
             durable_fact_requests=result.durable_fact_requests,
             outbox_events=result.outbox_events,
         )

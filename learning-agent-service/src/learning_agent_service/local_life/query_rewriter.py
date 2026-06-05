@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timedelta, timezone
-from typing import Any, Mapping, Optional
+from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+from learning_agent_service.domain.utils import as_mapping as _as_mapping, clean_text as _clean_text, coerce_float as _coerce_float
 
 from .schemas import LocationNorm, QueryUnderstandingResult, TimeNorm
 
@@ -41,24 +44,6 @@ _CITY_NAMES = (
 
 _SHOP_QUERY_KEYS = ("selected_shop_name", "shop_name", "current_shop")
 
-
-def _as_mapping(value: Any) -> Mapping[str, Any]:
-    if isinstance(value, Mapping):
-        return value
-    if hasattr(value, "model_dump"):
-        dumped = value.model_dump(mode="json")
-        if isinstance(dumped, Mapping):
-            return dumped
-    return {}
-
-
-def _clean_text(value: Any) -> Optional[str]:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
-
-
 def _merge_text_values(*values: Any) -> list[str]:
     merged: list[str] = []
     seen: set[str] = set()
@@ -74,7 +59,7 @@ def _merge_text_values(*values: Any) -> list[str]:
     return merged
 
 
-def _parse_timestamp(value: Any) -> Optional[datetime]:
+def _parse_timestamp(value: Any) -> datetime | None:
     if not value:
         return None
     if isinstance(value, datetime):
@@ -90,7 +75,7 @@ def _parse_timestamp(value: Any) -> Optional[datetime]:
         return None
 
 
-def _extract_category(text: str, client_context: Mapping[str, Any], session_context: Mapping[str, Any]) -> Optional[str]:
+def _extract_category(text: str, client_context: Mapping[str, Any], session_context: Mapping[str, Any]) -> str | None:
     for keyword, category in _CATEGORY_KEYWORDS:
         if keyword in text:
             return category
@@ -101,7 +86,7 @@ def _extract_category(text: str, client_context: Mapping[str, Any], session_cont
     return None
 
 
-def _extract_shop_query(client_context: Mapping[str, Any], session_context: Mapping[str, Any]) -> Optional[str]:
+def _extract_shop_query(client_context: Mapping[str, Any], session_context: Mapping[str, Any]) -> str | None:
     for key in _SHOP_QUERY_KEYS:
         value = client_context.get(key) or session_context.get(key)
         if value:
@@ -118,11 +103,11 @@ def _now_from_context(client_context: Mapping[str, Any], session_context: Mappin
     ):
         parsed = _parse_timestamp(candidate)
         if parsed is not None:
-            return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-    return datetime.now(timezone.utc)
+            return parsed.astimezone(UTC) if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    return datetime.now(UTC)
 
 
-def _extract_city(text: str, client_context: Mapping[str, Any], session_context: Mapping[str, Any]) -> Optional[str]:
+def _extract_city(text: str, client_context: Mapping[str, Any], session_context: Mapping[str, Any]) -> str | None:
     for key in ("city", "current_city", "location_city"):
         value = client_context.get(key) or session_context.get(key)
         if value:
@@ -155,16 +140,6 @@ def _extract_location(text: str, client_context: Mapping[str, Any], session_cont
         radius_km=radius_km,
     )
 
-
-def _coerce_float(value: Any) -> Optional[float]:
-    if value is None or value == "":
-        return None
-    try:
-        return float(value)
-    except Exception:
-        return None
-
-
 def _extract_time(text: str, now: datetime) -> TimeNorm:
     lowered = text.replace(" ", "")
     if any(token in lowered for token in ("今晚", "今天晚上", "今晚吃饭")):
@@ -178,7 +153,7 @@ def _extract_time(text: str, now: datetime) -> TimeNorm:
     return TimeNorm()
 
 
-def _meal_period_label(time_norm: TimeNorm) -> Optional[str]:
+def _meal_period_label(time_norm: TimeNorm) -> str | None:
     if time_norm.type == "tonight":
         return "今晚"
     if time_norm.type == "tomorrow_night":
@@ -190,7 +165,7 @@ def _meal_period_label(time_norm: TimeNorm) -> Optional[str]:
     return None
 
 
-def _scene_label(scene: Optional[str]) -> Optional[str]:
+def _scene_label(scene: str | None) -> str | None:
     if scene == "family_dinner":
         return "家庭聚餐"
     if scene == "date":
@@ -271,7 +246,7 @@ def _extract_preferences(text: str) -> tuple[list[str], list[str], list[str]]:
     return preferences, avoid, rewritten
 
 
-def _extract_scene(text: str) -> Optional[str]:
+def _extract_scene(text: str) -> str | None:
     lowered = text.replace(" ", "")
     if any(token in lowered for token in ("爸妈", "父母", "长辈", "老人")):
         return "family_dinner"
@@ -366,7 +341,7 @@ def normalize_query(
     time_phrase = _meal_period_label(time_norm)
     scene_phrase = _scene_label(scene)
     category_phrase = category if category and category != "餐厅" else None
-    price_phrase: Optional[str] = None
+    price_phrase: str | None = None
     if min_price is not None and max_price is not None:
         if min_price == max_price:
             price_phrase = f"人均{int(min_price)}元"

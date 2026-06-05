@@ -10,17 +10,17 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any
 
 try:
     from sqlalchemy import (
+        JSON,
         Boolean,
         DateTime,
         Float,
         ForeignKey,
         Index,
         Integer,
-        JSON,
         String,
         Text,
         UniqueConstraint,
@@ -33,30 +33,30 @@ try:
 except ImportError:  # pragma: no cover - exercised only before dependencies are installed.
     SQLALCHEMY_AVAILABLE = False
 
-    class _PlaceholderType(object):
+    class _PlaceholderType:
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             self.args = args
             self.kwargs = kwargs
 
-    class _MappedAlias(object):
-        def __class_getitem__(cls, item: Any) -> "_MappedAlias":
+    class _MappedAlias:
+        def __class_getitem__(cls, item: Any) -> _MappedAlias:
             return cls
 
     def mapped_column(*args: Any, **kwargs: Any) -> None:
         return None
 
-    class _FallbackMetadata(object):
+    class _FallbackMetadata:
         def create_all(self, *args: Any, **kwargs: Any) -> None:
             raise RuntimeError("sqlalchemy is not installed")
 
-    class DeclarativeBase(object):
+    class DeclarativeBase:
         metadata = _FallbackMetadata()
 
     Boolean = DateTime = Float = ForeignKey = Index = Integer = JSON = String = Text = UniqueConstraint = _PlaceholderType
     Mapped = _MappedAlias
     text = _PlaceholderType
 
-    class _Func(object):
+    class _Func:
         @staticmethod
         def now() -> None:
             return None
@@ -72,7 +72,7 @@ class Base(DeclarativeBase):
     """Shared SQLAlchemy declarative base for durable tables."""
 
 
-class TimestampMixin(object):
+class TimestampMixin:
     """Standard created/updated timestamps for durable rows."""
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -94,7 +94,7 @@ class UserPreferenceProfileModel(TimestampMixin, Base):
     user_id: Mapped[str] = mapped_column(String(128), nullable=False)
     answer_style: Mapped[str] = mapped_column(String(64), nullable=True)
     explanation_depth: Mapped[str] = mapped_column(String(64), nullable=True)
-    extra: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    extra: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
 
 class UserProfilePreferenceModel(TimestampMixin, Base):
@@ -125,7 +125,7 @@ class UserProfilePreferenceModel(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     source_session_id: Mapped[str] = mapped_column(String(128), nullable=True)
-    extra: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    extra: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
 
 class ClarificationRecordModel(TimestampMixin, Base):
@@ -140,12 +140,12 @@ class ClarificationRecordModel(TimestampMixin, Base):
     turn_id: Mapped[str] = mapped_column(String(128), nullable=False)
     ambiguity_type: Mapped[str] = mapped_column(String(64), nullable=False)
     question_text: Mapped[str] = mapped_column(Text, nullable=False)
-    options_json: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    options_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     selected_option_id: Mapped[str] = mapped_column(String(128), nullable=True)
     selected_option_label: Mapped[str] = mapped_column(String(255), nullable=True)
     resolution_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
-    extra: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    extra: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
 
 class ToolInvocationLogModel(TimestampMixin, Base):
@@ -166,9 +166,9 @@ class ToolInvocationLogModel(TimestampMixin, Base):
     duration_ms: Mapped[int] = mapped_column(Integer, nullable=True)
     degraded_to: Mapped[str] = mapped_column(String(64), nullable=True)
     error_code: Mapped[str] = mapped_column(String(32), nullable=True)
-    input_summary: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
-    output_summary: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
-    extra: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    input_summary: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    output_summary: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    extra: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
 
 class KnowledgeDocumentModel(TimestampMixin, Base):
@@ -189,7 +189,7 @@ class KnowledgeDocumentModel(TimestampMixin, Base):
     checksum: Mapped[str] = mapped_column(String(128), nullable=False)
     active_version: Mapped[str] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
-    extra: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    extra: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
 
 class KnowledgeDocumentVersionModel(TimestampMixin, Base):
@@ -215,7 +215,7 @@ class KnowledgeDocumentVersionModel(TimestampMixin, Base):
     activated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     invalidated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     rollback_from_version: Mapped[str] = mapped_column(String(64), nullable=True)
-    extra: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    extra: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
 
 class MemoryRecordModel(TimestampMixin, Base):
@@ -255,7 +255,7 @@ class MemoryRecordModel(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     summary: Mapped[str] = mapped_column(Text, nullable=True)
-    content: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    content: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     importance: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     stability: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
@@ -277,9 +277,9 @@ class MemoryRecordModel(TimestampMixin, Base):
     superseded_by: Mapped[str] = mapped_column(String(128), nullable=True)
     superseded_by_memory_id: Mapped[str] = mapped_column(String(128), nullable=True)
     vector_id: Mapped[str] = mapped_column(String(128), nullable=True)
-    raw_evidence: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    raw_evidence: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     schema_version: Mapped[str] = mapped_column(String(32), nullable=False, default="2")
-    extra: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    extra: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
     @property
     def source_turn_id(self) -> str | None:
@@ -336,7 +336,7 @@ class MemoryCandidateModel(TimestampMixin, Base):
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="model_inferred")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     summary: Mapped[str] = mapped_column(Text, nullable=True)
-    content: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    content: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     importance: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     stability: Mapped[float] = mapped_column(Float, nullable=False, default=0.5)
@@ -352,11 +352,11 @@ class MemoryCandidateModel(TimestampMixin, Base):
     supersedes: Mapped[str] = mapped_column(String(128), nullable=True)
     superseded_by: Mapped[str] = mapped_column(String(128), nullable=True)
     vector_id: Mapped[str] = mapped_column(String(128), nullable=True)
-    raw_evidence: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    raw_evidence: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     governance_action: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     require_confirmation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     approval_notes: Mapped[list[Any]] = mapped_column(JSON, nullable=False, default=list)
-    extra: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    extra: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
 
 class MemoryEdgeModel(TimestampMixin, Base):
@@ -381,7 +381,7 @@ class MemoryEdgeModel(TimestampMixin, Base):
     )
     edge_type: Mapped[str] = mapped_column(String(32), nullable=False, default="related_to")
     reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    extra: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    extra: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
 
 class MemoryAccessLogModel(TimestampMixin, Base):
@@ -405,7 +405,7 @@ class MemoryAccessLogModel(TimestampMixin, Base):
     action: Mapped[str] = mapped_column(String(32), nullable=False, default="read")
     accessed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     trace_id: Mapped[str] = mapped_column(String(128), nullable=True)
-    extra: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    extra: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
 
 class MemoryDeletionJobModel(TimestampMixin, Base):
@@ -432,7 +432,7 @@ class MemoryDeletionJobModel(TimestampMixin, Base):
     executed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
     error_message: Mapped[str] = mapped_column(Text, nullable=True)
     vector_id: Mapped[str] = mapped_column(String(128), nullable=True)
-    extra: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    extra: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
 
 class MemoryOutboxModel(TimestampMixin, Base):
@@ -454,7 +454,7 @@ class MemoryOutboxModel(TimestampMixin, Base):
     turn_id: Mapped[str] = mapped_column(String(128), nullable=True)
     event_type: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
-    payload: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     dedupe_key: Mapped[str] = mapped_column(String(255), nullable=False)
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -462,7 +462,7 @@ class MemoryOutboxModel(TimestampMixin, Base):
     last_error: Mapped[str] = mapped_column(Text, nullable=True)
     trace_id: Mapped[str] = mapped_column(String(128), nullable=True)
     vector_id: Mapped[str] = mapped_column(String(128), nullable=True)
-    extra: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    extra: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
 
 
 class MemoryTraceModel(Base):
@@ -507,7 +507,7 @@ class OutboxEventModel(TimestampMixin, Base):
     aggregate_id: Mapped[str] = mapped_column(String(128), nullable=False)
     event_type: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
-    payload: Mapped[Dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     dedupe_key: Mapped[str] = mapped_column(String(255), nullable=False)
     available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=True)
