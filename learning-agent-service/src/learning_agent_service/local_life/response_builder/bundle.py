@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -128,6 +130,23 @@ def build_response_bundle(
         token in compact_query
         for token in ("附近", "周边", "推荐", "几家", "多推荐", "多家")
     )
+    user_slots = getattr(user_need, "slots", None)
+    explicit_shop_hint = bool(selected_shop_id is not None or current_shop) or bool(getattr(user_slots, "shop_id", None) not in (None, "")) or bool(_clean_text(getattr(user_slots, "shop_name", None))) or bool(_clean_text(getattr(user_slots, "shop_query", None)))
+    if (
+        answer_contract is not None
+        and answer_contract.answer_style == "multi_shop_recommendation"
+        and not recommendation_like_query
+        and explicit_shop_hint
+        and str(getattr(user_need, "intent", "") or "").strip() == "merchant_detail"
+    ):
+        answer_contract = answer_contract.model_copy(
+            update={
+                "answer_style": "single_shop_review",
+                "allow_recommendation": False,
+                "allow_extra_context": True,
+                "evidence_policy": "balanced",
+            }
+        )
     if recommendation_like_query:
         if answer_contract is None:
             answer_contract = AnswerContract(
@@ -145,8 +164,6 @@ def build_response_bundle(
                 answer_style="multi_shop_recommendation",
                 missing_info_policy="say_unknown",
             )
-        elif answer_contract.answer_style != "multi_shop_recommendation":
-            answer_contract = answer_contract.model_copy(update={"answer_style": "multi_shop_recommendation"})
 
     # Early fallback check for single shop mode if no candidates are found (P0-Fix)
     # Skip early fallback for multi-facet queries – let _build_facet_driven_answer
@@ -154,7 +171,9 @@ def build_response_bundle(
     # Also skip in clarify mode since the clarification question should be used.
     _req_facet_count = len(getattr(user_need, "required_facets", None) or []) if user_need else 0
     print(f"[DEBUG response_builder] raw_query: {raw_query}, ranked_candidates: {ranked_candidates}, current_shop: {current_shop}, selected_shop_id: {selected_shop_id}")
-    if not ranked_candidates and (current_shop or selected_shop_id) and _req_facet_count <= 1 and mode != "clarify":
+    generic_shop_names = {"这家店", "这家", "这店", "该商家", "商家", "当前店家"}
+    has_specific_shop_context = bool(current_shop and str(current_shop).strip() not in generic_shop_names)
+    if not ranked_candidates and has_specific_shop_context and _req_facet_count <= 1 and mode != "clarify":
         shop_name = current_shop or f"商户{selected_shop_id}"
         import re as _re
         if _re.match(r"^shop:\d+$", str(shop_name)):
@@ -441,6 +460,20 @@ def build_response_bundle(
         pass # Keep original comparison text
     elif answer_contract is not None and answer_contract.answer_style == "clarification":
         pass # Keep original clarify text
+
+    coupon_query = any(token in str(raw_query or "").replace(" ", "") for token in ("券", "优惠", "团购", "代金券"))
+    coupon_answer_markers = ("券", "优惠", "代金券", "团购")
+    generic_topic_names = {"这家店", "这家", "这店", "该商家", "商家", "当前店家"}
+    has_specific_topic = bool(str(current_topic or "").strip() and str(current_topic or "").strip() not in generic_topic_names)
+    if has_specific_topic and coupon_query and not any(marker in str(answer_text or "") for marker in coupon_answer_markers):
+        coupon_answer = build_coupon_only_answer(
+            current_topic=current_topic,
+            ranked_candidates=ranked_candidates,
+            evidence_claims=evidence_claims,
+            facet_result_bundle=facet_result_bundle,
+        )
+        if coupon_answer:
+            answer_text = coupon_answer
 
     if (
         model_answer

@@ -6,7 +6,11 @@ from typing import Any
 from ...domain.contracts import (
     AnswerContract,
     AnswerVerifierResult,
+    LoopCounter,
     EntityJoinResult,
+    ReviewReport,
+    SemanticParseResult,
+    SourceContract,
     RoutingDecision,
     EvidenceQualityDecision,
 )
@@ -112,6 +116,57 @@ def _build_entity_join_result(turn: Any) -> EntityJoinResult:
         extra=extra,
 
     )
+
+
+def _facet_names_from_items(items: Any) -> list[str]:
+    facet_names: list[str] = []
+    for item in list(items or []):
+        if isinstance(item, Mapping):
+            facet_name = str(item.get("name") or item.get("facet") or item.get("facet_name") or "").strip()
+        else:
+            facet_name = str(item or "").strip()
+        if facet_name and facet_name not in facet_names:
+            facet_names.append(facet_name)
+    return facet_names
+
+
+def _facet_source_map_from_items(items: Any) -> dict[str, Any]:
+    source_map: dict[str, Any] = {}
+    for item in list(items or []):
+        if not isinstance(item, Mapping):
+            facet_name = str(item or "").strip()
+            if facet_name and facet_name not in source_map:
+                source_map[facet_name] = {}
+            continue
+        facet_name = str(item.get("name") or item.get("facet") or item.get("facet_name") or "").strip()
+        if not facet_name:
+            continue
+        payload = {
+            key: value
+            for key, value in (
+                ("data_source", item.get("data_source")),
+                ("source", item.get("source")),
+                ("scope_kind", item.get("scope_kind")),
+            )
+            if value not in (None, "", [], {}, ())
+        }
+        if payload:
+            source_map[facet_name] = payload
+        else:
+            source_map.setdefault(facet_name, {})
+    return source_map
+
+
+def _int_list_from_values(values: Any) -> list[int]:
+    parsed: list[int] = []
+    for value in list(values or []):
+        try:
+            parsed_value = int(value)
+        except (TypeError, ValueError):
+            continue
+        if parsed_value not in parsed:
+            parsed.append(parsed_value)
+    return parsed
 
 def _build_answer_contract(
 
@@ -239,10 +294,17 @@ def _build_answer_contract(
 
     routing_contract = getattr(turn, "routing_contract", None)
     allowed_facets = []
+    optional_facets = []
     forbidden_facets = []
+    facet_source_expectations: dict[str, Any] = {}
+    scope_kind: str | None = None
+    answer_style: str | None = None
     if routing_contract is not None:
         allowed_facets = list(routing_contract.compose_allowed_facets)
+        optional_facets = list(routing_contract.optional_facets)
         forbidden_facets = list(routing_contract.forbidden_facets)
+        facet_source_expectations = dict(getattr(routing_contract, "facet_source_map", {}) or {})
+        scope_kind = str(getattr(routing_contract, "scope_kind", "") or "").strip() or None
     else:
         try:
             from ...local_life.answer_contract import AnswerContract as LocalLifeAnswerContract
@@ -256,14 +318,28 @@ def _build_answer_contract(
                 ll_contract = LocalLifeAnswerContract.build_contract(user_need, target_shop)
                 allowed_facets = list(ll_contract.allowed_facets)
                 forbidden_facets = list(ll_contract.forbidden_facets)
+                answer_style = str(getattr(ll_contract, "answer_style", "") or "").strip() or None
+                scope_kind = "single_shop" if answer_style == "single_shop_review" else ("multi_shop" if answer_style == "multi_shop_recommendation" else None)
         except Exception:
             pass
+    optional_facets = optional_facets or _facet_names_from_items(routing_extra.get("optional_facets"))
+    if not facet_source_expectations:
+        facet_source_expectations = _facet_source_map_from_items(required_facets)
+        if optional_facets:
+            for facet_name in optional_facets:
+                facet_source_expectations.setdefault(facet_name, {})
+    if not scope_kind:
+        scope_kind = str(routing_extra.get("scope_kind") or "").strip() or None
+    if not answer_style:
+        answer_style = str(routing_extra.get("answer_style") or "").strip() or None
 
     return AnswerContract(
 
         original_query=str(getattr(turn, "raw_query", "") or ""),
 
         allowed_facets=allowed_facets,
+
+        optional_facets=optional_facets,
 
         forbidden_facets=forbidden_facets,
 
@@ -282,6 +358,9 @@ def _build_answer_contract(
         missing_slots=missing_slots,
 
         clarification_slot=clarification_slot,
+        answer_style=answer_style,
+        scope_kind=scope_kind,
+        facet_source_expectations=facet_source_expectations,
 
         extra={
 
@@ -473,5 +552,186 @@ def _build_answer_verifier_result(
 
         },
 
+    )
+
+
+def _build_semantic_parse_result(
+    turn: Any,
+    routing: RoutingDecision | None,
+    answer_contract: AnswerContract,
+) -> SemanticParseResult:
+    routing_extra = dict(getattr(routing, "extra", {}) or {}) if routing is not None else {}
+    primary_intent = str(getattr(getattr(routing, "intent", None), "name", "") or "").strip() or None
+    top_level_intent = primary_intent or str(routing_extra.get("top_level_intent") or routing_extra.get("answer_style") or answer_contract.answer_style or "").strip() or None
+    sub_intents = _facet_names_from_items(routing_extra.get("sub_intents"))
+    if not sub_intents:
+        sub_intents = [str(item).strip() for item in (routing_extra.get("sub_intent_names") or []) if str(item).strip()]
+    required_facets = [str(facet.get("name") or "").strip() for facet in answer_contract.required_facets if str(facet.get("name") or "").strip()]
+    optional_facets = list(answer_contract.optional_facets) or _facet_names_from_items(routing_extra.get("optional_facets"))
+    forbidden_facets = list(answer_contract.forbidden_facets)
+    constraints = dict(routing_extra.get("constraints") or {})
+    if answer_contract.scope_kind and "scope_kind" not in constraints:
+        constraints["scope_kind"] = answer_contract.scope_kind
+    if answer_contract.answer_style and "answer_style" not in constraints:
+        constraints["answer_style"] = answer_contract.answer_style
+    if answer_contract.facet_source_expectations and "facet_source_expectations" not in constraints:
+        constraints["facet_source_expectations"] = dict(answer_contract.facet_source_expectations)
+    target_reference = (
+        str(routing_extra.get("target_reference") or "").strip()
+        or str(answer_contract.selected_entity or "").strip()
+        or str(getattr(turn, "extra", {}).get("current_shop") or "").strip()
+        or None
+    )
+    confidence = float(getattr(routing, "confidence", 0.0) or 0.0) if routing is not None else float(routing_extra.get("confidence") or 0.0)
+    missing_slots = list(answer_contract.missing_slots or routing_extra.get("missing_slots") or [])
+    return SemanticParseResult(
+        primary_intent=primary_intent,
+        top_level_intent=top_level_intent,
+        sub_intents=sub_intents,
+        required_facets=required_facets,
+        optional_facets=optional_facets,
+        forbidden_facets=forbidden_facets,
+        constraints=constraints,
+        target_reference=target_reference,
+        confidence=confidence,
+        missing_slots=missing_slots,
+        extra={
+            "route_candidate": getattr(routing, "route_candidate", None) if routing is not None else routing_extra.get("route_candidate"),
+            "phase4_mode": _phase4_mode(),
+        },
+    )
+
+
+def _build_source_contract(
+    turn: Any,
+    routing: RoutingDecision | None,
+    answer_contract: AnswerContract,
+    *,
+    selected_shop_id: int | None = None,
+    current_shop: str | None = None,
+    explicit_query_shop: str | None = None,
+) -> SourceContract:
+    routing_extra = dict(getattr(routing, "extra", {}) or {}) if routing is not None else {}
+    source_map = dict(answer_contract.facet_source_expectations or {})
+    if not source_map:
+        source_map = _facet_source_map_from_items(routing_extra.get("required_facets"))
+    comparison_shop_ids = _int_list_from_values(routing_extra.get("comparison_shop_ids"))
+    candidate_shop_ids = _int_list_from_values(routing_extra.get("candidate_shop_ids"))
+    if selected_shop_id is not None and selected_shop_id not in candidate_shop_ids:
+        candidate_shop_ids = [selected_shop_id, *candidate_shop_ids]
+    scope_kind = (
+        str(answer_contract.scope_kind or routing_extra.get("scope_kind") or "").strip()
+        or None
+    )
+    target_reference_source = (
+        str(routing_extra.get("target_reference_source") or "").strip()
+        or ("explicit_query" if explicit_query_shop else None)
+        or ("current_shop" if current_shop else None)
+    )
+    return SourceContract(
+        required_facets=[str(facet.get("name") or "").strip() for facet in answer_contract.required_facets if str(facet.get("name") or "").strip()],
+        optional_facets=list(answer_contract.optional_facets) or _facet_names_from_items(routing_extra.get("optional_facets")),
+        forbidden_facets=list(answer_contract.forbidden_facets),
+        facet_source_map=source_map,
+        target_shop_id=selected_shop_id,
+        candidate_shop_ids=[shop_id for shop_id in candidate_shop_ids if shop_id is not None],
+        comparison_shop_ids=[shop_id for shop_id in comparison_shop_ids if shop_id is not None],
+        scope_kind=scope_kind,
+        target_reference_source=target_reference_source,
+        extra={
+            "current_shop": current_shop,
+            "explicit_query_shop": explicit_query_shop,
+            "route_candidate": getattr(routing, "route_candidate", None) if routing is not None else routing_extra.get("route_candidate"),
+        },
+    )
+
+
+def _build_loop_counter(turn: Any, runtime_context: Mapping[str, Any] | None = None) -> LoopCounter:
+    turn_extra = dict(getattr(turn, "extra", {}) or {})
+    runtime_context = dict(runtime_context or {})
+    runtime_metrics = dict(getattr(getattr(turn, "runtime", None), "metrics", {}) or {})
+
+    def _count(*keys: str) -> int:
+        for source in (turn_extra, runtime_metrics, runtime_context):
+            for key in keys:
+                value = source.get(key)
+                if value in (None, "", [], {}, ()):
+                    continue
+                try:
+                    return max(0, int(value))
+                except (TypeError, ValueError):
+                    continue
+        return 0
+
+    return LoopCounter(
+        retry_rag=_count("retry_rag", "retry_rag_count"),
+        retry_tool=_count("retry_tool", "retry_tool_count"),
+        retry_step=_count("retry_step", "retry_step_count"),
+        repair_answer=_count("repair_answer", "repair_answer_count"),
+        replan=_count("replan", "plan_replan_count"),
+        extra={
+            "graph_recursion_limit": runtime_context.get("graph_recursion_limit"),
+            "tool_loop_limit": runtime_context.get("tool_loop_limit"),
+            "rewrite_loop_limit": runtime_context.get("rewrite_loop_limit"),
+        },
+    )
+
+
+def _build_review_report(
+    request: Any,
+    answer_text: str,
+    entity_join_result: EntityJoinResult,
+    answer_contract: AnswerContract,
+    verifier_result: AnswerVerifierResult,
+    loop_counter: LoopCounter,
+    *,
+    runtime_context: Mapping[str, Any] | None = None,
+) -> ReviewReport:
+    phase4_mode = str(verifier_result.extra.get("phase4_mode") or "").strip().lower()
+    missing_facets = list(answer_contract.evidence_requirements.get("missing_facets") or [])
+    missing_slots = list(answer_contract.tool_requirements.get("missing_slots") or [])
+    failed_facets = [str(item).strip() for item in [*missing_facets, *missing_slots] if str(item).strip()]
+    if verifier_result.passed:
+        decision = "pass"
+        retry_target = None
+    elif phase4_mode == "enforce" and str(verifier_result.suggested_response_mode or "").strip().lower() == "partial_grounded":
+        decision = "repair_answer"
+        retry_target = verifier_result.suggested_response_mode
+    elif "cross_entity_stitching" in {str(item).strip().lower() for item in verifier_result.issues}:
+        decision = "degrade"
+        retry_target = verifier_result.suggested_response_mode
+    elif missing_facets or missing_slots:
+        decision = "repair_answer"
+        retry_target = verifier_result.suggested_response_mode
+    else:
+        decision = "repair_answer" if verifier_result.suggested_response_mode not in {"grounded", "no_answer"} else "degrade"
+        retry_target = verifier_result.suggested_response_mode if decision != "pass" else None
+    retry_count = int(loop_counter.repair_answer or 0)
+    runtime_context = dict(runtime_context or {})
+    max_retry_count = int(runtime_context.get("rewrite_loop_limit") or 0)
+    if max_retry_count <= 0:
+        max_retry_count = int(loop_counter.extra.get("rewrite_loop_limit") or 0)
+    if max_retry_count <= 0:
+        max_retry_count = 0
+    target_step_id = str(runtime_context.get("target_step_id") or "").strip() or None
+    if target_step_id is None:
+        target_step_id = str(loop_counter.extra.get("target_step_id") or "").strip() or None
+    return ReviewReport(
+        decision=decision,
+        reason=str(verifier_result.repair_hint or verifier_result.suggested_response_mode or "verified").strip(),
+        failed_facets=failed_facets,
+        repair_hint=str(verifier_result.repair_hint or ""),
+        retry_target=retry_target,
+        retry_count=retry_count,
+        max_retry_count=max_retry_count,
+        target_step_id=target_step_id,
+        extra={
+            "phase4_mode": phase4_mode or _phase4_mode(),
+            "verifier_issues": list(verifier_result.issues),
+            "answer_confidence": runtime_context.get("answer_confidence"),
+            "candidate_entities": list(entity_join_result.candidate_entities),
+            "selected_entity": entity_join_result.selected_entity,
+            "answer_text_length": len(str(answer_text or "")),
+        },
     )
 

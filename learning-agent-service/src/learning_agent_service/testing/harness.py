@@ -104,7 +104,7 @@ def extract_routing_trace(state: Any) -> dict[str, Any]:
     return routing_trace_to_dict(trace)
 
 
-@dataclass(slots=True)
+@dataclass
 class HarnessCase:
     case_id: str
     query: str
@@ -117,7 +117,7 @@ class HarnessCase:
     forbidden_behaviors: list[str] = field(default_factory=list)
 
 
-@dataclass(slots=True)
+@dataclass
 class ToolMockResult:
     tool_name: str
     status: str = "success"
@@ -125,7 +125,7 @@ class ToolMockResult:
     failure_reason: str | None = None
 
 
-@dataclass(slots=True)
+@dataclass
 class GoldenEvidencePack:
     case_id: str
     evidence_items: list[dict[str, Any]] = field(default_factory=list)
@@ -134,7 +134,7 @@ class GoldenEvidencePack:
     entity_keys: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass(slots=True)
+@dataclass
 class HarnessRunResult:
     case_id: str
     passed: bool
@@ -144,7 +144,7 @@ class HarnessRunResult:
     failures: list[str] = field(default_factory=list)
 
 
-@dataclass(slots=True)
+@dataclass
 class ReplayComparisonResult:
     case_id: str
     passed: bool
@@ -154,7 +154,7 @@ class ReplayComparisonResult:
     failures: list[str] = field(default_factory=list)
 
 
-@dataclass(slots=True)
+@dataclass
 class ReplayComparisonReport:
     total_cases: int
     changed_cases: int
@@ -163,7 +163,7 @@ class ReplayComparisonReport:
     case_status_counts: dict[str, int] = field(default_factory=dict)
 
 
-@dataclass(slots=True)
+@dataclass
 class EvaluationReport:
     total_cases: int
     passed_cases: int
@@ -188,6 +188,7 @@ class TraceHarnessRecorder:
             runtime = _as_mapping(getattr(state, "runtime", None))
             persistent = _as_mapping(getattr(state, "persistent", None))
         runtime_metrics = _as_mapping(runtime.get("metrics"))
+        turn_extra = _as_mapping(turn.get("extra"))
 
         recorded = {
             "case_id": case_id,
@@ -209,6 +210,7 @@ class TraceHarnessRecorder:
             "selected_shop_name": persistent.get("selected_shop_name"),
             "graph_runtime": phase5_trace.get("graph_runtime") or phase5_trace.get("runner_backend") or phase5_trace.get("runner_kind"),
             "graph_fallback": runtime_metrics.get("graph_fallback") or persistent.get("extra", {}).get("graph_fallback") or "none",
+            "final_answer_audit": turn_extra.get("final_answer_audit") or runtime_metrics.get("final_answer_audit") or phase4_trace.get("final_answer_audit"),
             "phase3_trace": phase3_trace,
             "phase5_trace": phase5_trace,
             "phase4_trace": phase4_trace,

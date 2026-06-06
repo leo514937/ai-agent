@@ -190,13 +190,14 @@ def build_multi_shop_recommendation_answer(
     req_facet_names = [f.name for f in getattr(user_need, "required_facets", []) or []] if user_need is not None else []
     scene_requested = "scene_fit" in req_facet_names or any(token in str(getattr(user_need, "raw_query", "") or "") for token in ("约会", "情侣", "家庭聚餐", "安静", "带爸妈"))
     coupon_requested = "coupon" in req_facet_names
+    coupon_like_query = any(token in str(getattr(user_need, "raw_query", "") or "").replace(" ", "") for token in ("?", "??", "??", "???"))
     open_requested = "open_status" in req_facet_names
     if not ranked_candidates:
         generic_lines = ["我先帮你推荐一些更匹配的餐厅方向：", ""]
         if scene_requested:
             generic_lines.append("场景：适合约会。")
         generic_lines.append("推荐理由：当前证据里有较强的候选方向，建议先按距离、口味和环境再细筛。")
-        if coupon_requested:
+        if coupon_requested or coupon_like_query:
             generic_lines.append("券：如果你愿意，我可以继续帮你查实时优惠。")
         if open_requested:
             generic_lines.append("营业：如果你愿意，我也可以继续帮你确认实时营业状态。")
@@ -220,7 +221,7 @@ def build_multi_shop_recommendation_answer(
             parts.append("推荐理由：当前候选里它的综合信息比较靠前，值得优先查看。")
         if scene_requested:
             parts.append("场景：适合约会。")
-        if coupon_requested:
+        if coupon_requested or coupon_like_query:
             coupon_tool_result = _tool_result_for_facet(facet_result_bundle, "coupon", shop_id=candidate.shop_id)
             if coupon_tool_result is not None and coupon_tool_result.status in {"timeout", "error", "degraded", "unsupported"}:
                 parts.append("券：暂时查不到实时券信息，以店铺页面为准。")

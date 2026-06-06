@@ -12,36 +12,27 @@ from learning_agent_service.domain.contracts import (
     RoutingDecision,
     ReferenceResolutionResult,
     RetrievalPlan,
-    SseEnvelope,
 )
 from learning_agent_service.domain.enums import IntentType
 from learning_agent_service.domain.utils import utcnow as _utc_now
 from learning_agent_service.domain.state import GraphState, clone_graph_state
+from ..state import append_runtime_event as _append_state_runtime_event
+from ..state import append_stage_timeline_entry as _append_stage_timeline_entry
 
 _DIRECT_RESPONSE_KINDS = {"greeting", "thanks", "farewell", "empty", "low_info", "profile", "memory_update", "conversation_recap", "location_unavailable"}
 _LOGGER = logging.getLogger(__name__)
 _CLASSIFY_TIMEOUT_SECONDS = 1.2
 _QUERY_REWRITE_TIMEOUT_SECONDS = 1.0
 def _event_sink_from_state(state: GraphState):
+    runtime_context = state.get("runtime_context", {})
+    if isinstance(runtime_context, Mapping) and runtime_context.get("stream_event_sink") is not None:
+        return runtime_context.get("stream_event_sink")
     runtime = state["runtime"]
     return runtime.extra.get("stream_event_sink") if isinstance(runtime.extra, Mapping) else None
 
 
 def _append_runtime_event(state: GraphState, event_type: str, payload: Mapping[str, Any]) -> None:
-    runtime = state["runtime"]
-    events = list(runtime.emitted_events)
-    events.append(
-        SseEnvelope(
-            event_type=event_type,
-            trace_id=runtime.trace_id,
-            session_id=runtime.session_id,
-            turn_id=runtime.turn_id,
-            timestamp=_utc_now(),
-            workflow_version=runtime.workflow_version,
-            payload=dict(payload),
-        )
-    )
-    state["runtime"] = runtime.model_copy(update={"emitted_events": events})
+    _append_state_runtime_event(state, event_type, dict(payload))
 
 
 def _emit_stage_state(
@@ -74,6 +65,17 @@ def _emit_stage_state(
         "details": dict(details or {}),
     }
     _append_runtime_event(state, f"{stage}_{status}" if status != "heartbeat" else "heartbeat", payload)
+    _append_stage_timeline_entry(
+        state,
+        {
+            "stage": stage,
+            "status": status,
+            "route_decision": routing.required_action if routing is not None else None,
+            "route_reason": routing.route_reason if routing is not None else None,
+            "detail": dict(details or {}),
+            "timestamp": _utc_now().isoformat(),
+        },
+    )
     _LOGGER.info(
         "workflow_stage_event %s",
         json.dumps(
@@ -433,6 +435,8 @@ def _restore_pending_clarification_from_result(
     clarification_result = dict(getattr(persistent, "clarification_result", {}) or {})
     if not clarification_result:
         return persistent, turn
+    if bool(clarification_result.get("consumed")):
+        return persistent, turn
 
     ambiguity_type = str(clarification_result.get("ambiguity_type") or "").strip().lower()
     if ambiguity_type not in {"location", "city", "area", "district", "region"}:
@@ -585,25 +589,15 @@ def _cached_rag_gate(turn: Any) -> dict[str, Any] | None:
         return dict(cached_vote)
     return None
 def _event_sink_from_state(state: GraphState):
+    runtime_context = state.get("runtime_context", {})
+    if isinstance(runtime_context, Mapping) and runtime_context.get("stream_event_sink") is not None:
+        return runtime_context.get("stream_event_sink")
     runtime = state["runtime"]
     return runtime.extra.get("stream_event_sink") if isinstance(runtime.extra, Mapping) else None
 
 
 def _append_runtime_event(state: GraphState, event_type: str, payload: Mapping[str, Any]) -> None:
-    runtime = state["runtime"]
-    events = list(runtime.emitted_events)
-    events.append(
-        SseEnvelope(
-            event_type=event_type,
-            trace_id=runtime.trace_id,
-            session_id=runtime.session_id,
-            turn_id=runtime.turn_id,
-            timestamp=_utc_now(),
-            workflow_version=runtime.workflow_version,
-            payload=dict(payload),
-        )
-    )
-    state["runtime"] = runtime.model_copy(update={"emitted_events": events})
+    _append_state_runtime_event(state, event_type, dict(payload))
 
 
 def _emit_stage_state(
@@ -636,6 +630,17 @@ def _emit_stage_state(
         "details": dict(details or {}),
     }
     _append_runtime_event(state, f"{stage}_{status}" if status != "heartbeat" else "heartbeat", payload)
+    _append_stage_timeline_entry(
+        state,
+        {
+            "stage": stage,
+            "status": status,
+            "route_decision": routing.required_action if routing is not None else None,
+            "route_reason": routing.route_reason if routing is not None else None,
+            "detail": dict(details or {}),
+            "timestamp": _utc_now().isoformat(),
+        },
+    )
     _LOGGER.info(
         "workflow_stage_event %s",
         json.dumps(
@@ -898,6 +903,8 @@ def _restore_pending_clarification_from_result(
     clarification_result = dict(getattr(persistent, "clarification_result", {}) or {})
     if not clarification_result:
         return persistent, turn
+    if bool(clarification_result.get("consumed")):
+        return persistent, turn
 
     ambiguity_type = str(clarification_result.get("ambiguity_type") or "").strip().lower()
     if ambiguity_type not in {"location", "city", "area", "district", "region"}:
@@ -1067,6 +1074,7 @@ def _build_recommendation_answer_text(
         lines.append("")
     lines.append("综合建议")
     lines.append("- 如果你更在意氛围和稳定性，建议先从前两家开始看。")
+    lines.append("- 券：如果你想继续看实时优惠，我可以接着帮你查。")
     return "\n".join(lines).strip()
 
 

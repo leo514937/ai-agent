@@ -41,7 +41,11 @@ def _is_optional_annotation(annotation: Any) -> bool:
         return False
 
     origin = get_origin(annotation)
-    if origin in {Union, types.UnionType}:
+    union_types = {Union}
+    union_type = getattr(types, "UnionType", None)
+    if union_type is not None:
+        union_types.add(union_type)
+    if origin in union_types:
         return type(None) in get_args(annotation)
 
     return False
@@ -178,9 +182,58 @@ class EntityJoinResult(CoreModel):
     extra: dict[str, Any] = Field(default_factory=dict)
 
 
+class SemanticParseResult(CoreModel):
+    primary_intent: str | None = None
+    top_level_intent: str | None = None
+    sub_intents: list[str] = Field(default_factory=list)
+    required_facets: list[str] = Field(default_factory=list)
+    optional_facets: list[str] = Field(default_factory=list)
+    forbidden_facets: list[str] = Field(default_factory=list)
+    constraints: dict[str, Any] = Field(default_factory=dict)
+    target_reference: str | None = None
+    confidence: float = 0.0
+    missing_slots: list[str] = Field(default_factory=list)
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+
+class SourceContract(CoreModel):
+    required_facets: list[str] = Field(default_factory=list)
+    optional_facets: list[str] = Field(default_factory=list)
+    forbidden_facets: list[str] = Field(default_factory=list)
+    facet_source_map: dict[str, Any] = Field(default_factory=dict)
+    target_shop_id: int | None = None
+    candidate_shop_ids: list[int] = Field(default_factory=list)
+    comparison_shop_ids: list[int] = Field(default_factory=list)
+    scope_kind: str | None = None
+    target_reference_source: str | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+
+class ReviewReport(CoreModel):
+    decision: Literal["pass", "repair_answer", "retry_rag", "retry_tool", "retry_step", "replan", "degrade"] = "pass"
+    reason: str = ""
+    failed_facets: list[str] = Field(default_factory=list)
+    repair_hint: str = ""
+    retry_target: str | None = None
+    retry_count: int = 0
+    max_retry_count: int = 0
+    target_step_id: str | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+
+class LoopCounter(CoreModel):
+    retry_rag: int = 0
+    retry_tool: int = 0
+    retry_step: int = 0
+    repair_answer: int = 0
+    replan: int = 0
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+
 class AnswerContract(CoreModel):
     original_query: str = ""
     allowed_facets: list[str] = Field(default_factory=list)
+    optional_facets: list[str] = Field(default_factory=list)
     forbidden_facets: list[str] = Field(default_factory=list)
     required_facets: list[dict[str, Any]] = Field(default_factory=list)
     evidence_requirements: dict[str, Any] = Field(default_factory=dict)
@@ -190,6 +243,9 @@ class AnswerContract(CoreModel):
     selected_entity: str | None = None
     missing_slots: list[str] = Field(default_factory=list)
     clarification_slot: str | None = None
+    answer_style: str | None = None
+    scope_kind: str | None = None
+    facet_source_expectations: dict[str, Any] = Field(default_factory=dict)
     extra: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -394,6 +450,7 @@ class RoutingDecision(CoreModel):
     safeguards_triggered: list[str] = Field(default_factory=list)
     fallback_reason: str | None = None
     route_candidate: str | None = None
+    execution_mode: Literal["clarify", "simple", "standard", "complex"] = "simple"
     preferred_chunk_roles: list[str] = Field(default_factory=list)
     tool_candidates: list[str] = Field(default_factory=list)
     clarification_question: str | None = None
@@ -407,11 +464,15 @@ class RoutingContract(CoreModel):
     required_facets: list[str] = Field(default_factory=list)
     optional_facets: list[str] = Field(default_factory=list)
     forbidden_facets: list[str] = Field(default_factory=list)
+    facet_source_map: dict[str, Any] = Field(default_factory=dict)
 
     target_shop_id: int | None = None
     candidate_shop_ids: list[int] = Field(default_factory=list)
+    comparison_shop_ids: list[int] = Field(default_factory=list)
     single_shop_mode: bool = False
     recommendation_mode: bool = False
+    scope_kind: str | None = None
+    target_reference_source: str | None = None
 
     rag_allowed: bool = True
     tool_allowed: bool = True
@@ -730,6 +791,10 @@ class TurnRuntimeState(CoreModel):
     citations: list[Citation] = Field(default_factory=list)
     answer_plan: AnswerPlan | None = None
     entity_join_result: EntityJoinResult | None = None
+    semantic_parse_result: SemanticParseResult | None = None
+    source_contract: SourceContract | None = None
+    review_report: ReviewReport | None = None
+    loop_counter: LoopCounter | None = None
     answer_contract: AnswerContract | None = None
     answer_verifier_result: AnswerVerifierResult | None = None
     tool_plan: ToolSelection | None = None
@@ -857,6 +922,13 @@ HybridRecallCandidate.model_rebuild()
 HybridRecallResult.model_rebuild()
 RagResult.model_rebuild()
 AnswerPlan.model_rebuild()
+SemanticParseResult.model_rebuild()
+SourceContract.model_rebuild()
+ReviewReport.model_rebuild()
+LoopCounter.model_rebuild()
+EntityJoinResult.model_rebuild()
+AnswerContract.model_rebuild()
+AnswerVerifierResult.model_rebuild()
 PlanStep.model_rebuild()
 StepResult.model_rebuild()
 PlanExecutionSummary.model_rebuild()

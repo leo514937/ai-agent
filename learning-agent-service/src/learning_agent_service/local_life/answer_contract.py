@@ -65,6 +65,11 @@ class AnswerContract(BaseModel):
         user_focused_facets = [f for f in req_facet_names if f not in ("location", "category")]
         raw_query = str(getattr(user_need, "raw_query", "") or "")
         compact_query = raw_query.replace(" ", "")
+        user_slots = getattr(user_need, "slots", None)
+        slot_shop_id = getattr(user_slots, "shop_id", None) if user_slots is not None else None
+        slot_shop_name = getattr(user_slots, "shop_name", None) if user_slots is not None else None
+        slot_shop_query = getattr(user_slots, "shop_query", None) if user_slots is not None else None
+        has_explicit_shop_hint = bool(target_shop and (target_shop.shop_id is not None or target_shop.shop_name is not None)) or bool(slot_shop_id not in (None, "")) or bool(str(slot_shop_name or "").strip()) or bool(str(slot_shop_query or "").strip())
         intent_name = str(getattr(user_need, "intent", "") or "").strip()
         inferred_coupon = any(token in compact_query for token in ("券", "优惠", "领券", "打折", "代金券", "折扣", "有券", "团购"))
         inferred_open = any(token in compact_query for token in ("营业", "开门", "开着", "营业时间", "现在营业吗", "现在开吗", "营业吗"))
@@ -125,7 +130,7 @@ class AnswerContract(BaseModel):
         elif "shop_detail" in user_focused_facets or "recommendation_reason" in user_focused_facets or not user_focused_facets:
             allowed_facets = ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "distance_eta", "price", "shop_detail", "recommendation_reason"]
             forbidden_facets = []
-            if target_shop and (target_shop.shop_id is not None or target_shop.shop_name is not None):
+            if has_explicit_shop_hint:
                 answer_style = "single_shop_review"
             else:
                 answer_style = "multi_shop_recommendation"

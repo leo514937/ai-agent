@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from .retrieval.shared import *# noqa: F401,F403,F405
 from .retrieval.dense import *# noqa: F401,F403,F405
 from .retrieval.sparse import *# noqa: F401,F403,F405
@@ -211,7 +213,7 @@ class HybridRetrieverService:
         ]
         settled = await asyncio.gather(*coroutines, return_exceptions=True)
         route_results: dict[str, tuple[Sequence[RecallHit], dict[str, Any]]] = {}
-        for (route_name, _retriever), outcome in zip(route_specs, settled, strict=False):
+        for (route_name, _retriever), outcome in zip(route_specs, settled):
             if isinstance(outcome, Exception):
                 _LOGGER.exception("rag_route_failed", extra={"route": route_name})
                 started_at = time.perf_counter()

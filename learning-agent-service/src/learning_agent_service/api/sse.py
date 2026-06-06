@@ -4,7 +4,7 @@ import json
 import queue
 import threading
 from collections.abc import Iterable, Iterator
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from .compat import StreamingResponse
 from .contracts import EventType, SseEnvelope, StageStatusPayload, validate_event_payload
@@ -93,7 +93,7 @@ def _stream_envelopes_with_keepalive(
 
 
 def _build_keepalive_envelope(template: SseEnvelope) -> SseEnvelope:
-    now = datetime.now(UTC)
+    now = datetime.now(timezone.utc)
     return SseEnvelope(
         event_type=EventType.HEARTBEAT.value,
         trace_id=template.trace_id,

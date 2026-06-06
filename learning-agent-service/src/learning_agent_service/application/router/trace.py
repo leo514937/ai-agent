@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 
-@dataclass(slots=True)
+@dataclass
 class StageTrace:
     input: Any = None
     output: Any = None
@@ -14,7 +14,7 @@ class StageTrace:
     error: str | None = None
 
 
-@dataclass(slots=True)
+@dataclass
 class RoutingTrace:
     query: str
     session_id: str
@@ -74,7 +74,7 @@ def build_routing_trace(
         session_id=str(session_id or ""),
         turn_id=str(turn_id or ""),
         trace_id=(str(trace_id).strip() or None) if trace_id is not None else None,
-        timestamp=timestamp or datetime.now(UTC).isoformat(),
+        timestamp=timestamp or datetime.now(timezone.utc).isoformat(),
         stages={str(key): _stage_trace_from_value(value) for key, value in dict(stages or {}).items()},
         final_decision=dict(final_decision or {}),
         ground_truth=_mapping_or_none(ground_truth),

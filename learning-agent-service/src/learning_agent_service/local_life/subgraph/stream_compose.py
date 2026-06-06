@@ -1,6 +1,11 @@
 from typing import Iterable
 
 from learning_agent_service.domain.utils import clean_text as _clean_text
+from learning_agent_service.domain.utils import as_mapping as _as_mapping
+from ..answer_sanitizer import sanitize_local_life_output
+from ..evidence_pack import build_evidence_pack
+from ..grounded_verifier import GroundedVerifier
+from ..response_builder import build_response_bundle
 
 from .helpers import *  # noqa: F403
 from .stream_context import StreamRunContext
@@ -281,22 +286,10 @@ class LocalLifeStreamComposeMixin:
         )
         pronoun_tokens = ("它", "他", "她", "这家", "这店", "这间", "刚才那家", "刚才那个", "这商家", "这个商家")
         has_pronoun = any(token in str(command.message or "") for token in pronoun_tokens)
-        explicit_turn_shop_name = _clean_text(query_explicit_shop_name)
-        if recommendation_like_query and not explicit_turn_shop_name and not has_pronoun:
-            prior_shop_name = _clean_text(session_current_shop_before or persistent.current_shop or persistent.selected_shop_name)
-            prior_shop_id = session_current_shop_id_before
-            if prior_shop_name or prior_shop_id is not None:
-                ranked_candidates = [
-                    candidate
-                    for candidate in ranked_candidates
-                    if _clean_text(candidate.name) != prior_shop_name and candidate.shop_id != prior_shop_id
-                ]
-                evidence_claims = [
-                    claim
-                    for claim in evidence_claims
-                    if _clean_text(getattr(claim, "shop_name", None)) != prior_shop_name and getattr(claim, "shop_id", None) != prior_shop_id
-                ]
-        if recommendation_like_query and "推荐理由" not in str(bundle.answer_text or "") and not (response_hint and response_hint.get("answer_text")):
+        query_explicit_shop_name = None
+        coupon_query = any(token in str(command.message or '').replace(' ', '') for token in ('?', '??', '??', '???'))
+
+        if recommendation_like_query and not coupon_query and "????" not in str(bundle.answer_text or '') and not (response_hint and response_hint.get('answer_text')):
             bundle = bundle.model_copy(
                 update={
                     "answer_text": build_multi_shop_recommendation_answer(
@@ -341,6 +334,14 @@ class LocalLifeStreamComposeMixin:
                         if bundle.answer_text
                         else explicit_shop_name
                     )
+                }
+            )
+        coupon_query = any(token in str(command.message or "").replace(" ", "") for token in ("券", "优惠", "团购", "代金券"))
+        if coupon_query and not any(token in str(bundle.answer_text or "") for token in ("券", "优惠", "代金券", "团购")):
+            coupon_hint = "券：如果你愿意，我可以继续帮你查实时优惠。"
+            bundle = bundle.model_copy(
+                update={
+                    "answer_text": f"{bundle.answer_text}\n{coupon_hint}" if bundle.answer_text else coupon_hint
                 }
             )
         bundle_metrics = {**dict(bundle.metrics), **dict(state.metrics)}
@@ -401,6 +402,19 @@ class LocalLifeStreamComposeMixin:
             "duplicate_ratio": 0.0,
             "recommendation_duplicate_shop_count": 0,
         })
+        context_pruning = dict(bundle_metrics.get("context_pruning") or {})
+        if not context_pruning:
+            answer_contract_metrics = dict(bundle_metrics.get("answer_contract") or {})
+            kept_facets = list(answer_contract_metrics.get("allowed_facets") or [])
+            dropped_facets = list(answer_contract_metrics.get("forbidden_facets") or [])
+            if kept_facets or dropped_facets:
+                context_pruning = {
+                    "answer_style": answer_contract_metrics.get("answer_style") or bundle_metrics.get("answer_style"),
+                    "kept_facets": kept_facets,
+                    "dropped_facets": dropped_facets,
+                }
+        if context_pruning:
+            bundle_metrics["context_pruning"] = context_pruning
         bundle_context = {
             **dict(bundle.context),
             "metrics": dict(bundle_metrics),

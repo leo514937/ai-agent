@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from typing import Any, Mapping
 from types import SimpleNamespace
+from typing import Any, Mapping
 
 from ....domain.contracts import PersistentSessionContext
 from ....local_life.entity_resolver import _explicit_entity_from_query
 from ....local_life.target_shop_policy import TargetShopPolicy
+from .query_merge import LocalLifeQueryMergeResult
 from .types import LLMParserResult, ResolvedTarget, SignalPolicyResult
+
 
 def resolve_target_merchant(
     raw_query: str,
@@ -14,26 +16,29 @@ def resolve_target_merchant(
     signal_result: SignalPolicyResult,
     persistent: PersistentSessionContext,
     client_context: Mapping[str, Any] | None = None,
+    merged_query: LocalLifeQueryMergeResult | None = None,
 ) -> ResolvedTarget:
     client_context_map = dict(client_context or {})
     session_context_map = persistent.model_dump()
-    
-    # Extract explicit entity from raw query if any
+
     explicit_entity = _explicit_entity_from_query(raw_query)
-    
-    # Build slots object expected by TargetShopPolicy
-    # shop_ids and shop_query are extracted from LLM parser slots or signal policy merchant hit
-    shop_ids = parser_result.slots.get("shop_ids") or []
-    shop_query = parser_result.slots.get("shop_name") or parser_result.slots.get("shop_query")
+
+    merged_slots = dict(merged_query.merged_slots if merged_query is not None else {})
+    shop_ids = merged_slots.get("shop_ids") or parser_result.slots.get("shop_ids") or []
+    shop_query = (
+        merged_slots.get("shop_name")
+        or merged_slots.get("shop_query")
+        or parser_result.slots.get("shop_name")
+        or parser_result.slots.get("shop_query")
+    )
     if not shop_query and signal_result.merchant_hit:
         shop_query = signal_result.merchant_hit.merchant_name
-        
+
     slots_obj = SimpleNamespace(
         shop_ids=shop_ids,
         shop_query=shop_query,
     )
-    
-    # Resolve target shop using TargetShopPolicy
+
     policy = TargetShopPolicy()
     target_shop = policy.resolve_target(
         raw_query=raw_query,
@@ -42,8 +47,7 @@ def resolve_target_merchant(
         session_context=session_context_map,
         explicit_entity=explicit_entity,
     )
-    
-    # Map resolution source to ResolvedTarget.source
+
     source_map = {
         "explicit_query": "explicit",
         "candidate_reference": "candidate_selection",
@@ -54,7 +58,7 @@ def resolve_target_merchant(
         "missing": "none",
         "rag_fallback": "none",
     }
-    
+
     source = source_map.get(target_shop.resolution_source or "", "none")
     if source == "none" and target_shop.source in ("current_query", "session"):
         if target_shop.is_explicit_in_current_turn:
@@ -65,27 +69,29 @@ def resolve_target_merchant(
             source = "candidate_selection"
         elif target_shop.shop_id or target_shop.shop_name:
             source = "context_inherit"
-            
-    # Determine if missing
-    missing = bool(target_shop.should_clarify or target_shop.resolution_source in ("missing", "ambiguous") and not target_shop.shop_id and not target_shop.shop_name)
+
+    missing = bool(target_shop.should_clarify or (target_shop.resolution_source in ("missing", "ambiguous") and not target_shop.shop_id and not target_shop.shop_name))
     if parser_result.target_shop and parser_result.target_shop.clarify_if_missing:
         if not target_shop.shop_id and not target_shop.shop_name:
             missing = True
-            
-    resolved_references = []
+
+    resolved_references: list[str] = []
     if target_shop.shop_name:
         resolved_references.append(target_shop.shop_name)
     elif target_shop.raw_mention:
         resolved_references.append(target_shop.raw_mention)
-        
+    if merged_query is not None and merged_query.target_reference:
+        if merged_query.target_reference not in resolved_references:
+            resolved_references.append(merged_query.target_reference)
+
     shop_id_str = str(target_shop.shop_id) if target_shop.shop_id is not None else None
-    
+
     clarification_question = None
     if missing:
         if "coupon" in parser_result.facet_needs or parser_result.intent == "package_or_coupon":
-            clarification_question = "你想查询哪家店的优惠券？请告诉我具体门店名称。"
+            clarification_question = "浣犳兂鏌ヨ鍝搴楃殑浼樻儬鍒革紵璇峰憡璇夋垜鍏蜂綋闂ㄥ簵鍚嶇О銆?"
         else:
-            clarification_question = "你问的是哪家店？请告诉我具体店名或选择刚才提到的商家。"
+            clarification_question = "浣犻棶鐨勬槸鍝搴楋紵璇峰憡璇夋垜鍏蜂綋搴楀悕鎴栭€夋嫨鍒氭墠鎻愬埌鐨勫晢瀹躲€?"
 
     return ResolvedTarget(
         shop_id=shop_id_str,

@@ -66,7 +66,34 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                 client_context=state["runtime"].client_context,
             )
             turn = _store_routing_decision(turn, routing)
+            should_consume_pending = (
+                getattr(persistent, "pending_clarification", None) is not None
+                and _pending_clarification_matches_query(turn.raw_query, persistent)
+            )
             if routing.required_action in {"clarify", "reject", "direct_answer", "memory_update", "no_op"}:
+                if should_consume_pending:
+                    state["turn"] = turn
+                    runtime = state["runtime"]
+                    metrics = dict(runtime.metrics)
+                    metrics["memory_retrieval_skipped"] = not routing.should_use_memory
+                    metrics["routing_decision"] = routing.model_dump(mode="json")
+                    metrics["routing_required_action"] = routing.required_action
+                    metrics["routing_reason"] = routing.route_reason
+                    state["runtime"] = runtime.model_copy(update={"metrics": metrics})
+                    state = _update_phase0_trace(
+                        state,
+                        harness_mode=str((state.get("runtime_context", {}) or {}).get("harness_mode") or (state["runtime"].extra or {}).get("harness_mode") or "off"),
+                        initial_routing_decision=routing.model_dump(mode="json"),
+                        initial_route_reason=routing.route_reason,
+                        initial_route_candidate=routing.route_candidate,
+                        initial_required_action=routing.required_action,
+                        retrieval_plan_status="not_attempted",
+                        retrieval_plan_failure_reason=None,
+                        tool_plan_status="not_attempted",
+                        tool_plan_failure_reason=None,
+                    )
+                    _log_routing_decision(state, stage="load_context_pending_clarification")
+                    return state
                 if routing.required_action == "clarify":
                     clarification_result, pending_clarification = self._build_pending_clarification_state(
                         runtime=state["runtime"],
@@ -95,7 +122,7 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                 state["runtime"] = runtime.model_copy(update={"metrics": metrics})
                 state = _update_phase0_trace(
                     state,
-                    harness_mode=str((state["runtime"].extra or {}).get("harness_mode") or "off"),
+                    harness_mode=str((state.get("runtime_context", {}) or {}).get("harness_mode") or (state["runtime"].extra or {}).get("harness_mode") or "off"),
                     initial_routing_decision=routing.model_dump(mode="json"),
                     initial_route_reason=routing.route_reason,
                     initial_route_candidate=routing.route_candidate,
@@ -159,7 +186,7 @@ class WorkflowNodeAdapterStagesFrontAMixin:
             state["runtime"] = runtime.model_copy(update={"metrics": metrics})
             state = _update_phase0_trace(
                 state,
-                harness_mode=str((state["runtime"].extra or {}).get("harness_mode") or "off"),
+                harness_mode=str((state.get("runtime_context", {}) or {}).get("harness_mode") or (state["runtime"].extra or {}).get("harness_mode") or "off"),
                 initial_routing_decision=routing.model_dump(mode="json"),
                 initial_route_reason=routing.route_reason,
                 initial_route_candidate=routing.route_candidate,
@@ -243,6 +270,16 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                 except Exception:
                     city = ""
                     location_value = None
+                if not city:
+                    options = list(getattr(pending, "options", []) or [])
+                    for option in options:
+                        option_value = str(getattr(option, "value", "") or getattr(option, "label", "") or getattr(option, "description", "") or "").strip()
+                        if option_value:
+                            city = option_value
+                            location_value = {"city": city}
+                            restored_persistent["current_city"] = city
+                            restored_persistent["current_location"] = location_value
+                            break
     
             if clarification_result:
                 clarification_result = dict(clarification_result)

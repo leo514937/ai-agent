@@ -482,7 +482,7 @@ def _build_required_facets(
 
                         "recommendation_reason",
 
-                        data_source=_PHASE1_DATA_SOURCE_STATIC_RAG,
+                        data_source=_PHASE1_DATA_SOURCE_MIXED,
 
                         freshness="static_ok",
 
@@ -712,7 +712,7 @@ def _build_required_facets(
 
                         "recommendation_reason",
 
-                        data_source=_PHASE1_DATA_SOURCE_STATIC_RAG,
+                        data_source=_PHASE1_DATA_SOURCE_MIXED,
 
                         freshness="static_ok",
 

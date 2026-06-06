@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 # Monkeypatch JsonPlusSerializer for compatibility with newer langgraph-checkpoint releases
@@ -40,6 +41,8 @@ from .subgraphs import (
     run_recommendation_subgraph,
     run_tool_subgraph,
     run_understand_turn,
+    route_after_rag,
+    route_after_understand,
     route_gate,
 )
 
@@ -168,6 +171,13 @@ class LangGraphWorkflowRunner(SequentialWorkflowRunner):
         )
         state = self._annotate_runner_context(state)
         state = clone_graph_state(state)
+
+        if hasattr(self._graph, "stream"):
+            try:
+                yield from self._run_graph_stream(state)
+                return
+            except Exception:
+                pass
         
         try:
             result = self._graph.invoke(state, config=_build_graph_config(state))
@@ -175,13 +185,67 @@ class LangGraphWorkflowRunner(SequentialWorkflowRunner):
             result = self._record_unexpected_error(state, "langgraph.invoke", exc)
             result = self._finalize_terminal(result)
             self._record_checkpoint_fallback(result)
-            yield from result["runtime"].emitted_events
+            yield from self._normalize_emitted_events(result["runtime"].emitted_events, result)
             return
-            
-        yield from result["runtime"].emitted_events
+
+        yield from self._normalize_emitted_events(result["runtime"].emitted_events, result)
+
+    @staticmethod
+    def _normalize_emitted_events(events, state):
+        turn = state.get("turn") if isinstance(state, dict) else None
+        final_answer = str(getattr(turn, "final_answer", "") or "").strip() if turn is not None else ""
+        for event in events:
+            yield LangGraphWorkflowRunner._normalize_emitted_event(event, final_answer)
+
+    def _run_graph_stream(self, state):
+        emitted_count = 0
+
+        def drain_emitted_events():
+            nonlocal emitted_count
+            events = list(state["runtime"].emitted_events)
+            for event in events[emitted_count:]:
+                yield self._normalize_emitted_event(event, str(state.get("turn").final_answer or "").strip())
+            emitted_count = len(events)
+
+        stream = self._graph.stream(state, config=_build_graph_config(state), stream_mode="values")
+        for chunk in stream:
+            if isinstance(chunk, dict) and "runtime" in chunk:
+                state = chunk
+                yield from drain_emitted_events()
+        yield from drain_emitted_events()
+
+    @staticmethod
+    def _normalize_emitted_event(event, final_answer: str):
+        if not final_answer:
+            return event
+        event_type = getattr(event, "event_type", None)
+        if event_type != "final":
+            return event
+        payload = getattr(event, "payload", None)
+        payload_dict = None
+        if hasattr(payload, "model_dump"):
+            payload_dict = payload.model_dump(mode="json")
+        elif isinstance(payload, dict):
+            payload_dict = dict(payload)
+        if not isinstance(payload_dict, dict):
+            return event
+        payload_dict["answer_text"] = final_answer
+        metrics = payload_dict.get("metrics")
+        if isinstance(metrics, dict):
+            answer_quality = dict(metrics.get("answer_quality") or {})
+            answer_quality["final_answer"] = final_answer
+            metrics["answer_quality"] = answer_quality
+            payload_dict["metrics"] = metrics
+        if hasattr(event, "model_copy"):
+            return event.model_copy(update={"payload": payload_dict})
+        if isinstance(event, dict):
+            new_event = dict(event)
+            new_event["payload"] = payload_dict
+            return new_event
+        return event
 
     def _annotate_runner_context(self, state):
-        return _update_phase5_trace(
+        state = _update_phase5_trace(
             state,
             runner_kind=self.runner_kind,
             runner_backend="langgraph",
@@ -189,6 +253,18 @@ class LangGraphWorkflowRunner(SequentialWorkflowRunner):
             runner_class=self.__class__.__name__,
             compare_ready=True,
         )
+        runtime_context = dict(state.get("runtime_context", {}) or {})
+        runtime_context.update(
+            {
+                "runner_kind": self.runner_kind,
+                "runner_backend": "langgraph",
+                "graph_runtime": "langgraph",
+                "runner_class": self.__class__.__name__,
+                "compare_ready": True,
+            }
+        )
+        state["runtime_context"] = runtime_context
+        return state
 
     def _record_checkpoint_fallback(self, state):
         if self._checkpointer is None:
@@ -200,7 +276,12 @@ class LangGraphWorkflowRunner(SequentialWorkflowRunner):
 
 def _build_graph_config(state):
     runtime = state["runtime"]
-    return {"configurable": {"thread_id": runtime.session_id}}
+    runtime_context = dict(state.get("runtime_context", {}) or {})
+    recursion_limit = int(runtime_context.get("graph_recursion_limit") or 50)
+    return {
+        "configurable": {"thread_id": runtime.session_id},
+        "recursion_limit": max(1, recursion_limit),
+    }
 
 
 _LANGGRAPH_TOPOLOGY = {
@@ -257,6 +338,69 @@ def export_langgraph_mermaid() -> str:
     for left, right in _LANGGRAPH_TOPOLOGY["edges"]:
         lines.append(f"  {left} --> {right}")
     return "\n".join(lines)
+
+
+def write_langgraph_visualizations(output_dir: str | Path | None = None) -> dict[str, str]:
+    from .graphs import (
+        export_rag_graph_mermaid,
+        export_recommendation_graph_mermaid,
+        export_tool_graph_mermaid,
+        describe_rag_graph_topology,
+        describe_recommendation_graph_topology,
+        describe_tool_graph_topology,
+    )
+
+    target_dir = Path(output_dir) if output_dir is not None else Path(__file__).resolve().parents[5] / "docs" / "langgraph"
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    files = {
+        "main_graph.mmd": export_langgraph_mermaid(),
+        "rag_graph.mmd": export_rag_graph_mermaid(),
+        "tool_graph.mmd": export_tool_graph_mermaid(),
+        "recommendation_graph.mmd": export_recommendation_graph_mermaid(),
+        "langgraph_topology.md": "\n".join(
+            [
+                "# LangGraph Topology",
+                "",
+                "## Main Graph",
+                f"- entry_point: {_LANGGRAPH_TOPOLOGY['entry_point']}",
+                f"- terminal: {_LANGGRAPH_TOPOLOGY['terminal']}",
+                "",
+                "```mermaid",
+                export_langgraph_mermaid(),
+                "```",
+                "",
+                "## Rag Graph",
+                f"- entry_point: {describe_rag_graph_topology()['entry_point']}",
+                "",
+                "```mermaid",
+                export_rag_graph_mermaid(),
+                "```",
+                "",
+                "## Tool Graph",
+                f"- entry_point: {describe_tool_graph_topology()['entry_point']}",
+                "",
+                "```mermaid",
+                export_tool_graph_mermaid(),
+                "```",
+                "",
+                "## Recommendation Graph",
+                f"- entry_point: {describe_recommendation_graph_topology()['entry_point']}",
+                "",
+                "```mermaid",
+                export_recommendation_graph_mermaid(),
+                "```",
+                "",
+            ]
+        ),
+    }
+
+    written: dict[str, str] = {}
+    for filename, content in files.items():
+        path = target_dir / filename
+        path.write_text(content, encoding="utf-8")
+        written[filename] = str(path)
+    return written
 
 
 def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None):
@@ -316,14 +460,6 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None
     graph.add_edge("persist_session", "emit_final")
     graph.add_edge("emit_final", END)
     compiled = graph.compile(checkpointer=checkpointer)
-    try:
-        mermaid = compiled.get_graph().draw_mermaid()
-        print(mermaid)
-        png_bytes = compiled.get_graph().draw_mermaid_png()
-        with open("graph.png", "wb") as f:
-            f.write(png_bytes)
-    except Exception:
-        pass
     return compiled
 
 

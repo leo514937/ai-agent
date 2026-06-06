@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from math import asin, cos, radians, sin, sqrt
 import unicodedata
 from typing import Any
@@ -39,7 +39,7 @@ def compact_text(value: Any) -> str:
 
 
 def utcnow() -> datetime:
-    return datetime.now(UTC)
+    return datetime.now(timezone.utc)
 
 
 def utcnow_iso() -> str:

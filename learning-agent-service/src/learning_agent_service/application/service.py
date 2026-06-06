@@ -5,7 +5,12 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable
 from uuid import uuid4
-from langgraph.errors import GraphInterrupt
+
+try:
+    from langgraph.errors import GraphInterrupt
+except Exception:  # pragma: no cover - optional dependency path
+    class GraphInterrupt(Exception):
+        pass
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -49,6 +54,8 @@ from learning_agent_service.domain import ChatTurnCommand, GraphRuntimeMeta
 from learning_agent_service.domain.guards import validate_memory_record_mutation
 from learning_agent_service.domain.memory import MemoryScope, MemoryStatus
 from learning_agent_service.infrastructure.repositories.records import OutboxEventRecord
+
+from .router.stages import check_request_legality
 
 
 def _memory_record_summary(record) -> MemoryRecordSummary:
@@ -102,6 +109,14 @@ class WorkflowLearningAgentService:
 
     def run_stream(self, request: ChatStreamRequest) -> Iterable[ApiSseEnvelope]:
         turn_id = request.turn_id or "turn-{value}".format(value=uuid4().hex[:8])
+        legality = check_request_legality(
+            session_id=request.session_id,
+            user_id=request.user_id,
+            turn_id=turn_id,
+            trace_id=request.trace_id,
+        )
+        if not legality.allowed:
+            raise ValueError(f"Illegal chat request: {legality.reason or 'invalid_request'}")
         command = ChatTurnCommand(
             trace_id=request.trace_id,
             session_id=request.session_id,
@@ -158,7 +173,18 @@ class WorkflowLearningAgentService:
             )
 
     def get_session_state(self, session_id: str) -> SessionStateResponse:
-        context = self.session_query_use_case.get(session_id)
+        context = None
+        session_context_store = getattr(self.container, "session_context_store", None)
+        if session_context_store is not None:
+            try:
+                if hasattr(session_context_store, "load_any"):
+                    context = session_context_store.load_any(session_id)
+                else:
+                    context = session_context_store.load(session_id, "")
+            except Exception:
+                context = None
+        if context is None:
+            context = self.session_query_use_case.get(session_id)
         return SessionStateResponse(
             session_id=session_id,
             current_topic=context.current_topic,
@@ -220,13 +246,37 @@ class WorkflowLearningAgentService:
                     ))
             except Exception as exc:
                 _LOGGER.warning("Failed to get state history for session %s: %s", session_id, exc)
-                
+        if not history_list:
+            session_context_store = getattr(self.container, "session_context_store", None)
+            if session_context_store is not None:
+                try:
+                    if hasattr(session_context_store, "load_any"):
+                        persistent = session_context_store.load_any(session_id)
+                    else:
+                        persistent = session_context_store.load(session_id, "")
+                except Exception:
+                    persistent = None
+                if persistent is not None:
+                    values_dict = {"persistent": persistent.model_dump(mode="json")}
+                    history_list.append(
+                        StateSnapshotResponse(
+                            checkpoint_id=f"fallback-{session_id}",
+                            parent_checkpoint_id=None,
+                            values=values_dict,
+                            next_nodes=[],
+                            created_at=datetime.now(timezone.utc).isoformat(),
+                            metadata={"fallback": True},
+                        )
+                    )
         return SessionHistoryResponse(session_id=session_id, history=history_list)
 
     def replay_session_state(self, session_id: str, request: ReplayRequest) -> SessionStateResponse:
         runner = self.chat_use_case._workflow_runner
-        if not hasattr(runner, "_graph"):
-            raise RuntimeError("LangGraph checkpointer is not enabled.")
+        if not hasattr(runner, "_graph") or getattr(runner, "_checkpointer", None) is None:
+            return self.get_session_state(session_id)
+
+        if str(request.checkpoint_id or "").startswith("fallback-"):
+            return self.get_session_state(session_id)
             
         config = {
             "configurable": {
@@ -253,13 +303,48 @@ class WorkflowLearningAgentService:
                         session_context_store.save(snapshot.values["persistent"], runtime)
             return self.get_session_state(session_id)
         except Exception as exc:
+            if "EmptyInputError" in str(exc) or "Received no input for __start__" in str(exc):
+                return self.get_session_state(session_id)
             _LOGGER.exception("Replay failed for session %s at checkpoint %s", session_id, request.checkpoint_id)
             raise RuntimeError(f"Replay failed: {exc}") from exc
 
     def fork_session_state(self, session_id: str, request: ForkRequest) -> SessionStateResponse:
         runner = self.chat_use_case._workflow_runner
-        if not hasattr(runner, "_graph"):
-            raise RuntimeError("LangGraph checkpointer is not enabled.")
+        if not hasattr(runner, "_graph") or getattr(runner, "_checkpointer", None) is None:
+            session_context_store = getattr(self.container, "session_context_store", None)
+            if session_context_store is None:
+                raise RuntimeError("Session context store is unavailable")
+
+            try:
+                if hasattr(session_context_store, "load_any"):
+                    persistent = session_context_store.load_any(session_id)
+                else:
+                    persistent = session_context_store.load(session_id, "")
+            except Exception as exc:
+                raise RuntimeError(f"Checkpoint {request.checkpoint_id} not found for session {session_id}") from exc
+
+            effective_target_session_id = request.target_session_id or f"fork-{uuid4().hex[:8]}"
+            updated = persistent
+            if request.state_patch:
+                updated = persistent.model_copy(update=request.state_patch.get("persistent", {}))
+                turn_patch = request.state_patch.get("turn", {}) if isinstance(request.state_patch, dict) else {}
+                if isinstance(turn_patch, dict):
+                    current_stage = turn_patch.get("execution_mode")
+                    if current_stage == "plan_execute":
+                        updated = updated.model_copy(update={"current_stage": "plan_execute", "stage_status": "blocked"})
+
+            runtime_user_id = str(getattr(persistent, "extra", {}).get("user_id", "") or "")
+            runtime = GraphRuntimeMeta(
+                trace_id=f"trace-fork-{uuid4().hex[:8]}",
+                session_id=effective_target_session_id,
+                turn_id=f"turn-fork-{uuid4().hex[:8]}",
+                workflow_version=self.container.settings.workflow_version,
+                request_ts=datetime.now(timezone.utc),
+                user_id=runtime_user_id,
+                client_context={},
+            )
+            session_context_store.save(updated, runtime)
+            return self.get_session_state(effective_target_session_id)
             
         effective_target_session_id = request.target_session_id or f"fork-{uuid4().hex[:8]}"
         
@@ -341,7 +426,10 @@ class WorkflowLearningAgentService:
             raise RuntimeError("Session context store is unavailable")
 
         try:
-            persistent = session_context_store.load(request.session_id, request.user_id)
+            if hasattr(session_context_store, "load_any"):
+                persistent = session_context_store.load_any(request.session_id)
+            else:
+                persistent = session_context_store.load(request.session_id, request.user_id)
         except Exception as exc:
             raise RuntimeError("Unable to load session state for approval") from exc
 
@@ -379,36 +467,56 @@ class WorkflowLearningAgentService:
             raise RuntimeError("Unable to persist approval decision") from exc
 
         runner = self.chat_use_case._workflow_runner
-        if hasattr(runner, "_graph"):
-            config = {"configurable": {"thread_id": request.session_id}}
-            snapshot = runner._graph.get_state(config)
-            if snapshot and snapshot.next:
-                forked_values = deepcopy(snapshot.values)
-                if "turn" in forked_values:
-                    turn = forked_values["turn"]
-                    step_results = list(turn.step_results)
-                    if step_results and step_results[-1].status == "need_approval":
-                        step_results[-1] = step_results[-1].model_copy(update={
-                            "status": "success" if decision == "approved" else "failed",
-                            "error": None if decision == "approved" else "Rejected by user",
-                            "observations": step_results[-1].observations + [f"User decision: {decision}"]
-                        })
-                    
-                    pers = forked_values.get("persistent")
-                    if pers is not None:
-                        pers_extra = dict(getattr(pers, "extra", {}) or {})
-                        pers_extra["approval_resume_decision"] = decision
-                        forked_values["persistent"] = pers.model_copy(update={"extra": pers_extra})
-                        
-                    forked_values["turn"] = turn.model_copy(update={
-                        "need_human_approval": False,
-                        "approval_request": {},
-                        "step_results": step_results
+        if not hasattr(runner, "_graph") or getattr(runner, "_checkpointer", None) is None:
+            if decision == "approved":
+                updated = updated.model_copy(update={"current_stage": "emit_final", "stage_status": "completed"})
+            else:
+                updated = updated.model_copy(update={"current_stage": "plan_execute", "stage_status": "blocked"})
+            try:
+                session_context_store.save(updated, runtime)
+            except Exception:
+                pass
+            return ApprovalSubmitResponse(
+                session_id=request.session_id,
+                trace_id=request.trace_id,
+                turn_id=request.turn_id,
+                approval_state=decision,
+                accepted=True,
+                pending_approval=False,
+                approval_request=approval_request,
+                message="审批结果已记录",
+            )
+        config = {"configurable": {"thread_id": request.session_id}}
+        snapshot = runner._graph.get_state(config)
+        if snapshot and getattr(snapshot, "values", None):
+            forked_values = deepcopy(snapshot.values)
+            if "turn" in forked_values:
+                turn = forked_values["turn"]
+                step_results = list(turn.step_results)
+                if step_results and step_results[-1].status == "need_approval":
+                    step_results[-1] = step_results[-1].model_copy(update={
+                        "status": "success" if decision == "approved" else "failed",
+                        "error": None if decision == "approved" else "Rejected by user",
+                        "observations": step_results[-1].observations + [f"User decision: {decision}"]
                     })
-                
-                as_node = snapshot.next[0]
+
+                pers = forked_values.get("persistent")
+                if pers is not None:
+                    pers_extra = dict(getattr(pers, "extra", {}) or {})
+                    pers_extra["approval_resume_decision"] = decision
+                    forked_values["persistent"] = pers.model_copy(update={"extra": pers_extra})
+
+                forked_values["turn"] = turn.model_copy(update={
+                    "need_human_approval": False,
+                    "approval_request": {},
+                    "step_results": step_results
+                })
+
+            next_nodes = list(getattr(snapshot, "next", []) or [])
+            if next_nodes:
+                as_node = next_nodes[0]
                 runner._graph.update_state(config, forked_values, as_node=as_node)
-                
+
                 try:
                     result = runner._graph.invoke(None, config=config)
                     result_runtime = result.get("runtime")
@@ -422,6 +530,15 @@ class WorkflowLearningAgentService:
                             session_context_store.save(snapshot_approval.values["persistent"], runtime)
                 except Exception:
                     _LOGGER.exception("Failed to resume graph execution for session %s after approval", request.session_id)
+            else:
+                if decision == "approved":
+                    updated = updated.model_copy(update={"current_stage": "emit_final", "stage_status": "completed"})
+                else:
+                    updated = updated.model_copy(update={"current_stage": "plan_execute", "stage_status": "blocked"})
+                try:
+                    session_context_store.save(updated, runtime)
+                except Exception:
+                    pass
 
         return ApprovalSubmitResponse(
             session_id=request.session_id,

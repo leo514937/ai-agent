@@ -24,6 +24,7 @@ from .models import ToolExecutionResult as BaseExecutionResult
 from .models import ToolSelection as BaseToolSelection
 from .normalizer import ToolResultNormalizer as BaseToolResultNormalizer
 from .planner import ToolPlanner as BaseToolPlanner
+from .tool_error_classifier import classify_tool_error
 from .registry import ToolRegistry
 from .transaction_store import InMemoryTransactionStore
 
@@ -546,32 +547,27 @@ def _classify_tool_failure(
     approval_state = str(approval_status or "").strip().lower()
     if status == ToolExecutionStatus.PENDING_APPROVAL or approval_state == "not_enabled_in_p0":
         return "approval_required"
-    if status == ToolExecutionStatus.REJECTED or approval_state in {"rejected", "deny", "denied"}:
-        return "permission_denied"
-    if _looks_like_no_result(tool_name, payload):
-        return "no_result"
-
-    error_code = str((errors or {}).get("code") or "").strip().upper()
-    error_message = str((errors or {}).get("message") or "").strip().lower()
-    if error_code == "LEARN-5301" or "timed out" in error_message or "timeout" in error_message:
-        return "timeout"
-    if "not found" in error_message:
-        return "no_result"
-    if approval_required and approval_state in {"forbidden", "unauthorized"}:
-        return "permission_denied"
-    if any(
-        token in error_message
-        for token in (
-            "unavailable",
-            "not configured",
-            "dependency",
-            "backend is missing",
-            "write failed",
-            "service temporarily unavailable",
-        )
-    ):
-        return "dependency_unavailable"
-    return None
+    classification = classify_tool_error(
+        tool_name=tool_name,
+        status=status.value if hasattr(status, "value") else status,
+        payload=payload,
+        errors=errors,
+        approval_required=approval_required,
+        approval_status=approval_state,
+    )
+    category = classification.category
+    if category is None:
+        return None
+    mapping = {
+        "timeout": "timeout",
+        "not_found": "no_result",
+        "empty_result": "no_result",
+        "permission_error": "permission_denied",
+        "invalid_params": "invalid_params",
+        "service_unavailable": "dependency_unavailable",
+        "approval_required": "approval_required",
+    }
+    return mapping.get(category, category)
 
 
 @dataclass
@@ -735,7 +731,7 @@ class ToolPlanner:
         )
 
 
-@dataclass(kw_only=True)
+@dataclass
 class ToolExecutor:
     java_business_client: Any | None = None
     transaction_store: InMemoryTransactionStore | None = None

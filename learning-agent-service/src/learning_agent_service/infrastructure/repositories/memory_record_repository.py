@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -44,8 +44,8 @@ def _ensure_aware(dt: datetime | None) -> datetime | None:
     if dt is None:
         return None
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=UTC)
-    return dt.astimezone(UTC)
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def _enum_value(value: Any) -> str:

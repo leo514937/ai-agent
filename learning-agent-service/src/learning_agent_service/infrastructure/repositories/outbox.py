@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from learning_agent_service.infrastructure.db.models import OutboxEventModel
 
@@ -39,7 +39,7 @@ class OutboxRepository(SqlAlchemyRepositoryBase):
                     )
                 instance.payload = dict(event.payload)
                 instance.status = event.status
-                instance.available_at = event.available_at or datetime.now(UTC)
+                instance.available_at = event.available_at or datetime.now(timezone.utc)
                 instance.trace_id = event.trace_id
                 instance.attempts = event.attempts
                 instance.last_error = event.last_error
@@ -50,7 +50,7 @@ class OutboxRepository(SqlAlchemyRepositoryBase):
 
     def claim_pending(self, limit: int, now: datetime | None = None) -> list[OutboxEventModel]:
         self._require_sqlalchemy()
-        claim_time = now or datetime.now(UTC)
+        claim_time = now or datetime.now(timezone.utc)
         with self.session_scope() as session:
             pending = list(
                 session.execute(
@@ -77,7 +77,7 @@ class OutboxRepository(SqlAlchemyRepositoryBase):
             if instance is None:
                 return None
             instance.status = "published"
-            instance.published_at = datetime.now(UTC)
+            instance.published_at = datetime.now(timezone.utc)
             instance.last_error = None
             session.add(instance)
             session.flush()

@@ -738,11 +738,11 @@ class MemoryOrchestrator:
                     "error": step.error,
                     "next_action": step.next_action,
                 }
-                for index, (step, summary) in enumerate(zip(turn.step_results, step_summaries, strict=False))
+                for index, (step, summary) in enumerate(zip(turn.step_results, step_summaries))
             ]
             procedural_failures = [
                 summary
-                for summary, step in zip(step_summaries, turn.step_results, strict=False)
+                for summary, step in zip(step_summaries, turn.step_results)
                 if step.error is not None
             ]
             candidates.append(

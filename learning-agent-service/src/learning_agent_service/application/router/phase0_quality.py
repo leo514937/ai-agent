@@ -26,11 +26,24 @@ from ..routing_primitives import (
 )
 from .phase3_review import _apply_route_review
 from .stages import (
+    route_execution_mode,
     check_hard_guard,
+    check_query_safety,
+    merge_local_life_query_context,
     check_signal_policy,
     parse_query_with_llm,
     resolve_target_merchant,
+    route_top_level_intent,
 )
+
+
+def _annotate_execution_mode(decision: RoutingDecision) -> RoutingDecision:
+    execution_mode = route_execution_mode(decision)
+    extra = dict(getattr(decision, "extra", {}) or {})
+    extra["execution_mode"] = execution_mode.execution_mode
+    extra["execution_mode_reason"] = execution_mode.reason
+    extra["execution_mode_signals"] = list(execution_mode.signals)
+    return decision.model_copy(update={"execution_mode": execution_mode.execution_mode, "extra": extra})
 
 
 def build_initial_routing_decision(
@@ -41,6 +54,59 @@ def build_initial_routing_decision(
     model_gateway: Any | None = None,
 ) -> RoutingDecision:
     normalized_query = normalize_query(raw_query)
+    top_level_intent = route_top_level_intent(raw_query, persistent=persistent, client_context=client_context)
+    safety_result = check_query_safety(raw_query, client_context=dict(client_context or {}))
+
+    if safety_result.blocked:
+        input_quality = build_input_quality(raw_query)
+        decision = RoutingDecision(
+            raw_query=str(raw_query or ""),
+            normalized_query=normalized_query,
+            domain="general",
+            confidence=safety_result.confidence,
+            input_quality=input_quality,
+            intent=IntentRoutingDecision(
+                name="unsafe",
+                confidence=safety_result.confidence,
+                allowed_routes=["reject"],
+                forbidden_routes=["rag_retrieval", "tool_call", "direct_answer"],
+            ),
+            required_action="reject",
+            blocked=True,
+            blocked_reason=safety_result.reason,
+            should_rewrite_query=False,
+            should_retrieve=False,
+            should_call_tool=False,
+            should_use_memory=False,
+            should_persist_memory=False,
+            should_vectorize_memory=False,
+            should_emit_retrieval_events=False,
+            retrieval_skipped_reason=safety_result.reason,
+            missing_slots=[],
+            resolved_references=[],
+            route_reason=safety_result.reason or "unsafe",
+            safeguards_triggered=[safety_result.reason] if safety_result.reason else ["unsafe"],
+            route_candidate=safety_result.route_candidate or "reject",
+            preferred_chunk_roles=[],
+            tool_candidates=[],
+            clarification_question=None,
+            extra={
+                "client_context": dict(client_context or {}),
+                "context_has_anchor": _context_has_anchor(persistent),
+                "context_has_candidate_anchor": _context_has_candidate_anchor(persistent),
+                "top_level_intent": top_level_intent.intent,
+                "top_level_intent_reason": top_level_intent.reason,
+                "query_safety": safety_result.to_dict(),
+            },
+        )
+        return _annotate_execution_mode(
+            _mark_routing_blocked(
+            decision,
+            reason=safety_result.reason or "unsafe",
+            required_action="reject",
+            route_candidate=safety_result.route_candidate or "reject",
+            )
+        )
 
     # 1. Stage 1: Hard Guard
     guard_result = check_hard_guard(raw_query, persistent, client_context)
@@ -84,6 +150,9 @@ def build_initial_routing_decision(
                 "client_context": dict(client_context or {}),
                 "context_has_anchor": _context_has_anchor(persistent),
                 "context_has_candidate_anchor": _context_has_candidate_anchor(persistent),
+                "top_level_intent": top_level_intent.intent,
+                "top_level_intent_reason": top_level_intent.reason,
+                "query_safety": safety_result.to_dict(),
             },
         )
 
@@ -102,11 +171,13 @@ def build_initial_routing_decision(
         elif guard_result.reason == "low_information":
             decision.clarification_question = "你想具体查哪一项？"
 
-        return _mark_routing_blocked(
+        return _annotate_execution_mode(
+            _mark_routing_blocked(
             decision,
             reason=guard_result.reason or "blocked",
             required_action=required_action,
             route_candidate=route_candidate,
+            )
         )
 
     # 2. Stage 2: Signal Policy
@@ -115,8 +186,23 @@ def build_initial_routing_decision(
     # 3. Stage 3: LLM Semantic Parser
     parser_result = parse_query_with_llm(raw_query, persistent, signal_result, model_gateway)
 
+    merged_query = merge_local_life_query_context(
+        raw_query,
+        persistent=persistent,
+        parser_slots=parser_result.slots,
+        client_context=client_context,
+        target_reference=getattr(parser_result.target_shop, "shop_name", None) if parser_result.target_shop else None,
+    )
+
     # 4. Stage 4: Target Resolution
-    target_result = resolve_target_merchant(raw_query, parser_result, signal_result, persistent, client_context)
+    target_result = resolve_target_merchant(
+        raw_query,
+        parser_result,
+        signal_result,
+        persistent,
+        client_context,
+        merged_query=merged_query,
+    )
 
     # 5. Build RoutingDecision from Stage 1-4 outputs
     input_quality = build_input_quality(raw_query)
@@ -241,8 +327,13 @@ def build_initial_routing_decision(
             "context_has_anchor": _context_has_anchor(persistent) or _client_context_has_anchor(client_context),
             "context_has_candidate_anchor": _context_has_candidate_anchor(persistent) or _client_context_has_candidate_anchor(client_context),
             "current_shop": persistent.current_shop or persistent.selected_shop_name,
+            "top_level_intent": top_level_intent.intent,
+            "top_level_intent_reason": top_level_intent.reason,
+            "query_safety": safety_result.to_dict(),
+            "query_merge": merged_query.to_dict(),
         },
     )
+    route = _annotate_execution_mode(route)
 
     # Apply clarification, recap, and topic continuation helpers from routing_primitives
     pending_follow_up_route = _pending_clarification_follow_up_route(
@@ -366,4 +457,5 @@ def build_initial_routing_decision(
         )
 
     # 6. Apply post-routing review
-    return _apply_route_review(route, raw_query=raw_query, persistent=persistent, client_context=client_context)
+    route = _apply_route_review(route, raw_query=raw_query, persistent=persistent, client_context=client_context)
+    return _annotate_execution_mode(route)

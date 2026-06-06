@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 from typing import Iterable
 
+from learning_agent_service.domain.contracts import ChatTurnCommand, PersistentSessionContext
 from .helpers import *  # noqa: F403
 from .stream_compose import LocalLifeStreamComposeMixin
 from .stream_load import LocalLifeStreamLoadMixin

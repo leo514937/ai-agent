@@ -82,7 +82,7 @@ class ToolExecutor:
                 approval_request=approval_request,
                 duration_ms=self._elapsed_ms(start),
             )
-        except TimeoutError:
+        except (TimeoutError, asyncio.TimeoutError, asyncio.CancelledError):
             return self._error_result(
                 selection,
                 error_code="LEARN-5301",

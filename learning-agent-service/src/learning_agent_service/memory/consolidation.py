@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from learning_agent_service.domain.memory import (
     MemoryConflict,
@@ -16,8 +16,8 @@ from learning_agent_service.domain.utils import utcnow as _utcnow
 
 def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None or value.tzinfo.utcoffset(value) is None:
-        return value.replace(tzinfo=UTC)
-    return value.astimezone(UTC)
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 @dataclass(frozen=True)

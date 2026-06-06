@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from learning_agent_service.domain.contracts import PersistentSessionContext, TurnRuntimeState
@@ -83,7 +83,7 @@ def build_input_context(
         session_id=_clean_text(session_id),
         user_id=_clean_text(user_id) or None,
         client_context=_as_mapping(client_context),
-        request_ts=(request_ts or datetime.now(UTC)).isoformat(),
+        request_ts=(request_ts or datetime.now(timezone.utc)).isoformat(),
     )
 
 

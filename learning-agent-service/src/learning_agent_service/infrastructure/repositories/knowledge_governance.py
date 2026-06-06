@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 from learning_agent_service.infrastructure.db.models import (
     KnowledgeDocumentModel,
@@ -55,7 +55,7 @@ class KnowledgeGovernanceRepository(SqlAlchemyRepositoryBase):
             instance.checksum = record.checksum
             instance.chunk_count = record.chunk_count
             instance.status = record.status
-            instance.imported_at = record.imported_at or datetime.now(UTC)
+            instance.imported_at = record.imported_at or datetime.now(timezone.utc)
             instance.activated_at = record.activated_at
             instance.invalidated_at = record.invalidated_at
             instance.rollback_from_version = record.rollback_from_version
@@ -66,7 +66,7 @@ class KnowledgeGovernanceRepository(SqlAlchemyRepositoryBase):
 
     def activate_version(self, document_id: str, version: str) -> KnowledgeDocumentVersionModel | None:
         self._require_sqlalchemy()
-        now = datetime.now(UTC)
+        now = datetime.now(timezone.utc)
         with self.session_scope() as session:
             document = session.execute(
                 select(KnowledgeDocumentModel).where(KnowledgeDocumentModel.document_id == document_id)
@@ -100,7 +100,7 @@ class KnowledgeGovernanceRepository(SqlAlchemyRepositoryBase):
             if version_row is None:
                 return None
             version_row.status = status
-            version_row.invalidated_at = datetime.now(UTC)
+            version_row.invalidated_at = datetime.now(timezone.utc)
             session.add(version_row)
             session.flush()
             return version_row
@@ -122,7 +122,7 @@ class KnowledgeGovernanceRepository(SqlAlchemyRepositoryBase):
             document.active_version = version
             version_row.status = "active"
             version_row.rollback_from_version = rollback_from_version
-            version_row.activated_at = datetime.now(UTC)
+            version_row.activated_at = datetime.now(timezone.utc)
             session.add(document)
             session.add(version_row)
             session.flush()

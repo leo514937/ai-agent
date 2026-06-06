@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
+from learning_agent_service.domain.utils import clean_text as _clean_text
 
 _PRONOUNS = (
     "这家",
@@ -343,6 +344,23 @@ class TargetShopPolicy:
         if not eff_explicit_name and shop_query and shop_query.strip() not in _PRONOUNS:
             eff_explicit_name = shop_query.strip()
 
+        has_explicit_shop_hint = bool(shop_ids) or bool(eff_explicit_name)
+        if not has_explicit_shop_hint and not low_info:
+            has_explicit_shop_hint = bool(
+                _clean_text(
+                    client_context_map.get("shopName")
+                    or client_context_map.get("selected_shop_name")
+                    or client_context_map.get("current_shop")
+                    or client_context_map.get("shop_name")
+                )
+                or _clean_text(
+                    session_context_map.get("shopName")
+                    or session_context_map.get("selected_shop_name")
+                    or session_context_map.get("current_shop")
+                    or session_context_map.get("shop_name")
+                )
+            )
+
         if eff_explicit_name and (
             _looks_like_generic_query_entity(eff_explicit_name)
             or eff_explicit_name.lower().strip() in ("assistant", "ai", "general", "none")
@@ -367,19 +385,16 @@ class TargetShopPolicy:
                     reason=f"explicit entity matched {alias_source or 'context'}",
                     candidate_shop_ids=[alias_shop_id] if alias_shop_id is not None else [],
                 )
-
-        if shop_ids or eff_explicit_name:
-            shop_id = int(shop_ids[0]) if shop_ids else None
             return TargetShop(
-                shop_id=shop_id,
+                shop_id=None,
                 shop_name=eff_explicit_name,
-                raw_mention=eff_explicit_name or (str(shop_id) if shop_id else None),
+                raw_mention=eff_explicit_name,
                 source="current_query",
                 resolution_source="explicit_query",
-                confidence=0.98,
+                confidence=0.95,
                 is_explicit_in_current_turn=True,
-                reason="explicit shop ids or query text from current turn",
-                candidate_shop_ids=[int(sid) for sid in shop_ids]
+                reason="explicit entity from current query",
+                candidate_shop_ids=[],
             )
 
         # Precedence 2: 用户选择序号
@@ -424,7 +439,7 @@ class TargetShopPolicy:
                 "不吵",
             )
         )
-        if low_info:
+        if low_info and not has_explicit_shop_hint:
             return TargetShop(
                 source="session",
                 resolution_source="missing",
@@ -467,7 +482,7 @@ class TargetShopPolicy:
                 is_explicit_in_current_turn=False,
                 reason="recommendation_query_should_not_lock_single_shop",
                 candidate_shop_ids=[],
-            )
+                )
 
         if has_pronoun and context_candidates:
             source_label, shop_id, shop_name = context_candidates[0]
@@ -482,6 +497,20 @@ class TargetShopPolicy:
                 is_pronoun_inherited=True,
                 reason=f"pronoun resolved from {source_label}",
                 candidate_shop_ids=[int(shop_id)] if shop_id else [],
+            )
+
+        if shop_ids or eff_explicit_name:
+            shop_id = int(shop_ids[0]) if shop_ids else None
+            return TargetShop(
+                shop_id=shop_id,
+                shop_name=eff_explicit_name,
+                raw_mention=eff_explicit_name or (str(shop_id) if shop_id else None),
+                source="current_query",
+                resolution_source="explicit_query",
+                confidence=0.98,
+                is_explicit_in_current_turn=True,
+                reason="explicit shop ids or query text from current turn",
+                candidate_shop_ids=[int(sid) for sid in shop_ids]
             )
 
         if context_candidates and not generic_query_like:

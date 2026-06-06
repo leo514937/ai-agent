@@ -1,7 +1,8 @@
 from dataclasses import dataclass
 
-from .helpers import Any, GraphState, Mapping, SseEnvelope, _utc_now
+from .helpers import Any, GraphState, Mapping
 from ..plan_execute import ReactStepExecutor
+from ..state import append_runtime_event as _append_state_runtime_event
 from .stages import WorkflowNodeAdapterStagesMixin
 
 
@@ -16,19 +17,5 @@ class WorkflowNodeAdapter(WorkflowNodeAdapterStagesMixin):
         )
 
     def _append_event(self, state: GraphState, event_type: str, payload: Mapping[str, Any]) -> GraphState:
-        runtime = state["runtime"]
-        events = list(runtime.emitted_events)
-        events.append(
-            SseEnvelope(
-                event_type=event_type,
-                trace_id=runtime.trace_id,
-                session_id=runtime.session_id,
-                turn_id=runtime.turn_id,
-                timestamp=_utc_now(),
-                workflow_version=runtime.workflow_version,
-                payload=dict(payload),
-            )
-        )
-        state["runtime"] = runtime.model_copy(update={"emitted_events": events})
-        return state
+        return _append_state_runtime_event(state, event_type, dict(payload))
 

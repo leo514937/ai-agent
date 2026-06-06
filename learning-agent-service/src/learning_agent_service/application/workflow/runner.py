@@ -5,7 +5,7 @@ import queue
 import threading
 import time
 from collections.abc import Iterable, Mapping
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from ...domain.contracts import (
@@ -17,6 +17,9 @@ from ...domain.contracts import (
 from ...domain.errors import TerminalEvent, WorkflowErrorCode, build_error
 from ...domain.state import GraphState, build_initial_state, clone_graph_state
 from ..router import _looks_like_unserviceable_location, _pending_clarification_matches_query
+from .state import append_runtime_error as _append_state_runtime_error
+from .state import append_runtime_event as _append_state_runtime_event
+from .state import append_stage_timeline_entry as _append_stage_timeline_entry
 from .services import WorkflowServices
 from .subgraphs import (
     route_after_rag,
@@ -97,6 +100,14 @@ class SequentialWorkflowRunner:
     def run_state(self, state: GraphState) -> GraphState:
         state = clone_graph_state(state)
         state = self._annotate_runner_context(state)
+        if self._should_consume_pending_clarification(state):
+            state = self._invoke_stage("consume_pending_clarification", self.services.consume_pending_clarification, state)
+            if self._is_terminal(state):
+                return self._finalize_terminal(state)
+            try:
+                state = self.services.understand_turn.parse_intent_slots(state)
+            except Exception:
+                pass
         state = self._invoke_stage("load_context", self.services.load_context, state)
         if self._is_terminal(state):
             return self._finalize_terminal(state)
@@ -295,6 +306,21 @@ class SequentialWorkflowRunner:
                 yield event
             emitted_count = len(events)
 
+        if self._should_consume_pending_clarification(state):
+            state = yield from self._invoke_stage_with_heartbeat_streaming(
+                "consume_pending_clarification",
+                self.services.consume_pending_clarification,
+                state,
+                heartbeat_stage="consume_pending_clarification",
+            )
+            if self._is_terminal(state):
+                state = self._finalize_terminal(state)
+                yield from drain_emitted_events()
+                return
+            try:
+                state = self.services.understand_turn.parse_intent_slots(state)
+            except Exception:
+                pass
         # 1) load_context
         self._emit_stage_event(state, "load_context_started", "load_context", "started", elapsed_ms=0.0)
         state = yield from self._invoke_stage_with_heartbeat_streaming(
@@ -787,19 +813,22 @@ class SequentialWorkflowRunner:
         runtime = state["runtime"]
         turn = state["turn"]
         persistent = state["persistent"]
-        runtime_extra = dict(getattr(runtime, "extra", {}) or {})
-        runtime_extra["streaming_fast_persist"] = True
-        state["runtime"] = runtime.model_copy(update={"extra": runtime_extra})
+        runtime_context = dict(state.get("runtime_context", {}) or {})
+        runtime_context["streaming_fast_persist"] = True
+        state["runtime_context"] = runtime_context
         turn_extra = dict(getattr(turn, "extra", {}) or {})
         turn_extra["streaming_fast_persist"] = True
         state["turn"] = turn.model_copy(update={"extra": turn_extra})
         persistent_extra = dict(getattr(persistent, "extra", {}) or {})
         persistent_extra["streaming_fast_persist"] = True
         state["persistent"] = persistent.model_copy(update={"extra": persistent_extra})
+        runtime_extra = dict(getattr(runtime, "extra", {}) or {})
+        runtime_extra["streaming_fast_persist"] = True
+        state["runtime"] = runtime.model_copy(update={"extra": runtime_extra})
         return state
 
     def _annotate_runner_context(self, state: GraphState) -> GraphState:
-        return _update_phase5_trace(
+        state = _update_phase5_trace(
             state,
             runner_kind=self.runner_kind,
             runner_backend="sequential",
@@ -807,6 +836,18 @@ class SequentialWorkflowRunner:
             runner_class=self.__class__.__name__,
             compare_ready=True,
         )
+        runtime_context = dict(state.get("runtime_context", {}) or {})
+        runtime_context.update(
+            {
+                "runner_kind": self.runner_kind,
+                "runner_backend": "sequential",
+                "graph_runtime": "legacy",
+                "runner_class": self.__class__.__name__,
+                "compare_ready": True,
+            }
+        )
+        state["runtime_context"] = runtime_context
+        return state
 
     def _emit_stage_event(
         self,
@@ -822,7 +863,6 @@ class SequentialWorkflowRunner:
         runtime = state["runtime"]
         turn = state["turn"]
         routing = getattr(turn, "routing_decision", None)
-        events = list(runtime.emitted_events)
         payload = {
             "stage": stage,
             "status": status,
@@ -837,18 +877,18 @@ class SequentialWorkflowRunner:
             "message": None,
             "details": {},
         }
-        events.append(
-            SseEnvelope(
-                event_type=event_type,
-                trace_id=runtime.trace_id,
-                session_id=runtime.session_id,
-                turn_id=runtime.turn_id,
-                timestamp=datetime.now(UTC),
-                workflow_version=runtime.workflow_version,
-                payload=payload,
-            )
+        _append_state_runtime_event(state, event_type, payload)
+        _append_stage_timeline_entry(
+            state,
+            {
+                "stage": stage,
+                "status": status,
+                "route_decision": payload["route_decision"],
+                "route_reason": payload["route_reason"],
+                "detail": {},
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
         )
-        state["runtime"] = runtime.model_copy(update={"emitted_events": events})
         _LOGGER.info(
             "workflow_stage_event trace_id=%s session_id=%s turn_id=%s stage=%s status=%s elapsed_ms=%s degrade_to=%s error=%s",
             runtime.trace_id,
@@ -947,7 +987,7 @@ class SequentialWorkflowRunner:
                 trace_id=runtime.trace_id,
                 session_id=runtime.session_id,
                 turn_id=runtime.turn_id,
-                timestamp=datetime.now(UTC),
+                timestamp=datetime.now(timezone.utc),
                 workflow_version=runtime.workflow_version,
                 payload=payload,
             )
@@ -1011,7 +1051,10 @@ class SequentialWorkflowRunner:
     def _invoke_stage_streaming(self, stage_name: str, handler, state: GraphState):
         event_queue: queue.Queue[object] = queue.Queue()
         runtime = state["runtime"]
-        runtime_extra = dict(runtime.extra)
+        runtime_context = dict(state.get("runtime_context", {}) or {})
+        runtime_context["stream_event_sink"] = event_queue
+        state["runtime_context"] = runtime_context
+        runtime_extra = dict(getattr(runtime, "extra", {}) or {})
         runtime_extra["stream_event_sink"] = event_queue
         state["runtime"] = runtime.model_copy(update={"extra": runtime_extra})
         started_at = time.perf_counter()
@@ -1043,8 +1086,11 @@ class SequentialWorkflowRunner:
 
         worker.join()
         state = result_holder.get("state", state)
+        runtime_context = dict(state.get("runtime_context", {}) or {})
+        runtime_context.pop("stream_event_sink", None)
+        state["runtime_context"] = runtime_context
         runtime = state["runtime"]
-        runtime_extra = dict(runtime.extra)
+        runtime_extra = dict(getattr(runtime, "extra", {}) or {})
         runtime_extra.pop("stream_event_sink", None)
         state["runtime"] = runtime.model_copy(update={"extra": runtime_extra})
         return state
@@ -1080,16 +1126,14 @@ class SequentialWorkflowRunner:
 
     def _record_unexpected_error(self, state: GraphState, stage_name: str, exc: Exception) -> GraphState:
         runtime = state["runtime"]
-        errors = list(runtime.errors)
-        errors.append(
-            build_error(
-                WorkflowErrorCode.INTERNAL_ERROR,
-                stage=stage_name,
-                message=str(exc),
-                is_terminal=True,
-            )
+        error = build_error(
+            WorkflowErrorCode.INTERNAL_ERROR,
+            stage=stage_name,
+            message=str(exc),
+            is_terminal=True,
         )
-        state["runtime"] = runtime.model_copy(update={"errors": errors, "terminal_event": TerminalEvent.ERROR})
+        state = _append_state_runtime_error(state, error)
+        state["runtime"] = state["runtime"].model_copy(update={"terminal_event": TerminalEvent.ERROR})
         return state
 
     @staticmethod

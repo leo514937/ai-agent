@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from learning_agent_service.domain.memory import (
@@ -265,7 +265,7 @@ class MemoryVectorizationGate:
             return MemoryVectorizationGateDecision(False, "inactive_status")
         if not getattr(record, "is_active", True):
             return MemoryVectorizationGateDecision(False, "record_inactive")
-        now = datetime.now(UTC)
+        now = datetime.now(timezone.utc)
         if record.effective_to is not None and record.effective_to <= now:
             return MemoryVectorizationGateDecision(False, "effective_to_expired")
         if record.valid_until is not None and record.valid_until <= now:

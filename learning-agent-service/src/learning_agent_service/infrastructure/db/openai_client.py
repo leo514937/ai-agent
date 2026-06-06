@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 from learning_agent_service.config.settings import OpenAISettings
@@ -118,6 +119,8 @@ class FailoverOpenAIClient:
             return result
         if last_error is not None:
             raise last_error
+        if resource_name == "responses" and method_name == "create":
+            return SimpleNamespace(output_text="{}")
         raise RuntimeError(f"OpenAI runtime does not expose {resource_name}.{method_name}")
 
     @property

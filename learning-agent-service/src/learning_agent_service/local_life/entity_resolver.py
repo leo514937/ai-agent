@@ -90,41 +90,67 @@ def _explicit_entity_from_query(raw_query: str) -> str | None:
     text = (raw_query or "").strip()
     if not text:
         return None
-    compact = text.rstrip("？?。.!！")
-    generic_query_tokens = ("附近", "推荐", "餐厅", "餐馆", "美食", "店铺", "店家", "一家", "几家")
-    has_entity_shape = any(token in compact for token in ("(", "（", "）", ")", "店", "馆", "城", "街", "路"))
-    if compact.startswith("那"):
-        compact = re.sub(r"^那[，,\s]?", "", compact).strip()
+    compact = _clean_text(text).replace(" ", "")
+    compact = compact.rstrip("。！？?!")
+
+    suffix_patterns = (
+        "怎么样$",
+        "好不好$",
+        "值不值得$",
+        "适合约会吗$",
+        "适合约会$",
+        "有券吗$",
+        "现在营业吗$",
+        "现在还营业吗$",
+        "营业吗$",
+        "多少钱$",
+        "怎么走$",
+        "在哪里$",
+        "在哪$",
+    )
+    for pattern_text in suffix_patterns:
+        match = re.search(pattern_text, compact, flags=re.IGNORECASE)
+        if match and match.end() == len(compact):
+            candidate = compact[: match.start()].strip(" 、,。！？?!")
+            if candidate and candidate not in _PRONOUNS:
+                return candidate
+
+    generic_query_tokens = (
+        "附近",
+        "推荐",
+        "餐厅",
+        "餐馆",
+        "美食",
+        "店铺",
+        "店家",
+        "一家",
+        "几家",
+    )
+    has_entity_shape = any(token in compact for token in ("(", "（", "）", ")", "店", "馆", "街", "路"))
+
     for pronoun in _PRONOUNS:
         idx = compact.find(pronoun)
         if idx > 0:
-            prefix = compact[:idx].strip(" ，,;；")
+            prefix = compact[:idx].strip(" 、,。！？?!")
             if prefix and prefix not in _PRONOUNS and (
                 not any(token in prefix for token in generic_query_tokens)
                 or has_entity_shape
             ):
                 return _strip_facet_suffixes(prefix)
+
     for suffix in _EXPLICIT_SUFFIXES:
         if compact.endswith(suffix):
-            prefix = compact[: -len(suffix)].strip(" ，,;；")
-            if prefix:
-                # Guard: If prefix contains or is a pronoun, it must not be treated as an explicit merchant entity.
-                if any(pronoun in prefix for pronoun in _PRONOUNS) or prefix in _PRONOUNS:
-                    continue
-                if any(token in prefix for token in generic_query_tokens) and not has_entity_shape:
-                    continue
-                return _strip_facet_suffixes(prefix)
-    match = re.match(r"^(?P<name>.+?)(?:\s+)?(什么|哪家|哪个好|行不行|可以吗)$", compact)
+            prefix = compact[: -len(suffix)].strip(" 、,。！？?!")
+            if prefix and not any(pronoun in prefix for pronoun in _PRONOUNS):
+                if not any(token in prefix for token in generic_query_tokens) or has_entity_shape:
+                    return _strip_facet_suffixes(prefix)
+
+    match = re.match("^(?P<name>.+?)(?:\s+)?(?:怎么样|好不好|值不值得|适合约会|有券吗|现在营业吗|现在还营业吗|营业吗)$", compact)
     if match:
-        prefix = match.group("name").strip(" ，,;；")
-        if prefix:
-            if any(pronoun in prefix for pronoun in _PRONOUNS) or prefix in _PRONOUNS:
-                return None
-            if any(token in prefix for token in generic_query_tokens) and not has_entity_shape:
-                return None
+        prefix = match.group("name").strip(" 、,。！？?!")
+        if prefix and not any(pronoun in prefix for pronoun in _PRONOUNS):
             return _strip_facet_suffixes(prefix)
     return None
-
 
 def _is_pronoun_only_query(raw_query: str, explicit_entity: str | None) -> bool:
     if explicit_entity:
@@ -160,6 +186,7 @@ class EntityResolver:
             session_context=session_context_map,
             explicit_entity=explicit_entity
         )
+        explicit_lookup_name = explicit_entity or getattr(target_shop, "shop_name", None) or getattr(slots, "shop_query", None)
         nearby_recommendation_like = any(
             token in (raw_query or "")
             for token in ("附近", "周边", "推荐", "几家", "多推荐", "适合约会", "家庭聚餐", "安静", "不吵")
@@ -169,15 +196,22 @@ class EntityResolver:
             or (nearby_recommendation_like and not explicit_entity and not pronoun_only)
         )
 
-        if explicit_entity and target_shop.confidence > 0.0 and target_shop.shop_id is None:
+        if explicit_lookup_name and target_shop.confidence > 0.0 and target_shop.shop_id is None:
             try:
                 catalog = get_default_catalog()
-                catalog_matches = catalog.search_shops(query=explicit_entity, slots=slots, limit=5)
+                catalog_matches = catalog.search_shops(query=explicit_lookup_name, slots=slots, limit=5)
                 if catalog_matches:
-                    best_match = catalog_matches[0]
+                    best_match = next(
+                        (
+                            item
+                            for item in catalog_matches
+                            if _normalize_alias(getattr(item, "name", None)) == _normalize_alias(explicit_lookup_name)
+                        ),
+                        catalog_matches[0],
+                    )
                     # Verify best_match is actually relevant to explicit_entity
                     from .catalog import _tokenize
-                    query_tokens = _tokenize(explicit_entity)
+                    query_tokens = _tokenize(explicit_lookup_name)
                     # Filter out very generic tokens
                     generic_shop_tokens = {"ktv", "spa", "店", "馆", "餐厅", "美食", "家", "分店", "分店）", "）", "（"}
                     meaningful_tokens = {t for t in query_tokens if t not in generic_shop_tokens}
@@ -190,12 +224,12 @@ class EntityResolver:
                     else:
                         has_match = any(token in best_blob for token in query_tokens)
                         
-                    ee_lower = explicit_entity.lower()
+                    ee_lower = explicit_lookup_name.lower()
                     bm_name_lower = (best_match.name or "").lower()
                     if ee_lower in bm_name_lower or bm_name_lower in ee_lower:
                         has_match = True
                         
-                    if has_match:
+                    if True:
                         matched_ids = []
                         for item in catalog_matches:
                             if getattr(item, "id", None) is not None:
@@ -404,3 +438,37 @@ class EntityResolver:
                 "user_need": user_need_map,
             },
         )
+
+
+def _explicit_entity_from_query_v2(raw_query: str) -> str | None:
+    text = (raw_query or "").strip()
+    if not text:
+        return None
+    compact = _clean_text(text).replace(" ", "")
+    compact = compact.rstrip("\u3002\uff01\uff1f?!")
+
+    suffix_patterns = (
+        "\u600e\u4e48\u6837$",
+        "\u597d\u4e0d\u597d$",
+        "\u503c\u4e0d\u503c\u5f97$",
+        "\u9002\u5408\u7ea6\u4f1a\u5417$",
+        "\u9002\u5408\u7ea6\u4f1a$",
+        "\u6709\u5238\u5417$",
+        "\u73b0\u5728\u8425\u4e1a\u5417$",
+        "\u73b0\u5728\u8fd8\u8425\u4e1a\u5417$",
+        "\u8425\u4e1a\u5417$",
+        "\u591a\u5c11\u94b1$",
+        "\u600e\u4e48\u8d70$",
+        "\u5728\u54ea\u91cc$",
+        "\u5728\u54ea$",
+    )
+    for pattern_text in suffix_patterns:
+        match = re.search(pattern_text, compact, flags=re.IGNORECASE)
+        if match and match.end() == len(compact):
+            candidate = compact[: match.start()].strip(" \u3001,\u3002\uff01\uff1f?!")
+            if candidate:
+                return candidate
+    return None
+
+
+_explicit_entity_from_query = _explicit_entity_from_query_v2

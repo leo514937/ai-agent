@@ -72,6 +72,8 @@ from .phase2_slots import (
     build_evidence_quality,
 )
 
+from .stages import route_execution_mode
+
 from .phase3_review import _apply_route_review
 
 from .phase4_plan import (
@@ -97,6 +99,10 @@ from .phase7_compose import (
     _build_answer_contract,
     _build_answer_verifier_result,
     _build_entity_join_result,
+    _build_loop_counter,
+    _build_review_report,
+    _build_semantic_parse_result,
+    _build_source_contract,
 )
 from .trace import (
     RoutingTrace,
@@ -118,6 +124,10 @@ __all__ = [
     "_build_answer_contract",
     "_build_answer_verifier_result",
     "_build_entity_join_result",
+    "_build_loop_counter",
+    "_build_review_report",
+    "_build_semantic_parse_result",
+    "_build_source_contract",
     "_build_min_entity_consistency",
     "_build_required_facets",
     "_build_task_plan",
@@ -162,6 +172,7 @@ __all__ = [
     "_route_review_reason",
     "_routing_from_turn",
     "_semantic_route_for_query",
+    "route_execution_mode",
     "_task_plan_enabled",
     "_task_plan_required_facets",
     "_task_plan_step_payload",

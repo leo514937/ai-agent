@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from learning_agent_service.infrastructure.repositories.records import OutboxEventRecord
@@ -22,7 +22,7 @@ class AsyncLogWriteRequest:
     dedupe_key: str
     payload: dict[str, Any] = field(default_factory=dict)
     trace_id: str | None = None
-    available_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    available_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def to_record(self) -> OutboxEventRecord:
         return OutboxEventRecord(
@@ -46,7 +46,7 @@ class TypedAsyncLogEvent:
     dedupe_key: str
     payload: dict[str, Any] = field(default_factory=dict)
     trace_id: str | None = None
-    available_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    available_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def to_request(self) -> AsyncLogWriteRequest:
         return AsyncLogWriteRequest(
@@ -78,7 +78,7 @@ def normalize_async_log_request(
     aggregate_id = str(entry.get("aggregate_id") or "%s:%s" % (session_id, turn_id))
     available_at = entry.get("available_at")
     if not isinstance(available_at, datetime):
-        available_at = datetime.now(UTC)
+        available_at = datetime.now(timezone.utc)
     return AsyncLogWriteRequest(
         aggregate_type=aggregate_type,
         aggregate_id=aggregate_id,

@@ -96,7 +96,7 @@ class LocalBM25SparseRetriever:
         scored: list[tuple[float, KnowledgeChunk]] = []
         if self._bm25 is not None:
             raw_scores = self._bm25.get_scores(query_tokens)
-            for chunk, score in zip(self._chunks, raw_scores, strict=False):
+            for chunk, score in zip(self._chunks, raw_scores):
                 if not self._filter_builder.matches_visibility(
                     chunk,
                     plan.retrieval_filters,
@@ -110,7 +110,7 @@ class LocalBM25SparseRetriever:
                     score_value += 0.05
                 scored.append((score_value, chunk))
         else:
-            for chunk, doc_tokens in zip(self._chunks, self._doc_tokens, strict=False):
+            for chunk, doc_tokens in zip(self._chunks, self._doc_tokens):
                 if not self._filter_builder.matches_visibility(
                     chunk,
                     plan.retrieval_filters,

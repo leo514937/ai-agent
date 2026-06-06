@@ -1,9 +1,11 @@
+from __future__ import annotations
+
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 import re
 import time
 from dataclasses import dataclass
+from typing import Any
 from learning_agent_service.domain.contracts import (
     AnswerComposeRequest,
     AnswerComposeResult,
@@ -13,6 +15,7 @@ from learning_agent_service.domain.contracts import (
 from learning_agent_service.config import Settings
 from learning_agent_service.application.rag_gate import compose_direct_response_text
 from learning_agent_service.application.router.phase2_slots import build_clarification_question
+from learning_agent_service.local_life.realtime_result_degrade_policy import build_realtime_degrade_message
 from .orchestrator_components import *# noqa: F401,F403,F405
 
 
@@ -196,7 +199,7 @@ class AnswerComposer:
                 trace_id=str(meta.get("trace_id") or ""),
                 session_id=str(meta.get("session_id") or ""),
                 turn_id=str(meta.get("turn_id") or ""),
-                timestamp=datetime.now(UTC),
+                timestamp=datetime.now(timezone.utc),
                 workflow_version=str(meta.get("workflow_version") or "learn-agent/v1"),
                 payload={
                     "delta": chunk,
@@ -240,6 +243,16 @@ class AnswerComposer:
         if tool_result is None or not tool_result.tool_name:
             return None
         failure_category = str(tool_result.extra.get("failure_category") or "").strip().lower()
+        degrade_message = build_realtime_degrade_message(
+            tool_name=tool_result.tool_name,
+            failure_category=failure_category or str(tool_result.status or "").strip().lower(),
+            request=request,
+        )
+        if failure_category in {"approval_required", "permission_denied", "timeout", "dependency_unavailable", "invalid_params", "service_unavailable"}:
+            if degrade_message:
+                return degrade_message
+        rag_pack = getattr(request.rag_result, "evidence_pack", None) if request.rag_result is not None else None
+        rag_items = list(getattr(rag_pack, "items", []) or [])
         if failure_category == "no_tool_mapping":
             return (
                 "这次我没能把这类本地生活请求稳定映射到具体工具，所以先不继续执行，避免误路由。"
@@ -256,8 +269,16 @@ class AnswerComposer:
             return "刚才查询超时了。你可以稍后重试，我也可以先帮你缩小范围再查。"
         if failure_category == "dependency_unavailable":
             return "相关服务暂时不可用，这次还查不到结果。你可以稍后再试。"
+        if failure_category == "no_result" and rag_items:
+            return None
         if failure_category == "no_result":
+            rag_pack = getattr(request.rag_result, "evidence_pack", None) if request.rag_result is not None else None
+            rag_items = list(getattr(rag_pack, "items", []) or [])
+            if rag_items:
+                return None
             return self._compose_no_result_answer(tool_result.tool_name, tool_result.normalized_output, request)
+        if failure_category == "no_result" and rag_items:
+            return None
         if tool_result.status == ToolExecutionStatus.SUCCESS and tool_result.extra.get("grounding_source") == "business_evidence":
             return self._compose_tool_success_answer(tool_result.tool_name, tool_result.normalized_output, request)
         return None
@@ -587,7 +608,7 @@ class AnswerComposer:
             return self._compose_no_answer(request, request.evidence_quality)
         lead = "根据知识库中的证据，可以得到以下结论："
         bullets: list[str] = []
-        for item, _citation in zip(items[: self.max_citations], citations or items, strict=False):
+        for item, _citation in zip(items[: self.max_citations], citations or items):
             snippet = item.content.strip().replace("\n", " ")
             if len(snippet) > 140:
                 snippet = snippet[:137].rstrip() + "..."

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from learning_agent_service.domain.memory import MemoryCandidate, MemorySource
@@ -90,7 +90,7 @@ class SessionMemoryUpdater:
             confirmed_facts=confirmed_facts,
             next_steps=next_steps,
             summary_version=current.summary_version + (1 if summary_changed else 0),
-            summary_updated_at=datetime.now(UTC) if summary_changed else current.summary_updated_at,
+            summary_updated_at=datetime.now(timezone.utc) if summary_changed else current.summary_updated_at,
             pending_clarification=_mapping_dict(clarification_result) or current.pending_clarification,
         )
 
@@ -162,7 +162,7 @@ class MemoryPromotionPolicy:
         return self._governance.evaluate_many(candidates)
 
     def evaluate(self, payload: MemoryPromotionInput) -> MemoryPromotionResult:
-        now = payload.current_time or datetime.now(UTC)
+        now = payload.current_time or datetime.now(timezone.utc)
         topic = self._resolver.canonicalize(payload.resolved_topic) if payload.resolved_topic else None
         session_update = self._updater.build_update(
             current=payload.current_session,

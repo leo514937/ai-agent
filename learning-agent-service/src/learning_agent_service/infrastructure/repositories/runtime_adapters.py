@@ -6,7 +6,7 @@ import json
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from learning_agent_service.domain import GraphRuntimeMeta, PersistentSessionContext
@@ -29,7 +29,7 @@ from .records import (
 
 def _json_default(value: Any) -> Any:
     if isinstance(value, datetime):
-        return value.astimezone(UTC).isoformat()
+        return value.astimezone(timezone.utc).isoformat()
     return str(value)
 
 
@@ -68,7 +68,7 @@ class RedisSessionContextStore(SessionContextPort):
             "next_steps": list(context.next_steps),
             "summary_version": context.summary_version,
             "summary_updated_at": context.summary_updated_at.isoformat() if context.summary_updated_at else None,
-            "updated_at": datetime.now(UTC).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         self.runtime.client.set(summary_key, json.dumps(summary_payload))
 

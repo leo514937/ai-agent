@@ -56,6 +56,23 @@ def _candidate_shop_ids(ranked_candidates: Sequence[Mapping[str, Any] | Any]) ->
     return ids
 
 
+def _evidence_shop_ids(pack: EvidencePack | Mapping[str, Any] | None) -> set[int]:
+    ids: set[int] = set()
+    evidence_pack = _as_mapping(pack)
+    for item in evidence_pack.get("items") or []:
+        item_map = _as_mapping(item)
+        raw_id = item_map.get("shop_id")
+        if raw_id in (None, ""):
+            raw_id = _as_mapping(item_map.get("metadata")).get("shop_id")
+        if raw_id in (None, ""):
+            continue
+        try:
+            ids.add(int(raw_id))
+        except Exception:
+            continue
+    return ids
+
+
 def _plan_from_any(answer_plan: LocalLifeAnswerPlan | Mapping[str, Any] | None) -> LocalLifeAnswerPlan | None:
     if answer_plan is None:
         return None
@@ -89,6 +106,7 @@ class GroundedVerifier:
 
         evidence_index = _evidence_index(evidence_pack)
         ranked_shop_ids = _candidate_shop_ids(ranked_candidates)
+        supported_shop_ids = ranked_shop_ids | _evidence_shop_ids(evidence_pack)
         normalized_plan = plan.model_dump(mode="json")
         issues: list[str] = []
         warnings: list[str] = []
@@ -108,7 +126,7 @@ class GroundedVerifier:
                 shop_id = int(candidate_map.get("shop_id") or 0)
             except Exception:
                 shop_id = 0
-            if shop_id not in ranked_shop_ids:
+            if shop_id not in supported_shop_ids:
                 issues.append("unknown_candidate_shop_id")
                 continue
             candidate_reasons.append(candidate_map)
@@ -120,7 +138,7 @@ class GroundedVerifier:
                 top_choice_shop_id = int(top_choice.get("shop_id") or 0)
             except Exception:
                 top_choice_shop_id = 0
-            if top_choice_shop_id not in ranked_shop_ids:
+            if top_choice_shop_id not in supported_shop_ids:
                 issues.append("unknown_top_choice_shop_id")
                 top_choice = None
         if top_choice is None and candidate_reasons:

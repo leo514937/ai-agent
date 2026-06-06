@@ -153,6 +153,7 @@ def build_evidence_pack(
         if candidate.get("shop_id") not in (None, "") or candidate.get("id") not in (None, "")
     }
     dropped_cross_shop_evidence: list[EvidenceItem] = []
+    evidence_citations: list[str] = []
 
     def _make_item(claim_map: Mapping[str, Any], *, shop_key: str, index: int) -> EvidenceItem:
         shop_id = claim_map.get("shop_id")
@@ -199,6 +200,7 @@ def build_evidence_pack(
         shop_key = str(candidate.get("shop_id") or candidate.get("id") or "")
         candidate_items = evidence_by_shop.get(shop_key, [])
         items.extend(candidate_items)
+        evidence_citations.extend(item.evidence_id for item in candidate_items)
         candidate_summaries.append(
             _candidate_summary(
                 candidate,
@@ -207,6 +209,10 @@ def build_evidence_pack(
                 scene=scene,
             )
         )
+
+    if not items and evidence_by_shop:
+        for candidate_items in evidence_by_shop.values():
+            items.extend(candidate_items)
 
     notes = []
     tool_summary_text = source_summary_map.get("tool_summary_text")
@@ -223,6 +229,33 @@ def build_evidence_pack(
         empty_reason = "no_matching_evidence" if selected_shop_ids else "no_selected_shop_ids"
 
     truncated = len(ranked_candidates) > len(candidate_summaries) or len(evidence_claims) > len(items)
+    rag_guardrail = source_summary_map.get("rag_guardrail")
+    rag_quality_status = _clean_text(source_summary_map.get("rag_quality_status"))
+    if not rag_quality_status and isinstance(rag_guardrail, Mapping):
+        rag_quality_status = _clean_text(rag_guardrail.get("rag_quality_status") or rag_guardrail.get("rag_quality"))
+    if not rag_quality_status:
+        if not items:
+            rag_quality_status = "empty"
+        elif any(float(item.confidence or 0.0) >= 0.7 for item in items):
+            rag_quality_status = "ok"
+        else:
+            rag_quality_status = "weak"
+    rag_quality_status = rag_quality_status.lower()
+    if rag_quality_status not in {"ok", "weak", "dirty", "empty", "degraded"}:
+        rag_quality_status = "unknown"
+
+    discard_summary = {
+        "selected_shop_ids": sorted(int(shop_id) for shop_id in selected_shop_ids if str(shop_id).strip().isdigit()),
+        "cross_shop_dropped_count": len(dropped_cross_shop_evidence),
+        "item_count": len(items),
+        "candidate_count": len(candidate_summaries),
+        "evidence_count": len(items),
+        "empty_reason": empty_reason,
+        "rag_quality_status": rag_quality_status,
+        "rag_mode": resolved_rag_mode,
+        "degraded_reason": source_summary_map.get("degraded_reason"),
+        "approval_required": bool(safety_result_map.get("approval_required")),
+    }
     return EvidencePack(
         raw_query=raw_query,
         slots=slots_map,
@@ -230,9 +263,12 @@ def build_evidence_pack(
         target_shop_id=inferred_target_shop_id,
         ranked_candidates=candidate_summaries,
         items=items,
+        citations=evidence_citations,
         shop_evidence_map=shop_evidence_map,
         grouped_by_shop={shop_key: list(items) for shop_key, items in evidence_by_shop.items()},
         dropped_cross_shop_evidence=dropped_cross_shop_evidence,
+        discard_summary=discard_summary,
+        evidence_status=rag_quality_status.upper(),
         source_summary=source_summary_map,
         safety_result=safety_result_map,
         notes=notes,

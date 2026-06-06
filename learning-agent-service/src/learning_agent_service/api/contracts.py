@@ -59,7 +59,11 @@ class EventType(str, Enum):
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
     PLAN_EXECUTION_STARTED = "plan_execution_started"
+    EXECUTE_PLAN_STEP = "execute_plan_step"
     PLAN_STEP_RESULT = "plan_step_result"
+    COLLECT_STEP_RESULT = "collect_step_result"
+    ALL_STEPS_DONE = "all_steps_done"
+    COMPLEX_REVIEW = "complex_review"
     APPROVAL_REQUIRED = "approval_required"
     PLAN_REPLANNED = "plan_replanned"
     PLAN_EXECUTION_SUMMARY = "plan_execution_summary"
@@ -224,10 +228,57 @@ class PlanExecutionStartedPayload(BaseModel):
     route_reason: str | None = None
 
 
+class ExecutePlanStepPayload(BaseModel):
+    step: PlanStep
+    current_step_index: int = Field(default=0, ge=0)
+    total_steps: int = Field(default=0, ge=0)
+    plan_replan_count: int = Field(default=0, ge=0)
+    current_stage: str | None = None
+    stage_status: str | None = None
+    route_decision: str | None = None
+    route_reason: str | None = None
+
+
 class PlanStepResultPayload(BaseModel):
     step_result: StepResult
     current_step_index: int = Field(default=0, ge=0)
     total_steps: int = Field(default=0, ge=0)
+    current_stage: str | None = None
+    stage_status: str | None = None
+    route_decision: str | None = None
+    route_reason: str | None = None
+
+
+class CollectStepResultPayload(BaseModel):
+    step_result: StepResult
+    current_step_index: int = Field(default=0, ge=0)
+    total_steps: int = Field(default=0, ge=0)
+    plan_replan_count: int = Field(default=0, ge=0)
+    current_stage: str | None = None
+    stage_status: str | None = None
+    route_decision: str | None = None
+    route_reason: str | None = None
+
+
+class AllStepsDonePayload(BaseModel):
+    completed_steps: int = Field(default=0, ge=0)
+    total_steps: int = Field(default=0, ge=0)
+    plan_replan_count: int = Field(default=0, ge=0)
+    current_stage: str | None = None
+    stage_status: str | None = None
+    route_decision: str | None = None
+    route_reason: str | None = None
+
+
+class ComplexReviewPayload(BaseModel):
+    summary: PlanExecutionSummary
+    decision: str | None = None
+    completed_steps: int = Field(default=0, ge=0)
+    total_steps: int = Field(default=0, ge=0)
+    final_decision: str | None = None
+    plan_replan_count: int = Field(default=0, ge=0)
+    max_replans: int = Field(default=0, ge=0)
+    max_tool_rounds: int = Field(default=0, ge=0)
     current_stage: str | None = None
     stage_status: str | None = None
     route_decision: str | None = None
@@ -559,7 +610,11 @@ EVENT_PAYLOAD_MODELS: dict[EventType, type[BaseModel]] = {
     EventType.TOOL_CALL: ToolCallPayload,
     EventType.TOOL_RESULT: ToolResultPayload,
     EventType.PLAN_EXECUTION_STARTED: PlanExecutionStartedPayload,
+    EventType.EXECUTE_PLAN_STEP: ExecutePlanStepPayload,
     EventType.PLAN_STEP_RESULT: PlanStepResultPayload,
+    EventType.COLLECT_STEP_RESULT: CollectStepResultPayload,
+    EventType.ALL_STEPS_DONE: AllStepsDonePayload,
+    EventType.COMPLEX_REVIEW: ComplexReviewPayload,
     EventType.APPROVAL_REQUIRED: ApprovalRequiredPayload,
     EventType.PLAN_REPLANNED: PlanReplannedPayload,
     EventType.PLAN_EXECUTION_SUMMARY: PlanExecutionSummaryPayload,

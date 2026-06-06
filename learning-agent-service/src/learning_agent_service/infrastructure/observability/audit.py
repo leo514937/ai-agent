@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -17,7 +17,7 @@ class AuditEnvelope:
     trace_id: str | None = None
     session_id: str | None = None
     turn_id: str | None = None
-    emitted_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    emitted_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def as_log_extra(self) -> dict[str, Any]:
         return {

@@ -21,6 +21,9 @@ FASTAPI_IMPORT_ERROR: Exception | None = None
 try:
     from fastapi import FastAPI
     from fastapi.responses import ORJSONResponse
+    import fastapi.responses as _fastapi_responses
+    if getattr(_fastapi_responses, "orjson", None) is None:
+        ORJSONResponse = None  # type: ignore[assignment]
 except Exception as exc:  # pragma: no cover - fallback is intentional
     FASTAPI_IMPORT_ERROR = exc
     FastAPI = None  # type: ignore[assignment]

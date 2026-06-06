@@ -15,6 +15,7 @@ from ...domain.enums import IntentType, ToolExecutionStatus
 from ...domain.errors import WorkflowErrorCode, build_error
 from ...domain.state import GraphState
 from ...tools.models import SideEffectLevel
+from .state import append_runtime_error as _append_state_runtime_error
 
 
 @dataclass(frozen=True)
@@ -35,10 +36,10 @@ class ReactStepExecutor:
 
     def plan_planner(self, state: GraphState) -> GraphState:
         turn = state["turn"]
-        plan = self._normalize_plan(turn.plan)
+        plan = self._normalize_plan(turn.plan, limit=self.policy.max_steps)
         task_plan = getattr(turn, "task_plan", None)
         if not plan and task_plan is not None and getattr(task_plan, "steps", None):
-            plan = self._normalize_plan(list(task_plan.steps))
+            plan = self._normalize_plan(list(task_plan.steps), limit=self.policy.max_steps)
         if not plan:
             plan = self._build_default_plan(state)
         turn_extra = dict(turn.extra)
@@ -70,7 +71,7 @@ class ReactStepExecutor:
 
     def plan_validator(self, state: GraphState) -> GraphState:
         turn = state["turn"]
-        plan = self._normalize_plan(turn.plan)
+        plan = self._normalize_plan(turn.plan, limit=self.policy.max_steps)
         if not plan:
             return self._mark_replan(
                 state,
@@ -170,6 +171,11 @@ class ReactStepExecutor:
         executed_steps = 0
         for index in range(start_index, len(plan)):
             if executed_steps >= self.policy.max_steps:
+                runtime = state["runtime"]
+                metrics = dict(runtime.metrics)
+                metrics["loop_guard_triggered"] = True
+                metrics["loop_guard_reason"] = "step_executor_max_steps"
+                state["runtime"] = runtime.model_copy(update={"metrics": metrics})
                 state = self._mark_replan(
                     state,
                     reason="步骤数量超过执行上限。",
@@ -185,6 +191,16 @@ class ReactStepExecutor:
                     "current_step": step,
                 }
             )
+            state = self.append_event(
+                state,
+                "execute_plan_step",
+                {
+                    "step": step.model_dump(mode="json"),
+                    "current_step_index": index,
+                    "total_steps": len(plan),
+                    "plan_replan_count": int(state["turn"].extra.get("plan_replan_count", 0) or 0),
+                },
+            )
             result = self._execute_step(state, step)
             step_results.append(result)
             state["turn"] = state["turn"].model_copy(update={"step_results": step_results})
@@ -196,6 +212,16 @@ class ReactStepExecutor:
                     "step_input": dict(getattr(step, "input_payload", {}) or {}),
                     "current_step_index": index,
                     "total_steps": len(plan),
+                },
+            )
+            state = self.append_event(
+                state,
+                "collect_step_result",
+                {
+                    "step_result": result.model_dump(mode="json"),
+                    "current_step_index": index,
+                    "total_steps": len(plan),
+                    "plan_replan_count": int(state["turn"].extra.get("plan_replan_count", 0) or 0),
                 },
             )
             executed_steps += 1
@@ -239,12 +265,37 @@ class ReactStepExecutor:
         state["runtime"] = state["runtime"].model_copy(update={"metrics": metrics})
         if total and completed >= total and not turn.need_human_approval:
             state["turn"] = turn.model_copy(update={"need_replan": False, "replan_reason": None})
+            if not self._has_event(state, "all_steps_done"):
+                state = self.append_event(
+                    state,
+                    "all_steps_done",
+                    {
+                        "completed_steps": completed,
+                        "total_steps": total,
+                        "plan_replan_count": int(turn.extra.get("plan_replan_count", 0) or 0),
+                    },
+                )
         return state
 
     def plan_reviewer(self, state: GraphState) -> GraphState:
         turn = state["turn"]
         summary = self._build_summary(turn)
         state["turn"] = turn.model_copy(update={"final_task_summary": summary})
+        if not self._has_event(state, "complex_review"):
+            state = self.append_event(
+                state,
+                "complex_review",
+                {
+                    "summary": summary.model_dump(mode="json"),
+                    "decision": summary.status,
+                    "completed_steps": summary.completed_steps,
+                    "total_steps": summary.total_steps,
+                    "final_decision": summary.final_decision,
+                    "plan_replan_count": int(turn.extra.get("plan_replan_count", 0) or 0),
+                    "max_replans": self.policy.max_replans,
+                    "max_tool_rounds": self.policy.max_tool_rounds,
+                },
+            )
         if not self._has_event(state, "plan_execution_summary") or int(turn.extra.get("plan_replan_count", 0) or 0) > 0:
             state = self.append_event(
                 state,
@@ -604,18 +655,14 @@ class ReactStepExecutor:
         stage: str,
         code: WorkflowErrorCode,
     ) -> GraphState:
-        runtime = state["runtime"]
-        errors = list(runtime.errors)
-        errors.append(
-            build_error(
-                code,
-                stage=stage,
-                message=reason,
-                retryable=False,
-                is_terminal=False,
-            )
+        error = build_error(
+            code,
+            stage=stage,
+            message=reason,
+            retryable=False,
+            is_terminal=False,
         )
-        state["runtime"] = runtime.model_copy(update={"errors": errors})
+        state = _append_state_runtime_error(state, error)
         state["turn"] = state["turn"].model_copy(update={"need_replan": True, "replan_reason": reason})
         return state
 
@@ -631,7 +678,7 @@ class ReactStepExecutor:
             return str(topic_hint)
         return turn.raw_query or "general-topic"
 
-    def _normalize_plan(self, plan: List[PlanStep]) -> List[PlanStep]:
+    def _normalize_plan(self, plan: List[PlanStep], limit: int | None = None) -> List[PlanStep]:
         normalized: List[PlanStep] = []
         for _index, item in enumerate(plan):
             if isinstance(item, PlanStep):
@@ -642,7 +689,9 @@ class ReactStepExecutor:
                     normalized.append(PlanStep.model_validate(item))
                 except Exception:
                     continue
-        return normalized[: self.policy.max_steps]
+        if limit is None:
+            return normalized
+        return normalized[: max(0, int(limit))]
 
     def _tool_registry(self):
         executor = getattr(self.container, "tool_executor", None)

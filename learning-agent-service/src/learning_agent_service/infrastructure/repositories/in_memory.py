@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from learning_agent_service.domain import GraphRuntimeMeta, PersistentSessionContext
@@ -25,7 +25,7 @@ class InMemorySessionContextStore(SessionContextPort):
         self.sessions[(runtime.session_id, runtime.user_id)] = deepcopy(context)
 
     def load_any(self, session_id: str) -> PersistentSessionContext:
-        for (stored_session_id, _), context in self.sessions.items():
+        for (stored_session_id, _), context in reversed(list(self.sessions.items())):
             if stored_session_id == session_id:
                 return deepcopy(context)
         return PersistentSessionContext()
@@ -43,7 +43,7 @@ class InMemoryTopicMasteryStore:
     def upsert(self, user_id: str, topic: str, payload: dict[str, Any]) -> dict[str, Any]:
         merged = self.get(user_id, topic)
         merged.update(payload)
-        merged["updated_at"] = datetime.now(UTC).isoformat()
+        merged["updated_at"] = datetime.now(timezone.utc).isoformat()
         self.records[(user_id, topic)] = deepcopy(merged)
         return deepcopy(merged)
 

@@ -1,9 +1,19 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
 from typing import Iterable
 
+from learning_agent_service.domain.contracts import ChatTurnCommand, PersistentSessionContext
 from learning_agent_service.domain.utils import as_mapping as _as_mapping
 
 from .helpers import *  # noqa: F403
 from .helpers import _mark_stage
+from ..context_arbitration import ContextArbitration
+from ..graph_state import build_input_context, build_memory_arbitration_result, build_perception_context
+from ..query_rewriter import normalize_query
+from ..slot_extractor import extract_slots
+from ..user_need_parser import UserNeedParser
+from ..target_shop_policy import is_low_information_query
 from .stream_context import StreamRunContext
 
 
@@ -76,7 +86,7 @@ class LocalLifeStreamLoadMixin:
             session_id=command.session_id,
             user_id=command.user_id,
             client_context=client_context,
-            request_ts=datetime.now(UTC),
+            request_ts=datetime.now(timezone.utc),
         )
         perception_context = build_perception_context(
             raw_query=command.message,
@@ -314,7 +324,7 @@ class LocalLifeStreamLoadMixin:
             session_id=command.session_id,
             user_id=command.user_id,
             client_context=client_context,
-            request_ts=datetime.now(UTC),
+            request_ts=datetime.now(timezone.utc),
         )
         perception_context = build_perception_context(
             raw_query=command.message,

@@ -226,9 +226,12 @@ class EvidencePack(LocalLifeModel):
     target_shop_id: int | None = None
     ranked_candidates: list[CandidateEvidenceSummary] = Field(default_factory=list)
     items: list[EvidenceItem] = Field(default_factory=list)
+    citations: list[str] = Field(default_factory=list)
     shop_evidence_map: dict[str, list[str]] = Field(default_factory=dict)
     grouped_by_shop: dict[str, list[EvidenceItem]] = Field(default_factory=dict)
     dropped_cross_shop_evidence: list[EvidenceItem] = Field(default_factory=list)
+    discard_summary: dict[str, Any] = Field(default_factory=dict)
+    evidence_status: str = "unknown"
     source_summary: dict[str, Any] = Field(default_factory=dict)
     safety_result: dict[str, Any] = Field(default_factory=dict)
     notes: list[str] = Field(default_factory=list)
@@ -263,6 +266,7 @@ class EvidencePack(LocalLifeModel):
         next_data["notes"] = _string_list(next_data.get("notes"))
         next_data["ranked_candidates"] = [item for item in next_data.get("ranked_candidates") or []]
         next_data["items"] = [item for item in next_data.get("items") or []]
+        next_data["citations"] = _string_list(next_data.get("citations"))
         next_data["shop_evidence_map"] = {
             str(key): _string_list(value)
             for key, value in _as_mapping(next_data.get("shop_evidence_map")).items()
@@ -272,6 +276,8 @@ class EvidencePack(LocalLifeModel):
             for key, value in _as_mapping(next_data.get("grouped_by_shop")).items()
         }
         next_data["dropped_cross_shop_evidence"] = [item for item in next_data.get("dropped_cross_shop_evidence") or []]
+        next_data["discard_summary"] = _as_mapping(next_data.get("discard_summary"))
+        next_data["evidence_status"] = _clean_text(next_data.get("evidence_status")) or "unknown"
         next_data["empty_reason"] = _clean_text(next_data.get("empty_reason"))
         return next_data
 

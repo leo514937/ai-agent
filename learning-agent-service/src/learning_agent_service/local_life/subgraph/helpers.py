@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -51,7 +51,7 @@ def _event(
         trace_id=trace_id,
         session_id=session_id,
         turn_id=turn_id,
-        timestamp=datetime.now(UTC),
+        timestamp=datetime.now(timezone.utc),
         workflow_version=workflow_version,
         payload=payload,
     )
@@ -63,7 +63,7 @@ def _runtime(command: ChatTurnCommand, workflow_version: str) -> GraphRuntimeMet
         session_id=command.session_id,
         turn_id=command.turn_id,
         workflow_version=workflow_version,
-        request_ts=datetime.now(UTC),
+        request_ts=datetime.now(timezone.utc),
         user_id=command.user_id,
         response_mode=command.response_mode,
         topic_hint=command.topic_hint,
@@ -280,7 +280,7 @@ def _stage_entry(
         "route_decision": route_decision,
         "route_reason": route_reason,
         "detail": dict(detail or {}),
-        "timestamp": datetime.now(UTC).isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -410,7 +410,7 @@ def _event(
         trace_id=trace_id,
         session_id=session_id,
         turn_id=turn_id,
-        timestamp=datetime.now(UTC),
+        timestamp=datetime.now(timezone.utc),
         workflow_version=workflow_version,
         payload=payload,
     )
@@ -422,7 +422,7 @@ def _runtime(command: ChatTurnCommand, workflow_version: str) -> GraphRuntimeMet
         session_id=command.session_id,
         turn_id=command.turn_id,
         workflow_version=workflow_version,
-        request_ts=datetime.now(UTC),
+        request_ts=datetime.now(timezone.utc),
         user_id=command.user_id,
         response_mode=command.response_mode,
         topic_hint=command.topic_hint,
@@ -639,7 +639,7 @@ def _stage_entry(
         "route_decision": route_decision,
         "route_reason": route_reason,
         "detail": dict(detail or {}),
-        "timestamp": datetime.now(UTC).isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
 

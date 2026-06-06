@@ -1,0 +1,6 @@
+graph TD
+  prepare_recommendation --> dispatch_shop_analysis
+  dispatch_shop_analysis --> analyze_one_shop
+  analyze_one_shop --> reduce_shop_results
+  reduce_shop_results --> finalize_recommendation
+  finalize_recommendation --> END

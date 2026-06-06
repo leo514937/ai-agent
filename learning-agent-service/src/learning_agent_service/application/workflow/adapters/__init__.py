@@ -1,2 +1,4 @@
 from .core import WorkflowNodeAdapter
-__all__ = ['WorkflowNodeAdapter']
+from .helpers import _build_recommendation_answer_text
+
+__all__ = ["WorkflowNodeAdapter", "_build_recommendation_answer_text"]

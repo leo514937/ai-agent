@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from learning_agent_service.domain.utils import as_mapping as _as_mapping, clean_text as _clean_text, coerce_float as _coerce_float
@@ -103,8 +103,8 @@ def _now_from_context(client_context: Mapping[str, Any], session_context: Mappin
     ):
         parsed = _parse_timestamp(candidate)
         if parsed is not None:
-            return parsed.astimezone(UTC) if parsed.tzinfo else parsed.replace(tzinfo=UTC)
-    return datetime.now(UTC)
+            return parsed.astimezone(timezone.utc) if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc)
 
 
 def _extract_city(text: str, client_context: Mapping[str, Any], session_context: Mapping[str, Any]) -> str | None:

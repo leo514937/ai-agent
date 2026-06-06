@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -127,7 +127,7 @@ def normalize_tool_result(
         error_code=normalized_error_code,
         error_message=normalized_error_message,
         source=str(source or payload.get("source") or "realtime_tool"),
-        fetched_at=fetched_at or datetime.now(UTC).isoformat(),
+        fetched_at=fetched_at or datetime.now(timezone.utc).isoformat(),
         ttl_seconds=ttl_seconds,
         is_realtime=facet is not None,
         confidence=_tool_confidence(normalized_status),

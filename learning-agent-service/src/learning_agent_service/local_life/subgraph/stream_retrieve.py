@@ -1,6 +1,20 @@
 from typing import Any, Iterable
 
+from learning_agent_service.api.contracts import (
+    RetrievalResultPayload,
+    RetrievalStartedPayload,
+    ToolCallPayload,
+    ToolResultPayload,
+)
+from learning_agent_service.domain.utils import as_mapping as _as_mapping
 from .helpers import *  # noqa: F403
+from ..evidence_scope_guard import EvidenceScopeGuard
+from ..fusion import fuse_candidates, merge_business_facts_with_semantic_evidence
+from ..rag_guardrail import LocalLifeRagGuardrail
+from ..ranker import rank_candidates
+from ..tool_planner import LocalLifeToolPlanner
+from ..tool_planner import PlannedToolInput
+from ..tool_result_normalizer import normalize_tool_result
 from .stream_context import StreamRunContext
 
 
@@ -174,6 +188,20 @@ class LocalLifeStreamRetrieveMixin:
                         exact_matches.append(shop)
                 if exact_matches:
                     structured_candidates = exact_matches
+        elif target_shop and target_shop.shop_name and query_route.route == "realtime_tool":
+            structured_candidates = self.business_client.search_candidates(
+                query=target_shop.shop_name,
+                slots=slots,
+                limit=getattr(self.settings, "local_life_candidate_limit", 5),
+            )
+            normalized_query = target_shop.shop_name.strip()
+            filtered_by_name = []
+            for shop in structured_candidates:
+                s_name = str(getattr(shop, "name", "") or "")
+                if _is_name_match(normalized_query, s_name):
+                    filtered_by_name.append(shop)
+            if filtered_by_name:
+                structured_candidates = filtered_by_name
 
         if slots.category and slots.category.strip() and query_route.use_business_candidates and not eff_resolved_shop_ids:
             normalized_cat = slots.category.strip()
@@ -270,7 +298,7 @@ class LocalLifeStreamRetrieveMixin:
         retrieval_strategy = query_route.retrieval_strategy
         qdrant_pack = None
         qdrant_claims: list[Any] = []
-        if query_route.route == "realtime_tool":
+        if query_route.route == "realtime_tool" and not (target_shop and target_shop.shop_name):
             structured_candidates = []
         elif self.local_life_retriever is not None and query_route.use_qdrant:
             try:

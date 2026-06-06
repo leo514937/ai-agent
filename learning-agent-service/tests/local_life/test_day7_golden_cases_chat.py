@@ -38,6 +38,7 @@ class Day7GoldenCasesChatTestCase(unittest.TestCase):
             case_id=case.case_id,
             passed=True,
             actual_trace={
+                "routing_trace": metrics.get("routing_trace") or last_result.final_payload.get("routing_trace") or metrics.get("routing_decision") or {},
                 "phase5_trace": phase5_trace,
                 "graph_runtime": metrics.get("graph_runtime") or phase5_trace.get("graph_runtime"),
                 "graph_fallback": metrics.get("graph_fallback") or phase5_trace.get("graph_fallback") or "none",

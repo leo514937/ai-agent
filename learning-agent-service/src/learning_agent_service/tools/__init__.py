@@ -11,6 +11,7 @@ from .models import (
 from .normalizer import ToolResultNormalizer
 from .planner import ToolPlanner
 from .registry import ToolRegistry
+from .tool_error_classifier import ToolErrorClassification, classify_tool_error
 from .transaction_store import InMemoryTransactionStore
 
 __all__ = [
@@ -22,6 +23,8 @@ __all__ = [
     "ToolExecutor",
     "ToolPlanner",
     "ToolRegistry",
+    "ToolErrorClassification",
+    "classify_tool_error",
     "ToolResultNormalizer",
     "ToolSelection",
     "ToolSpec",

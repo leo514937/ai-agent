@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from enum import Enum
 
 from learning_agent_service.domain.memory import (
@@ -114,7 +114,7 @@ class MemoryConflictResolver:
                 confidence=float(incoming.confidence or 0.0),
                 should_update_profile=False,
                 should_update_qdrant=False,
-                effective_from=datetime.now(UTC),
+                effective_from=datetime.now(timezone.utc),
                 normalized_key=normalized_key,
                 requires_clarification=temporal_scope == "ambiguous" and "最近" in (incoming.summary or ""),
             )
@@ -153,7 +153,7 @@ class MemoryConflictResolver:
                     "status": best_existing.status,
                     "effective_from": best_existing.effective_from,
                     "effective_to": best_existing.effective_to,
-                    "last_seen_at": datetime.now(UTC),
+                    "last_seen_at": datetime.now(timezone.utc),
                     "confidence": max(float(incoming.confidence or 0.0), float(best_existing.confidence or 0.0)),
                 }
             )
@@ -187,7 +187,7 @@ class MemoryConflictResolver:
                 confidence=float(incoming.confidence or 0.0),
                 should_update_profile=False,
                 should_update_qdrant=False,
-                effective_from=datetime.now(UTC),
+                effective_from=datetime.now(timezone.utc),
                 normalized_key=normalized_key,
             )
 
@@ -197,7 +197,7 @@ class MemoryConflictResolver:
                 "normalized_value": incoming_value,
                 "persistence_scope": MemoryPersistenceScope.LONG_TERM,
                 "is_active": True,
-                "effective_from": incoming.effective_from or datetime.now(UTC),
+                "effective_from": incoming.effective_from or datetime.now(timezone.utc),
                 "status": MemoryStatus.ACTIVE,
             }
         )
