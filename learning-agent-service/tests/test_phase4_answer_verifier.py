@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import _bootstrap  # noqa: F401
 
-from learning_agent_service.application import routing as routing_module
+from learning_agent_service.application.router import base as routing_module
 from learning_agent_service.application.workflow.adapters import WorkflowNodeAdapter
 from learning_agent_service.domain import (
     AnswerComposeRequest,

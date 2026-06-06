@@ -1,0 +1,2 @@
+{"case_id":"dirty_cross_shop_coupon_leak_001","query":"海底捞水晶城店有券吗？","expected_route":"rag_plus_tool","expected_rag_mode":"single_shop_rag","expected_shop_id":5,"forbidden_shop_ids":[9,11],"expected_facets":["coupon"],"expected_keywords":["券"]}
+{"case_id":"dirty_forbidden_facet_leak_001","query":"海底捞水晶城店适合约会吗？","expected_route":"rag","expected_rag_mode":"single_shop_rag","expected_shop_id":5,"forbidden_shop_ids":[9],"expected_facets":["scene_fit"],"expected_keywords":["约会"]}

@@ -1,6 +1,6 @@
 # P2-Day1：移除计划执行链并纯化路由
 
-源文档： [../P2_graph_topology_refactor_plan.md](../P2_graph_topology_refactor_plan.md)
+源文档：[./P2_graph_topology_refactor_plan.md](./P2_graph_topology_refactor_plan.md)
 
 ## 本日目标
 

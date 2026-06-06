@@ -4,7 +4,7 @@ import unittest
 
 import _bootstrap  # noqa: F401
 
-from learning_agent_service.application.routing import ensure_task_plan
+from learning_agent_service.application.router import ensure_task_plan
 from learning_agent_service.application.workflow.subgraphs import route_after_understand
 from learning_agent_service.domain import (
     ChatTurnCommand,

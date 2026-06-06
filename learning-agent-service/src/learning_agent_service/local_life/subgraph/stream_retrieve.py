@@ -1,26 +1,26 @@
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable
 
-from .helpers import *
+from .helpers import *  # noqa: F403
 from .stream_context import StreamRunContext
 
 
 class LocalLifeStreamRetrieveMixin:
     def _stage_retrieve_and_tools(self, ctx: StreamRunContext) -> Iterable[SseEnvelope]:
         command = ctx.command
-        persistent = ctx.persistent
+        _persistent = ctx.persistent
         client_context = ctx.client_context
-        session_context = ctx.session_context
-        clean_session_context = ctx.clean_session_context
-        session_current_shop_before = ctx.session_current_shop_before
-        session_current_shop_id_before = ctx.session_current_shop_id_before
-        last_candidates_before = ctx.last_candidates_before
-        low_information_input = ctx.low_information_input
+        _session_context = ctx.session_context
+        _clean_session_context = ctx.clean_session_context
+        _session_current_shop_before = ctx.session_current_shop_before
+        _session_current_shop_id_before = ctx.session_current_shop_id_before
+        _last_candidates_before = ctx.last_candidates_before
+        _low_information_input = ctx.low_information_input
         understanding = ctx.understanding
         slots = ctx.slots
-        clarification = ctx.clarification
+        _clarification = ctx.clarification
         intent = ctx.intent
         user_need = ctx.user_need
-        arbitration_result = ctx.arbitration_result
+        _arbitration_result = ctx.arbitration_result
         state = ctx.state
         query_route = ctx.query_route
         review_result = ctx.review_result

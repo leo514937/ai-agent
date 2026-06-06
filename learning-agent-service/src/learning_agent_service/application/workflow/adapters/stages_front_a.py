@@ -1,4 +1,19 @@
-from .helpers import *
+import time
+from concurrent.futures import ThreadPoolExecutor
+
+from learning_agent_service.application.rag_gate import RagGateRequest
+from learning_agent_service.application.router.base import routing_trace_payload, _update_phase0_trace
+from learning_agent_service.application.router.phase0_quality import build_initial_routing_decision
+from learning_agent_service.application.router.phase1_intent import apply_fast_decision_to_routing, build_rewrite_decision
+from learning_agent_service.application.router.phase3_review import _apply_route_review
+from learning_agent_service.application.router.phase4_plan import ensure_task_plan
+from learning_agent_service.application.router.phase5_retrieval import ensure_retrieval_plan
+from learning_agent_service.application.router.phase6_tool import ensure_tool_plan
+from learning_agent_service.application.routing_primitives import _mark_routing_blocked, _pending_clarification_matches_query
+from learning_agent_service.application.workflow.legacy_routing_migration import legacy_to_routing_decision
+from learning_agent_service.domain.contracts import ChatTurnCommand, FastDecision, ReferenceResolutionRequest, TurnUnderstandingRequest
+
+from .helpers import Any, GraphState, IntentType, Mapping, _append_stage_metric, _apply_phase1_routing_extra, _build_cached_rag_gate, _build_raw_retrieval_plan, _cached_rag_gate, _CLASSIFY_TIMEOUT_SECONDS, _coerce_reference_resolution, _coerce_retrieval_plan, _copy_state, _log_routing_decision, _mark_degrade, _response_kind_for_turn, _restore_pending_clarification_from_result, _routing_decision_for_turn, _store_routing_decision
 
 
 class WorkflowNodeAdapterStagesFrontAMixin:
@@ -205,7 +220,7 @@ class WorkflowNodeAdapterStagesFrontAMixin:
             location_value: dict[str, Any] | None = None
             if ambiguity_type in {"location", "city", "area", "district", "region"}:
                 try:
-                    location_result = normalize_local_life_query(
+                    location_result = normalize_local_life_query(  # noqa: F821
                         follow_up_query,
                         client_context=dict(runtime.client_context),
                         session_context={
@@ -360,7 +375,7 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                 ambiguity_type = str(getattr(persistent.pending_clarification, "ambiguity_type", "") or "").strip().lower()
                 if ambiguity_type in {"location", "city", "area", "district", "region"}:
                     try:
-                        location_result = normalize_local_life_query(
+                        location_result = normalize_local_life_query(  # noqa: F821
                             turn.raw_query,
                             client_context=dict(state["runtime"].client_context),
                             session_context={

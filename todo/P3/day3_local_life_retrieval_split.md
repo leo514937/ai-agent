@@ -1,6 +1,6 @@
 # P3-Day3：local_life_retrieval 拆分
 
-源文档： [../P3_learning-agent-service-refactor-plan.md](../P3_learning-agent-service-refactor-plan.md)
+源文档：[./P3_learning-agent-service-refactor-plan.md](./P3_learning-agent-service-refactor-plan.md)
 
 ## 本日目标
 

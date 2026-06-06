@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 
 from learning_agent_service.domain.utils import utcnow as _utcnow
 from learning_agent_service.infrastructure.db.models import (

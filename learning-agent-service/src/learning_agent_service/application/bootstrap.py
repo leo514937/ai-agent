@@ -37,7 +37,7 @@ async def _warmup_qdrant_knowledge_chunks(app: Any) -> dict[str, Any]:
     app.state.infrastructure_status["rag_knowledge_warmup"] = dict(warmup_state)
     try:
         chunks = await asyncio.to_thread(_load_qdrant_knowledge_chunks, qdrant)
-        chunk_count = int(getattr(rag_orchestrator, "replace_knowledge_chunks")(chunks))
+        chunk_count = int(rag_orchestrator.replace_knowledge_chunks(chunks))
         warmup_state.update(
             {
                 "status": "completed",

@@ -213,6 +213,18 @@ class InstrumentedLearningAgentService:
     def get_session_state(self, session_id: str):
         return self._delegate.get_session_state(session_id)
 
+    def get_session_state_history(self, session_id: str):
+        return self._delegate.get_session_state_history(session_id)
+
+    def replay_session_state(self, session_id: str, request):
+        return self._delegate.replay_session_state(session_id, request)
+
+    def fork_session_state(self, session_id: str, request):
+        return self._delegate.fork_session_state(session_id, request)
+
+    def submit_approval(self, request):
+        return self._delegate.submit_approval(request)
+
     def report_feedback(self, request):
         return self._delegate.report_feedback(request)
 

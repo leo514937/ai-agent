@@ -1,7 +1,30 @@
 from __future__ import annotations
 
-from .shared import *  # noqa: F401,F403
-from .dense import HeuristicDenseRetriever
+from .shared import *# noqa: F401,F403,F405
+
+from collections.abc import Iterable, Sequence
+from collections import defaultdict
+from dataclasses import replace
+from typing import Any
+import math
+import time
+
+from .shared import (
+    _LOGGER,
+    _tokenize,
+    _term_overlap,
+    _normalize_points,
+    _point_to_chunk,
+    _point_score,
+    validate_qdrant_collection_shape,
+    KnowledgeChunk,
+    RecallHit,
+    RetrievalPlan,
+    BM25Okapi,
+)
+from ..protocols import SparseRetriever
+from ..qdrant_filters import QdrantFilterBuilder
+from .dense import HeuristicDenseRetriever, ParentChildResolver
 
 class HeuristicSparseRetriever(HeuristicDenseRetriever):
     route_name = "sparse"

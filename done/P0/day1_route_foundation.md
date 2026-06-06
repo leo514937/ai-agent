@@ -1,6 +1,6 @@
 # P0-Day1：路由底座与信号层
 
-源文档： [../P0_intent-routing-4-stage-architecture.md](../P0_intent-routing-4-stage-architecture.md)
+源文档：[./P0_intent-routing-4-stage-architecture.md](./P0_intent-routing-4-stage-architecture.md)
 
 ## 本日目标
 

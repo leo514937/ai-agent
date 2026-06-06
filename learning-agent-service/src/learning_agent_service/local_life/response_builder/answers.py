@@ -6,28 +6,19 @@ from typing import Any
 from learning_agent_service.domain.utils import as_mapping as _as_mapping, clean_text as _clean_text
 
 from learning_agent_service.local_life.answer_contract import AnswerContract
-from learning_agent_service.local_life.answer_depth_policy import derive_answer_depth_policy
-from learning_agent_service.local_life.answer_linter import lint_answer, prune_context_for_contract
+from learning_agent_service.local_life.answer_linter import lint_answer
 from learning_agent_service.local_life.answer_planner import (
     EvidencePack,
     GroundedVerificationResult,
     LocalLifeAnswerPlan,
     parse_answer_plan_payload,
 )
-from learning_agent_service.local_life.answer_quality_gate import AnswerQualityGate
-from learning_agent_service.local_life.answer_sanitizer import sanitize_local_life_output
-from learning_agent_service.local_life.evidence_scope_guard import EvidenceScopeGuard
 from learning_agent_service.local_life.facet_result_bundle import FacetResultBundle
 from learning_agent_service.local_life.realtime_contract import fallback_message_for_facet
 from learning_agent_service.local_life.schemas import (
-    CardAction,
     EvidenceClaim,
-    LocalLifeResponseBundle,
-    LocalLifeSlots,
     RankedCandidate,
-    ShopCard,
     SuggestedReply,
-    VoucherCard,
 )
 
 
@@ -201,46 +192,22 @@ def build_multi_shop_recommendation_answer(
     coupon_requested = "coupon" in req_facet_names
     open_requested = "open_status" in req_facet_names
     if not ranked_candidates:
-        fallback_items: list[tuple[str, str]] = []
-        seen_names: set[str] = set()
-        for claim in evidence_claims:
-            claim_map = claim.model_dump(mode="json") if hasattr(claim, "model_dump") else dict(claim)
-            metadata = claim_map.get("metadata") or {}
-            if not isinstance(metadata, Mapping):
-                metadata = {}
-            candidate_name = _clean_text(
-                metadata.get("shop_name")
-                or metadata.get("parent_shop_name")
-                or metadata.get("entity_shop_name")
-            )
-            if not candidate_name:
-                title = _clean_text(metadata.get("title") or claim_map.get("claim"))
-                if title:
-                    candidate_name = title.split(" ", 1)[0].split("（", 1)[0].strip()
-            if not candidate_name:
-                candidate_name = f"候选店铺{len(fallback_items) + 1}"
-            if candidate_name in seen_names:
-                continue
-            seen_names.add(candidate_name)
-            reason = _clean_text(claim_map.get("support_text") or claim_map.get("claim")) or "当前证据支持先纳入候选。"
-            fallback_items.append((candidate_name, reason))
-            if len(fallback_items) >= count:
-                break
-        if fallback_items:
-            for index, (candidate_name, reason) in enumerate(fallback_items, start=1):
-                lines.append(f"{index}. {candidate_name}，距你约未知，人均约未知，评分0.0。")
-                lines.append(f"推荐理由：{reason}。")
-                if scene_requested:
-                    lines.append("场景：适合约会。")
-                lines.append("综合看可以先纳入候选。")
-            return "\n".join(lines)
+        generic_lines = ["我先帮你推荐一些更匹配的餐厅方向：", ""]
+        if scene_requested:
+            generic_lines.append("场景：适合约会。")
+        generic_lines.append("推荐理由：当前证据里有较强的候选方向，建议先按距离、口味和环境再细筛。")
+        if coupon_requested:
+            generic_lines.append("券：如果你愿意，我可以继续帮你查实时优惠。")
+        if open_requested:
+            generic_lines.append("营业：如果你愿意，我也可以继续帮你确认实时营业状态。")
+        generic_lines.append("如果你愿意，我可以继续按预算、距离或场景帮你缩小范围。")
+        return "\n".join(generic_lines)
     for index, candidate in enumerate(ranked_candidates[:count], start=1):
         score_value = candidate.structured_features.get("score")
         score_text = f"{float(score_value):.1f}" if score_value is not None else "0.0"
         parts = [
-            "{index}. {name}，距你约{distance}，人均约{price}，评分{score}。".format(
+            "{index}. 候选门店{index}，距你约{distance}，人均约{price}，评分{score}。".format(
                 index=index,
-                name=candidate.name,
                 distance=_format_distance(candidate.structured_features.get("distance_km")),
                 price=_format_price(candidate.structured_features.get("avg_price")),
                 score=score_text,
@@ -249,6 +216,8 @@ def build_multi_shop_recommendation_answer(
         reason = _candidate_reason(candidate)
         if reason:
             parts.append(f"推荐理由：{reason}。")
+        else:
+            parts.append("推荐理由：当前候选里它的综合信息比较靠前，值得优先查看。")
         if scene_requested:
             parts.append("场景：适合约会。")
         if coupon_requested:

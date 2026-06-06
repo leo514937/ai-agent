@@ -4,7 +4,7 @@ import unittest
 
 import _bootstrap  # noqa: F401
 
-from learning_agent_service.application.routing import (
+from learning_agent_service.application.router import (
     apply_fast_decision_to_routing,
     build_clarification_question,
     build_evidence_quality,

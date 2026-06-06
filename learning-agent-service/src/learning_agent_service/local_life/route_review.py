@@ -43,7 +43,7 @@ class RouteReview:
         if target_shop.shop_id:
             resolved_shop_id = target_shop.shop_id
             candidate_shop_ids = [resolved_shop_id]
-        elif user_need.context_refs:
+        elif explicit_entity is None and user_need.context_refs:
             for ref in user_need.context_refs:
                 if ref.type == "shop" and ref.id:
                     try:
@@ -150,7 +150,7 @@ class RouteReview:
         resolved_shop_id = None
         if target_shop.shop_id:
             resolved_shop_id = target_shop.shop_id
-        elif user_need.context_refs:
+        elif explicit_entity is None and user_need.context_refs:
             for ref in user_need.context_refs:
                 if ref.type == "shop" and ref.id:
                     try:

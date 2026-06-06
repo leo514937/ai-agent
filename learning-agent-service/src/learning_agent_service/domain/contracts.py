@@ -180,6 +180,8 @@ class EntityJoinResult(CoreModel):
 
 class AnswerContract(CoreModel):
     original_query: str = ""
+    allowed_facets: list[str] = Field(default_factory=list)
+    forbidden_facets: list[str] = Field(default_factory=list)
     required_facets: list[dict[str, Any]] = Field(default_factory=list)
     evidence_requirements: dict[str, Any] = Field(default_factory=dict)
     tool_requirements: dict[str, Any] = Field(default_factory=dict)
@@ -398,6 +400,26 @@ class RoutingDecision(CoreModel):
     rewrite_decision: RewriteDecision | None = None
     evidence_quality: EvidenceQualityDecision | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
+
+
+class RoutingContract(CoreModel):
+    required_action: str = "no_op"
+    required_facets: list[str] = Field(default_factory=list)
+    optional_facets: list[str] = Field(default_factory=list)
+    forbidden_facets: list[str] = Field(default_factory=list)
+
+    target_shop_id: int | None = None
+    candidate_shop_ids: list[int] = Field(default_factory=list)
+    single_shop_mode: bool = False
+    recommendation_mode: bool = False
+
+    rag_allowed: bool = True
+    tool_allowed: bool = True
+    compose_allowed_facets: list[str] = Field(default_factory=list)
+
+    input_invalid: bool = False
+    need_clarify: bool = False
+    clarify_reason: str | None = None
 
 
 class TurnUnderstandingRequest(CoreModel):
@@ -693,6 +715,7 @@ class TurnRuntimeState(CoreModel):
     route_decision: str | None = None
     route_reason: str | None = None
     routing_decision: RoutingDecision | None = None
+    routing_contract: RoutingContract | None = None
     rewrite_decision: RewriteDecision | None = None
     evidence_quality: EvidenceQualityDecision | None = None
     current_stage: str | None = None
@@ -847,6 +870,7 @@ IntentRoutingDecision.model_rebuild()
 RewriteDecision.model_rebuild()
 EvidenceQualityDecision.model_rebuild()
 RoutingDecision.model_rebuild()
+RoutingContract.model_rebuild()
 TurnUnderstandingRequest.model_rebuild()
 ReferenceResolutionRequest.model_rebuild()
 QueryRewriteRequest.model_rebuild()

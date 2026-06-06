@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any
 
 from learning_agent_service.domain.memory import MemoryTargetStore
-from learning_agent_service.domain.utils import utcnow as _utcnow
 from learning_agent_service.infrastructure.repositories.memory_record_repository import (
     MemoryRecordRepository,
 )

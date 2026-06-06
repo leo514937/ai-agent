@@ -1,4 +1,9 @@
-from .helpers import *
+from learning_agent_service.domain.errors import TerminalEvent
+from learning_agent_service.domain.utils import as_mapping as _as_mapping
+from learning_agent_service.local_life.schemas import LocalLifeSlots
+
+from .helpers import Any, GraphState, Mapping, SseEnvelope, _build_recommendation_answer_text, _build_single_shop_review_answer, _phase2_evidence_pack, _routing_decision_for_turn, _utc_now
+from learning_agent_service.local_life.entity_resolver import _explicit_entity_from_query
 
 
 class WorkflowNodeAdapterStagesBackEmitMixin:
@@ -94,12 +99,7 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                     return None
                 explicit_query_shop = turn_extra.get("explicit_query_shop")
                 if not explicit_query_shop:
-                    try:
-                        from ...local_life.entity_resolver import _explicit_entity_from_query
-                    except Exception:  # pragma: no cover - defensive fallback
-                        _explicit_entity_from_query = None  # type: ignore[assignment]
-                    if _explicit_entity_from_query is not None:
-                        explicit_query_shop = _explicit_entity_from_query(turn.raw_query)
+                    explicit_query_shop = _explicit_entity_from_query(turn.raw_query)
                 if not explicit_query_shop:
                     extra_explicit_query_shop = str(turn_extra.get("explicit_query_shop") or "").strip()
                     if extra_explicit_query_shop:
@@ -354,6 +354,16 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                 latest_turn_message = str(turn.raw_query or "").strip()
                 if latest_turn_message:
                     final_metrics["latest_turn_message"] = latest_turn_message
+                if not explicit_query_shop:
+                    explicit_query_shop = _explicit_entity_from_query(str(turn.raw_query or ""))
+                current_shop_name = (
+                    explicit_query_shop
+                    or turn_extra.get("current_shop")
+                    or state["persistent"].current_shop
+                    or state["persistent"].selected_shop_name
+                    or target_shop_name
+                    or "这家店"
+                )
                 tool_plan_required_tools: list[str] = []
                 tool_plan_inputs: dict[str, list[dict[str, Any]]] = {}
                 required_facets = answer_contract_payload.get("required_facets") if isinstance(answer_contract_payload, Mapping) else []
@@ -430,12 +440,7 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
 
                 final_answer_text = str(turn.final_answer or "").strip()
                 if not explicit_query_shop:
-                    try:
-                        from ...local_life.entity_resolver import _explicit_entity_from_query
-                    except Exception:  # pragma: no cover - best-effort fallback
-                        _explicit_entity_from_query = None  # type: ignore[assignment]
-                    if _explicit_entity_from_query is not None:
-                        explicit_query_shop = _explicit_entity_from_query(str(turn.raw_query or ""))
+                    explicit_query_shop = _explicit_entity_from_query(str(turn.raw_query or ""))
                 current_shop_name = (
                     explicit_query_shop
                     or turn_extra.get("current_shop")

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import Any
 
 from learning_agent_service.domain.utils import as_mapping as _as_mapping

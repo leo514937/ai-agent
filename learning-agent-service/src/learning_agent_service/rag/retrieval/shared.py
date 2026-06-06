@@ -1,12 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 import logging
-import math
 import re
-import time
-from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
@@ -21,18 +17,12 @@ except Exception:  # pragma: no cover - rank-bm25 may be unavailable in some run
     BM25Okapi = None  # type: ignore[assignment]
 
 from ..models import (
-    HybridRecallResult,
     KnowledgeChunk,
     RecallHit,
     RetrievalFilters,
     RetrievalPlan,
-    RetrievalTrace,
-    RetrievalTraceItem,
 )
-from ..protocols import DenseRetriever, MetadataRetriever, Reranker, SparseRetriever
-from ..qdrant_filters import _RUNTIME_FILTER_KEYS, QdrantFilterBuilder
-from ..rewrite import QueryRewriteService
-from learning_agent_service.domain.utils import coerce_float as _coerce_float
+from ..qdrant_filters import _RUNTIME_FILTER_KEYS
 
 _LOGGER = logging.getLogger(__name__)
 _TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_+#.:-]+|[\u4e00-\u9fff]+")
@@ -243,6 +233,8 @@ def _sanitize_trace_text(value: Any, *, limit: int = 256) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 1] + "…"
+
+_HARD_METADATA_KEYS: frozenset[str] = frozenset()
 
 def _is_hard_metadata_key(key: str) -> bool:
     normalized = _normalize_value(key)

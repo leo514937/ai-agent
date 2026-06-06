@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from typing import Any
 
 from learning_agent_service.domain.memory import MemoryTrace

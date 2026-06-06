@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 from learning_agent_service.infrastructure.db.models import MemoryOutboxModel

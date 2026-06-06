@@ -83,7 +83,7 @@ def _format_shop_section(index: int, candidate: dict[str, Any], claims: list[str
     elif structured.get("distance_km") not in (None, ""):
         bullets.append(f"- 适合场景：{name}距离你约{structured.get('distance_km')}公里，适合就近选择。")
     else:
-        bullets.append(f"- 适合场景：适合先看证据再下决定。")
+        bullets.append("- 适合场景：适合先看证据再下决定。")
     bullets.append("- 注意事项：建议结合时段、排队和现有信息再确认一次。")
     body = "\n".join(bullets)
     return f"{index}. {name}\n{body}"
@@ -102,7 +102,7 @@ def _compose_single_shop_review(topic_name: str, candidate: dict[str, Any], grou
         ("核心优点", positive_claims or ["当前证据显示它的综合表现比较稳，核心优点主要来自现有评价和排序。"]),
         ("可能不足", [risk_claim]),
         ("适合场景", [f"如果你更看重{'环境和体验' if 'environment' in requirements.get('sections', []) else '综合表现'}，这家店可以优先看。"]),
-        ("到店建议", [f"先看营业状态、券和排队，再决定是否现在去。"]),
+        ("到店建议", ["先看营业状态、券和排队，再决定是否现在去。"]),
     ]
     if structured.get("score") not in (None, ""):
         sections[0] = ("总体结论", [f"{name}整体评分约{structured.get('score')}，可以作为优先候选。"])
@@ -262,7 +262,7 @@ class AnswerStructureComposer:
 
         sections = [line for line in answer_text.splitlines() if line.strip() and not line.lstrip().startswith("-")]
         bullet_count = _bullet_count(answer_text)
-        sentence_count = _sentence_count(answer_text)
+        _sentence_count(answer_text)
         return AnswerStructureResult(
             answer_text=answer_text.strip(),
             sections=[{"title": section} for section in sections],

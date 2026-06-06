@@ -10,6 +10,10 @@ from typing import Any
 import httpx
 
 from learning_agent_service.domain.utils import as_mapping as _as_mapping, clean_text as _clean_text
+from learning_agent_service.application.router.trace import (
+    build_routing_trace_from_metrics,
+    routing_trace_to_dict,
+)
 from learning_agent_service.testing import EvaluationHarness, HarnessRunResult
 
 
@@ -232,12 +236,23 @@ class _HttpChatExecutor:
             last_result = _parse_sse(raw_text)
         metrics = dict(last_result.get("metrics") or {})
         phase5_trace = dict(metrics.get("phase5_trace") or {})
+        routing_trace = routing_trace_to_dict(
+            build_routing_trace_from_metrics(
+                query=turns[-1] if turns else case.query,
+                session_id=f"golden-{case.case_id}",
+                turn_id=f"{case.case_id}-turn-{len(turns)}",
+                trace_id=f"{case.case_id}-trace",
+                metrics=metrics,
+                final_decision=dict(last_result.get("route_gate") or metrics.get("route_gate") or {}),
+            )
+        )
         actual_trace = {
             "phase5_trace": phase5_trace,
             "graph_runtime": metrics.get("graph_runtime") or phase5_trace.get("graph_runtime"),
             "graph_fallback": metrics.get("graph_fallback") or phase5_trace.get("graph_fallback") or "none",
             "route_gate": metrics.get("route_gate") or {},
             "metrics": metrics,
+            "routing_trace": routing_trace,
         }
         return HarnessRunResult(
             case_id=case.case_id,

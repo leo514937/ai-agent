@@ -7,9 +7,11 @@ from ...domain.contracts import (
     PlanExecutionSummary,
     RagResult,
     ToolExecutionResult,
+    RoutingContract,
 )
 from ...domain.enums import RagStatus, ToolExecutionStatus
 from ...domain.state import GraphState
+from langgraph.types import Command
 from ..router import _update_phase3_trace, can_enter_retrieval, can_enter_tool
 from ..router import should_run_tool as routing_should_run_tool
 from .services import (
@@ -48,7 +50,13 @@ def route_after_load_context(state: GraphState) -> str:
     return "understand_turn"
 
 
-def route_gate(state: GraphState) -> GraphState:
+def run_load_context_node(state: GraphState, load_context_fn) -> Command:
+    state = load_context_fn(state)
+    target = route_after_load_context(state)
+    return Command(update=state, goto=target)
+
+
+def route_gate(state: GraphState) -> Command:
     turn = state["turn"]
     runtime = state["runtime"]
     routing = getattr(turn, "routing_decision", None)
@@ -91,9 +99,134 @@ def route_gate(state: GraphState) -> GraphState:
         "route_reason": route_reason or None,
     }
 
+    from collections.abc import Mapping
+    routing_extra = dict(getattr(routing, "extra", {}) or {}) if routing is not None else {}
+    raw_req_facets = routing_extra.get("required_facets") or []
+    required_facets = []
+    for f in raw_req_facets:
+        if isinstance(f, Mapping):
+            name = str(f.get("name") or "").strip()
+        else:
+            name = str(f or "").strip()
+        if name and name not in required_facets:
+            required_facets.append(name)
+            
+    raw_opt_facets = routing_extra.get("optional_facets") or []
+    optional_facets = []
+    for f in raw_opt_facets:
+        if isinstance(f, Mapping):
+            name = f.get("name")
+        else:
+            name = f
+        name_str = str(name or "").strip()
+        if name_str and name_str not in optional_facets:
+            optional_facets.append(name_str)
+
+    target_shop_id = None
+    turn_extra = dict(turn.extra)
+    target_shop_payload = turn_extra.get("target_shop")
+    if isinstance(target_shop_payload, Mapping):
+        target_shop_id = target_shop_payload.get("shop_id")
+    if target_shop_id is None:
+        target_shop_id = turn_extra.get("selected_shop_id") or turn_extra.get("target_shop_id")
+    if target_shop_id is None and isinstance(routing_extra.get("route_review_decision"), Mapping):
+        route_review = routing_extra.get("route_review_decision")
+        target_shop_id = route_review.get("resolved_shop_id")
+        if target_shop_id is None and isinstance(route_review.get("execution_requirements"), Mapping):
+            target_shop_id = route_review.get("execution_requirements").get("resolved_shop_id")
+    if target_shop_id is not None:
+        try:
+            target_shop_id = int(target_shop_id)
+        except (ValueError, TypeError):
+            target_shop_id = None
+
+    candidate_shop_ids = []
+    raw_candidates = turn_extra.get("candidate_shop_ids") or routing_extra.get("candidate_shop_ids") or []
+    for cid in raw_candidates:
+        try:
+            candidate_shop_ids.append(int(cid))
+        except (ValueError, TypeError):
+            pass
+
+    recommendation_mode = (branch == "recommendation")
+    single_shop_mode = not recommendation_mode and (target_shop_id is not None or bool(turn_extra.get("explicit_query_shop") or turn_extra.get("target_shop_name")))
+
+    raw_query = str(getattr(turn, "raw_query", "") or "")
+    compact_query = raw_query.replace(" ", "")
+    inferred_coupon = any(token in compact_query for token in ("券", "优惠", "领券", "打折", "代金券", "折扣", "有券", "团购"))
+    inferred_open = any(token in compact_query for token in ("营业", "开门", "开着", "营业时间", "现在营业吗", "现在开吗", "营业吗"))
+    inferred_distance = any(token in compact_query for token in ("距离", "有多远", "导航", "路线", "怎么走", "怎么去"))
+    
+    user_focused_facets = [f for f in required_facets if f not in ("location", "category")]
+    
+    allowed_facets = ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "distance_eta", "price", "shop_detail", "recommendation_reason"]
+    forbidden_facets = []
+    
+    if len(user_focused_facets) == 1 and user_focused_facets[0] == "coupon":
+        allowed_facets = ["coupon"]
+        forbidden_facets = ["environment", "taste", "service", "recommendation", "scene_fit", "open_status", "distance_eta", "price"]
+    elif len(user_focused_facets) == 1 and user_focused_facets[0] == "open_status":
+        allowed_facets = ["open_status"]
+        forbidden_facets = ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "distance_eta", "price"]
+    elif len(user_focused_facets) == 1 and user_focused_facets[0] == "distance_eta":
+        allowed_facets = ["distance_eta", "distance"]
+        forbidden_facets = ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "price"]
+    elif inferred_coupon and not inferred_open and not inferred_distance:
+        allowed_facets = ["coupon"]
+        forbidden_facets = ["environment", "taste", "service", "recommendation", "scene_fit", "open_status", "distance_eta", "price"]
+    elif inferred_open and not inferred_coupon and not inferred_distance:
+        allowed_facets = ["open_status"]
+        forbidden_facets = ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "distance_eta", "price"]
+    elif inferred_distance and not inferred_coupon and not inferred_open:
+        allowed_facets = ["distance_eta", "distance"]
+        forbidden_facets = ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "price"]
+    elif sum(1 for flag in (inferred_coupon, inferred_open, inferred_distance) if flag) > 1:
+        if single_shop_mode:
+            allowed_facets = ["environment", "taste", "service", "coupon", "open_status", "distance_eta", "distance", "price", "shop_detail", "recommendation_reason"]
+            forbidden_facets = ["recommendation"]
+        else:
+            allowed_facets = ["environment", "taste", "service", "coupon", "open_status", "distance_eta", "distance", "price", "shop_detail", "recommendation_reason"]
+            forbidden_facets = []
+    elif branch == "clarify":
+        allowed_facets = []
+        forbidden_facets = ["environment", "taste", "service", "recommendation", "coupon", "open_status", "distance_eta", "price"]
+    elif len([name for name in user_focused_facets if name in {"coupon", "open_status", "distance_eta"}]) > 1:
+        if recommendation_mode:
+            allowed_facets = ["coupon", "open_status", "distance_eta", "distance", "price", "scene_fit", "recommendation_reason", "shop_detail"]
+            forbidden_facets = []
+        else:
+            allowed_facets = ["environment", "taste", "service", "coupon", "open_status", "distance_eta", "distance", "price", "shop_detail", "recommendation_reason"]
+            forbidden_facets = ["recommendation"]
+
+    compose_allowed_facets = [f for f in allowed_facets if f not in forbidden_facets]
+
+    rag_allowed = bool(getattr(routing, "should_retrieve", True)) if routing is not None else True
+    tool_allowed = bool(getattr(routing, "should_call_tool", True)) if routing is not None else True
+
+    routing_contract = RoutingContract(
+        required_action=effective_action or "no_op",
+        required_facets=required_facets,
+        optional_facets=optional_facets,
+        forbidden_facets=forbidden_facets,
+        target_shop_id=target_shop_id,
+        candidate_shop_ids=candidate_shop_ids,
+        single_shop_mode=single_shop_mode,
+        recommendation_mode=recommendation_mode,
+        rag_allowed=rag_allowed,
+        tool_allowed=tool_allowed,
+        compose_allowed_facets=compose_allowed_facets,
+        input_invalid=bool(getattr(routing, "blocked", False)) if routing is not None else False,
+        need_clarify=(effective_action == "clarify"),
+        clarify_reason=str(getattr(routing, "blocked_reason", "") or "") if routing is not None else None,
+    )
+
     turn_extra = dict(turn.extra)
     turn_extra["route_gate"] = gate_trace
-    state["turn"] = turn.model_copy(update={"extra": turn_extra})
+    turn_extra["routing_contract"] = routing_contract.model_dump(mode="json")
+    state["turn"] = turn.model_copy(update={
+        "routing_contract": routing_contract,
+        "extra": turn_extra
+    })
 
     runtime_metrics = dict(getattr(runtime, "metrics", {}) or {})
     runtime_metrics["route_gate"] = gate_trace
@@ -107,7 +240,16 @@ def route_gate(state: GraphState) -> GraphState:
         route_reason=gate_trace["route_reason"] or fallback_reason,
         detail=gate_trace,
     )
-    return state
+    target_map = {
+        "clarify": "compose_answer",
+        "tool": "tool_subgraph",
+        "rag": "rag_subgraph",
+        "rag_plus_tool": "rag_subgraph",
+        "recommendation": "recommendation_subgraph",
+        "direct": "compose_answer",
+    }
+    target = target_map.get(branch, "compose_answer")
+    return Command(update=state, goto=target)
 
 
 def _stage_entry(stage: str, status: str, *, route_decision: str | None = None, route_reason: str | None = None, detail=None):
@@ -250,7 +392,7 @@ def _tool_stage_detail(turn) -> dict[str, object]:
     return detail
 
 
-def run_understand_turn(state: GraphState, services: UnderstandTurnServices) -> GraphState:
+def run_understand_turn(state: GraphState, services: UnderstandTurnServices) -> Command:
     state = services.parse_intent_slots(state)
     state = services.resolve_reference(state)
     state = services.ambiguity_check(state)
@@ -266,10 +408,12 @@ def run_understand_turn(state: GraphState, services: UnderstandTurnServices) -> 
             route_reason=str(routing.blocked_reason or rag_gate.get("reason") or "routing_blocked"),
             detail=rag_gate or {"blocked_reason": routing.blocked_reason},
         )
-        return state
+        target = route_after_understand(state)
+        return Command(update=state, goto=target)
     if rag_gate and not bool(rag_gate.get("allowed", True)):
         state = _mark_stage(state, "understand", "blocked", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(rag_gate.get("reason") or "rag_gate_blocked"), detail=rag_gate)
-        return state
+        target = route_after_understand(state)
+        return Command(update=state, goto=target)
     state = _mark_stage(
         state,
         "understand",
@@ -286,22 +430,80 @@ def run_understand_turn(state: GraphState, services: UnderstandTurnServices) -> 
     )
     routing = state["turn"].routing_decision
     if routing is not None and str(routing.required_action).strip().lower() in {"clarify", "reject", "direct_answer", "memory_update", "no_op"}:
-        return state
+        target = route_after_understand(state)
+        return Command(update=state, goto=target)
     if routing is not None and str(routing.required_action).strip().lower() in _RETRIEVAL_ACTIONS and state["turn"].retrieval_plan is None and can_enter_retrieval(state).allowed:
         state = services.rewrite_query(state)
-    return state
+    target = route_after_understand(state)
+    return Command(update=state, goto=target)
 
 
-def run_rag_subgraph(state: GraphState, services: RagSubgraphServices) -> GraphState:
-    if not can_enter_retrieval(state).allowed:
-        return _ensure_rag_result(state)
+def run_rag_subgraph(state: GraphState, services: RagSubgraphServices) -> Command:
+    contract = state["turn"].routing_contract
+    rag_allowed = contract.rag_allowed if contract is not None else can_enter_retrieval(state).allowed
+    if not rag_allowed:
+        state = _ensure_rag_result(state)
+        target = route_after_rag(state)
+        return Command(update=state, goto=target)
 
     state = _mark_stage(state, "rag", "running", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])))
-    state = services.hybrid_retrieve(state)
-    state = services.evaluate_evidence(state)
-    state = services.citation_builder(state)
-    state = _mark_stage(state, "rag", "completed", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])), detail={"evidence_count": len(state["turn"].evidence_pack.items) if state["turn"].evidence_pack else 0})
-    return _ensure_rag_result(state)
+    try:
+        state = services.hybrid_retrieve(state)
+        state = services.evaluate_evidence(state)
+        state = _filter_evidence_by_contract(state)
+        state = services.citation_builder(state)
+        state = _mark_stage(state, "rag", "completed", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])), detail={"evidence_count": len(state["turn"].evidence_pack.items) if state["turn"].evidence_pack else 0})
+    except Exception as exc:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.exception("RAG retrieval failed, applying degrade mechanism.")
+        from learning_agent_service.domain.contracts import EvidencePack, RagResult
+        from learning_agent_service.domain.enums import RagStatus
+        from learning_agent_service.domain.errors import WorkflowErrorCode, build_error
+        
+        err = build_error(
+            WorkflowErrorCode.INTERNAL_ERROR,
+            stage="retrieval",
+            message=f"RAG retrieval degraded due to exception: {exc}",
+            retryable=False,
+            is_terminal=False
+        )
+        
+        runtime = state["runtime"]
+        errors = list(runtime.errors)
+        errors.append(err)
+        metrics = dict(runtime.metrics)
+        metrics["retrieval_degraded"] = True
+        metrics["retrieval_error"] = str(exc)
+        
+        state["runtime"] = runtime.model_copy(update={
+            "errors": errors,
+            "degrade_to": "retrieval_degraded",
+            "metrics": metrics
+        })
+        
+        turn = state["turn"]
+        degraded_pack = EvidencePack(
+            items=[],
+            evidence_status="DEGRADED",
+            extra={"degrade_reason": str(exc)}
+        )
+        state["turn"] = turn.model_copy(update={
+            "evidence_pack": degraded_pack,
+            "citations": [],
+            "rag_result": RagResult(
+                status=RagStatus.DEGRADED,
+                evidence_pack=degraded_pack,
+                citations=[],
+                metrics={"error": str(exc)},
+                extra={"degraded": True}
+            )
+        })
+        state = _mark_stage(state, "rag", "failed", route_decision=_route_decision_for_turn(state["turn"]), route_reason=f"retrieval_degraded: {exc}")
+
+    state = _ensure_rag_result(state)
+    target = route_after_rag(state)
+    return Command(update=state, goto=target)
 
 
 def run_recommendation_subgraph(state: GraphState, services: RagSubgraphServices) -> GraphState:
@@ -328,7 +530,11 @@ def run_recommendation_subgraph(state: GraphState, services: RagSubgraphServices
         route_reason=str(state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])),
         detail={"branch": "recommendation"},
     )
-    state = run_rag_subgraph(state, services)
+    res = run_rag_subgraph(state, services)
+    if isinstance(res, Command):
+        state = res.update
+    else:
+        state = res
     state = _mark_stage(
         state,
         "recommendation",
@@ -341,6 +547,13 @@ def run_recommendation_subgraph(state: GraphState, services: RagSubgraphServices
 
 
 def run_tool_subgraph(state: GraphState, services: ToolSubgraphServices) -> GraphState:
+    contract = state["turn"].routing_contract
+    tool_allowed = contract.tool_allowed if contract is not None else should_run_tools(state)
+    if not tool_allowed:
+        state = _ensure_raw_tool_result(state)
+        state = _ensure_tool_result(state)
+        return state
+
     state = _mark_stage(
         state,
         "tool",
@@ -352,15 +565,64 @@ def run_tool_subgraph(state: GraphState, services: ToolSubgraphServices) -> Grap
             "intent": state["turn"].intent.value if state["turn"].intent else None,
         },
     )
-    state = services.tool_planner(state)
-    selection = state["turn"].tool_plan
-    if selection is None or not selection.should_execute:
-        state = _ensure_raw_tool_result(state)
-    else:
-        state = services.tool_executor(state)
-        state = _ensure_raw_tool_result(state)
+    try:
+        state = services.tool_planner(state)
+        selection = state["turn"].tool_plan
+        if selection is None or not selection.should_execute:
+            state = _ensure_raw_tool_result(state)
+        else:
+            state = services.tool_executor(state)
+            state = _ensure_raw_tool_result(state)
 
-    state = services.tool_result_normalizer(state)
+        state = services.tool_result_normalizer(state)
+    except Exception as exc:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.exception("Tool execution failed, applying degrade mechanism.")
+        from learning_agent_service.domain.contracts import NormalizedToolResult, ToolExecutionResult
+        from learning_agent_service.domain.enums import ToolExecutionStatus
+        from learning_agent_service.domain.errors import WorkflowErrorCode, build_error
+        
+        err = build_error(
+            WorkflowErrorCode.INFRASTRUCTURE_ERROR,
+            stage="tool",
+            message=f"Tool execution degraded due to exception: {exc}",
+            retryable=False,
+            is_terminal=False
+        )
+        
+        runtime = state["runtime"]
+        errors = list(runtime.errors)
+        errors.append(err)
+        metrics = dict(runtime.metrics)
+        metrics["tool_degraded"] = True
+        metrics["tool_error"] = str(exc)
+        
+        state["runtime"] = runtime.model_copy(update={
+            "errors": errors,
+            "metrics": metrics
+        })
+        
+        turn = state["turn"]
+        tool_name = turn.tool_plan.tool_name if turn.tool_plan else "unknown_tool"
+        
+        state["turn"] = turn.model_copy(update={
+            "raw_tool_result": ToolExecutionResult(
+                status=ToolExecutionStatus.FAILED,
+                tool_name=tool_name,
+                degraded_to=None,
+                error=WorkflowErrorCode.INFRASTRUCTURE_ERROR,
+                approval_status=None,
+                output_payload={"error": str(exc)}
+            ),
+            "tool_result": NormalizedToolResult(
+                status=ToolExecutionStatus.DEGRADED,
+                tool_name=tool_name,
+                normalized_output={"status": "degraded", "error": str(exc), "message": "实时券信息暂不可用"},
+                used_tools=[tool_name]
+            )
+        })
+
     state = _mark_stage(
         state,
         "tool",
@@ -612,4 +874,105 @@ def _ensure_plan_summary(state: GraphState) -> GraphState:
         final_decision=turn.replan_reason or turn.final_answer,
     )
     state["turn"] = turn.model_copy(update={"final_task_summary": summary})
+    return state
+
+
+def _filter_evidence_by_contract(state: GraphState) -> GraphState:
+    turn = state["turn"]
+    contract = getattr(turn, "routing_contract", None)
+    if contract is None:
+        return state
+    
+    evidence_pack = turn.evidence_pack
+    if evidence_pack is None:
+        return state
+        
+    from learning_agent_service.local_life.answer_linter import _infer_facets_from_text
+    
+    kept_items = []
+    discarded_items = []
+    
+    for item in evidence_pack.items:
+        # Check shop_id consistency
+        item_shop_id = item.metadata.get("shop_id") or item.metadata.get("parent_shop_id") or item.metadata.get("entity_shop_id")
+        if item_shop_id is not None:
+            try:
+                item_shop_id = int(str(item_shop_id))
+            except (ValueError, TypeError):
+                item_shop_id = None
+        
+        if contract.target_shop_id is not None and item_shop_id is not None and item_shop_id != contract.target_shop_id:
+            discarded_items.append(item)
+            continue
+            
+        # Check forbidden facets
+        item_facets = set()
+        for key in ("facet", "facets", "chunk_type"):
+            val = item.metadata.get(key)
+            if isinstance(val, list):
+                item_facets.update(str(x).strip().lower() for x in val)
+            elif val:
+                item_facets.add(str(val).strip().lower())
+        if item.chunk_type:
+            item_facets.add(str(item.chunk_type).strip().lower())
+        
+        item_facets.update(_infer_facets_from_text(item.content))
+        
+        forbidden_found = [f for f in contract.forbidden_facets if f.strip().lower() in item_facets]
+        if forbidden_found:
+            discarded_items.append(item)
+            continue
+            
+        kept_items.append(item)
+        
+    if len(kept_items) != len(evidence_pack.items):
+        kept_strong = [x for x in kept_items if x.tier == "strong"]
+        kept_weak = [x for x in kept_items if x.tier != "strong"]
+        
+        is_empty = len(kept_items) == 0
+        status = "EMPTY" if is_empty else "OK"
+        
+        new_pack = evidence_pack.model_copy(update={
+            "items": kept_items,
+            "strong_items": kept_strong,
+            "weak_items": kept_weak,
+            "evidence_status": status,
+            "top_scores": [x.score for x in kept_items[:3]]
+        })
+        
+        state["turn"] = turn.model_copy(update={
+            "evidence_pack": new_pack
+        })
+        
+        quality = turn.evidence_quality
+        if quality is not None:
+            covered_facets = list(quality.covered_facets)
+            missing_facets = list(quality.missing_facets)
+            
+            covered_facets = [f for f in covered_facets if f not in contract.forbidden_facets]
+            for f in contract.forbidden_facets:
+                if f in contract.required_facets and f not in missing_facets:
+                    missing_facets.append(f)
+                    
+            is_valid = len(kept_strong) > 0 or not contract.single_shop_mode
+            response_mode = "grounded" if not is_empty else "ask_clarification" if contract.need_clarify else "partial_grounded"
+            
+            new_quality = quality.model_copy(update={
+                "evidence_count": len(kept_items),
+                "covered_facets": covered_facets,
+                "missing_facets": missing_facets,
+                "is_valid": is_valid,
+                "response_mode": response_mode,
+                "top_score": kept_items[0].score if kept_items else 0.0
+            })
+            
+            routing = turn.routing_decision
+            if routing is not None:
+                routing = routing.model_copy(update={"evidence_quality": new_quality})
+            
+            state["turn"] = state["turn"].model_copy(update={
+                "evidence_quality": new_quality,
+                "routing_decision": routing
+            })
+            
     return state

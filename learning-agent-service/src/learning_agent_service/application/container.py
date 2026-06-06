@@ -10,7 +10,6 @@ import hashlib
 
 import re
 
-import sqlite3
 
 import time
 
@@ -20,13 +19,12 @@ from datetime import datetime, timezone
 
 from dataclasses import dataclass
 
-from pathlib import Path
 
-from typing import Any, Mapping, Optional, Sequence
-
+from typing import Any, Mapping, Optional
 
 
-from learning_agent_service.config import Settings, get_settings
+
+from learning_agent_service.config import Settings
 
 from learning_agent_service.domain import (
 
@@ -34,21 +32,13 @@ from learning_agent_service.domain import (
 
     FastDecision,
 
-    KnowledgeSearchRequest,
-
-    ReferenceResolutionResult,
-
-    RetrievalPlan,
-
     TurnUnderstandingRequest,
-
-    TurnUnderstandingResult,
 
 )
 
-from learning_agent_service.domain.contracts import SseEnvelope
+from learning_agent_service.domain.contracts import AnswerComposeRequest, SseEnvelope
 
-from learning_agent_service.domain.enums import IntentType, OutputStyle
+from learning_agent_service.domain.enums import IntentType
 
 from learning_agent_service.domain.protocols import (
 
@@ -74,31 +64,18 @@ from learning_agent_service.domain.protocols import (
 
 )
 
-from learning_agent_service.infrastructure.db.factories import InfrastructureClients, build_infrastructure_clients
+from learning_agent_service.infrastructure.db.factories import InfrastructureClients
 
 from learning_agent_service.infrastructure.db.openai_client import OpenAIRuntime
 
-from learning_agent_service.infrastructure.db.qdrant import QdrantRuntime
 
 from learning_agent_service.infrastructure.repositories import (
 
     AdapterStatus,
 
-    DurablePreferenceStore,
-
-    DurableProfileProjectionStore,
-
-    NoOpSemanticMemoryStore,
-
     MemoryOutboxRepository,
 
-    OutboxAsyncLogStore,
-
     OutboxRepository,
-
-    RedisSessionContextStore,
-
-    RuntimeComponentMode,
 
     RuntimeDependencyStatus,
 
@@ -112,109 +89,26 @@ from learning_agent_service.infrastructure.repositories import (
 
 from learning_agent_service.infrastructure.repositories.memory_trace_repository import MemoryTraceRepository
 
-from learning_agent_service.infrastructure.memory import (
 
-    DurableLongTermMemoryStore,
 
-    DurableSemanticMemoryStore,
-
-    LongTermMemoryRepository,
-
-    QdrantLongTermMemoryIndex,
-
-)
-
-from learning_agent_service.infrastructure.repositories.in_memory import (
-
-    InMemoryAsyncLogStore,
-
-    InMemorySessionContextStore,
-
-)
-
-from learning_agent_service.memory.service import MemoryService
 
 from learning_agent_service.memory.orchestrator import MemoryOrchestrator
 
-from learning_agent_service.memory import (
 
-    MemoryConsolidationJob,
 
-    MemoryConflictResolver,
 
-    MemoryGovernancePolicy,
-
-    MemoryInjectionPolicy,
-
-    MemoryPromotionPolicy,
-
-    MemoryRetrievalPolicy,
-
-)
-
-from learning_agent_service.memory.stores import InMemoryLongTermMemoryStore
-
-from learning_agent_service.rag.models import KnowledgeChunk
-
-from learning_agent_service.rag.heuristics import HeuristicModelGateway
 
 from learning_agent_service.rag.heuristics import HeuristicIntentGate
 
-from learning_agent_service.rag.retrieval import (
 
-    CrossEncoderReranker,
 
-    HeuristicDenseRetriever,
 
-    HeuristicMetadataRetriever,
 
-    HeuristicReranker,
 
-    HeuristicSparseRetriever,
 
-    LocalBM25SparseRetriever,
 
-    ParentChildResolver,
+from learning_agent_service.application.rag_gate import RagGateRequest, RagGateVote
 
-    QdrantFilterBuilder,
-
-    QdrantMetadataRetriever,
-
-    QdrantOnlineDenseRetriever,
-
-    RemoteCrossEncoderReranker,
-
-    RemoteReranker,
-
-)
-
-from learning_agent_service.rag.rewrite import QueryRewriteService
-
-from learning_agent_service.rag.service import DEFAULT_KNOWLEDGE_CHUNKS, HybridRAGOrchestrator
-
-from learning_agent_service.rag.local_life import LocalLifeParentChildRetriever
-
-from learning_agent_service.adapters.java_business import JavaBusinessClient
-
-from learning_agent_service.local_life.assistant import LocalLifeModelAssistant
-
-from learning_agent_service.local_life.query_router import LocalLifeQueryRouter
-
-from learning_agent_service.application.rag_gate import RagGateRequest, RagGateVote, RagRouteGate
-
-from learning_agent_service.tools.orchestrator import (
-
-    AnswerComposer,
-
-    Finalizer,
-
-    ToolExecutor,
-
-    ToolPlanner,
-
-    ToolResultNormalizer,
-
-)
 
 
 
@@ -231,6 +125,10 @@ except Exception:  # pragma: no cover - optional dependency path
 _SPARSE_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_+#.:-]+|[\u4e00-\u9fff]+")
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _normalize_embedding_query(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "").strip().lower())
 
 
 

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import _bootstrap  # noqa: F401
 
 from learning_agent_service.application.workflow.adapters import WorkflowNodeAdapter
-from learning_agent_service.application.routing import ensure_retrieval_plan, ensure_tool_plan
+from learning_agent_service.application.router import ensure_retrieval_plan, ensure_tool_plan
 from learning_agent_service.domain import (
     ChatTurnCommand,
     EvidencePack,
@@ -65,6 +65,7 @@ class Phase0TraceHarnessTestCase(unittest.TestCase):
         state = adapter.load_context(state)
         trace = extract_phase0_trace(state)
         snapshot = TraceHarnessRecorder().record(state, case_id="case-1")
+        routing_trace = snapshot["routing_trace"]
 
         self.assertEqual(trace["harness_mode"], "off")
         self.assertIsNotNone(trace["initial_routing_decision"])
@@ -73,6 +74,8 @@ class Phase0TraceHarnessTestCase(unittest.TestCase):
         self.assertEqual(trace["tool_plan_status"], "not_attempted")
         self.assertEqual(state["turn"].extra["phase0_trace"]["initial_required_action"], "clarify")
         self.assertEqual(snapshot["initial_routing_decision"]["required_action"], "clarify")
+        self.assertEqual(routing_trace["query"], "附近有什么推荐")
+        self.assertEqual(routing_trace["stages"]["phase0_trace"]["output"]["harness_mode"], "off")
 
     def test_phase0_trace_records_plan_failures_and_final_response_mode(self) -> None:
         container = _Phase0Container(

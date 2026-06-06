@@ -4,20 +4,43 @@ from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
+# Monkeypatch JsonPlusSerializer for compatibility with newer langgraph-checkpoint releases
+try:
+    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+    import ormsgpack
+
+    if not hasattr(JsonPlusSerializer, "dumps"):
+        def _jsonplus_dumps(self, obj):
+            type_, data = self.dumps_typed(obj)
+            return ormsgpack.packb((type_, data))
+        JsonPlusSerializer.dumps = _jsonplus_dumps
+
+    if not hasattr(JsonPlusSerializer, "loads"):
+        def _jsonplus_loads(self, data):
+            if not data:
+                return {}
+            type_, data_ = ormsgpack.unpackb(data)
+            return self.loads_typed((type_, data_))
+        JsonPlusSerializer.loads = _jsonplus_loads
+except Exception:
+    pass
+
 from .runner import SequentialWorkflowRunner, _update_phase5_trace
 from .services import WorkflowServices
 from ...domain.errors import TerminalEvent
+from ...domain.state import GraphState, clone_graph_state
+from ...domain import ChatTurnCommand, build_initial_state
+from ...domain.contracts import PersistentSessionContext
+from ...api.contracts import SseEnvelope
+from collections.abc import Iterable
 from .subgraphs import (
+    run_load_context_node,
     run_plan_execute_subgraph,
     run_rag_subgraph,
     run_recommendation_subgraph,
     run_tool_subgraph,
     run_understand_turn,
-    route_decider,
     route_gate,
-    route_after_load_context,
-    route_after_rag,
-    route_after_understand,
 )
 
 StateGraph: Any = None
@@ -54,17 +77,17 @@ class _CheckpointAwareGraphProxy:
         return result
 
     def get_state(self, config=None):
-        thread_id = _thread_id_from_config(config)
-        if thread_id and thread_id in _CHECKPOINT_FALLBACKS:
-            return _CheckpointSnapshot(values=deepcopy(_CHECKPOINT_FALLBACKS[thread_id]))
         getter = getattr(self._graph, "get_state", None)
         if callable(getter):
             try:
                 snapshot = getter(config)
+                if snapshot is not None and getattr(snapshot, "values", None):
+                    return snapshot
             except Exception:
-                snapshot = None
-            if snapshot is not None and getattr(snapshot, "values", None):
-                return snapshot
+                pass
+        thread_id = _thread_id_from_config(config)
+        if thread_id and thread_id in _CHECKPOINT_FALLBACKS:
+            return _CheckpointSnapshot(values=deepcopy(_CHECKPOINT_FALLBACKS[thread_id]))
         return _CheckpointSnapshot(values={})
 
     def __getattr__(self, item):
@@ -133,6 +156,30 @@ class LangGraphWorkflowRunner(SequentialWorkflowRunner):
         self._record_checkpoint_fallback(result)
         return self._annotate_runner_context(result)
 
+    def run_stream(
+        self,
+        command: ChatTurnCommand,
+        persistent_context: PersistentSessionContext | None = None,
+    ) -> Iterable[SseEnvelope]:
+        state = build_initial_state(
+            command=command,
+            workflow_version=self.workflow_version,
+            persistent=persistent_context,
+        )
+        state = self._annotate_runner_context(state)
+        state = clone_graph_state(state)
+        
+        try:
+            result = self._graph.invoke(state, config=_build_graph_config(state))
+        except Exception as exc:
+            result = self._record_unexpected_error(state, "langgraph.invoke", exc)
+            result = self._finalize_terminal(result)
+            self._record_checkpoint_fallback(result)
+            yield from result["runtime"].emitted_events
+            return
+            
+        yield from result["runtime"].emitted_events
+
     def _annotate_runner_context(self, state):
         return _update_phase5_trace(
             state,
@@ -177,6 +224,9 @@ _LANGGRAPH_TOPOLOGY = {
         ("load_context", "compose_answer"),
         ("understand_turn", "plan_execute_subgraph"),
         ("understand_turn", "route_gate"),
+        ("understand_turn", "compose_answer"),
+        ("understand_turn", "rag_subgraph"),
+        ("understand_turn", "tool_subgraph"),
         ("route_gate", "compose_answer"),
         ("route_gate", "tool_subgraph"),
         ("route_gate", "rag_subgraph"),
@@ -213,58 +263,52 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None
     if not LANGGRAPH_AVAILABLE:
         raise RuntimeError("langgraph is not installed")
 
-    graph = StateGraph(dict)  # type: ignore[type-var]
-    graph.add_node("load_context", lambda state: services.load_context(state))
-    graph.add_node("understand_turn", lambda state: run_understand_turn(state, services.understand_turn))
+    from langgraph.types import RetryPolicy
+
+    workflow_retry_policy = RetryPolicy(
+        max_attempts=3,
+        backoff_factor=2.0,
+        initial_interval=1.0,
+        retry_on=Exception,
+    )
+
+    graph = StateGraph(GraphState)  # type: ignore[type-var]
+    graph.add_node("load_context", lambda state: run_load_context_node(state, services.load_context))
+    graph.add_node(
+        "understand_turn", 
+        lambda state: run_understand_turn(state, services.understand_turn),
+        retry_policy=workflow_retry_policy
+    )
     graph.add_node("route_gate", lambda state: route_gate(state))
     graph.add_node(
         "plan_execute_subgraph",
         lambda state: run_plan_execute_subgraph(state, services.plan_execute_subgraph),
+        retry_policy=workflow_retry_policy
     )
-    graph.add_node("rag_subgraph", lambda state: run_rag_subgraph(state, services.rag_subgraph))
-    graph.add_node("recommendation_subgraph", lambda state: run_recommendation_subgraph(state, services.rag_subgraph))
-    graph.add_node("tool_subgraph", lambda state: run_tool_subgraph(state, services.tool_subgraph))
-    graph.add_node("compose_answer", lambda state: services.compose_answer(state))
+    graph.add_node(
+        "rag_subgraph", 
+        lambda state: run_rag_subgraph(state, services.rag_subgraph),
+        retry_policy=workflow_retry_policy
+    )
+    graph.add_node(
+        "recommendation_subgraph", 
+        lambda state: run_recommendation_subgraph(state, services.rag_subgraph),
+        retry_policy=workflow_retry_policy
+    )
+    graph.add_node(
+        "tool_subgraph", 
+        lambda state: run_tool_subgraph(state, services.tool_subgraph),
+        retry_policy=workflow_retry_policy
+    )
+    graph.add_node(
+        "compose_answer", 
+        lambda state: services.compose_answer(state),
+        retry_policy=workflow_retry_policy
+    )
     graph.add_node("persist_session", lambda state: services.persist_session(state))
     graph.add_node("emit_final", lambda state: services.emit_final(state))
 
     graph.set_entry_point("load_context")
-    graph.add_conditional_edges(
-        "load_context",
-        route_after_load_context,
-        {
-            "understand_turn": "understand_turn",
-            "compose_answer": "compose_answer",
-        },
-    )
-    graph.add_conditional_edges(
-        "understand_turn",
-        route_after_understand,
-        {
-            "plan_execute_subgraph": "plan_execute_subgraph",
-            "route_gate": "route_gate",
-        },
-    )
-    graph.add_conditional_edges(
-        "route_gate",
-        route_decider,
-        {
-            "clarify": "compose_answer",
-            "tool": "tool_subgraph",
-            "rag": "rag_subgraph",
-            "rag_plus_tool": "rag_subgraph",
-            "recommendation": "recommendation_subgraph",
-            "direct": "compose_answer",
-        },
-    )
-    graph.add_conditional_edges(
-        "rag_subgraph",
-        route_after_rag,
-        {
-            "tool_subgraph": "tool_subgraph",
-            "compose_answer": "compose_answer",
-        },
-    )
     graph.add_edge("recommendation_subgraph", "compose_answer")
     graph.add_edge("tool_subgraph", "compose_answer")
     graph.add_edge("plan_execute_subgraph", "compose_answer")

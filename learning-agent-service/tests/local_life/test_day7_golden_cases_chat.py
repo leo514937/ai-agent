@@ -56,6 +56,7 @@ class Day7GoldenCasesChatTestCase(unittest.TestCase):
             details = "\n".join(f"{item.case_id}: {item.failures}" for item in failures)
             self.fail(f"Golden cases failed:\n{details}")
         self.assertGreaterEqual(len(results), 7)
+        self.assertTrue(all("routing_trace" in result.actual_trace for result in results))
 
 
 if __name__ == "__main__":

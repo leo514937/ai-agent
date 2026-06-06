@@ -1,7 +1,32 @@
 from __future__ import annotations
 
-from .shared import *  # noqa: F401,F403
+from .shared import *# noqa: F401,F403,F405
 from .dense import HeuristicDenseRetriever
+
+from collections.abc import Sequence
+from dataclasses import replace
+from typing import Any
+import time
+
+from .shared import (
+    _LOGGER,
+    _tokenize,
+    _normalize_points,
+    _point_to_chunk,
+    _point_score,
+    validate_qdrant_collection_shape,
+    _extract_hard_metadata_filters,
+    _extract_soft_metadata_filters,
+    _matches_hard_filters,
+    _hard_metadata_score,
+    _soft_metadata_score,
+    _term_overlap,
+    KnowledgeChunk,
+    RecallHit,
+    RetrievalPlan,
+)
+from ..protocols import MetadataRetriever
+from ..qdrant_filters import QdrantFilterBuilder
 
 class HeuristicMetadataRetriever(HeuristicDenseRetriever):
     route_name = "metadata"

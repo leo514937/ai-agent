@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import logging
-import re
 import time
-import uuid
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -16,10 +13,7 @@ from learning_agent_service.config.settings import Settings, get_settings
 from learning_agent_service.infrastructure.db.openai_client import build_openai_runtime
 from learning_agent_service.infrastructure.db.qdrant import build_qdrant_runtime
 from learning_agent_service.local_life.schemas import (
-    BlogRecord,
     ShopRecord,
-    ShopTypeRecord,
-    VoucherRecord,
 )
 
 from ..models import KnowledgeChunk
@@ -242,8 +236,8 @@ _LOCAL_LIFE_PAYLOAD_INDEXES: tuple[tuple[str, Any], ...] = (
 )
 
 
-from .context_builder import *  # noqa: F401,F403
-from .entity_resolver import *  # noqa: F401,F403
+from .context_builder import *# noqa: F401,F403,F405
+from .entity_resolver import *# noqa: F401,F403,F405
 
 def build_local_life_knowledge_chunks(
     business_client: JavaBusinessClient,

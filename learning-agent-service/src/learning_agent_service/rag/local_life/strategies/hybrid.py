@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
 
 _DEFAULT_ROLE_WEIGHTS = {
     "merchant_profile": 1.0,

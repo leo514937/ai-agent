@@ -39,6 +39,12 @@
 - [P2_graph_topology_refactor_plan.md](./P2_graph_topology_refactor_plan.md)
 - [P3_learning-agent-service-refactor-plan.md](./P3_learning-agent-service-refactor-plan.md)
 
+## 补充需求分析
+
+- [local_life_service_effectiveness_requirements.md](./local_life_service_effectiveness_requirements.md)
+- 这份文档整理的是：如何从需求和效果层面继续提升本地生活服务 agent 的命中率、稳定性和可解释性
+- 重点包括：支持范围矩阵、intent 成功标准、事实来源优先级、单店 / 多店结果链、比较能力、自修复回路、评估体系和产品边界提示
+
 ## 统一执行原则
 
 所有分天文档都必须遵守这些约束：

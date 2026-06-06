@@ -1,6 +1,6 @@
 # P2-Day3：RAG 与 Recommendation 公共层梳理
 
-源文档： [../P2_graph_topology_refactor_plan.md](../P2_graph_topology_refactor_plan.md)
+源文档：[./P2_graph_topology_refactor_plan.md](./P2_graph_topology_refactor_plan.md)
 
 ## 本日目标
 

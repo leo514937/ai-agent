@@ -1,22 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-import re
 import threading
-import time
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any
 
-from learning_agent_service.application.rag_gate import compose_direct_response_text
-from learning_agent_service.application.router import build_clarification_question
-from learning_agent_service.config import Settings
 from learning_agent_service.domain import (
-    AnswerComposeRequest,
-    AnswerComposeResult,
-    EvidenceQualityDecision,
     NormalizedToolResult,
     SseEnvelope,
     ToolExecutionCommand,

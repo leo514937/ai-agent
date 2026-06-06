@@ -962,6 +962,11 @@ class SequentialWorkflowRunner:
         started_at = time.perf_counter()
         try:
             result = handler(state)
+            if type(result).__name__ == "Command" or (hasattr(result, "update") and not isinstance(result, dict)):
+                cmd = result
+                result = clone_graph_state(state)
+                if isinstance(cmd.update, dict):
+                    result.update(cmd.update)
         except Exception as exc:  # pragma: no cover - defensive safeguard
             elapsed_ms = (time.perf_counter() - started_at) * 1000.0
             runtime = state["runtime"]

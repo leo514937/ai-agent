@@ -4,7 +4,6 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from learning_agent_service.domain.utils import clean_text as _clean_text
 
 _OPEN_PATTERNS = (
     (re.compile(r"\bopen\b", re.IGNORECASE), "营业中"),

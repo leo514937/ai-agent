@@ -1,8 +1,8 @@
-from typing import Any, Iterable, Sequence
+from typing import Iterable
 
 from learning_agent_service.domain.utils import clean_text as _clean_text
 
-from .helpers import *
+from .helpers import *  # noqa: F403
 from .stream_context import StreamRunContext
 
 
@@ -11,18 +11,18 @@ class LocalLifeStreamComposeMixin:
         command = ctx.command
         persistent = ctx.persistent
         client_context = ctx.client_context
-        session_context = ctx.session_context
-        clean_session_context = ctx.clean_session_context
+        _session_context = ctx.session_context
+        _clean_session_context = ctx.clean_session_context
         session_current_shop_before = ctx.session_current_shop_before
         session_current_shop_id_before = ctx.session_current_shop_id_before
-        last_candidates_before = ctx.last_candidates_before
-        low_information_input = ctx.low_information_input
-        understanding = ctx.understanding
+        _last_candidates_before = ctx.last_candidates_before
+        _low_information_input = ctx.low_information_input
+        _understanding = ctx.understanding
         slots = ctx.slots
         clarification = ctx.clarification
         intent = ctx.intent
         user_need = ctx.user_need
-        arbitration_result = ctx.arbitration_result
+        _arbitration_result = ctx.arbitration_result
         state = ctx.state
         query_route = ctx.query_route
         review_result = ctx.review_result
@@ -31,17 +31,17 @@ class LocalLifeStreamComposeMixin:
         target_shop = ctx.target_shop
         answer_contract = ctx.answer_contract
         single_shop_mode = bool(target_shop and (target_shop.shop_id is not None or target_shop.shop_name is not None))
-        resolved_shop_ids = ctx.resolved_shop_ids
+        _resolved_shop_ids = ctx.resolved_shop_ids
         selected_shop = ctx.selected_shop
         structured_candidates = ctx.structured_candidates
         ranked_candidates = ctx.ranked_candidates
         evidence_claims = ctx.evidence_claims
         source_summary = ctx.source_summary
-        qdrant_pack = ctx.qdrant_pack
+        _qdrant_pack = ctx.qdrant_pack
         facet_bundle = ctx.facet_bundle or FacetResultBundle()
         coupon_result_obj = ctx.coupon_result_obj
         safety_result = ctx.safety_result
-        tool_plan = ctx.tool_plan
+        _tool_plan = ctx.tool_plan
         tool_name = ctx.tool_name
         tool_output = ctx.tool_output or {}
         extra_tool_outputs = list(ctx.extra_tool_outputs)
@@ -143,6 +143,36 @@ class LocalLifeStreamComposeMixin:
                 tool_summary_text = tool_summary_text.rstrip("。") + "；" + extra_summaries_text
             elif extra_summaries_text:
                 tool_summary_text = extra_summaries_text
+        compact_query = str(command.message or "").replace(" ", "")
+        recommendation_like_query = any(
+            token in compact_query
+            for token in ("附近", "周边", "推荐", "几家", "多推荐", "多家")
+        )
+        recommendation_clear_session_shop = recommendation_like_query and not any(
+            token in str(command.message or "") for token in ("它", "他", "她", "这家", "这店", "这间", "刚才那家", "刚才那个", "这商家", "这个商家")
+        )
+        if recommendation_clear_session_shop:
+            prior_shop_name = _clean_text(session_current_shop_before or persistent.current_shop or persistent.selected_shop_name)
+            prior_shop_id = session_current_shop_id_before
+            if prior_shop_name or prior_shop_id is not None:
+                ranked_candidates = [
+                    candidate
+                    for candidate in ranked_candidates
+                    if _clean_text(candidate.name) != prior_shop_name and candidate.shop_id != prior_shop_id
+                ]
+                evidence_claims = [
+                    claim
+                    for claim in evidence_claims
+                    if _clean_text(getattr(claim, "shop_name", None)) != prior_shop_name and getattr(claim, "shop_id", None) != prior_shop_id
+                ]
+        facet_keyword_query = any(
+            token in compact_query
+            for token in ("券", "优惠", "营业", "开门", "开着", "营业时间", "现在营业吗", "现在开吗", "营业吗", "距离", "有多远", "导航", "路线", "怎么走", "怎么去")
+        )
+        if facet_keyword_query:
+            response_hint = {}
+        if recommendation_clear_session_shop or (answer_contract is not None and answer_contract.answer_style in {"facet_multi", "multi_shop_recommendation"}):
+            response_hint = {}
         evidence_pack = build_evidence_pack(
             raw_query=command.message,
             ranked_candidates=ranked_candidates,
@@ -206,6 +236,8 @@ class LocalLifeStreamComposeMixin:
         )
         current_topic_value = target_shop.shop_name if target_shop and target_shop.shop_name else (selected_shop.name if selected_shop else (top_shop.name if top_shop and not forbid_fallback else slots.category or slots.scene))
         current_shop_value = target_shop.shop_name if target_shop and target_shop.shop_name else (selected_shop.name if selected_shop else state.metrics.get("local_life_execution_contract", {}).get("resolved_shop_name") or (top_shop.name if top_shop and not forbid_fallback else None) or (None if forbid_fallback else (persistent.current_shop or persistent.selected_shop_name or client_context.get("shopName") or client_context.get("shop_name") or client_context.get("selected_shop_name") or client_context.get("current_shop"))))
+        if recommendation_clear_session_shop:
+            current_shop_value = None
         if command.message and _clean_text(current_shop_value) == _clean_text(command.message):
             current_shop_value = persistent.current_shop or persistent.selected_shop_name or current_shop_value
 
@@ -247,11 +279,23 @@ class LocalLifeStreamComposeMixin:
             bundle,
             shop_lookup={candidate.shop_id: candidate.name for candidate in ranked_candidates if getattr(candidate, "shop_id", None) is not None},
         )
-        compact_query = str(command.message or "").replace(" ", "")
-        recommendation_like_query = any(
-            token in compact_query
-            for token in ("附近", "周边", "推荐", "几家", "多推荐", "多家")
-        )
+        pronoun_tokens = ("它", "他", "她", "这家", "这店", "这间", "刚才那家", "刚才那个", "这商家", "这个商家")
+        has_pronoun = any(token in str(command.message or "") for token in pronoun_tokens)
+        explicit_turn_shop_name = _clean_text(query_explicit_shop_name)
+        if recommendation_like_query and not explicit_turn_shop_name and not has_pronoun:
+            prior_shop_name = _clean_text(session_current_shop_before or persistent.current_shop or persistent.selected_shop_name)
+            prior_shop_id = session_current_shop_id_before
+            if prior_shop_name or prior_shop_id is not None:
+                ranked_candidates = [
+                    candidate
+                    for candidate in ranked_candidates
+                    if _clean_text(candidate.name) != prior_shop_name and candidate.shop_id != prior_shop_id
+                ]
+                evidence_claims = [
+                    claim
+                    for claim in evidence_claims
+                    if _clean_text(getattr(claim, "shop_name", None)) != prior_shop_name and getattr(claim, "shop_id", None) != prior_shop_id
+                ]
         if recommendation_like_query and "推荐理由" not in str(bundle.answer_text or "") and not (response_hint and response_hint.get("answer_text")):
             bundle = bundle.model_copy(
                 update={
@@ -283,6 +327,8 @@ class LocalLifeStreamComposeMixin:
             )
             or _clean_text(getattr(selected_shop, "name", None))
         )
+        if recommendation_like_query and not query_explicit_shop_name and not any(token in str(command.message or "") for token in ("它", "他", "她", "这家", "这店", "这间", "刚才那家", "刚才那个", "这商家", "这个商家")):
+            explicit_shop_name = ""
         if (
             explicit_shop_name
             and explicit_shop_name not in str(bundle.answer_text or "")

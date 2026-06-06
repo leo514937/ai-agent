@@ -21,6 +21,9 @@ from .contracts import (
     MemoryTraceSummary,
     SessionStateResponse,
     SseEnvelope,
+    SessionHistoryResponse,
+    ReplayRequest,
+    ForkRequest,
 )
 
 
@@ -29,6 +32,15 @@ class LearningAgentService(Protocol):
         ...
 
     def get_session_state(self, session_id: str) -> SessionStateResponse:
+        ...
+
+    def get_session_state_history(self, session_id: str) -> SessionHistoryResponse:
+        ...
+
+    def replay_session_state(self, session_id: str, request: ReplayRequest) -> SessionStateResponse:
+        ...
+
+    def fork_session_state(self, session_id: str, request: ForkRequest) -> SessionStateResponse:
         ...
 
     def submit_approval(self, request: ApprovalSubmitRequest) -> ApprovalSubmitResponse:
@@ -205,3 +217,16 @@ class UnavailableLearningAgentService:
     ) -> MemoryActionResponse:
         self._raise()
         raise AssertionError("unreachable")
+
+    def get_session_state_history(self, session_id: str) -> SessionHistoryResponse:
+        self._raise()
+        raise AssertionError("unreachable")
+
+    def replay_session_state(self, session_id: str, request: ReplayRequest) -> SessionStateResponse:
+        self._raise()
+        raise AssertionError("unreachable")
+
+    def fork_session_state(self, session_id: str, request: ForkRequest) -> SessionStateResponse:
+        self._raise()
+        raise AssertionError("unreachable")
+

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from learning_agent_service.domain.utils import as_mapping as _as_mapping, clean_text as _clean_text
+from learning_agent_service.domain.utils import clean_text as _clean_text
 
 
 @dataclass(frozen=True)

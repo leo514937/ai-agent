@@ -6,7 +6,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import _bootstrap  # noqa: F401
 
 try:
     from langgraph.checkpoint.sqlite import SqliteSaver
@@ -60,6 +59,8 @@ class LangGraphCheckpointingTestCase(unittest.TestCase):
                 )
                 state = self._build_direct_answer_state(session_id="session-checkpoint")
                 result = runner.run_state(state)
+                print("DEBUG: result final_answer =", result["turn"].final_answer)
+                print("DEBUG: result errors =", result["runtime"].errors)
 
             self.assertEqual(result["turn"].final_answer, "persisted answer")
 

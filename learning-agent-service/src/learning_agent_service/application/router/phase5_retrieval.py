@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ...domain.contracts import (
     RetrievalEligibility,
-    RoutingDecision,
 )
 from ..routing_signals import (
     synthesize_retrieval_plan,

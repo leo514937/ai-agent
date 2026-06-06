@@ -98,9 +98,19 @@ from .phase7_compose import (
     _build_answer_verifier_result,
     _build_entity_join_result,
 )
+from .trace import (
+    RoutingTrace,
+    StageTrace,
+    build_routing_trace,
+    build_routing_trace_from_metrics,
+    build_routing_trace_from_state,
+    routing_trace_to_dict,
+)
 
 __all__ = [
     "RoutingBuildContext",
+    "RoutingTrace",
+    "StageTrace",
     "_allowed_routes_from_fast_decision",
     "_apply_phase1_routing_extra",
     "_apply_route_review",
@@ -164,6 +174,9 @@ __all__ = [
     "build_clarification_question",
     "build_evidence_quality",
     "build_initial_routing_decision",
+    "build_routing_trace",
+    "build_routing_trace_from_metrics",
+    "build_routing_trace_from_state",
     "build_input_quality",
     "build_rewrite_decision",
     "can_enter_retrieval",
@@ -172,6 +185,7 @@ __all__ = [
     "ensure_task_plan",
     "ensure_tool_plan",
     "normalize_query",
+    "routing_trace_to_dict",
     "routing_trace_payload",
     "should_persist_memory",
     "should_run_tool",

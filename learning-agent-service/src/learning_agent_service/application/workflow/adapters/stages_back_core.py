@@ -1,4 +1,22 @@
 from .helpers import *
+from learning_agent_service.domain.utils import as_mapping as _as_mapping
+from learning_agent_service.domain.contracts import (
+    AnswerComposeRequest,
+    AnswerComposeResult,
+)
+from learning_agent_service.application.router import (
+    _build_entity_join_result,
+    _build_answer_contract,
+    _build_answer_verifier_result,
+    routing_trace_payload,
+    _apply_phase1_routing_extra,
+    _update_phase0_trace,
+    _update_phase1_trace,
+    _update_phase2_trace,
+    _update_phase3_trace,
+    _update_phase4_trace,
+)
+
 
 
 class WorkflowNodeAdapterStagesBackCoreMixin:
@@ -497,7 +515,10 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                     or ""
                 ).strip()
     
-            pending_updates: dict[str, Any] = {}
+            pending_updates: dict[str, Any] = {
+                "current_stage": turn.current_stage,
+                "stage_status": turn.stage_status,
+            }
             clarification_consumed = bool(
                 dict(getattr(persistent, "clarification_result", {}) or {}).get("consumed")
                 or turn_extra.get("pending_clarification_consumed")

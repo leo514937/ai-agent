@@ -6,7 +6,6 @@ import re
 
 import unicodedata
 
-from collections import Counter
 
 from collections.abc import Mapping, Sequence
 
@@ -16,23 +15,8 @@ from typing import Any
 
 
 
-from ..config import get_settings
 
 from ..domain.contracts import (
-
-    AnswerContract,
-
-    AnswerVerifierResult,
-
-    EntityJoinResult,
-
-    EvidenceItem,
-
-    EvidencePack,
-
-    EvidenceQualityDecision,
-
-    FastDecision,
 
     InputQualityDecision,
 
@@ -40,19 +24,10 @@ from ..domain.contracts import (
 
     PersistentSessionContext,
 
-    PlanStep,
-
-    RetrievalEligibility,
-
-    RewriteDecision,
-
     RoutingDecision,
-
-    TaskPlan,
 
 )
 
-from ..domain.enums import IntentType
 
 from ..local_life.query_rewriter import _CITY_NAMES as _LOCAL_LIFE_CITY_NAMES
 
@@ -63,10 +38,6 @@ from .routing_signals import (
     SemanticRoutingDraft,
 
     route_semantic_query,
-
-    synthesize_retrieval_plan,
-
-    synthesize_tool_selection,
 
 )
 

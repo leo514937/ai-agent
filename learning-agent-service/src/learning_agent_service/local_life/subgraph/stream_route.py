@@ -1,6 +1,6 @@
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable
 
-from .helpers import *
+from .helpers import *  # noqa: F403
 from .stream_context import StreamRunContext
 
 

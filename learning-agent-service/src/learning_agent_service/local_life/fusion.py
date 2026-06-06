@@ -4,7 +4,6 @@ from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from learning_agent_service.domain.utils import as_mapping as _as_mapping
 
 from learning_agent_service.rag.local_life import LocalLifeEvidencePack
 

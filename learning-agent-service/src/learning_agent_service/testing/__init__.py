@@ -13,6 +13,7 @@ from .harness import (
     TraceHarnessRecorder,
     extract_phase0_trace,
     extract_phase3_trace,
+    extract_routing_trace,
 )
 
 __all__ = [
@@ -30,4 +31,5 @@ __all__ = [
     "TraceHarnessRecorder",
     "extract_phase0_trace",
     "extract_phase3_trace",
+    "extract_routing_trace",
 ]

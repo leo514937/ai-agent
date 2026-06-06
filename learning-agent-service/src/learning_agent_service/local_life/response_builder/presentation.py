@@ -4,8 +4,25 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from learning_agent_service.domain.utils import as_mapping as _as_mapping, clean_text as _clean_text
+from learning_agent_service.local_life.answer_planner import EvidencePack, LocalLifeAnswerPlan
+from learning_agent_service.local_life.schemas import (
+    CardAction,
+    EvidenceClaim,
+    LocalLifeSlots,
+    RankedCandidate,
+    ShopCard,
+    SuggestedReply,
+    VoucherCard,
+)
 
-from .answers import *
+from .answers import (
+    _candidate_reason,
+    _format_distance,
+    _format_price,
+    _merge_unique_text,
+    _normalize_suggested_replies,
+    _top_badges,
+)
 
 
 def _build_shop_card(candidate: RankedCandidate) -> dict[str, Any]:

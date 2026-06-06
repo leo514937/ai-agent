@@ -1,6 +1,6 @@
 # P1-Day2：路由合同 + Checkpointer + 证据评估
 
-源文档： [../P1_langgraph_capability_completion_plan.md](../P1_langgraph_capability_completion_plan.md)
+源文档：[./P1_langgraph_capability_completion_plan.md](./P1_langgraph_capability_completion_plan.md)
 
 ## 本日目标
 

@@ -33,13 +33,23 @@ def build_engine(settings: PostgresSettings) -> Any:
         require_dependency("sqlalchemy", "Postgres durable storage")
     if not settings.dsn:
         raise InfrastructureConfigurationError("LEARNING_AGENT_POSTGRES_DSN must be configured before enabling Postgres")
-    return create_engine(
-        settings.dsn,
+    connect_args = {}
+    dsn_text = str(settings.dsn or "").strip().lower()
+    if dsn_text.startswith("postgresql") or dsn_text.startswith("postgres://"):
+        # 让不可达的本地 Postgres 尽快失败，避免把服务启动卡死在连接探测上。
+        connect_args["connect_timeout"] = 3
+    engine_kwargs = dict(
         echo=settings.echo,
         pool_size=settings.pool_size,
         max_overflow=settings.max_overflow,
         pool_pre_ping=settings.pool_pre_ping,
         future=True,
+    )
+    if connect_args:
+        engine_kwargs["connect_args"] = connect_args
+    return create_engine(
+        settings.dsn,
+        **engine_kwargs,
     )
 
 

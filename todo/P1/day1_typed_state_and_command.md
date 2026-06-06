@@ -1,6 +1,6 @@
 # P1-Day1：Typed GraphState + Command API
 
-源文档： [../P1_langgraph_capability_completion_plan.md](../P1_langgraph_capability_completion_plan.md)
+源文档： [./P1_langgraph_capability_completion_plan.md](./P1_langgraph_capability_completion_plan.md)
 
 ## 本日目标
 

@@ -13,7 +13,6 @@ from ...domain.contracts import (
 from .base import (
     _extract_entity_key_from_evidence_item,
     _extract_entity_key_from_tool_result,
-    _normalize_entity_key,
     _phase4_flags,
     _phase4_mode,
     _PHASE1_DATA_SOURCE_DYNAMIC_TOOL,
@@ -238,9 +237,35 @@ def _build_answer_contract(
 
     forbidden_without_evidence = list(dict.fromkeys(dynamic_facets))
 
+    routing_contract = getattr(turn, "routing_contract", None)
+    allowed_facets = []
+    forbidden_facets = []
+    if routing_contract is not None:
+        allowed_facets = list(routing_contract.compose_allowed_facets)
+        forbidden_facets = list(routing_contract.forbidden_facets)
+    else:
+        try:
+            from ...local_life.answer_contract import AnswerContract as LocalLifeAnswerContract
+            user_need = routing_extra.get("user_need")
+            target_shop = None
+            target_shop_payload = dict(turn.extra.get("target_shop") or {})
+            if target_shop_payload:
+                from ...local_life.target_shop_policy import TargetShop
+                target_shop = TargetShop.model_validate(target_shop_payload)
+            if user_need is not None:
+                ll_contract = LocalLifeAnswerContract.build_contract(user_need, target_shop)
+                allowed_facets = list(ll_contract.allowed_facets)
+                forbidden_facets = list(ll_contract.forbidden_facets)
+        except Exception:
+            pass
+
     return AnswerContract(
 
         original_query=str(getattr(turn, "raw_query", "") or ""),
+
+        allowed_facets=allowed_facets,
+
+        forbidden_facets=forbidden_facets,
 
         required_facets=required_facets,
 

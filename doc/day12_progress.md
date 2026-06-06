@@ -38,7 +38,12 @@
   - `P3_intent-routing-4-stage-architecture.md`
 - **成果**：用户及 AI 能以最直观的方式一览全局待办的执行优先级。
 
+### 8. 代码提交与 GitHub 推送完成（下午 16:39）
+- **忽略规则优化**：修改了 `.gitignore`，安全排除了本地运行产生的 `.log`、`.rdb`、`var/`、`scratch/` 以及 `pyrightconfig.json` 等噪音文件。
+- **推送远端**：成功将全部 7 天已完成的代码与待办规划方案打包并推送至远端主分支 `main` ([2dcc8c8](https://github.com/leo514937/ai-agent/commit/2dcc8c8c9604a1b5b6b54c70ba62465d929704df))。
+
 ## 下一步建议
+
 
 1. **执行 P0 阶段的 GraphState 类型硬化与类型安全守护**：在 `workflow/state.py` 定义强类型 `GraphState` 并改造 `builder.py` 使用 `StateGraph(GraphState)`。
 2. **执行 P1 阶段的 LangGraph 编排图拓扑瘦身**：移除 `plan_execute`，将校验从 `compose_answer` 拆离，合并 `rag`/`recommendation` 检索底层。

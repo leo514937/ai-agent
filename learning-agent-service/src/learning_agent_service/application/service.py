@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+from copy import deepcopy
+import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, Iterable
 from uuid import uuid4
+from langgraph.errors import GraphInterrupt
+
+
+_LOGGER = logging.getLogger(__name__)
+
 
 from learning_agent_service.api.contracts import (
     AckPayload,
@@ -11,7 +18,6 @@ from learning_agent_service.api.contracts import (
     ChatStreamRequest,
     ErrorPayload as ApiErrorPayload,
     EventType,
-    FeedbackIssueType,
     FeedbackReportRequest,
     FeedbackReportResponse,
     FeedbackSampleItem,
@@ -30,6 +36,10 @@ from learning_agent_service.api.contracts import (
     MemoryTraceSummary,
     SessionStateResponse,
     SseEnvelope as ApiSseEnvelope,
+    SessionHistoryResponse,
+    StateSnapshotResponse,
+    ReplayRequest,
+    ForkRequest,
 )
 from learning_agent_service.application.use_cases import (
     ChatWorkflowService,
@@ -37,7 +47,7 @@ from learning_agent_service.application.use_cases import (
 )
 from learning_agent_service.domain import ChatTurnCommand, GraphRuntimeMeta
 from learning_agent_service.domain.guards import validate_memory_record_mutation
-from learning_agent_service.domain.memory import MemoryScope, MemoryStatus, MemoryTargetStore
+from learning_agent_service.domain.memory import MemoryScope, MemoryStatus
 from learning_agent_service.infrastructure.repositories.records import OutboxEventRecord
 
 
@@ -171,6 +181,160 @@ class WorkflowLearningAgentService:
             extra=dict(context.extra),
         )
 
+    def get_session_state_history(self, session_id: str) -> SessionHistoryResponse:
+        runner = self.chat_use_case._workflow_runner
+        history_list = []
+        if hasattr(runner, "_graph"):
+            config = {"configurable": {"thread_id": session_id}}
+            try:
+                for snapshot in runner._graph.get_state_history(config):
+                    checkpoint_id = snapshot.config.get("configurable", {}).get("checkpoint_id")
+                    parent_checkpoint_id = (
+                        snapshot.parent_config.get("configurable", {}).get("checkpoint_id")
+                        if snapshot.parent_config
+                        else None
+                    )
+                    
+                    values_dict = {}
+                    for k, v in snapshot.values.items():
+                        if hasattr(v, "model_dump"):
+                            values_dict[k] = v.model_dump(mode="json")
+                        elif isinstance(v, dict):
+                            values_dict[k] = deepcopy(v)
+                        else:
+                            values_dict[k] = v
+                            
+                    history_list.append(StateSnapshotResponse(
+                        checkpoint_id=checkpoint_id,
+                        parent_checkpoint_id=parent_checkpoint_id,
+                        values=values_dict,
+                        next_nodes=list(snapshot.next),
+                        created_at=(
+                            snapshot.created_at.isoformat()
+                            if hasattr(snapshot.created_at, "isoformat")
+                            else str(snapshot.created_at)
+                            if snapshot.created_at
+                            else None
+                        ),
+                        metadata=dict(snapshot.metadata or {})
+                    ))
+            except Exception as exc:
+                _LOGGER.warning("Failed to get state history for session %s: %s", session_id, exc)
+                
+        return SessionHistoryResponse(session_id=session_id, history=history_list)
+
+    def replay_session_state(self, session_id: str, request: ReplayRequest) -> SessionStateResponse:
+        runner = self.chat_use_case._workflow_runner
+        if not hasattr(runner, "_graph"):
+            raise RuntimeError("LangGraph checkpointer is not enabled.")
+            
+        config = {
+            "configurable": {
+                "thread_id": session_id,
+                "checkpoint_id": request.checkpoint_id,
+            }
+        }
+        
+        try:
+            result = runner._graph.invoke(None, config=config)
+            session_context_store = getattr(self.container, "session_context_store", None)
+            if session_context_store is not None:
+                runtime = result.get("runtime")
+                if runtime is not None:
+                    session_context_store.save(result["persistent"], runtime)
+            return self.get_session_state(session_id)
+        except GraphInterrupt:
+            snapshot = runner._graph.get_state(config)
+            if snapshot and snapshot.values:
+                session_context_store = getattr(self.container, "session_context_store", None)
+                if session_context_store is not None:
+                    runtime = snapshot.values.get("runtime")
+                    if runtime is not None:
+                        session_context_store.save(snapshot.values["persistent"], runtime)
+            return self.get_session_state(session_id)
+        except Exception as exc:
+            _LOGGER.exception("Replay failed for session %s at checkpoint %s", session_id, request.checkpoint_id)
+            raise RuntimeError(f"Replay failed: {exc}") from exc
+
+    def fork_session_state(self, session_id: str, request: ForkRequest) -> SessionStateResponse:
+        runner = self.chat_use_case._workflow_runner
+        if not hasattr(runner, "_graph"):
+            raise RuntimeError("LangGraph checkpointer is not enabled.")
+            
+        effective_target_session_id = request.target_session_id or f"fork-{uuid4().hex[:8]}"
+        
+        config = {
+            "configurable": {
+                "thread_id": session_id,
+                "checkpoint_id": request.checkpoint_id,
+            }
+        }
+        snapshot = runner._graph.get_state(config)
+        if not snapshot or not snapshot.values:
+            raise RuntimeError(f"Checkpoint {request.checkpoint_id} not found for session {session_id}")
+            
+        forked_values = deepcopy(snapshot.values)
+        
+        if request.state_patch:
+            for key, val in request.state_patch.items():
+                if key in forked_values:
+                    current_val = forked_values[key]
+                    if hasattr(current_val, "model_copy") and isinstance(val, dict):
+                        forked_values[key] = current_val.model_copy(update=val)
+                    elif isinstance(current_val, dict) and isinstance(val, dict):
+                        current_val.update(val)
+                    else:
+                        forked_values[key] = val
+                else:
+                    forked_values[key] = val
+                    
+        if "runtime" in forked_values:
+            runtime = forked_values["runtime"]
+            new_trace_id = f"trace-fork-{uuid4().hex[:8]}"
+            new_turn_id = f"turn-fork-{uuid4().hex[:8]}"
+            forked_values["runtime"] = runtime.model_copy(
+                update={
+                    "session_id": effective_target_session_id,
+                    "trace_id": new_trace_id,
+                    "turn_id": new_turn_id,
+                }
+            )
+            
+        target_config = {
+            "configurable": {
+                "thread_id": effective_target_session_id,
+            }
+        }
+        as_node = snapshot.next[0] if snapshot.next else None
+        if as_node is None:
+            turn_patch = request.state_patch.get("turn", {}) if request.state_patch else {}
+            if isinstance(turn_patch, dict) and turn_patch.get("execution_mode") == "plan_execute":
+                as_node = "plan_execute_subgraph"
+        
+        runner._graph.update_state(target_config, forked_values, as_node=as_node)
+        
+        try:
+            result = runner._graph.invoke(None, config=target_config)
+            session_context_store = getattr(self.container, "session_context_store", None)
+            if session_context_store is not None:
+                runtime = result.get("runtime")
+                if runtime is not None:
+                    session_context_store.save(result["persistent"], runtime)
+            return self.get_session_state(effective_target_session_id)
+        except GraphInterrupt:
+            snapshot_fork = runner._graph.get_state(target_config)
+            if snapshot_fork and snapshot_fork.values:
+                session_context_store = getattr(self.container, "session_context_store", None)
+                if session_context_store is not None:
+                    runtime = snapshot_fork.values.get("runtime")
+                    if runtime is not None:
+                        session_context_store.save(snapshot_fork.values["persistent"], runtime)
+            return self.get_session_state(effective_target_session_id)
+        except Exception as exc:
+            _LOGGER.exception("Fork failed to execute for target session %s", effective_target_session_id)
+            raise RuntimeError(f"Fork execution failed: {exc}") from exc
+
+
     def submit_approval(self, request: ApprovalSubmitRequest) -> ApprovalSubmitResponse:
         session_context_store = getattr(self.container, "session_context_store", None)
         if session_context_store is None:
@@ -213,6 +377,51 @@ class WorkflowLearningAgentService:
             session_context_store.save(updated, runtime)
         except Exception as exc:
             raise RuntimeError("Unable to persist approval decision") from exc
+
+        runner = self.chat_use_case._workflow_runner
+        if hasattr(runner, "_graph"):
+            config = {"configurable": {"thread_id": request.session_id}}
+            snapshot = runner._graph.get_state(config)
+            if snapshot and snapshot.next:
+                forked_values = deepcopy(snapshot.values)
+                if "turn" in forked_values:
+                    turn = forked_values["turn"]
+                    step_results = list(turn.step_results)
+                    if step_results and step_results[-1].status == "need_approval":
+                        step_results[-1] = step_results[-1].model_copy(update={
+                            "status": "success" if decision == "approved" else "failed",
+                            "error": None if decision == "approved" else "Rejected by user",
+                            "observations": step_results[-1].observations + [f"User decision: {decision}"]
+                        })
+                    
+                    pers = forked_values.get("persistent")
+                    if pers is not None:
+                        pers_extra = dict(getattr(pers, "extra", {}) or {})
+                        pers_extra["approval_resume_decision"] = decision
+                        forked_values["persistent"] = pers.model_copy(update={"extra": pers_extra})
+                        
+                    forked_values["turn"] = turn.model_copy(update={
+                        "need_human_approval": False,
+                        "approval_request": {},
+                        "step_results": step_results
+                    })
+                
+                as_node = snapshot.next[0]
+                runner._graph.update_state(config, forked_values, as_node=as_node)
+                
+                try:
+                    result = runner._graph.invoke(None, config=config)
+                    result_runtime = result.get("runtime")
+                    if result_runtime is not None:
+                        session_context_store.save(result["persistent"], result_runtime)
+                except GraphInterrupt:
+                    snapshot_approval = runner._graph.get_state(config)
+                    if snapshot_approval and snapshot_approval.values:
+                        runtime = snapshot_approval.values.get("runtime")
+                        if runtime is not None:
+                            session_context_store.save(snapshot_approval.values["persistent"], runtime)
+                except Exception:
+                    _LOGGER.exception("Failed to resume graph execution for session %s after approval", request.session_id)
 
         return ApprovalSubmitResponse(
             session_id=request.session_id,

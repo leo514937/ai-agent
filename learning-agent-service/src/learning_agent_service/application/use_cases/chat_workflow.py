@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 
 from learning_agent_service.config import Settings
@@ -15,6 +16,9 @@ from ..workflow.services import (
     UnderstandTurnServices,
     WorkflowServices,
 )
+
+_LOGGER = logging.getLogger(__name__)
+
 class ChatWorkflowService:
     def __init__(self, container) -> None:
         self._container = container

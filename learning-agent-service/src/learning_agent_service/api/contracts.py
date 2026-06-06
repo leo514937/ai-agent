@@ -8,13 +8,10 @@ from pydantic import AliasChoices, BaseModel, Field
 
 from learning_agent_service.domain.contracts import (
     ClarificationCard,
-    Citation,
     ErrorPayload,
     FinalPayload,
-    MemoryUsedSummary,
     PlanExecutionSummary,
     PlanStep,
-    RetrievalSummary,
     StepResult,
 )
 
@@ -569,6 +566,31 @@ EVENT_PAYLOAD_MODELS: dict[EventType, type[BaseModel]] = {
     EventType.FINAL: FinalPayload,
     EventType.ERROR: ErrorPayload,
 }
+
+
+class StateSnapshotResponse(BaseModel):
+    checkpoint_id: str | None = None
+    values: dict[str, Any] = Field(default_factory=dict)
+    next_nodes: list[str] = Field(default_factory=list)
+    created_at: str | None = None
+    parent_checkpoint_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SessionHistoryResponse(BaseModel):
+    session_id: str
+    history: list[StateSnapshotResponse] = Field(default_factory=list)
+
+
+class ReplayRequest(BaseModel):
+    checkpoint_id: str
+
+
+class ForkRequest(BaseModel):
+    checkpoint_id: str
+    target_session_id: str | None = None
+    state_patch: dict[str, Any] | None = None
+
 
 
 def validate_event_payload(event_type: EventType | str, payload: dict[str, Any]) -> dict[str, Any]:

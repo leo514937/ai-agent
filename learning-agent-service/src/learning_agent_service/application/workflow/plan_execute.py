@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List
 
 from ...domain.contracts import (
     PlanExecutionSummary,
@@ -275,6 +275,17 @@ class ReactStepExecutor:
                     "risk_level": str(request.get("risk_level") or turn.risk_level),
                 },
             )
+            
+        is_langgraph = False
+        runtime = state.get("runtime")
+        if runtime is not None:
+            trace = dict(runtime.metrics.get("phase5_trace", {}) or {})
+            if trace.get("runner_backend") == "langgraph" or trace.get("graph_runtime") == "langgraph":
+                is_langgraph = True
+        if is_langgraph:
+            from langgraph.errors import NodeInterrupt
+            raise NodeInterrupt(request)
+            
         return state
 
     def replanner(self, state: GraphState) -> GraphState:
@@ -407,7 +418,7 @@ class ReactStepExecutor:
         )
 
     def _build_tool_selection(self, state: GraphState, step: PlanStep, tool_name: str):
-        turn = state["turn"]
+        _ = state["turn"]
         topic = self._topic_from_state(state)
         payload = self._tool_input_for_name(state, tool_name, step, topic)
         if isinstance(getattr(step, "input_payload", None), dict) and step.input_payload:
@@ -622,7 +633,7 @@ class ReactStepExecutor:
 
     def _normalize_plan(self, plan: List[PlanStep]) -> List[PlanStep]:
         normalized: List[PlanStep] = []
-        for index, item in enumerate(plan):
+        for _index, item in enumerate(plan):
             if isinstance(item, PlanStep):
                 normalized.append(item)
                 continue

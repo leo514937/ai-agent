@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -97,6 +96,15 @@ class AnswerContract(BaseModel):
             allowed_facets = ["distance_eta", "distance"]
             forbidden_facets = ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "price"]
             answer_style = "distance_only"
+        elif sum(1 for flag in (inferred_coupon, inferred_open, inferred_distance) if flag) > 1:
+            if target_shop and (target_shop.shop_id is not None or target_shop.shop_name is not None):
+                allowed_facets = ["environment", "taste", "service", "coupon", "open_status", "distance_eta", "distance", "price", "shop_detail", "recommendation_reason"]
+                forbidden_facets = ["recommendation"]
+                answer_style = "facet_multi"
+            else:
+                allowed_facets = ["environment", "taste", "service", "coupon", "open_status", "distance_eta", "distance", "price", "shop_detail", "recommendation_reason"]
+                forbidden_facets = []
+                answer_style = "multi_shop_recommendation"
         elif getattr(user_need, "intent", None) == "clarify":
             allowed_facets = []
             forbidden_facets = ["environment", "taste", "service", "recommendation", "coupon", "open_status", "distance_eta", "price"]

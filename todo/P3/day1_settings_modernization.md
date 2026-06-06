@@ -1,6 +1,6 @@
 # P3-Day1：Settings 现代化
 
-源文档： [../P3_learning-agent-service-refactor-plan.md](../P3_learning-agent-service-refactor-plan.md)
+源文档：[./P3_learning-agent-service-refactor-plan.md](./P3_learning-agent-service-refactor-plan.md)
 
 ## 本日目标
 

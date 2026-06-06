@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import _bootstrap  # noqa: F401
 
 from learning_agent_service.application.rag_gate import RagRouteGate
-from learning_agent_service.application.routing import build_initial_routing_decision
+from learning_agent_service.application.router import build_initial_routing_decision
 from learning_agent_service.application.workflow.adapters import WorkflowNodeAdapter
 from learning_agent_service.domain import (
     AnswerComposeRequest,

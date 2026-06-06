@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
 from typing import Any
 
 from learning_agent_service.domain.memory import (

@@ -4,16 +4,14 @@ import re
 from pathlib import Path
 import unittest
 
-import _bootstrap  # noqa: F401
 
 
 class LegacyRoutingPurgeTestCase(unittest.TestCase):
     def test_core_runtime_files_do_not_branch_on_legacy_routing_fields(self) -> None:
         root = Path(__file__).resolve().parents[1]
         targets = [
-            root / "src" / "learning_agent_service" / "application" / "routing.py",
             root / "src" / "learning_agent_service" / "application" / "dependencies.py",
-            root / "src" / "learning_agent_service" / "application" / "workflow" / "adapters.py",
+            root / "src" / "learning_agent_service" / "application" / "workflow" / "adapters" / "helpers.py",
             root / "src" / "learning_agent_service" / "application" / "workflow" / "subgraphs.py",
             root / "src" / "learning_agent_service" / "tools" / "service.py",
             root / "src" / "learning_agent_service" / "memory" / "orchestrator.py",

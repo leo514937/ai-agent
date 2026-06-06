@@ -8,6 +8,8 @@ New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $logFile = Join-Path $logDir 'python-service.log'
 $stdoutLogFile = Join-Path $logDir 'python-service.out.log'
 $bootstrapLogFile = Join-Path $logDir 'python-service-bootstrap.log'
+$qdrantLogFile = Join-Path $logDir 'qdrant.log'
+$qdrantErrLogFile = Join-Path $logDir 'qdrant.err.log'
 
 function Write-BootstrapLog {
     param(
@@ -58,6 +60,109 @@ function Resolve-PythonLauncher {
     return $null
 }
 
+function Test-QdrantHealthy {
+    try {
+        $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+        if ($curl) {
+            & $curl.Source -fsS 'http://127.0.0.1:6333/healthz' *> $null
+            return ($LASTEXITCODE -eq 0)
+        }
+
+        $response = Invoke-WebRequest -Uri 'http://127.0.0.1:6333/healthz' -TimeoutSec 2 -ErrorAction Stop
+        return ($null -ne $response)
+    } catch {
+        try {
+            return [bool](Test-NetConnection 127.0.0.1 -Port 6333 -InformationLevel Quiet)
+        } catch {
+            return $false
+        }
+    }
+}
+
+function Resolve-QdrantDirectory {
+    $candidateRoots = @()
+    if ($env:QDRANT_DIR) {
+        $candidateRoots += $env:QDRANT_DIR
+    }
+    $candidateRoots += @(
+        'D:\software\qdrant',
+        'C:\Program Files\Qdrant',
+        'C:\Program Files\qdrant'
+    )
+
+    foreach ($candidateRoot in $candidateRoots) {
+        if ([string]::IsNullOrWhiteSpace($candidateRoot)) {
+            continue
+        }
+
+        $candidateExe = Join-Path $candidateRoot 'qdrant.exe'
+        if (Test-Path $candidateExe) {
+            return $candidateRoot
+        }
+    }
+
+    $command = Get-Command qdrant.exe -ErrorAction SilentlyContinue
+    if ($command) {
+        return Split-Path -Parent $command.Source
+    }
+
+    return $null
+}
+
+function Wait-QdrantHealthy {
+    param(
+        [int]$MaxAttempts = 20
+    )
+
+    for ($i = 0; $i -lt $MaxAttempts; $i++) {
+        if (Test-QdrantHealthy) {
+            return $true
+        }
+        Start-Sleep -Seconds 1
+    }
+
+    return $false
+}
+
+function Start-QdrantIfNeeded {
+    if (Test-QdrantHealthy) {
+        Write-BootstrapLog "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Qdrant 已在运行: http://127.0.0.1:6333"
+        return
+    }
+
+    $qdrantDir = Resolve-QdrantDirectory
+    if (-not $qdrantDir) {
+        Write-BootstrapLog "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [WARN] 未找到 Qdrant 安装目录或 qdrant.exe。请通过环境变量 QDRANT_DIR 覆盖，或先手动启动 Qdrant。"
+        return
+    }
+
+    $qdrantExe = Join-Path $qdrantDir 'qdrant.exe'
+    Write-BootstrapLog "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] 启动 Qdrant: $qdrantExe"
+    try { Set-Content -Path $qdrantLogFile -Value '' -Encoding utf8 -ErrorAction Stop } catch { }
+    try { Set-Content -Path $qdrantErrLogFile -Value '' -Encoding utf8 -ErrorAction Stop } catch { }
+
+    try {
+        Start-Process `
+            -FilePath $qdrantExe `
+            -WorkingDirectory $qdrantDir `
+            -RedirectStandardOutput $qdrantLogFile `
+            -RedirectStandardError $qdrantErrLogFile `
+            -WindowStyle Hidden `
+            -PassThru -ErrorAction Stop | Out-Null
+    } catch {
+        Write-BootstrapLog "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [ERROR] Qdrant 启动命令执行失败: $($_.Exception.Message)"
+        throw
+    }
+
+    if (Wait-QdrantHealthy) {
+        Write-BootstrapLog "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Qdrant 启动成功: http://127.0.0.1:6333"
+        return
+    }
+
+    Write-BootstrapLog "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] [ERROR] Qdrant 启动后仍未通过健康检查，请查看日志: $qdrantLogFile 和 $qdrantErrLogFile"
+    throw "Qdrant 启动失败"
+}
+
 $launcher = Resolve-PythonLauncher
 if (-not $launcher) {
     Write-BootstrapLog ("[{0}] [ERROR] 未找到可用的 Python 解释器或项目虚拟环境。" -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'))
@@ -72,6 +177,9 @@ $env:NO_PROXY = 'localhost,127.0.0.1,::1'
 $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
 Write-BootstrapLog "[$timestamp] 使用启动器: $($launcher.Label)"
 Write-BootstrapLog "[$timestamp] 工作目录: $(Get-Location)"
+
+Write-BootstrapLog "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] 启动前检查 Qdrant。"
+Start-QdrantIfNeeded
 
 Write-BootstrapLog "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] 启动前检查本地生活 Qdrant 集合。"
 $cmdStr = "`"$($launcher.Command)`" $($launcher.Args -join ' ') -m learning_agent_service.bootstrap.local_life"

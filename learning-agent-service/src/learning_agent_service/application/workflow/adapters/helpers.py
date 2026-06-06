@@ -2,65 +2,21 @@ from __future__ import annotations
 
 import json
 import logging
-import time
+import re
 
-from dataclasses import dataclass
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError, wait
 from typing import Any, Mapping
 
 from learning_agent_service.domain.contracts import (
-    AnswerComposeRequest,
-    ChatTurnCommand,
     ClarificationCard,
-    CitationBuildRequest,
-    EvidenceEvaluationRequest,
-    FastDecision,
     EvidenceQualityDecision,
-    MasteryUpdateCommand,
-    HybridRetrieveRequest,
     RoutingDecision,
-    PersistSessionCommand,
-    QueryRewriteRequest,
-    ReferenceResolutionRequest,
     ReferenceResolutionResult,
     RetrievalPlan,
     SseEnvelope,
-    ToolExecutionCommand,
-    ToolNormalizationRequest,
-    ToolPlanningRequest,
-    MemoryUpdateSummary,
-    TurnUnderstandingRequest,
 )
 from learning_agent_service.domain.enums import IntentType
-from learning_agent_service.domain.utils import as_mapping as _as_mapping, utcnow as _utc_now
-from learning_agent_service.domain.errors import TerminalEvent, WorkflowErrorCode, build_error
+from learning_agent_service.domain.utils import utcnow as _utc_now
 from learning_agent_service.domain.state import GraphState, clone_graph_state
-from learning_agent_service.memory.models import MemoryCapabilityError
-from learning_agent_service.local_life.query_rewriter import normalize_query as normalize_local_life_query
-from learning_agent_service.application.routing_primitives import _mark_routing_blocked, _pending_clarification_matches_query
-from learning_agent_service.application.router import (
-    apply_fast_decision_to_routing,
-    _build_answer_contract,
-    _build_answer_verifier_result,
-    _build_entity_join_result,
-    build_evidence_quality,
-    build_initial_routing_decision,
-    build_rewrite_decision,
-    can_enter_retrieval,
-    ensure_retrieval_plan,
-    ensure_tool_plan,
-    ensure_task_plan,
-    _apply_route_review,
-    _update_phase1_trace,
-    _update_phase0_trace,
-    _update_phase2_trace,
-    _update_phase3_trace,
-    _update_phase4_trace,
-    routing_trace_payload,
-)
-from learning_agent_service.application.rag_gate import RagGateRequest
-from learning_agent_service.application.workflow.legacy_routing_migration import legacy_to_routing_decision
-from learning_agent_service.application.workflow.plan_execute import ReactStepExecutor
 
 _DIRECT_RESPONSE_KINDS = {"greeting", "thanks", "farewell", "empty", "low_info", "profile", "memory_update", "conversation_recap", "location_unavailable"}
 _LOGGER = logging.getLogger(__name__)
@@ -138,6 +94,103 @@ def _emit_stage_state(
 
 def _copy_state(state: GraphState) -> GraphState:
     return clone_graph_state(state)
+
+
+_EXPLICIT_ENTITY_SUFFIXES = (
+    "现在营业吗",
+    "现在有券吗",
+    "现在能不能订",
+    "现在能不能约",
+    "现在开吗",
+    "适合带爸妈吗",
+    "适合家庭聚餐吗",
+    "怎么样呢",
+    "有券吗呢",
+    "营业吗呢",
+    "怎么样",
+    "有券吗",
+    "有券",
+    "有几张券",
+    "有可用优惠券吗",
+    "适合约会吗",
+    "适合吗",
+    "好不好",
+    "值不值得",
+    "值不值",
+    "营业吗",
+    "呢",
+    "店呢",
+    "家呢",
+    "商家呢",
+    "哪个呢",
+)
+
+_PRONOUNS = ("这家", "这店", "这间", "它", "他", "她", "刚才那家", "刚才那个", "这商家", "这个商家", "这几家", "第一家", "第二家")
+
+_GENERIC_QUERY_TOKENS = ("附近", "推荐", "餐厅", "餐馆", "美食", "店铺", "店家", "一家", "几家")
+
+
+def _strip_facet_suffixes(prefix: str) -> str:
+    if not prefix:
+        return prefix
+    facet_suffixes = ("环境", "价格", "人均", "味道", "口味", "服务", "券", "优惠", "营业时间", "营业状态", "地址", "电话")
+    _question_verb_patterns = (
+        "有券吗", "有优惠吗", "有优惠券吗", "有没有券", "有没有优惠",
+        "有券", "有优惠", "营业吗", "开门吗", "现在营业吗",
+    )
+    changed = True
+    while changed:
+        changed = False
+        for qv in _question_verb_patterns:
+            if prefix.endswith(qv):
+                prefix = prefix[:-len(qv)].strip(" 的，,;；")
+                changed = True
+                break
+        if not changed:
+            for f_suf in facet_suffixes:
+                if prefix.endswith(f_suf):
+                    prefix = prefix[:-len(f_suf)].strip(" 的，,;；")
+                    changed = True
+                    break
+    return prefix
+
+
+def _explicit_entity_from_query(raw_query: str) -> str | None:
+    text = (raw_query or "").strip()
+    if not text:
+        return None
+    compact = text.rstrip("？?。.!！")
+    has_entity_shape = any(token in compact for token in ("(", "（", "）", ")", "店", "馆", "城", "街", "路"))
+    if compact.startswith("那"):
+        compact = re.sub(r"^那[，,\s]?", "", compact).strip()
+    for pronoun in _PRONOUNS:
+        idx = compact.find(pronoun)
+        if idx > 0:
+            prefix = compact[:idx].strip(" ，,;；")
+            if prefix and prefix not in _PRONOUNS and (
+                not any(token in prefix for token in _GENERIC_QUERY_TOKENS)
+                or has_entity_shape
+            ):
+                return _strip_facet_suffixes(prefix)
+    for suffix in _EXPLICIT_ENTITY_SUFFIXES:
+        if compact.endswith(suffix):
+            prefix = compact[: -len(suffix)].strip(" ，,;；")
+            if prefix:
+                if any(pronoun in prefix for pronoun in _PRONOUNS) or prefix in _PRONOUNS:
+                    continue
+                if any(token in prefix for token in _GENERIC_QUERY_TOKENS) and not has_entity_shape:
+                    continue
+                return _strip_facet_suffixes(prefix)
+    match = re.match(r"^(?P<name>.+?)(?:\s+)?(什么|哪家|哪个好|行不行|可以吗)$", compact)
+    if match:
+        prefix = match.group("name").strip(" ，,;；")
+        if prefix:
+            if any(pronoun in prefix for pronoun in _PRONOUNS) or prefix in _PRONOUNS:
+                return None
+            if any(token in prefix for token in _GENERIC_QUERY_TOKENS) and not has_entity_shape:
+                return None
+            return _strip_facet_suffixes(prefix)
+    return None
 
 
 def _append_stage_metric(state: GraphState, stage: str, elapsed_ms: float | None) -> None:

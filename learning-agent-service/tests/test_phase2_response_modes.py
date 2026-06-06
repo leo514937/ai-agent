@@ -5,7 +5,7 @@ import unittest
 import _bootstrap  # noqa: F401
 
 from learning_agent_service.application.workflow.adapters import WorkflowNodeAdapter
-from learning_agent_service.application.routing import build_clarification_question, build_evidence_quality
+from learning_agent_service.application.router import build_clarification_question, build_evidence_quality
 from learning_agent_service.domain import (
     AnswerComposeRequest,
     ChatTurnCommand,

@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import re
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from typing import Any
 
 from ...config import get_settings
-from ...domain.contracts import EvidenceItem, RetrievalEligibility, RoutingDecision
+from ...domain.contracts import EvidenceItem, RoutingDecision
 
 
 _PUNCT_ONLY_RE = re.compile(r"^[\s\W_]+$", re.UNICODE)

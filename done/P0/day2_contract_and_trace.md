@@ -1,6 +1,6 @@
 # P0-Day2：决策合并、合同与可追踪性
 
-源文档： [../P0_intent-routing-4-stage-architecture.md](../P0_intent-routing-4-stage-architecture.md)
+源文档： [./P0_intent-routing-4-stage-architecture.md](./P0_intent-routing-4-stage-architecture.md)
 
 ## 本日目标
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from typing import Any
 
-from .core import *  # noqa: F401,F403
+from .core import *# noqa: F401,F403,F405
 
 def _resolve_shop_detail(business_client: JavaBusinessClient, shop: ShopRecord) -> ShopRecord | None:
     if shop is None:

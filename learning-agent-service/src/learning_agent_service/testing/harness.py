@@ -6,6 +6,10 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from learning_agent_service.domain.utils import as_mapping as _as_mapping
+from learning_agent_service.application.router.trace import (
+    build_routing_trace_from_state,
+    routing_trace_to_dict,
+)
 
 
 def _nested_mapping(*sources: Mapping[str, Any], key: str) -> dict[str, Any]:
@@ -93,6 +97,13 @@ def extract_phase5_trace(state: Any) -> dict[str, Any]:
     return phase5_trace
 
 
+def extract_routing_trace(state: Any) -> dict[str, Any]:
+    if state is None:
+        return {}
+    trace = build_routing_trace_from_state(state)
+    return routing_trace_to_dict(trace)
+
+
 @dataclass(slots=True)
 class HarnessCase:
     case_id: str
@@ -167,6 +178,7 @@ class TraceHarnessRecorder:
         phase3_trace = extract_phase3_trace(state)
         phase5_trace = extract_phase5_trace(state)
         phase4_trace = extract_phase4_trace(state)
+        routing_trace = extract_routing_trace(state)
         if isinstance(state, Mapping):
             turn = _as_mapping(state.get("turn"))
             runtime = _as_mapping(state.get("runtime"))
@@ -200,6 +212,7 @@ class TraceHarnessRecorder:
             "phase3_trace": phase3_trace,
             "phase5_trace": phase5_trace,
             "phase4_trace": phase4_trace,
+            "routing_trace": routing_trace,
         }
         return recorded
 
@@ -225,7 +238,7 @@ class ReplayHarness:
 
     @staticmethod
     def _comparison_value(result: HarnessRunResult, field: str) -> Any:
-        if field in {"phase0_trace", "phase3_trace", "phase4_trace", "phase5_trace"}:
+        if field in {"phase0_trace", "phase3_trace", "phase4_trace", "phase5_trace", "routing_trace"}:
             return dict(result.actual_trace or {}).get(field)
         if field.startswith("actual_trace."):
             value: Any = dict(result.actual_trace or {})
@@ -328,6 +341,7 @@ class EvaluationHarness:
             phase0_trace = dict(trace.get("phase0_trace") or {})
             phase5_trace = dict(trace.get("phase5_trace") or {})
             phase4_trace = dict(trace.get("phase4_trace") or {})
+            _ = dict(trace.get("routing_trace") or {})
             for failure in result.failures:
                 failure_buckets[str(failure)] += 1
             response_mode = str(
@@ -372,6 +386,10 @@ class EvaluationHarness:
                 "graph_runtime_distribution": dict(sorted(graph_runtime_counts.items())),
                 "graph_fallback_distribution": dict(sorted(graph_fallback_counts.items())),
                 "missing_trace_fields": dict(sorted(missing_trace_field_counts.items())),
+                "routing_trace_distribution": {
+                    "present": sum(1 for result in results if dict(result.actual_trace or {}).get("routing_trace")),
+                    "absent": sum(1 for result in results if not dict(result.actual_trace or {}).get("routing_trace")),
+                },
                 "verifier_status_distribution": dict(sorted(verifier_status_counts.items())),
                 "verifier_issue_distribution": dict(sorted(verifier_issue_counts.items())),
                 "verifier_response_mode_distribution": dict(sorted(verifier_response_mode_counts.items())),

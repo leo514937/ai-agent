@@ -10,15 +10,10 @@ import hashlib
 
 import re
 
-import sqlite3
 
-import time
 
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
-from datetime import datetime, timezone
 
-from dataclasses import dataclass
 
 from pathlib import Path
 
@@ -30,33 +25,16 @@ from learning_agent_service.config import Settings, get_settings
 
 from learning_agent_service.domain import (
 
-    ChatTurnCommand,
-
-    FastDecision,
-
-    KnowledgeSearchRequest,
-
     ReferenceResolutionResult,
 
     RetrievalPlan,
 
-    TurnUnderstandingRequest,
-
-    TurnUnderstandingResult,
-
 )
 
-from learning_agent_service.domain.contracts import SseEnvelope
 
 from learning_agent_service.domain.enums import IntentType, OutputStyle
 
 from learning_agent_service.domain.protocols import (
-
-    AnswerComposerPort,
-
-    FinalizerPort,
-
-    MemoryServicePort,
 
     ModelGatewayPort,
 
@@ -66,17 +44,10 @@ from learning_agent_service.domain.protocols import (
 
     SessionContextPort,
 
-    ToolExecutorPort,
-
-    ToolPlannerPort,
-
-    ToolResultNormalizerPort,
-
 )
 
 from learning_agent_service.infrastructure.db.factories import InfrastructureClients, build_infrastructure_clients
 
-from learning_agent_service.infrastructure.db.openai_client import OpenAIRuntime
 
 from learning_agent_service.infrastructure.db.qdrant import QdrantRuntime
 
@@ -200,7 +171,7 @@ from learning_agent_service.local_life.assistant import LocalLifeModelAssistant
 
 from learning_agent_service.local_life.query_router import LocalLifeQueryRouter
 
-from learning_agent_service.application.rag_gate import RagGateRequest, RagGateVote, RagRouteGate
+from learning_agent_service.application.rag_gate import RagRouteGate
 
 from learning_agent_service.tools.orchestrator import (
 
@@ -236,7 +207,25 @@ _LOGGER = logging.getLogger(__name__)
 
 
 
-from .container import *  # noqa: F401,F403
+from .container import (
+    AppDependencies,
+    ApplicationRuntime,
+    MemoryDeps,
+    OpenAIAnswerComposeAdapter,
+    OpenAIBackedModelGateway,
+    OpenAIHyDEAdapter,
+    OpenAIQueryRewriteAdapter,
+    OpenAIRagGateJudge,
+    RagDeps,
+    RagGateDeps,
+    RepositoryBundle,
+    StreamingDeps,
+    ToolDeps,
+    UnderstandingDeps,
+    _build_memory_embedding_adapter,
+    _build_openai_embedding_adapter,
+    _resolve_memory_vector_size,
+)
 
 
 def build_dependencies(settings: Settings | None = None) -> AppDependencies:
@@ -351,9 +340,9 @@ def build_dependencies(settings: Settings | None = None) -> AppDependencies:
 
     )
 
-    setattr(runtime, "local_life_retriever", local_life_retriever)
+    runtime.local_life_retriever = local_life_retriever
 
-    setattr(runtime, "local_life_query_router", local_life_query_router)
+    runtime.local_life_query_router = local_life_query_router
 
     return AppDependencies(runtime=runtime)
 
@@ -1083,9 +1072,10 @@ def _build_workflow_checkpointer(settings: Settings) -> object | None:
 
     sqlite_path.parent.mkdir(parents=True, exist_ok=True)
 
-    connection = sqlite3.connect(str(sqlite_path), check_same_thread=False)
-
-    return SqliteSaver(connection)
+    ctx = SqliteSaver.from_conn_string(str(sqlite_path))
+    saver = ctx.__enter__()
+    saver._conn_ctx = ctx
+    return saver
 
 
 
@@ -2455,7 +2445,7 @@ def _local_life_generic_intent(action: str) -> IntentType:
 
 
 
-def _enrich_local_life_slots(raw_intent: Optional[str], slots: Mapping[str, Any], command) -> Dict[str, Any]:
+def _enrich_local_life_slots(raw_intent: Optional[str], slots: Mapping[str, Any], command) -> dict[str, Any]:
 
     enriched = dict(slots)
 
