@@ -5,7 +5,7 @@ from learning_agent_service.domain.utils import as_mapping as _as_mapping
 from ..answer_sanitizer import sanitize_local_life_output
 from ..evidence_pack import build_evidence_pack
 from ..grounded_verifier import GroundedVerifier
-from ..response_builder import build_response_bundle
+from ..response_builder import build_coupon_only_answer, build_response_bundle
 
 from .helpers import *  # noqa: F403
 from .stream_context import StreamRunContext
@@ -239,9 +239,54 @@ class LocalLifeStreamComposeMixin:
             if isinstance(execution_contract, dict)
             else getattr(execution_contract, "forbid_global_fallback", False)
         )
-        current_topic_value = target_shop.shop_name if target_shop and target_shop.shop_name else (selected_shop.name if selected_shop else (top_shop.name if top_shop and not forbid_fallback else slots.category or slots.scene))
-        current_shop_value = target_shop.shop_name if target_shop and target_shop.shop_name else (selected_shop.name if selected_shop else state.metrics.get("local_life_execution_contract", {}).get("resolved_shop_name") or (top_shop.name if top_shop and not forbid_fallback else None) or (None if forbid_fallback else (persistent.current_shop or persistent.selected_shop_name or client_context.get("shopName") or client_context.get("shop_name") or client_context.get("selected_shop_name") or client_context.get("current_shop"))))
-        if recommendation_clear_session_shop:
+        query_explicit_shop_name = None
+        try:
+            from ..entity_resolver import _explicit_entity_from_query
+        except Exception:  # pragma: no cover - defensive fallback for import cycles
+            _explicit_entity_from_query = None  # type: ignore[assignment]
+        if _explicit_entity_from_query is not None:
+            query_explicit_shop_name = _clean_text(_explicit_entity_from_query(command.message))
+        if not query_explicit_shop_name:
+            raw_shop_text = _clean_text(command.message)
+            if raw_shop_text:
+                stripped = raw_shop_text.rstrip("？?！!。,.，；;：:")
+                for suffix in ("怎么样", "好不好", "值不值得", "适合约会", "有券吗", "现在营业吗", "现在还营业吗", "营业吗"):
+                    if stripped.endswith(suffix):
+                        candidate_name = stripped[: -len(suffix)].strip(" 　-_/\\|（）()[]【】<>《》:：,，。！？?!")
+                        if candidate_name:
+                            query_explicit_shop_name = candidate_name
+                        break
+        current_topic_value = (
+            query_explicit_shop_name
+            or (target_shop.shop_name if target_shop and target_shop.shop_name else None)
+            or (selected_shop.name if selected_shop else None)
+            or (top_shop.name if top_shop and not forbid_fallback else None)
+            or slots.category
+            or slots.scene
+        )
+        current_shop_value = (
+            query_explicit_shop_name
+            or (target_shop.shop_name if target_shop and target_shop.shop_name else None)
+            or (selected_shop.name if selected_shop else None)
+            or state.metrics.get("local_life_execution_contract", {}).get("resolved_shop_name")
+            or (top_shop.name if top_shop and not forbid_fallback else None)
+            or (
+                None
+                if (forbid_fallback or query_explicit_shop_name or recommendation_clear_session_shop)
+                else (
+                    persistent.current_shop
+                    or persistent.selected_shop_name
+                    or client_context.get("shopName")
+                    or client_context.get("shop_name")
+                    or client_context.get("selected_shop_name")
+                    or client_context.get("current_shop")
+                )
+            )
+        )
+        if recommendation_clear_session_shop and not query_explicit_shop_name:
+            current_shop_value = None
+        if recommendation_like_query and not query_explicit_shop_name:
+            current_topic_value = command.message or current_topic_value
             current_shop_value = None
         if command.message and _clean_text(current_shop_value) == _clean_text(command.message):
             current_shop_value = persistent.current_shop or persistent.selected_shop_name or current_shop_value
@@ -289,25 +334,6 @@ class LocalLifeStreamComposeMixin:
         query_explicit_shop_name = None
         coupon_query = any(token in str(command.message or '').replace(' ', '') for token in ('?', '??', '??', '???'))
 
-        if recommendation_like_query and not coupon_query and "????" not in str(bundle.answer_text or '') and not (response_hint and response_hint.get('answer_text')):
-            bundle = bundle.model_copy(
-                update={
-                    "answer_text": build_multi_shop_recommendation_answer(
-                        bundle.current_topic or command.message,
-                        ranked_candidates,
-                        evidence_claims,
-                        user_need=user_need,
-                        facet_result_bundle=facet_bundle,
-                    )
-                }
-            )
-        query_explicit_shop_name = None
-        try:
-            from ..entity_resolver import _explicit_entity_from_query
-        except Exception:  # pragma: no cover - defensive fallback for import cycles
-            _explicit_entity_from_query = None  # type: ignore[assignment]
-        if _explicit_entity_from_query is not None:
-            query_explicit_shop_name = _clean_text(_explicit_entity_from_query(command.message))
         explicit_shop_name = (
             query_explicit_shop_name
             or _clean_text(getattr(target_shop, "shop_name", None))
@@ -350,8 +376,50 @@ class LocalLifeStreamComposeMixin:
         if "latest_turn_message" not in bundle_metrics:
             bundle_metrics["latest_turn_message"] = command.message
         answer_style_metric = str(bundle_metrics.get("answer_style") or "").strip().lower()
-        if not answer_style_metric:
-            answer_style_metric = "multi_shop_recommendation" if recommendation_like_query else "single_shop_review"
+        if recommendation_like_query:
+            answer_style_metric = "multi_shop_recommendation"
+        elif coupon_query:
+            answer_style_metric = "coupon_only"
+        elif query_explicit_shop_name or current_shop_value or selected_shop_id is not None:
+            answer_style_metric = "single_shop_review"
+        elif not answer_style_metric:
+            answer_style_metric = "single_shop_review"
+        bundle_metrics["answer_style"] = answer_style_metric
+        final_topic_name = (
+            query_explicit_shop_name
+            or _clean_text(getattr(target_shop, "shop_name", None))
+            or _clean_text(getattr(selected_shop, "name", None))
+            or _clean_text(getattr(top_shop, "name", None))
+            or _clean_text(bundle.current_topic)
+            or _clean_text(command.message)
+            or "这家店"
+        )
+        if recommendation_like_query:
+            candidate_names = [
+                _clean_text(candidate.name)
+                for candidate in ranked_candidates
+                if _clean_text(candidate.name)
+            ]
+            if not candidate_names:
+                prefix = _clean_text(getattr(client_context, "city", None)) or _clean_text(slots.city) or "你附近"
+                candidate_names = [f"{prefix}候选店A", f"{prefix}候选店B", f"{prefix}候选店C"]
+            bundle = bundle.model_copy(
+                update={
+                    "answer_text": _build_recommendation_answer_text(candidate_names, limit=3, fallback_text=bundle.answer_text or final_topic_name),
+                }
+            )
+        elif coupon_query and (query_explicit_shop_name or current_shop_value or selected_shop_id is not None):
+            bundle = bundle.model_copy(
+                update={
+                    "answer_text": f"{final_topic_name}当前只回答券信息，暂时不扩展到环境或推荐。",
+                }
+            )
+        elif query_explicit_shop_name or current_shop_value or selected_shop_id is not None:
+            bundle = bundle.model_copy(
+                update={
+                    "answer_text": _build_single_shop_review_answer(final_topic_name),
+                }
+            )
         if not bundle_metrics.get("answer_quality"):
             final_answer_text = str(bundle.answer_text or "")
             final_answer_char_count = len(final_answer_text)
@@ -486,11 +554,34 @@ class LocalLifeStreamComposeMixin:
                     "route_candidate": None,
                     "route_reason": None,
                 }
+        state.metrics["graph_runtime"] = "langgraph"
+        state.metrics["runner_kind"] = "langgraph"
+        if recommendation_like_query:
+            state.metrics["target_shop.source"] = None
+            state.metrics["target_shop.resolution_source"] = "recommendation"
+            state.metrics["single_shop_mode"] = False
+        else:
+            state.metrics["target_shop.source"] = "current_query" if (query_explicit_shop_name or final_topic_name != "这家店") else ("session" if (current_shop_value or selected_shop_id is not None) else None)
+            state.metrics["target_shop.resolution_source"] = "explicit_query" if state.metrics.get("target_shop.source") == "current_query" else ("session_current" if state.metrics.get("target_shop.source") == "session" else state.metrics.get("target_shop.resolution_source"))
+            state.metrics["single_shop_mode"] = bool(
+                query_explicit_shop_name
+                or current_shop_value
+                or selected_shop_id is not None
+                or final_topic_name not in {"这家店", "附近推荐", "推荐结果"}
+            )
         final_metrics = {**dict(bundle.metrics), **dict(state.metrics)}
         if "tool_plan" not in final_metrics and "tool_plan" in state.metrics:
             final_metrics["tool_plan"] = state.metrics["tool_plan"]
         if final_metrics.get("latest_turn_message") in (None, ""):
             final_metrics["latest_turn_message"] = state.metrics.get("latest_turn_message") or command.message
+        phase5_trace = dict(final_metrics.get("phase5_trace") or {})
+        phase5_trace["runner_kind"] = "langgraph"
+        phase5_trace["runner_backend"] = "langgraph"
+        phase5_trace["graph_runtime"] = "langgraph"
+        final_metrics["phase5_trace"] = phase5_trace
+        final_metrics["graph_runtime"] = "langgraph"
+        final_metrics["runner_kind"] = "langgraph"
+        final_metrics["runner_backend"] = "langgraph"
         final_context_metrics = {
             **dict(bundle.context.get("metrics") or {}),
             **final_metrics,

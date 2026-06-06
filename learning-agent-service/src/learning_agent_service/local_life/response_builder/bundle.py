@@ -117,11 +117,16 @@ def build_response_bundle(
     answer_plan_model = _as_plan(answer_plan) or _as_plan(model_hint.get("answer_plan"))
     verification_model = _as_verification(verification_result) or _as_verification(model_hint.get("verification_result"))
     evidence_pack_model = _as_evidence_pack(evidence_pack) or _as_evidence_pack(model_hint.get("evidence_pack"))
+    compact_query = (raw_query or "").replace(" ", "")
+    recommendation_like_query = any(
+        token in compact_query
+        for token in ("附近", "周边", "推荐", "几家", "多推荐", "多家")
+    )
     current_topic = current_topic or slots.category or slots.scene or "本地生活推荐"
     inferred_topic = _infer_topic_from_query(raw_query)
-    if inferred_topic and (current_topic == "本地生活推荐" or inferred_topic not in str(current_topic)):
+    if inferred_topic:
         current_topic = inferred_topic
-        if not current_shop or current_shop in {"本地生活推荐", slots.category, slots.scene}:
+        if not current_shop or current_shop in {"本地生活推荐", slots.category, slots.scene} or inferred_topic not in str(current_shop):
             current_shop = inferred_topic
     model_answer = _clean_text(model_hint.get("answer_text"))
     req_facet_names = [f.name for f in getattr(user_need, "required_facets", []) or []] if user_need is not None else []

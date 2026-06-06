@@ -1073,8 +1073,8 @@ def _build_recommendation_answer_text(
         lines.append("- 注意事项：建议先确认营业状态、预算和是否需要排队。")
         lines.append("")
     lines.append("综合建议")
-    lines.append("- 如果你更在意氛围和稳定性，建议先从前两家开始看。")
-    lines.append("- 券：如果你想继续看实时优惠，我可以接着帮你查。")
+    lines.append("- 如果你更在意气围和稳定性，建议先从前两家开始看。")
+    lines.append("- 另外，如果你想继续看实时优惠，我可以接着帮你查。")
     return "\n".join(lines).strip()
 
 
@@ -1088,11 +1088,53 @@ def _build_single_shop_review_answer(shop_name: str | None) -> str:
             "- 当前证据和排序都说明它有一定优势，适合继续筛选。",
             "- 如果你更看重环境和体验，可以优先看这家。",
             "可能不足",
-            "- 仍建议结合营业状态、预算和排队情况再确认一次。",
+            "- 仍建议结合营业时间和排队情况再确认一次。",
             "适合场景",
             "- 适合想先快速判断，再决定是否到店的场景。",
             "到店建议",
             "- 先看营业时间和实时信息，再决定是否现在去。",
+        ]
+    )
+
+
+
+def _build_recommendation_answer_text(
+    shop_names: list[str],
+    limit: int = 3,
+    fallback_text: str | None = None,
+) -> str:
+    names = [str(name).strip() for name in shop_names if str(name).strip()]
+    if not names:
+        return fallback_text or "\u6211\u6682\u65f6\u6ca1\u6709\u627e\u5230\u5408\u9002\u7684\u5e97\u3002"
+
+    lines = ["\u6211\u5148\u5e2e\u4f60\u63a8\u8350\u4ee5\u4e0b\u8fd9\u51e0\u5bb6\u5e97\u94fa\uff1a", ""]
+    for i, name in enumerate(names[:limit], 1):
+        lines.append(f"{i}. {name}")
+        lines.append("- \u63a8\u8350\u7406\u7531\uff1a\u5f53\u524d\u5019\u9009\u91cc\u5b83\u7684\u7efc\u5408\u4fe1\u606f\u6bd4\u8f83\u9760\u524d\uff0c\u503c\u5f97\u4f18\u5148\u67e5\u770b\u3002")
+        lines.append("- \u9002\u5408\u573a\u666f\uff1a\u9002\u5408\u7ea6\u4f1a\u3001\u804a\u5929\u6216\u8f7b\u677e\u805a\u9910\u3002")
+        lines.append("- \u6ce8\u610f\u4e8b\u9879\uff1a\u5efa\u8bae\u5148\u786e\u8ba4\u8425\u4e1a\u72b6\u6001\u3001\u9884\u7b97\u548c\u662f\u5426\u9700\u8981\u6392\u961f\u3002")
+        lines.append("")
+    lines.append("\u7efc\u5408\u5efa\u8bae")
+    lines.append("- \u5982\u679c\u4f60\u66f4\u5728\u610f\u6c14\u56f4\u548c\u7a33\u5b9a\u6027\uff0c\u5efa\u8bae\u5148\u4ece\u524d\u4e24\u5bb6\u5f00\u59cb\u770b\u3002")
+    lines.append("- \u53e6\u5916\uff0c\u5982\u679c\u4f60\u60f3\u7ee7\u7eed\u770b\u5b9e\u65f6\u4f18\u60e0\uff0c\u6211\u53ef\u4ee5\u63a5\u7740\u5e2e\u4f60\u67e5\u3002")
+    return "\n".join(lines).strip()
+
+
+def _build_single_shop_review_answer(shop_name: str | None) -> str:
+    name = str(shop_name or "\u8fd9\u5bb6\u5e97").strip() or "\u8fd9\u5bb6\u5e97"
+    return "\n".join(
+        [
+            "\u603b\u4f53\u7ed3\u8bba",
+            f"- {name}\u76ee\u524d\u53ef\u4ee5\u5148\u4f5c\u4e3a\u5019\u9009\uff0c\u73b0\u6709\u4fe1\u606f\u652f\u6301\u7ee7\u7eed\u89c2\u5bdf\u3002",
+            "\u6838\u5fc3\u4f18\u70b9",
+            "- \u5f53\u524d\u8bc1\u636e\u548c\u6392\u5e8f\u90fd\u8bf4\u660e\u5b83\u5177\u6709\u4e00\u5b9a\u4f18\u52bf\uff0c\u9002\u5408\u7ee7\u7eed\u7b5b\u9009\u3002",
+            "- \u5982\u679c\u4f60\u66f4\u91cd\u89c6\u73af\u5883\u548c\u4f53\u9a8c\uff0c\u53ef\u4ee5\u4f18\u5148\u770b\u8fd9\u5bb6\u3002",
+            "\u53ef\u80fd\u4e0d\u8db3",
+            "- \u4ecd\u5efa\u8bae\u7ed3\u5408\u8425\u4e1a\u65f6\u95f4\u548c\u6392\u961f\u60c5\u51b5\u518d\u786e\u8ba4\u4e00\u6b21\u3002",
+            "\u9002\u5408\u573a\u666f",
+            "- \u9002\u5408\u60f3\u5148\u5feb\u901f\u5224\u65ad\uff0c\u518d\u51b3\u5b9a\u662f\u5426\u5230\u5e97\u7684\u573a\u666f\u3002",
+            "\u5230\u5e97\u5efa\u8bae",
+            "- \u5148\u770b\u8425\u4e1a\u65f6\u95f4\u548c\u5b9e\u65f6\u4fe1\u606f\uff0c\u518d\u51b3\u5b9a\u662f\u5426\u73b0\u5728\u53bb\u3002",
         ]
     )
 

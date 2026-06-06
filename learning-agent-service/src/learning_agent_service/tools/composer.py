@@ -719,3 +719,114 @@ class Finalizer:
 
     def finalize(self, *args, **kwargs) -> SseEnvelope | None:
         return None
+
+
+def _clean_partial_grounded_answer(self: AnswerComposer, request: AnswerComposeRequest) -> str:
+    evidence_quality = request.evidence_quality
+    covered_facets = list(getattr(evidence_quality, "covered_facets", None) or [])
+    missing_facets = list(getattr(evidence_quality, "missing_facets", None) or [])
+    slot_notes: list[str] = []
+    if covered_facets:
+        slot_notes.append("\u5df2\u786e\u8ba4\uff1a" + "、".join(self._facet_labels(covered_facets[:3])))
+    if missing_facets:
+        slot_notes.append("\u6682\u672a\u786e\u8ba4\uff1a" + "、".join(self._facet_labels(missing_facets[:3])))
+
+    try:
+        from learning_agent_service.local_life.entity_resolver import _explicit_entity_from_query
+    except Exception:  # pragma: no cover - defensive fallback
+        _explicit_entity_from_query = None  # type: ignore[assignment]
+
+    raw_query = str(request.raw_query or "").strip()
+    explicit_topic = _explicit_entity_from_query(raw_query) if _explicit_entity_from_query is not None else None
+    meta = dict(request.stream_event_meta or {})
+    current_topic = (
+        explicit_topic
+        or str(meta.get("current_shop") or "").strip()
+        or str(getattr(request.answer_contract, "selected_entity", "") or "").strip()
+        or str(getattr(request.entity_join_result, "selected_entity", "") or "").strip()
+        or "\u8fd9\u5bb6\u5e97"
+    )
+
+    intro = "\u76ee\u524d\u53ea\u80fd\u5148\u7ed9\u4f60\u4e00\u4e2a\u90e8\u5206\u5224\u65ad\u3002"
+    if current_topic:
+        intro = f"{current_topic}\uff1a{intro}"
+    if slot_notes:
+        intro = intro + " " + "\uff1b".join(slot_notes) + "\u3002"
+    body = self._grounded_fallback(request)
+    if body.startswith("\u54e6\uff0c\u7cfb\u7edf\u670d\u52a1\u51fa\u73b0\u4e86\u4e00\u70b9\u5c0f\u72b6\u51b5") or "RAG_NO_ANSWER" in body:
+        return body
+    return self._append_auxiliary_sections(request, f"{intro}\n{body}", include_auxiliary=True)
+
+
+def _clean_compose_no_result_answer(
+    self: AnswerComposer,
+    tool_name: str,
+    payload: Mapping[str, Any],
+    request: AnswerComposeRequest | None = None,
+) -> str:
+    data = _tool_data(payload)
+    shop_name = str(data.get("shop_name") or "\u8fd9\u5bb6\u5e97").strip() or "\u8fd9\u5bb6\u5e97"
+    concrete_shop_name = ""
+    has_static_vouchers = False
+    static_info = ""
+
+    if request is not None:
+        if request.answer_contract:
+            contract_extra = _slot_mapping(getattr(request.answer_contract, "extra", {}))
+            candidate_shop_name = _optional_str(contract_extra.get("selected_shop_name") or contract_extra.get("current_shop"))
+            if candidate_shop_name:
+                concrete_shop_name = candidate_shop_name
+        if not concrete_shop_name and request.entity_join_result:
+            extra_data = _slot_mapping(getattr(request.entity_join_result, "extra", {}))
+            candidate_shop_name = _optional_str(extra_data.get("selected_shop_name") or extra_data.get("current_shop"))
+            if candidate_shop_name:
+                concrete_shop_name = candidate_shop_name
+        if not concrete_shop_name and request.stream_event_meta:
+            meta = _slot_mapping(request.stream_event_meta)
+            candidate_shop_name = _optional_str(meta.get("current_shop") or meta.get("selected_shop_name"))
+            if candidate_shop_name:
+                concrete_shop_name = candidate_shop_name
+        if not concrete_shop_name and request.rag_result and request.rag_result.evidence_pack:
+            for ev_item in request.rag_result.evidence_pack.items:
+                meta = _slot_mapping(getattr(ev_item, "metadata", {}))
+                candidate_shop_name = _optional_str(meta.get("shop_name") or meta.get("shopName"))
+                if candidate_shop_name:
+                    concrete_shop_name = candidate_shop_name
+                    break
+
+        if request.rag_result and request.rag_result.evidence_pack:
+            for item in request.rag_result.evidence_pack.items:
+                content = str(item.content or "").strip()
+                meta = getattr(item, "metadata", {}) or {}
+                v_count = meta.get("voucher_count") if isinstance(meta, dict) else None
+                pkg_desc = meta.get("package_description") if isinstance(meta, dict) else None
+                if v_count or pkg_desc:
+                    has_static_vouchers = True
+                    if v_count:
+                        static_info += f"\u4f18\u60e0\u5238\u6570\u91cf\uff1a{v_count}\u5f20\u3002"
+                    if pkg_desc:
+                        static_info += f"\u5957\u9910\u8bf4\u660e\uff1a{pkg_desc}"
+                    break
+                elif "\u5238" in content or "\u4f18\u60e0" in content or "\u5957\u9910" in content:
+                    has_static_vouchers = True
+                    static_info = "\u77e5\u8bc6\u5e93\u4e2d\u5305\u542b\u76f8\u5173\u4f18\u60e0\u6216\u5957\u9910\u63cf\u8ff0\u3002"
+                    break
+
+    if concrete_shop_name:
+        shop_name = concrete_shop_name
+
+    if tool_name == "get_order_status":
+        return "\u6211\u8fd9\u8fb9\u8fd8\u6ca1\u67e5\u5230\u5bf9\u5e94\u7684\u8ba2\u5355\u4fe1\u606f\u3002\u4f60\u53ef\u4ee5\u8865\u5145\u8ba2\u5355\u53f7\uff0c\u6216\u8005\u786e\u8ba4\u4e00\u4e0b\u662f\u4e0d\u662f\u67e5\u9519\u4e86\u95e8\u5e97\u548c\u8ba2\u5355\u3002"
+    if tool_name == "get_coupon_list":
+        if has_static_vouchers:
+            return f"{shop_name}\u5b9e\u65f6\u672a\u67e5\u5230\u53ef\u7528\u5238\uff0c\u4f46\u53ef\u53c2\u8003\u77e5\u8bc6\u5e93\u4e2d\u7684\u4f18\u60e0\u4fe1\u606f\uff1a{static_info}\u3002"
+        return f"\u6211\u8fd9\u8fb9\u8fd8\u6ca1\u67e5\u5230 {shop_name} \u53ef\u7528\u7684\u5238\u3002\u4f60\u53ef\u4ee5\u6362\u4e00\u5bb6\u5e97\uff0c\u6216\u8005\u544a\u8bc9\u6211\u60f3\u770b\u7684\u5e97\u540d\u548c\u533a\u57df\u3002"
+    if tool_name == "get_shop_detail":
+        return "\u6211\u8fd9\u8fb9\u8fd8\u6ca1\u5b9a\u4f4d\u5230\u4f60\u8981\u770b\u7684\u95e8\u5e97\u3002\u4f60\u53ef\u4ee5\u8865\u5145\u5e97\u540d\u3001\u533a\u57df\uff0c\u6216\u8005\u76f4\u63a5\u7ed9\u6211\u5e97\u94fa ID\u3002"
+    if tool_name == "search_restaurants":
+        return "\u6211\u8fd9\u8fb9\u6682\u65f6\u6ca1\u7b5b\u5230\u7b26\u5408\u6761\u4ef6\u7684\u95e8\u5e97\u3002\u4f60\u53ef\u4ee5\u653e\u5bbd\u9884\u7b97\u3001\u8ddd\u79bb\u6216\u53e3\u5473\u6761\u4ef6\uff0c\u6211\u7ee7\u7eed\u5e2e\u4f60\u627e\u3002"
+    return "\u6211\u8fd9\u8fb9\u8fd8\u6ca1\u67e5\u5230\u5bf9\u5e94\u7ed3\u679c\u3002\u4f60\u53ef\u4ee5\u8865\u5145\u66f4\u5177\u4f53\u7684\u5bf9\u8c61\u3001\u8303\u56f4\u6216\u6761\u4ef6\uff0c\u6211\u7ee7\u7eed\u5e2e\u4f60\u67e5\u3002"
+
+
+AnswerComposer._compose_partial_grounded_answer = _clean_partial_grounded_answer
+AnswerComposer._compose_no_result_answer = _clean_compose_no_result_answer

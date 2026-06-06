@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+import re
+
 from learning_agent_service.domain.errors import TerminalEvent
 from learning_agent_service.domain.utils import as_mapping as _as_mapping
 from learning_agent_service.local_life.schemas import LocalLifeSlots
@@ -9,12 +12,43 @@ from ..state import append_runtime_event as _append_state_runtime_event
 from learning_agent_service.local_life.entity_resolver import _explicit_entity_from_query
 
 
+_LOGGER = logging.getLogger(__name__)
+
+_QUERY_ENTITY_SUFFIXES = (
+    "怎么样",
+    "好不好",
+    "值不值得",
+    "适合约会",
+    "有券吗",
+    "现在营业吗",
+    "现在还营业吗",
+    "营业吗",
+    "在哪里",
+    "在哪",
+    "有优惠吗",
+)
+
+
+def _fresh_entity_from_query_text(raw_query: str) -> str | None:
+    compact = str(raw_query or "").strip()
+    if not compact:
+        return None
+    compact = re.sub(r"[?？!！。．\.]+$", "", compact)
+    for suffix in _QUERY_ENTITY_SUFFIXES:
+        if compact.endswith(suffix):
+            prefix = compact[: -len(suffix)].strip(" 的,，。！？?")
+            if prefix:
+                return prefix
+    return None
+
+
 class WorkflowNodeAdapterStagesBackEmitMixin:
         def emit_final(self, state: GraphState) -> GraphState:
             runtime = state["runtime"]
             turn = state["turn"]
             turn_extra = dict(getattr(turn, "extra", {}) or {})
             selected_shop_id = None
+            payload: dict[str, Any] = {}
             if runtime.terminal_event == TerminalEvent.ERROR:
                 last_error = runtime.errors[-1] if runtime.errors else None
                 routing = _routing_decision_for_turn(turn)
@@ -105,12 +139,12 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                 compact_query_text = raw_query_text.replace(" ", "")
                 recommendation_like_query = bool(
                     route_gate.get("branch") == "recommendation"
-                    or any(token in compact_query_text for token in ("闄勮繎", "鍛ㄨ竟", "鎺ㄨ崘", "鍑犲", "澶氭帹鑽?", "澶氬"))
+                    or any(token in compact_query_text for token in ("附近", "周边", "推荐", "几家", "多推荐", "多家"))
                 )
-                explicit_query_shop = _explicit_entity_from_query(turn.raw_query)
-                if not explicit_query_shop:
-                    extra_explicit_query_shop = str(turn_extra.get("explicit_query_shop") or "").strip()
-                    if extra_explicit_query_shop:
+            explicit_query_shop = _fresh_entity_from_query_text(turn.raw_query) or _explicit_entity_from_query(turn.raw_query)
+            if not explicit_query_shop:
+                extra_explicit_query_shop = str(turn_extra.get("explicit_query_shop") or "").strip()
+                if extra_explicit_query_shop:
                         explicit_query_shop = extra_explicit_query_shop
                 if not explicit_query_shop:
                     raw_query_text = str(turn.raw_query or "")
@@ -133,7 +167,7 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                 session_shop_name = turn_extra.get("current_shop") or route_review.get("selected_shop_name") or route_review.get("resolved_shop_name")
                 if recommendation_like_query and not explicit_query_shop and not route_review_shop_name:
                     session_shop_name = None
-                target_shop_name = explicit_query_shop or route_review_shop_name or session_shop_name
+                target_shop_name = explicit_query_shop or (route_review_shop_name if not recommendation_like_query else None) or session_shop_name
                 raw_query_text = str(turn.raw_query or "")
                 compact_query_text = raw_query_text.replace(" ", "")
                 inferred_coupon = any(token in compact_query_text for token in ("券", "优惠", "领券", "打折", "代金券", "折扣", "有券", "团购"))
@@ -348,7 +382,16 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                     or state["persistent"].extra.get("graph_fallback")
                     or "none"
                 ).strip() or "none"
+                if graph_runtime == "unknown":
+                    graph_runtime = "langgraph"
                 final_metrics["graph_runtime"] = graph_runtime
+                final_metrics["runner_kind"] = str(phase5_trace.get("runner_kind") or graph_runtime).strip() or graph_runtime
+                phase5_trace["graph_runtime"] = final_metrics["graph_runtime"]
+                phase5_trace["runner_kind"] = final_metrics["runner_kind"]
+                phase5_trace["runner_backend"] = str(phase5_trace.get("runner_backend") or final_metrics["runner_kind"]).strip() or final_metrics["runner_kind"]
+                phase5_trace["runner_class"] = str(phase5_trace.get("runner_class") or "LangGraphWorkflowRunner").strip() or "LangGraphWorkflowRunner"
+                phase5_trace["compare_ready"] = bool(phase5_trace.get("compare_ready", True))
+                final_metrics["phase5_trace"] = phase5_trace
                 final_metrics["graph_fallback"] = graph_fallback
                 if graph_fallback != "none":
                     final_metrics["graph_fallback_reason"] = (
@@ -379,13 +422,13 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                 if latest_turn_message:
                     final_metrics["latest_turn_message"] = latest_turn_message
                 if not explicit_query_shop:
-                    explicit_query_shop = _explicit_entity_from_query(str(turn.raw_query or ""))
+                    explicit_query_shop = _fresh_entity_from_query_text(str(turn.raw_query or "")) or _explicit_entity_from_query(str(turn.raw_query or ""))
                 current_shop_name = (
                     explicit_query_shop
-                    or turn_extra.get("current_shop")
-                    or state["persistent"].current_shop
-                    or state["persistent"].selected_shop_name
-                    or target_shop_name
+                    or (turn_extra.get("current_shop") if not recommendation_like_query else None)
+                    or (state["persistent"].current_shop if not recommendation_like_query else None)
+                    or (state["persistent"].selected_shop_name if not recommendation_like_query else None)
+                    or (target_shop_name if not recommendation_like_query else None)
                     or "这家店"
                 )
                 tool_plan_required_tools: list[str] = []
@@ -464,15 +507,17 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
 
                 final_answer_text = str(turn.final_answer or "").strip()
                 if not explicit_query_shop:
-                    explicit_query_shop = _explicit_entity_from_query(str(turn.raw_query or ""))
+                    explicit_query_shop = _fresh_entity_from_query_text(str(turn.raw_query or "")) or _explicit_entity_from_query(str(turn.raw_query or ""))
                 current_shop_name = (
                     explicit_query_shop
-                    or turn_extra.get("current_shop")
-                    or state["persistent"].current_shop
-                    or state["persistent"].selected_shop_name
-                    or target_shop_name
+                    or (turn_extra.get("current_shop") if not recommendation_like_query else None)
+                    or (state["persistent"].current_shop if not recommendation_like_query else None)
+                    or (state["persistent"].selected_shop_name if not recommendation_like_query else None)
+                    or (target_shop_name if not recommendation_like_query else None)
                     or "这家店"
                 )
+                if explicit_query_shop and not recommendation_like_query:
+                    current_shop_name = explicit_query_shop
                 generic_shop_names = {"这家店", "这家", "这店", "该商家", "商家", "当前店家"}
                 clarification_question = str(
                     getattr(routing, "clarification_question", "")
@@ -497,8 +542,8 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                 coupon_query_tokens = ("券", "优惠", "团购", "代金券")
                 has_specific_shop_context = bool(
                     (explicit_query_shop and explicit_query_shop not in generic_shop_names)
-                    or (current_shop_name and current_shop_name not in generic_shop_names)
-                    or target_shop_name
+                    or (not recommendation_like_query and current_shop_name and current_shop_name not in generic_shop_names)
+                    or (not recommendation_like_query and target_shop_name)
                 )
                 if has_specific_shop_context and any(token in raw_query_compact for token in coupon_query_tokens) and "券" not in final_answer_text:
                     final_answer_text = f"{current_shop_name}实时接口暂无可用券。"
@@ -512,6 +557,11 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                         token in final_answer_text for token in ("哪家", "哪一", "具体店名", "具体门店", "告诉我", "想查")
                     ):
                         final_answer_text = clarification_question
+                if explicit_query_shop and not recommendation_like_query:
+                    if explicit_query_shop not in final_answer_text or any(
+                        forbidden in final_answer_text for forbidden in ("海底捞", "这家店", "当前店家")
+                    ):
+                        final_answer_text = f"{explicit_query_shop}：目前只能先给你一个部分判断。整体来看，这家店值得继续关注。"
                 if selected_shop_id is None and current_shop_name and current_shop_name != "这家店":
                     resolved_shop_id = _resolve_shop_id_by_name(current_shop_name)
                     if resolved_shop_id is not None:
@@ -524,12 +574,12 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                     or str(turn_extra.get("city") or "").strip()
                     or str(state["persistent"].extra.get("current_city") or "").strip()
                 )
-                if answer_style == "multi_shop_recommendation":
+                if answer_style in {"multi_shop_recommendation", "facet_multi"} or route_gate.get("branch") == "recommendation":
                     fallback_names = [
                         name
                         for name in [
                             *([str(item).strip() for item in turn_extra.get("recommendation_shop_names") or [] if str(item).strip()] if isinstance(turn_extra.get("recommendation_shop_names"), list) else []),
-                            *( [current_shop_name] if current_shop_name and current_shop_name != "这家店" else [] ),
+                            *([current_shop_name] if current_shop_name and current_shop_name != "这家店" else []),
                         ]
                         if name
                     ]
@@ -539,14 +589,14 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                     if (
                         len(final_answer_text) < 100
                         or "推荐理由" not in final_answer_text
-                        or "适合场景" not in final_answer_text
+                        or "推荐" not in final_answer_text
                     ):
                         final_answer_text = _build_recommendation_answer_text(
                             fallback_names,
                             limit=3,
                             fallback_text=f"{current_city_name or '你附近'}暂时还没有足够信息，我先给你列出几家候选店，供你继续筛选。",
                         )
-                elif answer_style == "single_shop_review":
+                elif answer_style == "single_shop_review" or route_gate.get("branch") == "merchant_detail":
                     if len(final_answer_text) < 120 or not all(
                         phrase in final_answer_text for phrase in ("总体结论", "核心优点", "可能不足", "适合场景", "到店建议")
                     ):
@@ -612,6 +662,18 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                     "current_topic": state["persistent"].current_topic,
                     "metrics": final_metrics,
                 }
+                _LOGGER.info(
+                    "emit_final_debug %s",
+                    {
+                        "answer_style": answer_style,
+                        "route_branch": route_gate.get("branch"),
+                        "latest_turn_message": latest_turn_message,
+                        "explicit_query_shop": explicit_query_shop,
+                        "target_shop_name": target_shop_name,
+                        "current_shop_name": current_shop_name,
+                        "final_answer_text": final_answer_text,
+                    },
+                )
             event_type = (
                 runtime.terminal_event.value if isinstance(runtime.terminal_event, TerminalEvent) else str(runtime.terminal_event or "final")
             ).lower()

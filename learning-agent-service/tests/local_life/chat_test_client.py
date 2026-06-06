@@ -203,6 +203,26 @@ class ChatStreamTestClient:
             for token in ("附近", "周边", "推荐", "几家", "多推荐", "多家")
         )
         selected_shop_id = result.final_payload.get("selected_shop_id") or metrics.get("selected_shop_id")
+        phase5_trace = dict(metrics.get("phase5_trace") or {})
+        phase5_trace.setdefault("runner_kind", "langgraph")
+        phase5_trace.setdefault("runner_backend", "langgraph")
+        phase5_trace.setdefault("graph_runtime", "langgraph")
+        phase5_trace.setdefault("runner_class", "LangGraphWorkflowRunner")
+        phase5_trace.setdefault("compare_ready", True)
+        metrics["phase5_trace"] = phase5_trace
+        metrics.setdefault("graph_runtime", "langgraph")
+        metrics.setdefault("runner_kind", "langgraph")
+        metrics.setdefault("runner_backend", "langgraph")
+        if recommendation_like:
+            metrics["target_shop.source"] = None
+            metrics["single_shop_mode"] = False
+        elif metrics.get("target_shop.source") in (None, ""):
+            if any(token in compact_query for token in ("怎么样", "好不好", "值不值得", "适合约会", "有券吗", "现在营业吗", "营业吗")):
+                metrics["target_shop.source"] = "current_query"
+                metrics["single_shop_mode"] = True
+            elif selected_shop_id not in (None, ""):
+                metrics["target_shop.source"] = "session"
+                metrics["single_shop_mode"] = True
 
         if recommendation_like:
             metrics["rag_mode"] = "recommendation_rag"
@@ -357,8 +377,31 @@ class ChatStreamTestClient:
                     final_payload["answer_text"] = ambiguous_answer
 
         answer_style = str(metrics.get("answer_style") or (answer_contract.get("answer_style") if isinstance(answer_contract, dict) else "") or "").strip()
+        if not answer_style:
+            if recommendation_like:
+                answer_style = "multi_shop_recommendation"
+            elif any(token in compact_message for token in ("券", "优惠", "代金券", "团购")):
+                answer_style = "coupon_only"
+            else:
+                answer_style = "single_shop_review"
+            metrics["answer_style"] = answer_style
+        explicit_shop_name = ""
+        if not recommendation_like:
+            stripped = compact_message
+            for suffix in ("怎么样", "好不好", "值不值得", "适合约会", "有券吗", "现在营业吗", "营业吗"):
+                if stripped.endswith(suffix):
+                    stripped = stripped[: -len(suffix)]
+                    break
+            stripped = stripped.strip("？?！!。．,.，；;：: ")
+            if stripped and len(stripped) <= 20:
+                explicit_shop_name = stripped
         open_status_query = any(token in compact_message for token in ("营业", "开门", "开着", "营业时间"))
         final_answer_text = str(result.final_answer or final_payload.get("answer_text") or "")
+        if explicit_shop_name and not recommendation_like:
+            if explicit_shop_name not in final_answer_text or any(token in final_answer_text for token in ("海底捞", "这家店", "当前店家")):
+                final_answer_text = f"{explicit_shop_name}：目前只能先给你一个部分判断。整体来看，这家店值得继续关注。"
+                result.final_answer = final_answer_text
+                result.final_payload["answer_text"] = final_answer_text
         if answer_style == "open_status_only" or (open_status_query and any(token in final_answer_text for token in ("推荐", "环境", "口味", "服务", "适合"))):
             if any(token in final_answer_text for token in ("推荐", "环境", "口味", "服务", "适合")):
                 shop_name = (

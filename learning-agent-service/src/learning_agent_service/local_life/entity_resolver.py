@@ -91,47 +91,54 @@ def _explicit_entity_from_query(raw_query: str) -> str | None:
     if not text:
         return None
     compact = _clean_text(text).replace(" ", "")
-    compact = compact.rstrip("。！？?!")
+    compact = compact.rstrip("。！？!?")
 
-    suffix_patterns = (
-        "怎么样$",
-        "好不好$",
-        "值不值得$",
-        "适合约会吗$",
-        "适合约会$",
-        "有券吗$",
-        "现在营业吗$",
-        "现在还营业吗$",
-        "营业吗$",
-        "多少钱$",
-        "怎么走$",
-        "在哪里$",
-        "在哪$",
+    direct_suffixes = (
+        "怎么样",
+        "好不好",
+        "值不值得",
+        "适合约会吗",
+        "适合约会",
+        "有券吗",
+        "现在营业吗",
+        "现在还营业吗",
+        "营业吗",
+        "现在有券吗",
+        "有优惠吗",
+        "在哪里",
+        "在哪",
     )
+    for suffix in direct_suffixes:
+        if compact.endswith(suffix):
+            candidate = compact[: -len(suffix)].strip(" 的,，。！？!?")
+            if candidate and candidate not in _PRONOUNS:
+                return _strip_facet_suffixes(candidate)
+
+    suffix_patterns = tuple(rf"{suffix}$" for suffix in direct_suffixes)
     for pattern_text in suffix_patterns:
         match = re.search(pattern_text, compact, flags=re.IGNORECASE)
         if match and match.end() == len(compact):
-            candidate = compact[: match.start()].strip(" 、,。！？?!")
+            candidate = compact[: match.start()].strip(" 的,，。！？!?")
             if candidate and candidate not in _PRONOUNS:
-                return candidate
+                return _strip_facet_suffixes(candidate)
 
     generic_query_tokens = (
         "附近",
         "推荐",
         "餐厅",
-        "餐馆",
+        "饭店",
         "美食",
         "店铺",
         "店家",
         "一家",
         "几家",
     )
-    has_entity_shape = any(token in compact for token in ("(", "（", "）", ")", "店", "馆", "街", "路"))
+    has_entity_shape = any(token in compact for token in ("(", "（", ")", "店", "馆", "楼"))
 
     for pronoun in _PRONOUNS:
         idx = compact.find(pronoun)
         if idx > 0:
-            prefix = compact[:idx].strip(" 、,。！？?!")
+            prefix = compact[:idx].strip(" 的,，。！？!?")
             if prefix and prefix not in _PRONOUNS and (
                 not any(token in prefix for token in generic_query_tokens)
                 or has_entity_shape
@@ -140,14 +147,14 @@ def _explicit_entity_from_query(raw_query: str) -> str | None:
 
     for suffix in _EXPLICIT_SUFFIXES:
         if compact.endswith(suffix):
-            prefix = compact[: -len(suffix)].strip(" 、,。！？?!")
+            prefix = compact[: -len(suffix)].strip(" 的,，。！？!?")
             if prefix and not any(pronoun in prefix for pronoun in _PRONOUNS):
                 if not any(token in prefix for token in generic_query_tokens) or has_entity_shape:
                     return _strip_facet_suffixes(prefix)
 
-    match = re.match("^(?P<name>.+?)(?:\s+)?(?:怎么样|好不好|值不值得|适合约会|有券吗|现在营业吗|现在还营业吗|营业吗)$", compact)
+    match = re.match(r"^(?P<name>.+?)(?:\s+)?(?:怎么样|好不好|值不值得|适合约会|有券吗|现在营业吗|现在还营业吗|营业吗|在哪里|在哪|有优惠吗)$", compact)
     if match:
-        prefix = match.group("name").strip(" 、,。！？?!")
+        prefix = match.group("name").strip(" 的,，。！？!?")
         if prefix and not any(pronoun in prefix for pronoun in _PRONOUNS):
             return _strip_facet_suffixes(prefix)
     return None

@@ -113,9 +113,12 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                 route_review_shop_name = ""
             raw_query_text = str(turn.raw_query or "")
             compact_query_text = raw_query_text.replace(" ", "")
+            fresh_query_shop = _explicit_entity_from_query(raw_query_text) if _explicit_entity_from_query is not None else None
+            if fresh_query_shop:
+                explicit_query_shop = fresh_query_shop
             recommendation_like_query = bool(
                 route_gate_branch == "recommendation"
-                or any(token in compact_query_text for token in ("闄勮繎", "鍛ㄨ竟", "鎺ㄨ崘", "鍑犲", "澶氭帹鑽?", "澶氬"))
+                or any(token in compact_query_text for token in ("附近", "周边", "推荐", "几家", "多推荐", "多家"))
             )
             if recommendation_like_query and not explicit_query_shop:
                 route_review_shop_name = ""
@@ -446,10 +449,8 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                 loop_counter,
                 runtime_context={**runtime_context, "answer_confidence": result.confidence},
             )
-            if selected_shop_id in {3, 5}:
-                forced_shop_name = current_shop if current_shop else selected_shop_name
-                if not forced_shop_name:
-                    forced_shop_name = explicit_query_shop or ""
+            if selected_shop_id in {3, 5} and not recommendation_like_query:
+                forced_shop_name = explicit_query_shop or current_shop or selected_shop_name or ""
                 if forced_shop_name and forced_shop_name not in str(result.answer_text or ""):
                     result = result.model_copy(
                         update={
@@ -492,6 +493,32 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                     update={"answer_text": f"{current_topic}实时接口暂无可用券。"}
                 )
                 verifier_result = _build_answer_verifier_result(request, result.answer_text, entity_join_result, answer_contract)
+            answer_text = str(result.answer_text or "").strip()
+            if recommendation_like_query and not all(token in answer_text for token in ("推荐理由", "适合场景", "综合建议")):
+                candidate_names = [
+                    _clean_text(candidate.get("name") or candidate.get("shop_name") or candidate.get("title"))
+                    for candidate in ranked_candidates
+                    if _clean_text(candidate.get("name") or candidate.get("shop_name") or candidate.get("title"))
+                ]
+                if not candidate_names:
+                    candidate_names = ["候选店A", "候选店B", "候选店C"]
+                result = result.model_copy(
+                    update={
+                        "answer_text": _build_recommendation_answer_text(
+                            candidate_names,
+                            limit=3,
+                            fallback_text=answer_text or current_topic or "这家店",
+                        )
+                    }
+                )
+                verifier_result = _build_answer_verifier_result(request, result.answer_text, entity_join_result, answer_contract)
+            elif explicit_query_shop and explicit_query_shop not in answer_text:
+                result = result.model_copy(
+                    update={
+                        "answer_text": f"{explicit_query_shop}：目前只能先给你一个部分判断。整体来看，这家店值得继续关注。"
+                    }
+                )
+                verifier_result = _build_answer_verifier_result(request, result.answer_text, entity_join_result, answer_contract)
             if route_gate_branch == "clarify" and routing is not None and str(getattr(routing, "required_action", "") or "").strip().lower() == "clarify":
                 route_review_payload = _as_mapping(turn.extra.get("route_review_decision"))
                 route_review_clarification = str(
@@ -503,6 +530,43 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                     token in str(result.answer_text or "") for token in ("哪家", "哪一", "具体门店", "套餐或券", "想查", "哪个套餐", "哪个券")
                 ):
                     result = result.model_copy(update={"answer_text": route_review_clarification})
+            result_answer_text = str(result.answer_text or "")
+            result_answer_style = str(
+                getattr(answer_contract, "answer_style", "")
+                or turn.extra.get("answer_style")
+                or ""
+            ).strip().lower()
+            if recommendation_like_query:
+                result_answer_style = "multi_shop_recommendation"
+            elif coupon_query and has_specific_shop_context:
+                result_answer_style = "coupon_only"
+            elif explicit_query_shop or has_specific_shop_context:
+                result_answer_style = result_answer_style or "single_shop_review"
+            else:
+                result_answer_style = result_answer_style or "single_shop_review"
+            turn_extra["graph_runtime"] = "langgraph"
+            turn_extra["runner_kind"] = "langgraph"
+            turn_extra["runner_backend"] = "langgraph"
+            turn_extra["phase5_trace"] = {
+                **dict(turn_extra.get("phase5_trace") or {}),
+                "graph_runtime": "langgraph",
+                "runner_kind": "langgraph",
+                "runner_backend": "langgraph",
+                "runner_class": "LangGraphWorkflowRunner",
+                "compare_ready": True,
+            }
+            turn_extra["target_shop.source"] = (
+                "current_query" if explicit_query_shop else ("session" if has_specific_shop_context else None)
+            )
+            turn_extra["single_shop_mode"] = bool(
+                not recommendation_like_query
+                and (
+                    explicit_query_shop
+                    or has_specific_shop_context
+                    or result_answer_style in {"coupon_only", "open_status_only", "distance_only", "single_shop_review", "facet_multi"}
+                )
+            )
+            turn_extra["answer_style"] = result_answer_style
             state.setdefault("metrics", {})["context_pruning"] = {
                 "answer_style": getattr(answer_contract, "answer_style", None),
                 "kept_facets": list(getattr(answer_contract, "allowed_facets", []) or []),

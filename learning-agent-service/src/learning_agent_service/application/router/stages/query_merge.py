@@ -75,6 +75,8 @@ def merge_local_life_query_context(
 
     if explicit_query_shop:
         current_shop = explicit_query_shop
+        merged_slots["shop_name"] = explicit_query_shop
+        merged_slots["shop_query"] = explicit_query_shop
     elif recommendation_like and not any(pronoun in compact for pronoun in _PRONOUNS):
         current_shop = None
         merged_slots.pop("shop_name", None)

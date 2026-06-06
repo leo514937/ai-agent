@@ -15,6 +15,7 @@ from ...domain.contracts import (
     ToolSelection,
     TurnRuntimeState,
 )
+from ...local_life.entity_resolver import _explicit_entity_from_query
 from ...local_life.query_rewriter import _CITY_NAMES as _LOCAL_LIFE_CITY_NAMES
 
 
@@ -328,13 +329,19 @@ def _extract_slots(
     context: Mapping[str, Any],
 ) -> dict[str, Any]:
     slots: dict[str, Any] = {}
+    explicit_shop = str(_explicit_entity_from_query(normalized or compact) or "").strip() or None
+    nearby_recommendation_like = any(
+        token in compact
+        for token in ("附近", "周边", "推荐", "几家", "多推荐", "适合约会", "家庭聚餐", "安静", "不吵")
+    )
     shop_name = (
-        context.get("shopName")
+        explicit_shop
+        or context.get("shopName")
         or context.get("shop_name")
-        or persistent.current_shop
-        or persistent.selected_shop_name
+        or (None if nearby_recommendation_like else persistent.current_shop)
+        or (None if nearby_recommendation_like else persistent.selected_shop_name)
         or persistent.current_topic
-        or _extract_shop_name(normalized, compact)
+        or (None if nearby_recommendation_like else _extract_shop_name(normalized, compact))
     )
     if shop_name:
         slots["shop_name"] = str(shop_name).strip()
@@ -483,6 +490,7 @@ def route_semantic_query(
     compact = _compact_text(raw_query)
     candidates = registry.match(raw_query, persistent=persistent, client_context=client_context)
     candidate_names = [candidate.spec_name for candidate in candidates]
+    explicit_shop = str(_explicit_entity_from_query(raw_query) or "").strip() or None
 
     if not normalized:
         return SemanticRoutingDraft(
@@ -530,6 +538,9 @@ def route_semantic_query(
                 )
             )
             merged_slots = _merge_candidate_slots(*merged_candidates)
+            if not explicit_shop:
+                merged_slots.pop("shop_name", None)
+                merged_slots.pop("shop_query", None)
             return SemanticRoutingDraft(
                 domain="local_life",
                 intent="local_life_recommend",
@@ -1015,6 +1026,15 @@ def synthesize_retrieval_plan(
     slots.update(dict(routing.extra.get("semantic_slots", {}) or {}))
     if client_context:
         slots.setdefault("client_context", dict(client_context))
+    explicit_shop = str(_explicit_entity_from_query(turn.raw_query or "") or "").strip() or None
+    recommendation_like = any(
+        token in _compact_text(normalized_query)
+        for token in ("附近", "周边", "推荐", "几家", "多推荐", "适合约会", "家庭聚餐", "安静", "不吵")
+    )
+    if explicit_shop:
+        slots["shop_name"] = explicit_shop
+    elif recommendation_like:
+        slots.pop("shop_name", None)
 
     preferred_chunk_roles = list(routing.preferred_chunk_roles or [])
     if not preferred_chunk_roles:
@@ -1024,7 +1044,13 @@ def synthesize_retrieval_plan(
         "is_active": True,
         "is_latest": True,
     }
-    shop_name = str(slots.get("shop_name") or persistent.current_shop or persistent.selected_shop_name or "").strip()
+    shop_name = str(
+        slots.get("shop_name")
+        or explicit_shop
+        or (None if recommendation_like else persistent.current_shop)
+        or (None if recommendation_like else persistent.selected_shop_name)
+        or ""
+    ).strip()
     if shop_name:
         retrieval_filters["shop_name"] = shop_name
     shop_id = slots.get("shop_id") or persistent.selected_shop_id
@@ -1133,7 +1159,12 @@ def _choose_tool_name(
     normalized = _normalize_text(turn.raw_query or routing.normalized_query)
     compact = _compact_text(normalized)
     shop_id = slots.get("shop_id") or persistent.selected_shop_id
-    shop_name = slots.get("shop_name") or persistent.current_shop or persistent.selected_shop_name or persistent.current_topic
+    explicit_shop = str(_explicit_entity_from_query(turn.raw_query or "") or "").strip() or None
+    recommendation_like = any(
+        token in compact
+        for token in ("附近", "周边", "推荐", "几家", "多推荐", "适合约会", "家庭聚餐", "安静", "不吵")
+    )
+    shop_name = slots.get("shop_name") or explicit_shop or (None if recommendation_like else persistent.current_shop) or (None if recommendation_like else persistent.selected_shop_name) or persistent.current_topic
     voucher_id = slots.get("voucher_id") or slots.get("coupon_id")
     location = slots.get("location") or persistent.current_location
     if any(token in compact for token in ("营业", "开门", "开业", "还能去", "排队", "库存")):
@@ -1163,6 +1194,12 @@ def _build_tool_input(
     slots: Mapping[str, Any],
 ) -> dict[str, Any]:
     normalized = _normalize_text(turn.raw_query or routing.normalized_query)
+    explicit_shop = str(_explicit_entity_from_query(turn.raw_query or "") or "").strip() or None
+    compact = _compact_text(normalized)
+    recommendation_like = any(
+        token in compact
+        for token in ("附近", "周边", "推荐", "几家", "多推荐", "适合约会", "家庭聚餐", "安静", "不吵")
+    )
     
     raw_shop_id = slots.get("shop_id") or persistent.selected_shop_id
     shop_id = None
@@ -1187,18 +1224,18 @@ def _build_tool_input(
     if tool_name == "get_coupon_list":
         return {
             "shop_id": shop_id,
-            "shop_name": slots.get("shop_name") or persistent.current_shop or persistent.selected_shop_name or persistent.current_topic,
+            "shop_name": slots.get("shop_name") or explicit_shop or (None if recommendation_like else persistent.current_shop) or (None if recommendation_like else persistent.selected_shop_name) or persistent.current_topic,
             "voucher_id": slots.get("voucher_id"),
             "query": normalized,
         }
     if tool_name == "get_order_status":
         return {
             "shop_id": shop_id,
-            "shop_name": slots.get("shop_name") or persistent.current_shop or persistent.selected_shop_name or persistent.current_topic,
+            "shop_name": slots.get("shop_name") or explicit_shop or (None if recommendation_like else persistent.current_shop) or (None if recommendation_like else persistent.selected_shop_name) or persistent.current_topic,
             "query": normalized,
         }
     return {
         "shop_id": shop_id,
-        "shop_name": slots.get("shop_name") or persistent.current_shop or persistent.selected_shop_name or persistent.current_topic,
+        "shop_name": slots.get("shop_name") or explicit_shop or (None if recommendation_like else persistent.current_shop) or (None if recommendation_like else persistent.selected_shop_name) or persistent.current_topic,
         "query": normalized,
     }

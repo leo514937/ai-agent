@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from learning_agent_service.domain.utils import as_mapping as _as_mapping, clean_text as _clean_text, coerce_float as _coerce_float
+from .entity_resolver import _explicit_entity_from_query
 
 from .schemas import (
     ClarificationDecision,
@@ -95,6 +96,9 @@ def _extract_shop_query(text: str, session_context: Mapping[str, Any]) -> str | 
 
     compact = (text or "").strip()
     if compact:
+        explicit_entity = _explicit_entity_from_query(compact)
+        if explicit_entity:
+            return explicit_entity
         normalized = compact.rstrip("？?。.!！")
         pronoun_hits = ("这家", "这店", "这间", "它", "刚才那家", "刚才那个", "这商家", "这个商家")
         for pronoun in ("这家", "这店", "这间", "它", "刚才那家", "刚才那个", "这商家", "这个商家"):
@@ -234,6 +238,22 @@ def extract_slots(
     model_price = _as_mapping(model_hint.get("price"))
     text = (raw_query or "").strip()
     compact = text.replace(" ", "")
+    explicit_query_shop = _explicit_entity_from_query(text)
+    nearby_recommendation_like = any(
+        token in compact
+        for token in (
+            "闄勮繎",
+            "鍛ㄨ竟",
+            "鎺ㄨ崘",
+            "甯垜鎵?",
+            "鎵句竴瀹?",
+            "鎵句釜",
+            "鎯虫壘",
+            "闄勮繎鎺ㄨ崘",
+            "鍘诲摢",
+            "鍘诲摢鍎?",
+        )
+    )
 
     category = _extract_category(compact, session_context)
     shop_query = _extract_shop_query(text, session_context)
@@ -308,7 +328,11 @@ def extract_slots(
 
     if model_category:
         category = model_category
-    if model_shop_query:
+    if explicit_query_shop:
+        shop_query = explicit_query_shop
+    elif nearby_recommendation_like:
+        shop_query = None
+    elif model_shop_query:
         shop_query = model_shop_query
     if model_scene:
         scene = model_scene

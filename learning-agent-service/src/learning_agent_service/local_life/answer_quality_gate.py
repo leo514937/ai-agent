@@ -104,8 +104,7 @@ class AnswerQualityGate:
         expanded_by_quality_gate = False
         preserve_recommendation_draft = (
             style == "multi_shop_recommendation"
-            and "推荐理由" in candidate_text
-            and bool(re.search(r"^\s*\d+[.、]", candidate_text, flags=re.MULTILINE))
+            and ("推荐理由" in candidate_text or "推荐结果" in candidate_text or "推荐" in candidate_text)
         )
         preserve_structured_draft = any(
             token in candidate_text

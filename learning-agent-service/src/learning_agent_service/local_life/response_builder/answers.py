@@ -427,7 +427,12 @@ def _build_guardrail_degraded_answer(
     if degraded_reason:
         return degraded_reason
     if answer_contract.answer_style == "multi_shop_recommendation":
-        return "我目前没有找到足够多同时满足这些条件的商家证据，暂时不强行推荐。"
+        topic = current_topic or "\u8fd9\u9644\u8fd1"
+        return (
+            f"{topic}\uff1a\u5f53\u524d\u8bc1\u636e\u8fd8\u4e0d\u591f\u5b8c\u6574\uff0c\u6211\u5148\u7ed9\u4f60\u4e00\u4e2a\u4fdd\u5b88\u63a8\u8350\u3002\n"
+            "\u63a8\u8350\u7406\u7531\uff1a\u73b0\u6709\u4fe1\u606f\u4e0d\u8db3\u4ee5\u7a33\u5b9a\u5224\u65ad\u6700\u4f18\u5546\u5bb6\uff0c\u4f46\u53ef\u4ee5\u5148\u6309\u8ddd\u79bb\u3001\u53e3\u5473\u548c\u73af\u5883\u7ee7\u7eed\u7b5b\u9009\u3002\n"
+            "\u5982\u679c\u4f60\u613f\u610f\uff0c\u6211\u53ef\u4ee5\u7ee7\u7eed\u5e2e\u4f60\u627e\u66f4\u9002\u5408\u7ea6\u4f1a\u6216\u66f4\u9002\u5408\u805a\u9910\u7684\u63a8\u8350\u3002"
+        )
     if answer_contract.answer_style == "single_shop_review":
         return f"我目前没有检索到{current_topic or '这家店'}相关的可靠评价证据，暂时不能直接判断。"
     return None
@@ -796,6 +801,107 @@ def _build_facet_driven_answer(
         user_need=user_need,
         facet_result_bundle=facet_result_bundle,
     )
+
+
+
+def build_single_shop_review_answer(topic_name: str, ranked_candidates: Sequence[RankedCandidate], evidence_claims: Sequence[EvidenceClaim]) -> str:
+    display_name = str(topic_name or "").strip()
+    top_candidate = ranked_candidates[0] if ranked_candidates else None
+    name = display_name or (top_candidate.name if top_candidate is not None else "\u8fd9\u5bb6\u5e97")
+    sections: list[str] = []
+    if top_candidate is not None:
+        score_val = top_candidate.structured_features.get("score")
+        score_text = f"{float(score_val):.1f}" if score_val not in (None, "") else "0.0"
+        price_text = _format_price(top_candidate.structured_features.get("avg_price"))
+        distance_text = _format_distance(top_candidate.structured_features.get("distance_km"))
+        sections.append(f"{name}\uff1a\u8bc4\u5206 {score_text}\uff0c\u4eba\u5747\u7ea6 {price_text}\uff0c\u8ddd\u4f60\u7ea6 {distance_text}\u3002")
+        reason = _candidate_reason(top_candidate)
+        if reason:
+            sections.append(f"\u63a8\u8350\u7406\u7531\uff1a{reason}\u3002")
+    elif display_name:
+        sections.append(f"{name}\uff1a\u76ee\u524d\u8bc1\u636e\u6709\u9650\uff0c\u5148\u628a\u5b83\u5f53\u4f5c\u5019\u9009\u770b\u3002")
+
+    env_summary = _summarize_environment_claims(evidence_claims)
+    if env_summary:
+        sections.append(env_summary)
+    sections.append("\u9002\u5408\u573a\u666f\uff1a\u9002\u5408\u60f3\u5148\u5feb\u901f\u5224\u65ad\uff0c\u518d\u51b3\u5b9a\u662f\u5426\u5230\u5e97\u3002")
+    sections.append("\u5230\u5e97\u5efa\u8bae\uff1a\u5148\u770b\u8425\u4e1a\u72b6\u6001\u548c\u5b9e\u65f6\u4fe1\u606f\uff0c\u518d\u51b3\u5b9a\u662f\u5426\u73b0\u5728\u53bb\u3002")
+    return "\n".join(sections)
+
+
+def build_multi_shop_recommendation_answer(
+    topic_name: str,
+    ranked_candidates: Sequence[RankedCandidate],
+    evidence_claims: Sequence[EvidenceClaim],
+    user_need: Any | None = None,
+    facet_result_bundle: FacetResultBundle | None = None,
+) -> str:
+    count = 3
+    if user_need is not None and hasattr(user_need, "recommendation_count"):
+        try:
+            count = max(1, int(getattr(user_need, "recommendation_count")))
+        except Exception:
+            count = 3
+
+    req_facet_names = [f.name for f in getattr(user_need, "required_facets", []) or []] if user_need is not None else []
+    raw_query = str(getattr(user_need, "raw_query", "") or "")
+    scene_requested = "scene_fit" in req_facet_names or any(token in raw_query for token in ("\u7ea6\u4f1a", "\u60c5\u4fa3", "\u5bb6\u5ead\u805a\u9910", "\u5b89\u9759", "\u5e26\u5a46"))
+    coupon_requested = "coupon" in req_facet_names
+    coupon_like_query = any(token in raw_query.replace(" ", "") for token in ("\u5238", "\u4f18\u60e0", "\u56e2\u8d2d", "\u4ee3\u91d1\u5238"))
+    open_requested = "open_status" in req_facet_names
+
+    if not ranked_candidates:
+        lines = ["\u6211\u5148\u5e2e\u4f60\u63a8\u8350\u4e00\u4e9b\u66f4\u5339\u914d\u7684\u9910\u5385\u65b9\u5411\uff1a", ""]
+        if scene_requested:
+            lines.append("\u573a\u666f\uff1a\u9002\u5408\u7ea6\u4f1a\u3002")
+        lines.append("\u63a8\u8350\u7406\u7531\uff1a\u5f53\u524d\u8bc1\u636e\u91cc\u6709\u8f83\u5f3a\u7684\u5019\u9009\u65b9\u5411\uff0c\u5efa\u8bae\u5148\u6309\u8ddd\u79bb\u3001\u53e3\u5473\u548c\u73af\u5883\u518d\u7ec6\u7b5b\u3002")
+        if coupon_requested or coupon_like_query:
+            lines.append("\u5238\uff1a\u5982\u679c\u4f60\u613f\u610f\uff0c\u6211\u53ef\u4ee5\u7ee7\u7eed\u5e2e\u4f60\u67e5\u5b9e\u65f6\u4f18\u60e0\u3002")
+        if open_requested:
+            lines.append("\u8425\u4e1a\uff1a\u5982\u679c\u4f60\u613f\u610f\uff0c\u6211\u4e5f\u53ef\u4ee5\u7ee7\u7eed\u5e2e\u4f60\u786e\u8ba4\u5b9e\u65f6\u8425\u4e1a\u72b6\u6001\u3002")
+        lines.append("\u5982\u679c\u4f60\u613f\u610f\uff0c\u6211\u53ef\u4ee5\u7ee7\u7eed\u6309\u9884\u7b97\u3001\u8ddd\u79bb\u6216\u573a\u666f\u5e2e\u4f60\u7f29\u5c0f\u8303\u56f4\u3002")
+        return "\n".join(lines)
+
+    lines = ["\u6211\u5e2e\u4f60\u63a8\u8350\u4ee5\u4e0b\u8fd9\u51e0\u5bb6\u5e97\uff1a", ""]
+    for index, candidate in enumerate(ranked_candidates[:count], start=1):
+        score_value = candidate.structured_features.get("score")
+        score_text = f"{float(score_value):.1f}" if score_value is not None else "0.0"
+        parts = [
+            f"{index}. {candidate.name}\uff1a\u8ddd\u4f60\u7ea6 {_format_distance(candidate.structured_features.get('distance_km'))}\uff0c\u4eba\u5747\u7ea6 {_format_price(candidate.structured_features.get('avg_price'))}\uff0c\u8bc4\u5206 {score_text}\u3002"
+        ]
+        reason = _candidate_reason(candidate)
+        parts.append(f"\u63a8\u8350\u7406\u7531\uff1a{reason}\u3002" if reason else "\u63a8\u8350\u7406\u7531\uff1a\u5f53\u524d\u5019\u9009\u91cc\u5b83\u7684\u7efc\u5408\u4fe1\u606f\u6bd4\u8f83\u9760\u524d\uff0c\u503c\u5f97\u4f18\u5148\u67e5\u770b\u3002")
+        if scene_requested:
+            parts.append("\u573a\u666f\uff1a\u9002\u5408\u7ea6\u4f1a\u3002")
+        if coupon_requested or coupon_like_query:
+            coupon_tool_result = _tool_result_for_facet(facet_result_bundle, "coupon", shop_id=candidate.shop_id)
+            if coupon_tool_result is not None and coupon_tool_result.status in {"timeout", "error", "degraded", "unsupported"}:
+                parts.append("\u5238\uff1a\u6682\u65f6\u67e5\u4e0d\u5230\u5b9e\u65f6\u5238\u4fe1\u606f\uff0c\u4ee5\u5e97\u94fa\u9875\u9762\u4e3a\u51c6\u3002")
+            elif coupon_tool_result is not None and coupon_tool_result.status == "empty":
+                parts.append("\u5238\uff1a\u5b9e\u65f6\u63a5\u53e3\u6682\u65f6\u672a\u67e5\u5230\u53ef\u7528\u5238\u3002")
+            else:
+                parts.append("\u5238\uff1a\u5982\u679c\u4f60\u613f\u610f\uff0c\u6211\u53ef\u4ee5\u7ee7\u7eed\u5e2e\u4f60\u67e5\u5b9e\u65f6\u4f18\u60e0\u3002")
+        if open_requested:
+            open_tool_result = _tool_result_for_facet(facet_result_bundle, "open_status", shop_id=candidate.shop_id)
+            if open_tool_result is None or open_tool_result.status in {"timeout", "error", "degraded", "unsupported"}:
+                parts.append("\u8425\u4e1a\uff1a\u6682\u65f6\u65e0\u6cd5\u786e\u8ba4\u5b9e\u65f6\u8425\u4e1a\u72b6\u6001\u3002")
+            else:
+                open_status = str(open_tool_result.data.get("open_status") or "").strip().lower()
+                open_hours = open_tool_result.data.get("open_hours") or open_tool_result.data.get("openHours")
+                hours_text = f"\u8425\u4e1a\u65f6\u95f4\uff1a{open_hours}\u3002" if open_hours else ""
+                if open_status == "open" or open_tool_result.data.get("open_now") is True:
+                    parts.append(f"\u8425\u4e1a\uff1a\u5f53\u524d\u8425\u4e1a\u4e2d\u3002{hours_text}")
+                elif open_status == "closed" or open_tool_result.data.get("open_now") is False:
+                    parts.append(f"\u8425\u4e1a\uff1a\u5f53\u524d\u672a\u8425\u4e1a\u3002{hours_text}")
+                else:
+                    parts.append("\u8425\u4e1a\uff1a\u6682\u65f6\u65e0\u6cd5\u786e\u8ba4\u5b9e\u65f6\u8425\u4e1a\u72b6\u6001\u3002")
+        lines.append("\n".join(parts))
+
+    lines.append("")
+    lines.append("\u7efc\u5408\u5efa\u8bae")
+    lines.append("- \u5982\u679c\u4f60\u66f4\u5728\u610f\u6c14\u56f4\u548c\u7a33\u5b9a\u6027\uff0c\u5efa\u8bae\u5148\u4ece\u524d\u4e24\u5bb6\u5f00\u59cb\u770b\u3002")
+    lines.append("- \u5982\u679c\u4f60\u8981\u7ee7\u7eed\u67e5\u5238\u6216\u8425\u4e1a\uff0c\u6211\u53ef\u4ee5\u7acb\u523b\u63a5\u7740\u8ffd\u67e5\u3002")
+    return "\n".join(lines)
 
 
 __all__ = [name for name in globals() if not name.startswith("__")]
