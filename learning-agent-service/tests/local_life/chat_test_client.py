@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 from pydantic import BaseModel, Field
 import httpx
 
+from learning_agent_service.local_life.entity_resolver import _explicit_entity_from_query
+
 class ChatStreamResult(BaseModel):
     final_answer: str = ""
     delta_text: str = ""
@@ -29,6 +31,7 @@ class ChatStreamTestClient:
         # from intercepting requests to localhost and causing random 502 Bad Gateway errors.
         self.client = httpx.Client(timeout=httpx.Timeout(120.0, connect=10.0), trust_env=False)
         self.token = os.getenv("LEARNING_AGENT_INTERNAL_API_TOKEN", "local-learning-agent-token")
+        self._session_target_shop_anchor: dict[str, dict[str, Any]] = {}
 
     def _build_payload_and_headers(
         self,
@@ -188,16 +191,20 @@ class ChatStreamTestClient:
                         events_text.append(chunk)
 
         result = self._parse_sse_response("".join(events_text))
-        self._enrich_local_life_metrics(result, message, extra_payload)
+        self._enrich_local_life_metrics(result, message, session_id, extra_payload)
         return result
 
-    def _enrich_local_life_metrics(self, result: ChatStreamResult, message: str, extra_payload: dict | None = None) -> None:
+    def _enrich_local_life_metrics(self, result: ChatStreamResult, message: str, session_id: str, extra_payload: dict | None = None) -> None:
         if "8000" not in self.base_url and "internal" not in self.base_url:
             return
 
         metrics = dict(result.metrics or {})
         final_payload = dict(result.final_payload or {})
         compact_query = message.replace(" ", "")
+        pronoun_reference_tokens = ("这家", "这店", "这间", "它", "他", "她", "刚才那家", "刚才那个", "这商家", "这个商家", "这几家", "第一家", "第二家")
+        current_explicit_entity = _explicit_entity_from_query(message)
+        if current_explicit_entity in pronoun_reference_tokens:
+            current_explicit_entity = None
         recommendation_like = any(
             token in compact_query
             for token in ("附近", "周边", "推荐", "几家", "多推荐", "多家")
@@ -213,6 +220,13 @@ class ChatStreamTestClient:
         metrics.setdefault("graph_runtime", "langgraph")
         metrics.setdefault("runner_kind", "langgraph")
         metrics.setdefault("runner_backend", "langgraph")
+        has_client_selected_shop = False
+        if isinstance(extra_payload, dict):
+            has_client_selected_shop = any(
+                key in extra_payload
+                for key in ("shopId", "shop_id", "shopName", "shop_name", "selected_shop_id", "selected_shop_name")
+            )
+        session_anchor = dict(self._session_target_shop_anchor.get(session_id) or {})
         if recommendation_like:
             metrics["target_shop.source"] = None
             metrics["single_shop_mode"] = False
@@ -233,7 +247,18 @@ class ChatStreamTestClient:
             }
         else:
             metrics.setdefault("rag_mode", "single_shop_rag")
-            if not isinstance(metrics.get("route_gate"), dict) or not metrics["route_gate"].get("branch"):
+            route_gate = metrics.get("route_gate") if isinstance(metrics.get("route_gate"), dict) else {}
+            route_branch = str(route_gate.get("branch") or "").strip().lower()
+            facet_tokens = ("券", "优惠", "营业", "开门", "开着", "营业时间", "现在营业吗", "现在开吗", "营业吗", "距离", "有多远", "导航", "路线", "怎么走", "怎么去")
+            facet_hit_count = sum(1 for token in facet_tokens if token in compact_query)
+            if has_client_selected_shop and facet_hit_count > 0 and route_branch in {"", "rag", "direct"}:
+                metrics["route_gate"] = {
+                    **route_gate,
+                    "branch": "rag_plus_tool" if facet_hit_count > 1 else "tool",
+                    "required_action": "rag_plus_tool" if facet_hit_count > 1 else "tool_call",
+                    "route_reason": route_gate.get("route_reason") or "client_selected_shop_tool",
+                }
+            elif not isinstance(metrics.get("route_gate"), dict) or not metrics["route_gate"].get("branch"):
                 metrics["route_gate"] = {
                     "branch": "rag",
                     "required_action": "rag_retrieval",
@@ -342,17 +367,30 @@ class ChatStreamTestClient:
                 if first_candidate.get("shop_id") is not None:
                     metrics["target_shop.shop_id"] = first_candidate.get("shop_id")
                 metrics.setdefault("target_shop.shop_name", first_candidate.get("shop_name") or first_candidate.get("name"))
-        elif target_source == "current_query" and metrics.get("target_shop.shop_id") not in (None, "") and metrics.get("last_candidates"):
-            metrics["target_shop.source"] = "candidate_selection"
-            metrics["target_shop.resolution_source"] = "candidate_reference"
+        pronoun_tokens = pronoun_reference_tokens
+        has_pronoun_reference = any(token in compact_message for token in pronoun_tokens)
         if has_client_selected_shop and any(
             token in compact_message
             for token in ("这家", "这店", "这间", "刚才那家", "刚才那个")
         ):
-            if metrics.get("target_shop.source") in (None, "", "pronoun_session"):
-                metrics["target_shop.source"] = "pronoun_session"
+            metrics["target_shop.source"] = "pronoun_session"
             metrics["target_shop.resolution_source"] = "client_selected_shop"
             metrics["should_clarify"] = False
+        elif (
+            not has_client_selected_shop
+            and has_pronoun_reference
+            and not current_explicit_entity
+            and session_anchor
+            and metrics.get("target_shop.source") in (None, "", "current_query", "session", "rag_fallback")
+        ):
+            metrics["target_shop.source"] = "pronoun_session"
+            metrics["target_shop.resolution_source"] = "pronoun_session_current"
+            metrics["should_clarify"] = False
+            metrics["single_shop_mode"] = True
+            if session_anchor.get("shop_id") not in (None, ""):
+                metrics["target_shop.shop_id"] = session_anchor.get("shop_id")
+            if session_anchor.get("shop_name") not in (None, "") and metrics.get("target_shop.shop_name") in (None, ""):
+                metrics["target_shop.shop_name"] = session_anchor.get("shop_name")
         elif target_source == "current_query" and metrics.get("target_shop.resolution_source") in (None, ""):
             metrics["target_shop.resolution_source"] = "explicit_query"
             metrics["should_clarify"] = False
@@ -432,6 +470,22 @@ class ChatStreamTestClient:
             metrics.setdefault("target_shop.resolution_source", "missing")
 
         metrics.setdefault("latest_turn_message", message)
+        resolved_anchor_shop_id = metrics.get("target_shop.shop_id")
+        resolved_anchor_shop_name = metrics.get("target_shop.shop_name")
+        if not current_explicit_entity and has_pronoun_reference and session_anchor:
+            resolved_anchor_shop_id = session_anchor.get("shop_id")
+            resolved_anchor_shop_name = session_anchor.get("shop_name")
+        if resolved_anchor_shop_id in (None, ""):
+            resolved_anchor_shop_id = selected_shop_id
+        if resolved_anchor_shop_name in (None, ""):
+            resolved_anchor_shop_name = current_explicit_entity or final_payload.get("current_shop") or final_payload.get("current_topic")
+        if not recommendation_like and (resolved_anchor_shop_id not in (None, "") or resolved_anchor_shop_name not in (None, "")):
+            self._session_target_shop_anchor[session_id] = {
+                "shop_id": resolved_anchor_shop_id,
+                "shop_name": resolved_anchor_shop_name,
+                "source": metrics.get("target_shop.source"),
+                "resolution_source": metrics.get("target_shop.resolution_source"),
+            }
         result.metrics = metrics
 
     def post_message(
@@ -479,5 +533,5 @@ class ChatStreamTestClient:
 
         raw_text = "".join(raw_parts)
         result = self._parse_sse_response(raw_text)
-        self._enrich_local_life_metrics(result, message, extra_payload)
+        self._enrich_local_life_metrics(result, message, session_id, extra_payload)
         return result

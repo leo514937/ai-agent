@@ -25,7 +25,7 @@ class RoutingTraceContractTestCase(unittest.TestCase):
                 "phase0_trace": {"input": {"query": "附近有什么推荐"}, "output": {"harness_mode": "off"}},
                 "phase5_trace": StageTrace(output={"runner_kind": "langgraph"}, duration_ms=12.5),
             },
-            final_decision={"required_action": "clarify"},
+            final_decision={"required_action": "clarify", "execution_mode": "clarify"},
         )
         payload = routing_trace_to_dict(trace)
 
@@ -33,6 +33,7 @@ class RoutingTraceContractTestCase(unittest.TestCase):
         self.assertEqual(trace.session_id, "session-1")
         self.assertEqual(trace.turn_id, "turn-1")
         self.assertEqual(trace.trace_id, "trace-1")
+        self.assertEqual(payload["execution_mode"], "clarify")
         self.assertEqual(payload["stages"]["phase0_trace"]["output"], {"harness_mode": "off"})
         self.assertEqual(payload["stages"]["phase5_trace"]["output"], {"runner_kind": "langgraph"})
         self.assertEqual(payload["final_decision"]["required_action"], "clarify")
@@ -44,6 +45,7 @@ class RoutingTraceContractTestCase(unittest.TestCase):
             should_call_tool=False,
             route_candidate="local_life.recommend",
             intent=IntentRoutingDecision(name="local_life_recommend", confidence=0.88),
+            execution_mode="standard",
         )
         state = SimpleNamespace(
             turn=SimpleNamespace(
@@ -67,6 +69,7 @@ class RoutingTraceContractTestCase(unittest.TestCase):
 
         self.assertEqual(payload["query"], "附近有什么推荐")
         self.assertEqual(payload["trace_id"], "trace-2")
+        self.assertEqual(payload["execution_mode"], "standard")
         self.assertEqual(payload["stages"]["phase0_trace"]["output"]["harness_mode"], "off")
         self.assertEqual(payload["stages"]["phase3_trace"]["output"]["task_plan_status"], "synthesized")
         self.assertEqual(payload["stages"]["phase5_trace"]["output"]["runner_kind"], "sequential")

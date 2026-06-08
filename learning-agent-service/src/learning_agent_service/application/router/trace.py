@@ -21,6 +21,7 @@ class RoutingTrace:
     turn_id: str
     timestamp: str
     trace_id: str | None = None
+    execution_mode: str | None = None
     stages: dict[str, StageTrace] = field(default_factory=dict)
     final_decision: dict[str, Any] = field(default_factory=dict)
     ground_truth: dict[str, Any] | None = None
@@ -68,15 +69,19 @@ def build_routing_trace(
     ground_truth: Mapping[str, Any] | None = None,
     is_correct: bool | None = None,
     timestamp: str | None = None,
+    execution_mode: str | None = None,
 ) -> RoutingTrace:
+    final_decision_map = dict(final_decision or {})
+    normalized_execution_mode = str(execution_mode or final_decision_map.get("execution_mode") or "").strip() or None
     return RoutingTrace(
         query=str(query or ""),
         session_id=str(session_id or ""),
         turn_id=str(turn_id or ""),
         trace_id=(str(trace_id).strip() or None) if trace_id is not None else None,
+        execution_mode=normalized_execution_mode,
         timestamp=timestamp or datetime.now(timezone.utc).isoformat(),
         stages={str(key): _stage_trace_from_value(value) for key, value in dict(stages or {}).items()},
-        final_decision=dict(final_decision or {}),
+        final_decision=final_decision_map,
         ground_truth=_mapping_or_none(ground_truth),
         is_correct=is_correct,
     )
@@ -120,6 +125,7 @@ def build_routing_trace_from_state(
         final_decision=_mapping_or_none(routing) or {},
         ground_truth=ground_truth,
         is_correct=is_correct,
+        execution_mode=str(getattr(routing, "execution_mode", "") or turn_extra.get("execution_mode") or "").strip() or None,
     )
 
 
@@ -153,4 +159,5 @@ def build_routing_trace_from_metrics(
         ground_truth=ground_truth,
         is_correct=is_correct,
         timestamp=timestamp,
+        execution_mode=str((final_decision or {}).get("execution_mode") or metrics_map.get("execution_mode") or "").strip() or None,
     )

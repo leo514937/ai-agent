@@ -762,6 +762,7 @@ def build_response_bundle(
         metrics.setdefault("answer_style", None)
     if recommendation_like_query:
         metrics["answer_style"] = "multi_shop_recommendation"
+    route_decision_normalized = str(route_decision or "").strip().lower()
     if recommendation_like_query or metrics.get("answer_style") == "multi_shop_recommendation":
         metrics["rag_mode"] = "recommendation_rag"
         metrics.setdefault(
@@ -771,6 +772,36 @@ def build_response_bundle(
                 "required_action": "rag_plus_tool",
                 "route_candidate": None,
                 "route_reason": None,
+            },
+        )
+    elif route_decision_normalized == "clarify":
+        metrics.setdefault(
+            "route_gate",
+            {
+                "branch": "clarify",
+                "required_action": "clarify",
+                "route_candidate": None,
+                "route_reason": route_reason,
+            },
+        )
+    elif route_decision_normalized == "rag_plus_tool":
+        metrics.setdefault(
+            "route_gate",
+            {
+                "branch": "rag_plus_tool",
+                "required_action": "rag_plus_tool",
+                "route_candidate": None,
+                "route_reason": route_reason,
+            },
+        )
+    elif route_decision_normalized == "tool_call":
+        metrics.setdefault(
+            "route_gate",
+            {
+                "branch": "tool",
+                "required_action": "tool_call",
+                "route_candidate": None,
+                "route_reason": route_reason,
             },
         )
     elif selected_shop_id is not None:

@@ -547,7 +547,30 @@ class LocalLifeStreamComposeMixin:
             }
         else:
             state.metrics.setdefault("rag_mode", "single_shop_rag")
-            if "route_gate" not in state.metrics:
+            route_gate_current = state.metrics.get("route_gate") if isinstance(state.metrics.get("route_gate"), Mapping) else {}
+            route_decision_normalized = str(bundle.route_decision or state.route_decision or route_gate_current.get("required_action") or "").strip().lower()
+            if route_decision_normalized == "clarify":
+                state.metrics["route_gate"] = {
+                    "branch": "clarify",
+                    "required_action": "clarify",
+                    "route_candidate": route_gate_current.get("route_candidate"),
+                    "route_reason": route_gate_current.get("route_reason") or state.route_reason,
+                }
+            elif route_decision_normalized == "rag_plus_tool":
+                state.metrics["route_gate"] = {
+                    "branch": "rag_plus_tool",
+                    "required_action": "rag_plus_tool",
+                    "route_candidate": route_gate_current.get("route_candidate"),
+                    "route_reason": route_gate_current.get("route_reason") or state.route_reason,
+                }
+            elif route_decision_normalized == "tool_call" or (facet_keyword_query and selected_shop_id is not None):
+                state.metrics["route_gate"] = {
+                    "branch": "tool",
+                    "required_action": "tool_call",
+                    "route_candidate": route_gate_current.get("route_candidate"),
+                    "route_reason": route_gate_current.get("route_reason") or state.route_reason,
+                }
+            elif "route_gate" not in state.metrics:
                 state.metrics["route_gate"] = {
                     "branch": "rag",
                     "required_action": "rag_retrieval",
@@ -653,7 +676,10 @@ class LocalLifeStreamComposeMixin:
             session_id=command.session_id,
             turn_id=command.turn_id,
             workflow_version=self.settings.workflow_version,
-            payload=bundle.model_dump(mode="json"),
+            payload={
+                **bundle.model_dump(mode="json"),
+                "answer_text": getattr(bundle, "answer_text", None) or getattr(state, "answer_text", None) or "",
+            },
         )
         return bundle
 

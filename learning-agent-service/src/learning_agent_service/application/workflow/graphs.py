@@ -6,9 +6,11 @@ from typing import Any
 
 from ...domain.contracts import Citation, EvidencePack, EvidenceItem
 from ...domain.state import GraphState, clone_graph_state
-from .services import RagSubgraphServices, ToolSubgraphServices
+from .services import PlanExecuteSubgraphServices, RagSubgraphServices, ToolSubgraphServices
 from .state import append_runtime_error as _append_state_runtime_error
 from .subgraphs import (
+    _ensure_plan_progress_state,
+    _ensure_plan_summary,
     _ensure_rag_result,
     _ensure_raw_tool_result,
     _ensure_tool_result,
@@ -18,6 +20,7 @@ from .subgraphs import (
     _tool_stage_detail,
     can_enter_retrieval,
     route_after_rag,
+    route_after_rag_graph,
     should_run_tools,
 )
 
@@ -53,13 +56,39 @@ _RAG_TOPOLOGY = _GraphTopology(
     terminal="END",
     nodes=(
         "build_retrieval_plan",
-        "execute_rag_pipeline",
+        "recall_rag",
+        "filter_rag",
+        "rerank_rag",
+        "build_evidence_pack",
         "finalize_rag",
     ),
     edges=(
-        ("build_retrieval_plan", "execute_rag_pipeline"),
-        ("execute_rag_pipeline", "finalize_rag"),
+        ("build_retrieval_plan", "recall_rag"),
+        ("recall_rag", "filter_rag"),
+        ("filter_rag", "rerank_rag"),
+        ("rerank_rag", "build_evidence_pack"),
+        ("build_evidence_pack", "finalize_rag"),
         ("finalize_rag", "END"),
+    ),
+)
+
+_PLAN_EXECUTE_TOPOLOGY = _GraphTopology(
+    entry_point="planner_node",
+    terminal="END",
+    nodes=(
+        "planner_node",
+        "plan_executor",
+        "collect_step_result",
+        "complex_review",
+        "finalize_plan_execute",
+    ),
+    edges=(
+        ("planner_node", "plan_executor"),
+        ("plan_executor", "collect_step_result"),
+        ("collect_step_result", "complex_review"),
+        ("complex_review", "plan_executor"),
+        ("complex_review", "finalize_plan_execute"),
+        ("finalize_plan_execute", "END"),
     ),
 )
 
@@ -97,6 +126,49 @@ _RECOMMENDATION_TOPOLOGY = _GraphTopology(
     ),
 )
 
+_MAIN_TOPOLOGY = _GraphTopology(
+    entry_point="load_context",
+    terminal="END",
+    nodes=(
+        "load_context",
+        "understand_turn",
+        "rule_review",
+        "route_gate",
+        "plan_execute_subgraph",
+        "rag_subgraph",
+        "recommendation_subgraph",
+        "tool_subgraph",
+        "merge_rank_node",
+        "contract_review",
+        "compose_answer",
+        "persist_session",
+        "emit_final",
+    ),
+    edges=(
+        ("START", "load_context"),
+        ("load_context", "understand_turn"),
+        ("load_context", "compose_answer"),
+        ("understand_turn", "rule_review"),
+        ("understand_turn", "compose_answer"),
+        ("rule_review", "route_gate"),
+        ("route_gate", "compose_answer"),
+        ("route_gate", "tool_subgraph"),
+        ("route_gate", "rag_subgraph"),
+        ("route_gate", "recommendation_subgraph"),
+        ("route_gate", "plan_execute_subgraph"),
+        ("rag_subgraph", "tool_subgraph"),
+        ("rag_subgraph", "merge_rank_node"),
+        ("recommendation_subgraph", "merge_rank_node"),
+        ("tool_subgraph", "merge_rank_node"),
+        ("plan_execute_subgraph", "merge_rank_node"),
+        ("merge_rank_node", "contract_review"),
+        ("contract_review", "compose_answer"),
+        ("compose_answer", "persist_session"),
+        ("persist_session", "emit_final"),
+        ("emit_final", "END"),
+    ),
+)
+
 _GRAPH_CACHE: dict[tuple[str, int], Any] = {}
 _RECOMMENDATION_BRANCH_CACHE: dict[str, GraphState] = {}
 
@@ -120,7 +192,7 @@ def _prepare_rag(state: GraphState) -> GraphState:
     return clone_graph_state(state)
 
 
-def _execute_rag_pipeline(state: GraphState, services: RagSubgraphServices) -> GraphState:
+def _recall_rag(state: GraphState, services: RagSubgraphServices) -> GraphState:
     contract = state["turn"].routing_contract
     rag_allowed = contract.rag_allowed if contract is not None else can_enter_retrieval(state).allowed
     if not rag_allowed:
@@ -140,6 +212,70 @@ def _execute_rag_pipeline(state: GraphState, services: RagSubgraphServices) -> G
             route_reason=str(state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])),
             detail={"evidence_count": len(state["turn"].evidence_pack.items) if state["turn"].evidence_pack else 0},
         )
+    except Exception:
+        pass
+    return state
+
+
+def _filter_rag(state: GraphState) -> GraphState:
+    state = _ensure_rag_result(state)
+    try:
+        state = state
+        state = _filter_evidence_by_contract(state)
+    except Exception:
+        pass
+    return state
+
+
+def _rerank_rag(state: GraphState) -> GraphState:
+    turn = state["turn"]
+    evidence_pack = getattr(turn, "evidence_pack", None)
+    if evidence_pack is None or not getattr(evidence_pack, "items", None):
+        return state
+
+    items = list(getattr(evidence_pack, "items", []) or [])
+    strong_items = sorted(
+        [item for item in items if str(getattr(item, "tier", "strong") or "strong").strip().lower() != "weak"],
+        key=lambda item: float(getattr(item, "score", 0.0) or 0.0),
+        reverse=True,
+    )
+    weak_items = sorted(
+        [item for item in items if str(getattr(item, "tier", "strong") or "strong").strip().lower() == "weak"],
+        key=lambda item: float(getattr(item, "score", 0.0) or 0.0),
+        reverse=True,
+    )
+    sorted_items = [*strong_items, *weak_items]
+    top_scores = [float(getattr(item, "score", 0.0) or 0.0) for item in sorted_items[:5]]
+    state["turn"] = turn.model_copy(
+        update={
+            "evidence_pack": evidence_pack.model_copy(
+                update={
+                    "items": sorted_items,
+                    "strong_items": strong_items,
+                    "weak_items": weak_items,
+                    "top_scores": top_scores,
+                }
+            )
+        }
+    )
+    return state
+
+
+def _build_evidence_pack(state: GraphState, services: RagSubgraphServices) -> GraphState:
+    try:
+        state = services.citation_builder(state)
+    except Exception:
+        pass
+    return _ensure_rag_result(state)
+
+
+def _execute_rag_pipeline(state: GraphState, services: RagSubgraphServices) -> GraphState:
+    try:
+        state = _recall_rag(state, services)
+        state = _filter_rag(state)
+        state = _rerank_rag(state)
+        state = _build_evidence_pack(state, services)
+        return state
     except Exception as exc:  # pragma: no cover - exercised via integration tests
         import logging
 
@@ -187,6 +323,75 @@ def _execute_rag_pipeline(state: GraphState, services: RagSubgraphServices) -> G
 
 def _finalize_rag(state: GraphState) -> GraphState:
     return _ensure_rag_result(state)
+
+
+def _prepare_plan_execute(state: GraphState) -> GraphState:
+    return clone_graph_state(state)
+
+
+def _planner_node(state: GraphState, services: PlanExecuteSubgraphServices) -> GraphState:
+    turn = state["turn"]
+    if turn.task_plan is None and turn.execution_mode != "plan_execute" and not (
+        turn.execution_mode == "auto"
+        and (
+            turn.task_complexity == "complex"
+            or turn.need_human_approval
+            or turn.risk_level in {"medium", "high"}
+        )
+    ):
+        return state
+
+    state = _mark_stage(state, "plan_execute", "running", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])))
+    state = services.plan_planner(state)
+    state = _ensure_plan_progress_state(state)
+    state = services.plan_validator(state)
+    return state
+
+
+def _plan_executor(state: GraphState, services: PlanExecuteSubgraphServices) -> GraphState:
+    state = services.step_executor(state)
+    state = _ensure_plan_progress_state(state)
+    return state
+
+
+def _collect_step_result(state: GraphState, services: PlanExecuteSubgraphServices) -> GraphState:
+    state = _ensure_plan_progress_state(state)
+    state = services.progress_checker(state)
+    return state
+
+
+def _complex_review(state: GraphState, services: PlanExecuteSubgraphServices) -> GraphState:
+    state = services.plan_reviewer(state)
+    turn = state["turn"]
+    if turn.need_human_approval:
+        state = services.human_approval_stub(state)
+        state = _mark_stage(state, "plan_execute", "blocked", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].replan_reason or state["turn"].approval_request.get("reason") or "need_human_approval"))
+        return state
+
+    if turn.need_replan:
+        state = services.replanner(state)
+        state = _ensure_plan_progress_state(state)
+        if state["turn"].need_replan:
+            state = services.plan_reviewer(state)
+            state = _mark_stage(state, "plan_execute", "blocked", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].replan_reason or "need_replan"))
+            return state
+        return state
+
+    return state
+
+
+def _finalize_plan_execute(state: GraphState) -> GraphState:
+    state = _mark_stage(state, "plan_execute", "completed", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])))
+    summary = state["turn"].final_task_summary
+    state = _update_phase3_trace(
+        state,
+        task_plan_execution_status=getattr(summary, "status", "completed") if summary is not None else "completed",
+        task_plan_completed_steps=getattr(summary, "completed_steps", 0) if summary is not None else len([result for result in state["turn"].step_results if result.status == "success"]),
+        task_plan_total_steps=getattr(summary, "total_steps", 0) if summary is not None else len(state["turn"].plan),
+        task_plan_final_decision=getattr(summary, "final_decision", None) if summary is not None else state["turn"].final_answer,
+        task_plan_step_results=len(state["turn"].step_results),
+    )
+    return _ensure_plan_summary(state)
 
 
 def _prepare_tool(state: GraphState) -> GraphState:
@@ -505,15 +710,109 @@ def _finalize_recommendation(state: GraphState) -> GraphState:
     }
 
 
+def _score_key(item: Any) -> float:
+    if isinstance(item, dict):
+        return float(item.get("score", 0.0) or 0.0)
+    return float(getattr(item, "score", 0.0) or 0.0)
+
+
+def _rule_review(state: GraphState) -> GraphState:
+    turn = state["turn"]
+    turn_extra = dict(turn.extra)
+    turn_extra["rule_review"] = {
+        "reviewed": True,
+        "current_action": str(getattr(turn.routing_decision, "required_action", "") or "").strip().lower() if getattr(turn, "routing_decision", None) is not None else None,
+        "route_review_decision": dict(turn_extra.get("route_review_decision") or {}),
+    }
+    state["turn"] = turn.model_copy(update={"extra": turn_extra})
+    return _mark_stage(
+        state,
+        "rule_review",
+        "completed",
+        route_decision=_route_decision_for_turn(state["turn"]),
+        route_reason=str(turn_extra.get("route_reason") or _route_decision_for_turn(state["turn"])),
+        detail=turn_extra["rule_review"],
+    )
+
+
+def _merge_rank_node(state: GraphState) -> GraphState:
+    turn = state["turn"]
+    turn_extra = dict(turn.extra)
+    ranked_candidates = list(turn_extra.get("ranked_candidates") or [])
+    evidence_claims = list(turn_extra.get("evidence_claims") or [])
+    ranked_candidates = sorted(ranked_candidates, key=_score_key, reverse=True)
+    evidence_claims = sorted(evidence_claims, key=_score_key, reverse=True)
+    turn_extra["ranked_candidates"] = ranked_candidates
+    turn_extra["evidence_claims"] = evidence_claims
+    turn_extra["merge_rank_node"] = {
+        "reviewed": True,
+        "ranked_candidate_count": len(ranked_candidates),
+        "evidence_claim_count": len(evidence_claims),
+        "top_candidate": (ranked_candidates[0].get("name") if ranked_candidates and isinstance(ranked_candidates[0], dict) else getattr(ranked_candidates[0], "name", None)) if ranked_candidates else None,
+    }
+    state["turn"] = turn.model_copy(update={"extra": turn_extra})
+    return _mark_stage(
+        state,
+        "merge_rank",
+        "completed",
+        route_decision=_route_decision_for_turn(state["turn"]),
+        route_reason=str(turn_extra.get("route_reason") or _route_decision_for_turn(state["turn"])),
+        detail=turn_extra["merge_rank_node"],
+    )
+
+
+def _contract_review(state: GraphState) -> GraphState:
+    turn = state["turn"]
+    turn_extra = dict(turn.extra)
+    turn_extra["contract_review"] = {
+        "reviewed": True,
+        "branch": str(turn_extra.get("route_gate", {}).get("branch") or "").strip().lower() or None,
+        "target_shop_id": turn_extra.get("target_shop_id"),
+        "route_candidate": turn_extra.get("route_candidate"),
+    }
+    state["turn"] = turn.model_copy(update={"extra": turn_extra})
+    return _mark_stage(
+        state,
+        "contract_review",
+        "completed",
+        route_decision=_route_decision_for_turn(state["turn"]),
+        route_reason=str(turn_extra.get("route_reason") or _route_decision_for_turn(state["turn"])),
+        detail=turn_extra["contract_review"],
+    )
+
+
 def _build_rag_graph(services: RagSubgraphServices):
     graph = StateGraph(GraphState)  # type: ignore[type-var]
     graph.add_node("build_retrieval_plan", _prepare_rag)
-    graph.add_node("execute_rag_pipeline", lambda state: _execute_rag_pipeline(state, services))
+    graph.add_node("recall_rag", lambda state: _recall_rag(state, services))
+    graph.add_node("filter_rag", _filter_rag)
+    graph.add_node("rerank_rag", _rerank_rag)
+    graph.add_node("build_evidence_pack", lambda state: _build_evidence_pack(state, services))
     graph.add_node("finalize_rag", _finalize_rag)
     graph.set_entry_point("build_retrieval_plan")
-    graph.add_edge("build_retrieval_plan", "execute_rag_pipeline")
-    graph.add_edge("execute_rag_pipeline", "finalize_rag")
+    graph.add_edge("build_retrieval_plan", "recall_rag")
+    graph.add_edge("recall_rag", "filter_rag")
+    graph.add_edge("filter_rag", "rerank_rag")
+    graph.add_edge("rerank_rag", "build_evidence_pack")
+    graph.add_edge("build_evidence_pack", "finalize_rag")
     graph.add_edge("finalize_rag", END)
+    return graph.compile()
+
+
+def _build_plan_execute_graph(services: PlanExecuteSubgraphServices):
+    graph = StateGraph(GraphState)  # type: ignore[type-var]
+    graph.add_node("planner_node", _prepare_plan_execute)
+    graph.add_node("plan_executor", lambda state: _plan_executor(state, services))
+    graph.add_node("collect_step_result", lambda state: _collect_step_result(state, services))
+    graph.add_node("complex_review", lambda state: _complex_review(state, services))
+    graph.add_node("finalize_plan_execute", _finalize_plan_execute)
+    graph.set_entry_point("planner_node")
+    graph.add_edge("planner_node", "plan_executor")
+    graph.add_edge("plan_executor", "collect_step_result")
+    graph.add_edge("collect_step_result", "complex_review")
+    graph.add_edge("complex_review", "plan_executor")
+    graph.add_edge("complex_review", "finalize_plan_execute")
+    graph.add_edge("finalize_plan_execute", END)
     return graph.compile()
 
 
@@ -556,6 +855,10 @@ def build_rag_graph(services: RagSubgraphServices):
     return _graph_cached("rag", services, lambda: _build_rag_graph(services))
 
 
+def build_plan_execute_graph(services: PlanExecuteSubgraphServices):
+    return _graph_cached("plan_execute", services, lambda: _build_plan_execute_graph(services))
+
+
 def build_tool_graph(services: ToolSubgraphServices):
     return _graph_cached("tool", services, lambda: _build_tool_graph(services))
 
@@ -564,12 +867,30 @@ def build_recommendation_graph(services: RagSubgraphServices):
     return _graph_cached("recommendation", services, lambda: _build_recommendation_graph(services))
 
 
+def describe_langgraph_topology() -> dict[str, Any]:
+    return {
+        "entry_point": _MAIN_TOPOLOGY.entry_point,
+        "terminal": _MAIN_TOPOLOGY.terminal,
+        "nodes": list(_MAIN_TOPOLOGY.nodes),
+        "edges": [tuple(edge) for edge in _MAIN_TOPOLOGY.edges],
+    }
+
+
 def describe_rag_graph_topology() -> dict[str, Any]:
     return {
         "entry_point": _RAG_TOPOLOGY.entry_point,
         "terminal": _RAG_TOPOLOGY.terminal,
         "nodes": list(_RAG_TOPOLOGY.nodes),
         "edges": [tuple(edge) for edge in _RAG_TOPOLOGY.edges],
+    }
+
+
+def describe_plan_execute_graph_topology() -> dict[str, Any]:
+    return {
+        "entry_point": _PLAN_EXECUTE_TOPOLOGY.entry_point,
+        "terminal": _PLAN_EXECUTE_TOPOLOGY.terminal,
+        "nodes": list(_PLAN_EXECUTE_TOPOLOGY.nodes),
+        "edges": [tuple(edge) for edge in _PLAN_EXECUTE_TOPOLOGY.edges],
     }
 
 
@@ -594,6 +915,20 @@ def describe_recommendation_graph_topology() -> dict[str, Any]:
 def export_rag_graph_mermaid() -> str:
     lines = ["graph TD"]
     for left, right in _RAG_TOPOLOGY.edges:
+        lines.append(f"  {left} --> {right}")
+    return "\n".join(lines)
+
+
+def export_langgraph_mermaid() -> str:
+    lines = ["graph TD"]
+    for left, right in _MAIN_TOPOLOGY.edges:
+        lines.append(f"  {left} --> {right}")
+    return "\n".join(lines)
+
+
+def export_plan_execute_graph_mermaid() -> str:
+    lines = ["graph TD"]
+    for left, right in _PLAN_EXECUTE_TOPOLOGY.edges:
         lines.append(f"  {left} --> {right}")
     return "\n".join(lines)
 

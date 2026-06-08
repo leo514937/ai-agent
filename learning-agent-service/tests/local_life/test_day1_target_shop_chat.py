@@ -70,6 +70,24 @@ class Day1TargetShopChatTestCase(unittest.TestCase):
         self.assertNotIn("海底捞水晶城", result2.final_answer)
         self.assertEqual(result2.metrics.get("target_shop.source"), "current_query")
 
+    def test_day1_2b_multi_turn_override_preserves_explicit_resolution_source(self) -> None:
+        """Case D1-2b: 多轮显式新商铺覆盖旧商铺时，保留 explicit_query 指标"""
+        session_id = f"day1-switch-shop-resolution-{uuid4().hex[:8]}"
+
+        self.client.post_message(
+            message="海底捞水晶城店怎么样？",
+            session_id=session_id
+        )
+        result2 = self.client.post_message(
+            message="巴奴毛肚火锅怎么样？",
+            session_id=session_id
+        )
+
+        self.assertIn("巴奴", result2.final_answer)
+        self.assertNotIn("海底捞水晶城", result2.final_answer)
+        self.assertEqual(result2.metrics.get("target_shop.source"), "current_query")
+        self.assertEqual(result2.metrics.get("target_shop.resolution_source"), "explicit_query")
+
     def test_day1_3_pronoun_inheritance(self) -> None:
         """Case D1-3: 指代词继承旧商铺"""
         session_id = f"day1-pronoun-{uuid4().hex[:8]}"

@@ -596,7 +596,10 @@ class LocalLifeStreamLoadMixin:
                 session_id=command.session_id,
                 turn_id=command.turn_id,
                 workflow_version=self.settings.workflow_version,
-                payload=bundle.model_dump(mode="json"),
+                payload={
+                    **bundle.model_dump(mode="json"),
+                    "answer_text": getattr(bundle, "answer_text", None) or getattr(state, "answer_text", None) or "",
+                },
             )
             return
         ctx.persistent = persistent
