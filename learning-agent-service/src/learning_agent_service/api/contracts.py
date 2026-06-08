@@ -651,4 +651,14 @@ class ForkRequest(BaseModel):
 def validate_event_payload(event_type: EventType | str, payload: dict[str, Any]) -> dict[str, Any]:
     normalized_event = event_type if isinstance(event_type, EventType) else EventType(event_type)
     model = EVENT_PAYLOAD_MODELS[normalized_event]
-    return model.model_validate(payload).model_dump(mode="json")
+    normalized_payload = dict(payload or {})
+    if normalized_event == EventType.FINAL and "answer_text" not in normalized_payload:
+        context = normalized_payload.get("context")
+        context_map = context if isinstance(context, dict) else {}
+        normalized_payload["answer_text"] = (
+            normalized_payload.get("answer_text")
+            or context_map.get("answer_text")
+            or context_map.get("final_answer")
+            or ""
+        )
+    return model.model_validate(normalized_payload).model_dump(mode="json")

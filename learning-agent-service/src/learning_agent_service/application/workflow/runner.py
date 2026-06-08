@@ -22,6 +22,9 @@ from .state import append_runtime_event as _append_state_runtime_event
 from .state import append_stage_timeline_entry as _append_stage_timeline_entry
 from .services import WorkflowServices
 from .subgraphs import (
+    run_contract_review_node,
+    run_merge_rank_node,
+    run_rule_review_node,
     route_after_rag,
     route_after_understand,
     route_decider,
@@ -158,6 +161,15 @@ class SequentialWorkflowRunner:
             state,
         )
         next_stage = route_after_understand(state)
+        if next_stage == "rule_review":
+            state = self._invoke_stage(
+                "rule_review",
+                lambda current: run_rule_review_node(current),
+                state,
+            )
+            if self._is_terminal(state):
+                return self._finalize_terminal(state)
+            next_stage = "route_gate"
         if next_stage == "emit_final":
             persistent = state["persistent"]
             if getattr(persistent, "pending_clarification", None) is not None:
@@ -166,6 +178,7 @@ class SequentialWorkflowRunner:
                     return self._finalize_terminal(state)
             return self._finalize_terminal(state, default_terminal=TerminalEvent.FINAL)
 
+        post_review_required = False
         if next_stage == "plan_execute_subgraph":
             state = self._invoke_stage(
                 "plan_execute_subgraph",
@@ -174,6 +187,7 @@ class SequentialWorkflowRunner:
             )
             if self._is_terminal(state):
                 return self._finalize_terminal(state)
+            post_review_required = True
         elif next_stage == "rag_subgraph":
             state = self._invoke_stage(
                 "rag_subgraph",
@@ -191,6 +205,7 @@ class SequentialWorkflowRunner:
                 )
                 if self._is_terminal(state):
                     return self._finalize_terminal(state)
+            post_review_required = True
         elif next_stage == "route_gate":
             state = self._invoke_stage("route_gate", route_gate, state)
             if self._is_terminal(state):
@@ -218,6 +233,7 @@ class SequentialWorkflowRunner:
                 )
                 if self._is_terminal(state):
                     return self._finalize_terminal(state)
+                post_review_required = True
             elif next_stage == "rag":
                 state = self._invoke_stage(
                     "rag_subgraph",
@@ -235,6 +251,7 @@ class SequentialWorkflowRunner:
                     )
                     if self._is_terminal(state):
                         return self._finalize_terminal(state)
+                post_review_required = True
             elif next_stage == "rag_plus_tool":
                 state = self._invoke_stage(
                     "rag_subgraph",
@@ -250,6 +267,7 @@ class SequentialWorkflowRunner:
                 )
                 if self._is_terminal(state):
                     return self._finalize_terminal(state)
+                post_review_required = True
             elif next_stage == "recommendation":
                 state = self._invoke_stage(
                     "recommendation_subgraph",
@@ -258,12 +276,30 @@ class SequentialWorkflowRunner:
                 )
                 if self._is_terminal(state):
                     return self._finalize_terminal(state)
+                post_review_required = True
             elif next_stage == "direct":
                 pass
         elif next_stage == "tool_subgraph":
             state = self._invoke_stage(
                 "tool_subgraph",
                 lambda current: run_tool_subgraph(current, self.services.tool_subgraph),
+                state,
+            )
+            if self._is_terminal(state):
+                return self._finalize_terminal(state)
+            post_review_required = True
+
+        if post_review_required:
+            state = self._invoke_stage(
+                "merge_rank_node",
+                lambda current: run_merge_rank_node(current),
+                state,
+            )
+            if self._is_terminal(state):
+                return self._finalize_terminal(state)
+            state = self._invoke_stage(
+                "contract_review",
+                lambda current: run_contract_review_node(current),
                 state,
             )
             if self._is_terminal(state):
@@ -506,6 +542,21 @@ class SequentialWorkflowRunner:
         self._emit_stage_event(state, "intent_analysis_done", "intent_analysis", "done", elapsed_ms=intent_elapsed)
         yield from drain_emitted_events()
         next_stage = route_after_understand(state)
+        if next_stage == "rule_review":
+            self._emit_stage_event(state, "heartbeat", "rule_review", "started", elapsed_ms=0.0)
+            yield from drain_emitted_events()
+            state = yield from self._invoke_stage_with_heartbeat_streaming(
+                "rule_review",
+                lambda current: run_rule_review_node(current),
+                state,
+                heartbeat_stage="rule_review",
+            )
+            yield from drain_emitted_events()
+            if self._is_terminal(state):
+                state = self._finalize_terminal(state)
+                yield from drain_emitted_events()
+                return
+            next_stage = "route_gate"
         if next_stage == "emit_final":
             persistent = state["persistent"]
             if getattr(persistent, "pending_clarification", None) is not None:
@@ -526,6 +577,23 @@ class SequentialWorkflowRunner:
             return
 
         # 3) 分支阶段
+        if next_stage == "rule_review":
+            self._emit_stage_event(state, "heartbeat", "rule_review", "started", elapsed_ms=0.0)
+            yield from drain_emitted_events()
+            state = yield from self._invoke_stage_with_heartbeat_streaming(
+                "rule_review",
+                lambda current: run_rule_review_node(current),
+                state,
+                heartbeat_stage="rule_review",
+            )
+            yield from drain_emitted_events()
+            if self._is_terminal(state):
+                state = self._finalize_terminal(state)
+                yield from drain_emitted_events()
+                return
+            next_stage = "route_gate"
+
+        post_review_required = False
         if next_stage == "route_gate":
             state = yield from self._invoke_stage_with_heartbeat_streaming(
                 "route_gate",
@@ -599,6 +667,7 @@ class SequentialWorkflowRunner:
                     state = self._finalize_terminal(state)
                     yield from drain_emitted_events()
                     return
+                post_review_required = True
             elif next_stage == "rag":
                 self._emit_stage_event(state, "retrieval_started", "retrieval", "started", elapsed_ms=0.0)
                 state = yield from self._invoke_stage_with_heartbeat_streaming(
@@ -625,6 +694,7 @@ class SequentialWorkflowRunner:
                         state = self._finalize_terminal(state)
                         yield from drain_emitted_events()
                         return
+                post_review_required = True
             elif next_stage == "rag_plus_tool":
                 self._emit_stage_event(state, "retrieval_started", "retrieval", "started", elapsed_ms=0.0)
                 state = yield from self._invoke_stage_with_heartbeat_streaming(
@@ -649,6 +719,7 @@ class SequentialWorkflowRunner:
                     state = self._finalize_terminal(state)
                     yield from drain_emitted_events()
                     return
+                post_review_required = True
             elif next_stage == "recommendation":
                 self._emit_stage_event(state, "retrieval_started", "retrieval", "started", elapsed_ms=0.0)
                 state = yield from self._invoke_stage_with_heartbeat_streaming(
@@ -662,6 +733,7 @@ class SequentialWorkflowRunner:
                     state = self._finalize_terminal(state)
                     yield from drain_emitted_events()
                     return
+                post_review_required = True
             elif next_stage == "direct":
                 pass
         if next_stage == "plan_execute_subgraph":
@@ -676,6 +748,7 @@ class SequentialWorkflowRunner:
                 state = self._finalize_terminal(state)
                 yield from drain_emitted_events()
                 return
+            post_review_required = True
         elif next_stage == "rag_subgraph":
             self._emit_stage_event(state, "retrieval_started", "retrieval", "started", elapsed_ms=0.0)
             state = yield from self._invoke_stage_with_heartbeat_streaming(
@@ -702,12 +775,38 @@ class SequentialWorkflowRunner:
                     state = self._finalize_terminal(state)
                     yield from drain_emitted_events()
                     return
+            post_review_required = True
         elif next_stage == "tool_subgraph":
             state = yield from self._invoke_stage_with_heartbeat_streaming(
                 "tool_subgraph",
                 lambda current: run_tool_subgraph(current, self.services.tool_subgraph),
                 state,
                 heartbeat_stage="tool",
+            )
+            yield from drain_emitted_events()
+            if self._is_terminal(state):
+                state = self._finalize_terminal(state)
+                yield from drain_emitted_events()
+                return
+            post_review_required = True
+
+        if post_review_required:
+            state = yield from self._invoke_stage_with_heartbeat_streaming(
+                "merge_rank_node",
+                lambda current: run_merge_rank_node(current),
+                state,
+                heartbeat_stage="merge_rank",
+            )
+            yield from drain_emitted_events()
+            if self._is_terminal(state):
+                state = self._finalize_terminal(state)
+                yield from drain_emitted_events()
+                return
+            state = yield from self._invoke_stage_with_heartbeat_streaming(
+                "contract_review",
+                lambda current: run_contract_review_node(current),
+                state,
+                heartbeat_stage="contract_review",
             )
             yield from drain_emitted_events()
             if self._is_terminal(state):
