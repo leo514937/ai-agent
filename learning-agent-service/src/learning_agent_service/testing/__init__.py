@@ -15,10 +15,12 @@ from .harness import (
     extract_phase3_trace,
     extract_routing_trace,
 )
+from .recording import EvalCaseRecorder, TraceWriter
 
 __all__ = [
     "EvaluationHarness",
     "EvaluationReport",
+    "EvalCaseRecorder",
     "GoldenEvidencePack",
     "HarnessCase",
     "HarnessRunResult",
@@ -26,6 +28,7 @@ __all__ = [
     "ReplayComparisonResult",
     "RagGoldenEvidenceHarness",
     "ReplayHarness",
+    "TraceWriter",
     "ToolMockHarness",
     "ToolMockResult",
     "TraceHarnessRecorder",

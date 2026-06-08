@@ -391,11 +391,6 @@ class WorkflowLearningAgentService:
             }
         }
         as_node = snapshot.next[0] if snapshot.next else None
-        if as_node is None:
-            turn_patch = request.state_patch.get("turn", {}) if request.state_patch else {}
-            if isinstance(turn_patch, dict) and turn_patch.get("execution_mode") == "plan_execute":
-                as_node = "plan_execute_subgraph"
-        
         runner._graph.update_state(target_config, forked_values, as_node=as_node)
         
         try:

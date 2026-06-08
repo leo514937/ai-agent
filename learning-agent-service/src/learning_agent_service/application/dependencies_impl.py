@@ -211,6 +211,7 @@ from .container import (
     AppDependencies,
     ApplicationRuntime,
     MemoryDeps,
+    OpenAIEmbeddingAdapter,
     OpenAIAnswerComposeAdapter,
     OpenAIBackedModelGateway,
     OpenAIHyDEAdapter,

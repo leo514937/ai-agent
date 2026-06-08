@@ -211,6 +211,7 @@ class TraceHarnessRecorder:
             "graph_runtime": phase5_trace.get("graph_runtime") or phase5_trace.get("runner_backend") or phase5_trace.get("runner_kind"),
             "graph_fallback": runtime_metrics.get("graph_fallback") or persistent.get("extra", {}).get("graph_fallback") or "none",
             "final_answer_audit": turn_extra.get("final_answer_audit") or runtime_metrics.get("final_answer_audit") or phase4_trace.get("final_answer_audit"),
+            "final_answer_safety": turn_extra.get("final_answer_safety") or runtime_metrics.get("final_answer_safety") or phase4_trace.get("final_answer_safety"),
             "phase3_trace": phase3_trace,
             "phase5_trace": phase5_trace,
             "phase4_trace": phase4_trace,
@@ -337,6 +338,8 @@ class EvaluationHarness:
         verifier_status_counts = Counter()
         verifier_issue_counts = Counter()
         verifier_response_mode_counts = Counter()
+        final_answer_safety_severity_counts = Counter()
+        final_answer_audit_severity_counts = Counter()
 
         for result in results:
             trace = dict(result.actual_trace or {})
@@ -375,6 +378,14 @@ class EvaluationHarness:
                 verifier_response_mode_counts[verifier_response_mode] += 1
                 for issue in phase4_trace.get("verifier_issues") or []:
                     verifier_issue_counts[str(issue)] += 1
+            final_answer_safety = dict(trace.get("final_answer_safety") or {})
+            if final_answer_safety:
+                final_answer_safety_severity = str(final_answer_safety.get("severity") or "unknown").strip() or "unknown"
+                final_answer_safety_severity_counts[final_answer_safety_severity] += 1
+            final_answer_audit = dict(trace.get("final_answer_audit") or {})
+            if final_answer_audit:
+                final_answer_audit_severity = str(final_answer_audit.get("severity") or "unknown").strip() or "unknown"
+                final_answer_audit_severity_counts[final_answer_audit_severity] += 1
 
         return EvaluationReport(
             total_cases=total_cases,
@@ -395,6 +406,8 @@ class EvaluationHarness:
                 "verifier_status_distribution": dict(sorted(verifier_status_counts.items())),
                 "verifier_issue_distribution": dict(sorted(verifier_issue_counts.items())),
                 "verifier_response_mode_distribution": dict(sorted(verifier_response_mode_counts.items())),
+                "final_answer_safety_severity_distribution": dict(sorted(final_answer_safety_severity_counts.items())),
+                "final_answer_audit_severity_distribution": dict(sorted(final_answer_audit_severity_counts.items())),
             },
         )
 

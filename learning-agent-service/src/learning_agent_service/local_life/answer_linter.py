@@ -48,7 +48,7 @@ def _ensure_contract(answer_contract: AnswerContract | Mapping[str, Any] | None)
         raw["allowed_facets"] = []
     if "forbidden_facets" not in raw:
         raw["forbidden_facets"] = []
-    if "answer_style" not in raw:
+    if not str(raw.get("answer_style") or "").strip():
         raw["answer_style"] = "single_shop_review"
     return AnswerContract.model_validate(raw)
 

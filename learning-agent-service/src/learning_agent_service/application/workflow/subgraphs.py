@@ -6,20 +6,18 @@ from typing import Any
 
 from ...domain.contracts import (
     NormalizedToolResult,
-    PlanExecutionSummary,
     RagResult,
     ToolExecutionResult,
     RoutingContract,
 )
 from ...domain.enums import RagStatus, ToolExecutionStatus
 from ...domain.state import GraphState
-from ..router import _update_phase3_trace, can_enter_retrieval, can_enter_tool
+from ..router import can_enter_retrieval, can_enter_tool
 from ..router import route_execution_mode
 from ..router import should_run_tool as routing_should_run_tool
 from .state import append_runtime_error as _append_state_runtime_error
 from .state import append_stage_timeline_entry as _append_stage_timeline_entry
 from .services import (
-    PlanExecuteSubgraphServices,
     RagSubgraphServices,
     ToolSubgraphServices,
     UnderstandTurnServices,
@@ -66,7 +64,7 @@ def _route_decision_for_turn(turn) -> str:
 
 def route_after_load_context(state: GraphState) -> str:
     routing = state["turn"].routing_decision
-    if routing is not None and routing.blocked:
+    if routing is not None and (routing.blocked or str(routing.required_action).strip().lower() in _DIRECT_ACTIONS):
         return "compose_answer"
     return "understand_turn"
 
@@ -81,10 +79,7 @@ def route_gate(state: GraphState) -> Command:
     turn = state["turn"]
     runtime = state["runtime"]
     routing = getattr(turn, "routing_decision", None)
-    execution_mode_result = route_execution_mode(routing) if routing is not None else None
-    execution_mode = execution_mode_result.execution_mode if execution_mode_result is not None else "simple"
-    execution_mode_reason = execution_mode_result.reason if execution_mode_result is not None else "no_routing_decision"
-    execution_mode_signals = list(execution_mode_result.signals) if execution_mode_result is not None else ["missing_routing"]
+    execution_mode = route_execution_mode(routing).execution_mode if routing is not None else "simple"
     branch = route_decider(state)
     effective_action_map = {
         "recommendation": "rag_plus_tool",
@@ -95,32 +90,22 @@ def route_gate(state: GraphState) -> Command:
         "clarify": "clarify",
     }
     effective_action = effective_action_map.get(branch, str(getattr(routing, "required_action", "") or "").strip().lower() if routing is not None else None)
-    if routing is not None and effective_action:
-        current_action = str(getattr(routing, "required_action", "") or "").strip().lower()
-        routing_update = {
-            "required_action": effective_action,
-            "should_retrieve": effective_action in {"rag_retrieval", "rag_plus_tool"},
-            "should_call_tool": effective_action in {"tool_call", "rag_plus_tool"},
-            "should_use_memory": effective_action not in {"clarify", "reject", "no_op"},
-            "should_persist_memory": effective_action not in {"clarify", "reject", "no_op"},
-            "should_vectorize_memory": effective_action not in {"clarify", "reject", "no_op"},
-            "should_emit_retrieval_events": effective_action in {"rag_retrieval", "rag_plus_tool"},
-        }
-        if effective_action != current_action:
-            routing_update["blocked"] = False
-            routing_update["blocked_reason"] = None
-        routing = routing.model_copy(update=routing_update)
-    if routing is not None:
-        routing_extra = dict(getattr(routing, "extra", {}) or {})
-        routing_extra["execution_mode"] = execution_mode
-        routing_extra["execution_mode_reason"] = execution_mode_reason
-        routing_extra["execution_mode_signals"] = execution_mode_signals
-        routing = routing.model_copy(update={"execution_mode": execution_mode, "extra": routing_extra})
+    if routing is not None and effective_action and effective_action != str(getattr(routing, "required_action", "") or "").strip().lower():
+        routing = routing.model_copy(
+            update={
+                "required_action": effective_action,
+                "blocked": False,
+                "blocked_reason": None,
+                "should_retrieve": effective_action in {"rag_retrieval", "rag_plus_tool"},
+                "should_call_tool": effective_action in {"tool_call", "rag_plus_tool"},
+                "should_use_memory": effective_action not in {"clarify", "reject", "no_op"},
+                "should_persist_memory": effective_action not in {"clarify", "reject", "no_op"},
+                "should_vectorize_memory": effective_action not in {"clarify", "reject", "no_op"},
+                "should_emit_retrieval_events": effective_action in {"rag_retrieval", "rag_plus_tool"},
+            }
+        )
         turn_extra = dict(turn.extra)
         turn_extra["routing_decision"] = routing.model_dump(mode="json")
-        turn_extra["execution_mode"] = execution_mode
-        turn_extra["execution_mode_reason"] = execution_mode_reason
-        turn_extra["execution_mode_signals"] = execution_mode_signals
         state["turn"] = turn.model_copy(update={"routing_decision": routing, "extra": turn_extra})
         turn = state["turn"]
     if branch == "complex" and str(getattr(turn, "execution_mode", "") or "").strip().lower() != "plan_execute":
@@ -139,8 +124,6 @@ def route_gate(state: GraphState) -> Command:
     gate_trace = {
         "branch": branch,
         "execution_mode": execution_mode,
-        "execution_mode_reason": execution_mode_reason,
-        "execution_mode_signals": execution_mode_signals,
         "required_action": required_action,
         "route_candidate": route_candidate,
         "route_reason": route_reason or None,
@@ -278,7 +261,6 @@ def route_gate(state: GraphState) -> Command:
     runtime_metrics = dict(getattr(runtime, "metrics", {}) or {})
     runtime_metrics["route_gate"] = gate_trace
     runtime_metrics["execution_mode"] = execution_mode
-    runtime_metrics["execution_mode_reason"] = execution_mode_reason
     state["runtime"] = runtime.model_copy(update={"metrics": runtime_metrics})
 
     state = _mark_stage(
@@ -297,89 +279,8 @@ def route_gate(state: GraphState) -> Command:
         "recommendation": "recommendation_subgraph",
         "direct": "compose_answer",
     }
-    if execution_mode == "clarify":
-        target = "compose_answer"
-    elif execution_mode == "complex":
-        target = "plan_execute_subgraph"
-    else:
-        target = target_map.get(branch, "compose_answer")
+    target = target_map.get(branch, "compose_answer")
     return Command(update=state, goto=target)
-
-
-def run_rule_review_node(state: GraphState) -> GraphState:
-    turn = state["turn"]
-    turn_extra = dict(turn.extra)
-    turn_extra["rule_review"] = {
-        "reviewed": True,
-        "current_action": str(getattr(turn.routing_decision, "required_action", "") or "").strip().lower() if getattr(turn, "routing_decision", None) is not None else None,
-        "route_review_decision": dict(turn_extra.get("route_review_decision") or {}),
-    }
-    state["turn"] = turn.model_copy(update={"extra": turn_extra})
-    return _mark_stage(
-        state,
-        "rule_review",
-        "completed",
-        route_decision=_route_decision_for_turn(state["turn"]),
-        route_reason=str(turn_extra.get("route_reason") or _route_decision_for_turn(state["turn"])),
-        detail=turn_extra["rule_review"],
-    )
-
-
-def run_merge_rank_node(state: GraphState) -> GraphState:
-    turn = state["turn"]
-    turn_extra = dict(turn.extra)
-    ranked_candidates = list(turn_extra.get("ranked_candidates") or [])
-    evidence_claims = list(turn_extra.get("evidence_claims") or [])
-
-    def _score(item: Any) -> float:
-        if isinstance(item, Mapping):
-            return float(item.get("score", 0.0) or 0.0)
-        return float(getattr(item, "score", 0.0) or 0.0)
-
-    ranked_candidates = sorted(ranked_candidates, key=_score, reverse=True)
-    evidence_claims = sorted(evidence_claims, key=_score, reverse=True)
-    turn_extra["ranked_candidates"] = ranked_candidates
-    turn_extra["evidence_claims"] = evidence_claims
-    turn_extra["merge_rank_node"] = {
-        "reviewed": True,
-        "ranked_candidate_count": len(ranked_candidates),
-        "evidence_claim_count": len(evidence_claims),
-        "top_candidate": (
-            ranked_candidates[0].get("name") if ranked_candidates and isinstance(ranked_candidates[0], Mapping)
-            else getattr(ranked_candidates[0], "name", None)
-        )
-        if ranked_candidates
-        else None,
-    }
-    state["turn"] = turn.model_copy(update={"extra": turn_extra})
-    return _mark_stage(
-        state,
-        "merge_rank",
-        "completed",
-        route_decision=_route_decision_for_turn(state["turn"]),
-        route_reason=str(turn_extra.get("route_reason") or _route_decision_for_turn(state["turn"])),
-        detail=turn_extra["merge_rank_node"],
-    )
-
-
-def run_contract_review_node(state: GraphState) -> GraphState:
-    turn = state["turn"]
-    turn_extra = dict(turn.extra)
-    turn_extra["contract_review"] = {
-        "reviewed": True,
-        "branch": str(turn_extra.get("route_gate", {}).get("branch") or "").strip().lower() or None,
-        "target_shop_id": turn_extra.get("target_shop_id"),
-        "route_candidate": turn_extra.get("route_candidate"),
-    }
-    state["turn"] = turn.model_copy(update={"extra": turn_extra})
-    return _mark_stage(
-        state,
-        "contract_review",
-        "completed",
-        route_decision=_route_decision_for_turn(state["turn"]),
-        route_reason=str(turn_extra.get("route_reason") or _route_decision_for_turn(state["turn"])),
-        detail=turn_extra["contract_review"],
-    )
 
 
 def _stage_entry(stage: str, status: str, *, route_decision: str | None = None, route_reason: str | None = None, detail=None):
@@ -571,12 +472,9 @@ def run_rag_subgraph(state: GraphState, services: RagSubgraphServices) -> Comman
     if compiled_graph is not None:
         from ...domain.state import clone_graph_state
 
-        try:
-            compiled_state = compiled_graph.invoke(clone_graph_state(state))
-            target = route_after_rag_graph(compiled_state)
-            return Command(update=compiled_state, goto=target)
-        except Exception:
-            compiled_graph = None
+        compiled_state = compiled_graph.invoke(clone_graph_state(state))
+        target = route_after_rag(compiled_state)
+        return Command(update=compiled_state, goto=target)
 
     contract = state["turn"].routing_contract
     rag_allowed = contract.rag_allowed if contract is not None else can_enter_retrieval(state).allowed
@@ -785,102 +683,6 @@ def run_tool_subgraph(state: GraphState, services: ToolSubgraphServices) -> Grap
     return _ensure_tool_result(state)
 
 
-def run_plan_execute_subgraph(state: GraphState, services: PlanExecuteSubgraphServices) -> GraphState:
-    turn = state["turn"]
-    if turn.task_plan is None and turn.execution_mode != "plan_execute" and not (
-        turn.execution_mode == "auto"
-        and (
-            turn.task_complexity == "complex"
-            or turn.need_human_approval
-            or turn.risk_level in {"medium", "high"}
-        )
-    ):
-        return state
-
-    try:
-        from .graphs import build_plan_execute_graph
-
-        compiled_graph = build_plan_execute_graph(services)
-    except Exception:
-        compiled_graph = None
-    if compiled_graph is not None:
-        from ...domain.state import clone_graph_state
-
-        try:
-            return compiled_graph.invoke(clone_graph_state(state))
-        except Exception:
-            compiled_graph = None
-
-    state = _mark_stage(state, "plan_execute", "running", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])))
-    state = services.plan_planner(state)
-    state = _ensure_plan_progress_state(state)
-    state = services.plan_validator(state)
-    state = services.step_executor(state)
-    state = _ensure_plan_progress_state(state)
-    state = services.progress_checker(state)
-    state = services.plan_reviewer(state)
-
-    if state["turn"].need_human_approval:
-        state = services.human_approval_stub(state)
-        state = _mark_stage(state, "plan_execute", "blocked", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].replan_reason or state["turn"].approval_request.get("reason") or "need_human_approval"))
-        summary = state["turn"].final_task_summary
-        state = _update_phase3_trace(
-            state,
-            task_plan_execution_status="blocked",
-            task_plan_completed_steps=getattr(summary, "completed_steps", 0) if summary is not None else 0,
-            task_plan_total_steps=getattr(summary, "total_steps", 0) if summary is not None else len(state["turn"].plan),
-            task_plan_final_decision=getattr(summary, "final_decision", None) if summary is not None else None,
-            task_plan_step_results=len(state["turn"].step_results),
-        )
-        return _ensure_plan_summary(state)
-
-    if state["turn"].need_replan:
-        state = services.replanner(state)
-        state = _ensure_plan_progress_state(state)
-        if state["turn"].need_replan:
-            state = services.plan_reviewer(state)
-            state = _mark_stage(state, "plan_execute", "blocked", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].replan_reason or "need_replan"))
-            summary = state["turn"].final_task_summary
-            state = _update_phase3_trace(
-                state,
-                task_plan_execution_status="blocked",
-                task_plan_completed_steps=getattr(summary, "completed_steps", 0) if summary is not None else 0,
-                task_plan_total_steps=getattr(summary, "total_steps", 0) if summary is not None else len(state["turn"].plan),
-                task_plan_final_decision=getattr(summary, "final_decision", None) if summary is not None else None,
-                task_plan_step_results=len(state["turn"].step_results),
-            )
-            return _ensure_plan_summary(state)
-        state = services.step_executor(state)
-        state = _ensure_plan_progress_state(state)
-        state = services.progress_checker(state)
-        state = services.plan_reviewer(state)
-        if state["turn"].need_human_approval:
-            state = services.human_approval_stub(state)
-            state = _mark_stage(state, "plan_execute", "blocked", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].replan_reason or state["turn"].approval_request.get("reason") or "need_human_approval"))
-            summary = state["turn"].final_task_summary
-            state = _update_phase3_trace(
-                state,
-                task_plan_execution_status="blocked",
-                task_plan_completed_steps=getattr(summary, "completed_steps", 0) if summary is not None else 0,
-                task_plan_total_steps=getattr(summary, "total_steps", 0) if summary is not None else len(state["turn"].plan),
-                task_plan_final_decision=getattr(summary, "final_decision", None) if summary is not None else None,
-                task_plan_step_results=len(state["turn"].step_results),
-            )
-            return _ensure_plan_summary(state)
-
-    state = _mark_stage(state, "plan_execute", "completed", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])))
-    summary = state["turn"].final_task_summary
-    state = _update_phase3_trace(
-        state,
-        task_plan_execution_status=getattr(summary, "status", "completed") if summary is not None else "completed",
-        task_plan_completed_steps=getattr(summary, "completed_steps", 0) if summary is not None else len([result for result in state["turn"].step_results if result.status == "success"]),
-        task_plan_total_steps=getattr(summary, "total_steps", 0) if summary is not None else len(state["turn"].plan),
-        task_plan_final_decision=getattr(summary, "final_decision", None) if summary is not None else state["turn"].final_answer,
-        task_plan_step_results=len(state["turn"].step_results),
-    )
-    return _ensure_plan_summary(state)
-
-
 def should_clarify(state: GraphState) -> bool:
     routing = state["turn"].routing_decision
     if routing is not None:
@@ -900,23 +702,15 @@ def should_run_tools(state: GraphState) -> bool:
     return False
 
 
-def should_run_plan_execute(state: GraphState) -> bool:
-    turn = state["turn"]
-    return turn.task_plan is not None or turn.execution_mode == "plan_execute" or (
-        turn.execution_mode == "auto"
-        and (
-            turn.task_complexity == "complex"
-            or turn.need_human_approval
-            or turn.risk_level in {"medium", "high"}
-        )
-    )
-
-
 def route_after_understand(state: GraphState) -> str:
     routing = state["turn"].routing_decision
-    if routing is not None and routing.blocked:
+    if routing is not None and (routing.blocked or str(routing.required_action).strip().lower() in _DIRECT_ACTIONS):
         return "compose_answer"
-    return "rule_review"
+    if should_run_rag(state):
+        return "rag_subgraph"
+    if should_run_tools(state):
+        return "tool_subgraph"
+    return "route_gate"
 
 
 def route_decider(state: GraphState) -> str:
@@ -927,7 +721,7 @@ def route_decider(state: GraphState) -> str:
 
     execution_mode = str(getattr(routing, "execution_mode", "") or "").strip().lower()
     if execution_mode == "complex":
-        return "complex"
+        return "direct"
 
     action = str(routing.required_action or "").strip().lower()
     if action == "clarify":
@@ -992,61 +786,6 @@ def route_after_rag(state: GraphState) -> str:
             return "tool_subgraph"
         return "compose_answer"
     return "compose_answer"
-
-
-def route_after_rag_graph(state: GraphState) -> str:
-    routing = state["turn"].routing_decision
-    if routing is not None and str(routing.required_action).strip().lower() == "rag_plus_tool" and can_enter_tool(state).allowed:
-        return "tool_subgraph"
-    return "merge_rank_node"
-
-
-def _ensure_plan_progress_state(state: GraphState) -> GraphState:
-    turn = state["turn"]
-    if turn.current_step is None and turn.plan:
-        index = min(max(turn.current_step_index, 0), len(turn.plan) - 1)
-        state["turn"] = turn.model_copy(
-            update={
-                "current_step_index": index,
-                "current_step": turn.plan[index],
-            }
-        )
-    return state
-
-
-def _ensure_plan_summary(state: GraphState) -> GraphState:
-    turn = state["turn"]
-    if turn.final_task_summary is not None:
-        return state
-    if not turn.plan and not turn.step_results and not turn.need_human_approval and not turn.approval_request:
-        return state
-
-    completed_steps = len([item for item in turn.step_results if item.status == "success"])
-    total_steps = len(turn.plan) if turn.plan else len(turn.step_results)
-    if turn.need_human_approval:
-        status = "need_approval"
-    elif turn.need_replan and completed_steps < total_steps:
-        status = "partial" if completed_steps > 0 else "failed"
-    elif total_steps and completed_steps >= total_steps:
-        status = "completed"
-    elif completed_steps > 0:
-        status = "partial"
-    else:
-        status = "failed"
-
-    key_findings: list[str] = []
-    for result in turn.step_results:
-        key_findings.extend(result.observations[:1])
-
-    summary = PlanExecutionSummary(
-        status=status,  # type: ignore[arg-type]
-        completed_steps=completed_steps,
-        total_steps=total_steps,
-        key_findings=key_findings[:5],
-        final_decision=turn.replan_reason or turn.final_answer,
-    )
-    state["turn"] = turn.model_copy(update={"final_task_summary": summary})
-    return state
 
 
 def _filter_evidence_by_contract(state: GraphState) -> GraphState:

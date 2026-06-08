@@ -14,7 +14,6 @@ from learning_agent_service.application.workflow.runner import SequentialWorkflo
 from learning_agent_service.domain.contracts import AnswerComposeRequest, ChatTurnCommand, PersistentSessionContext, RagResult, SseEnvelope
 from learning_agent_service.domain.enums import RagStatus
 from learning_agent_service.application.workflow.services import (
-    PlanExecuteSubgraphServices,
     RagSubgraphServices,
     ToolSubgraphServices,
     UnderstandTurnServices,
@@ -77,15 +76,6 @@ class _FakeWorkflowServices:
             tool_executor=lambda state: self._append(state, "tool_executor", EventType.TOOL_RESULT.value),
             tool_result_normalizer=lambda state: self._append(state, "tool_result_normalizer", EventType.TOOL_RESULT.value),
         )
-        self.plan_execute_subgraph = PlanExecuteSubgraphServices(
-            plan_planner=lambda state: self._append(state, "plan_planner", EventType.PLAN_EXECUTION_SUMMARY.value),
-            plan_validator=lambda state: self._append(state, "plan_validator", EventType.PLAN_EXECUTION_SUMMARY.value),
-            step_executor=lambda state: self._append(state, "step_executor", EventType.PLAN_EXECUTION_SUMMARY.value),
-            progress_checker=lambda state: self._append(state, "progress_checker", EventType.PLAN_EXECUTION_SUMMARY.value),
-            plan_reviewer=lambda state: self._append(state, "plan_reviewer", EventType.PLAN_EXECUTION_SUMMARY.value),
-            human_approval_stub=lambda state: self._append(state, "human_approval_stub", EventType.PLAN_EXECUTION_SUMMARY.value),
-            replanner=lambda state: self._append(state, "replanner", EventType.PLAN_EXECUTION_SUMMARY.value),
-        )
 
     def _append(self, state, stage: str, event_type: str) -> object:
         self.calls.append(stage)
@@ -116,9 +106,6 @@ class _FakeWorkflowServices:
 
     def tool_subgraph(self, state):
         return self._append(state, "tool_subgraph", EventType.TOOL_RESULT.value)
-
-    def plan_execute_subgraph(self, state):
-        return self._append(state, "plan_execute_subgraph", EventType.PLAN_EXECUTION_SUMMARY.value)
 
     def compose_answer(self, state):
         runtime = state["runtime"]
@@ -368,7 +355,6 @@ class StreamingBehaviorTestCase(unittest.TestCase):
                 citation_builder=_noop,
             ),
             tool_subgraph=ToolSubgraphServices(),
-            plan_execute_subgraph=PlanExecuteSubgraphServices(),
             compose_answer=_compose,
             persist_session=_noop,
             emit_final=_emit_final,
@@ -438,7 +424,6 @@ class StreamingBehaviorTestCase(unittest.TestCase):
             understand_turn=UnderstandTurnServices(),
             rag_subgraph=RagSubgraphServices(),
             tool_subgraph=ToolSubgraphServices(),
-            plan_execute_subgraph=PlanExecuteSubgraphServices(),
             compose_answer=_compose_noop,
             persist_session=lambda state: state,
             emit_final=_emit_final,

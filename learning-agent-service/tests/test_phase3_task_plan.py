@@ -29,7 +29,7 @@ class Phase3TaskPlanTestCase(unittest.TestCase):
         persistent = PersistentSessionContext(**persistent_kwargs)
         return build_initial_state(command, persistent=persistent)
 
-    def test_complex_local_life_request_builds_task_plan_and_routes_to_plan_execute(self) -> None:
+    def test_complex_local_life_request_builds_task_plan_and_routes_through_tooling(self) -> None:
         state = self._build_state(
             "推荐一家适合约会、现在营业、最好有券的火锅店",
             current_city="北京",
@@ -72,7 +72,7 @@ class Phase3TaskPlanTestCase(unittest.TestCase):
         self.assertEqual(task_plan.execution_mode, "plan_execute")
         self.assertEqual(task_plan.task_complexity, "complex")
         self.assertEqual(state["turn"].execution_mode, "plan_execute")
-        self.assertEqual(route_after_understand(state), "plan_execute_subgraph")
+        self.assertEqual(route_after_understand(state), "tool_subgraph")
 
         step_ids = [step.step_id for step in task_plan.steps]
         self.assertEqual(step_ids[0], "resolve_location")
@@ -108,7 +108,6 @@ class Phase3TaskPlanTestCase(unittest.TestCase):
 
         self.assertIsNone(state["turn"].task_plan)
         self.assertNotEqual(state["turn"].execution_mode, "plan_execute")
-        self.assertNotEqual(route_after_understand(state), "plan_execute_subgraph")
 
         phase3_trace = state["turn"].extra.get("phase3_trace")
         self.assertIsNotNone(phase3_trace)

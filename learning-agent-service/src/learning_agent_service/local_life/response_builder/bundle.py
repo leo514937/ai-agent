@@ -10,6 +10,7 @@ from learning_agent_service.local_life.answer_linter import lint_answer, prune_c
 from learning_agent_service.local_life.answer_planner import EvidencePack, GroundedVerificationResult, LocalLifeAnswerPlan
 from learning_agent_service.local_life.answer_quality_gate import AnswerQualityGate
 from learning_agent_service.local_life.answer_sanitizer import sanitize_local_life_output
+from learning_agent_service.local_life.final_answer_safety import apply_final_answer_safety
 from learning_agent_service.local_life.evidence_scope_guard import EvidenceScopeGuard
 from learning_agent_service.local_life.facet_result_bundle import FacetResultBundle
 from learning_agent_service.local_life.schemas import (
@@ -897,6 +898,24 @@ def build_response_bundle(
         )
         if coupon_answer:
             answer_text = coupon_answer
+    final_answer_safety = apply_final_answer_safety(
+        answer_text=answer_text,
+        answer_contract=answer_contract,
+        ranked_candidates=ranked_candidates,
+        evidence_claims=evidence_claims,
+        evidence_pack=evidence_pack_model,
+        facet_result_bundle=facet_result_bundle,
+        user_need=user_need,
+        route_gate={"route_decision": route_decision, "route_reason": route_reason} if route_decision or route_reason else None,
+        source_contract=None,
+        review_report=None,
+        tool_results=[],
+    )
+    answer_text = final_answer_safety.answer_text
+    safety_result = final_answer_safety.to_dict()
+    metrics["final_answer_safety"] = safety_result
+    metrics["final_answer_audit"] = final_answer_safety.final_answer_audit
+    metrics["answer_lint"] = final_answer_safety.answer_lint
     bundle = LocalLifeResponseBundle(
         answer_text=answer_text,
         mode=mode,

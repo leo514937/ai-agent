@@ -1,10 +1,33 @@
-"""触发 LangGraph 拓扑导出（Mermaid 文本 + PNG）"""
+from __future__ import annotations
+
+import argparse
 import sys
-sys.path.insert(0, "src")
+from pathlib import Path
 
-from learning_agent_service.application.workflow.builder import _build_langgraph_runner
-from learning_agent_service.application.workflow.services import WorkflowServices
+import _bootstrap  # noqa: F401
 
-services = WorkflowServices()
-graph = _build_langgraph_runner(services)
-print("graph.png exported")
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from learning_agent_service.application.workflow.builder import write_langgraph_visualizations
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Export LangGraph visualizations for the current workflow.")
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Directory to write the exported graph artifacts. Defaults to docs/langgraph.",
+    )
+    args = parser.parse_args(argv)
+
+    written = write_langgraph_visualizations(output_dir=args.output_dir)
+    for filename, path in sorted(written.items()):
+        print(f"{filename}: {path}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

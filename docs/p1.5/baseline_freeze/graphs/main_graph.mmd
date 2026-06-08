@@ -1,21 +1,22 @@
-graph TD
-  START --> load_context
-  load_context --> understand_turn
-  load_context --> compose_answer
-  understand_turn --> plan_execute_subgraph
-  understand_turn --> route_gate
-  understand_turn --> compose_answer
-  understand_turn --> rag_subgraph
-  understand_turn --> tool_subgraph
-  route_gate --> compose_answer
-  route_gate --> tool_subgraph
-  route_gate --> rag_subgraph
-  route_gate --> recommendation_subgraph
-  rag_subgraph --> tool_subgraph
-  rag_subgraph --> compose_answer
-  recommendation_subgraph --> compose_answer
-  tool_subgraph --> compose_answer
-  plan_execute_subgraph --> compose_answer
-  compose_answer --> persist_session
-  persist_session --> emit_final
-  emit_final --> END
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__(<p>__start__</p>)
+	load_context(load_context)
+	understand_turn(understand_turn)
+	route_gate(route_gate)
+	rag_subgraph(rag_subgraph)
+	recommendation_subgraph(recommendation_subgraph)
+	tool_subgraph(tool_subgraph)
+	compose_answer(compose_answer)
+	persist_session(persist_session)
+	emit_final(emit_final)
+	__end__(<p>__end__</p>)
+	__start__ --> load_context;
+	load_context --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc

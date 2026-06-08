@@ -25,6 +25,7 @@ from learning_agent_service.application.router import (
     _update_phase4_trace,
 )
 from learning_agent_service.local_life.final_answer_audit import audit_final_answer
+from learning_agent_service.local_life.final_answer_safety import apply_final_answer_safety
 from learning_agent_service.local_life.response_builder import build_coupon_only_answer
 
 
@@ -581,6 +582,34 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                 loop_counter,
                 runtime_context={**runtime_context, "answer_confidence": result.confidence},
             )
+            tool_results_payload = []
+            for candidate_tool_result in (getattr(turn, "raw_tool_result", None), getattr(turn, "tool_result", None)):
+                if candidate_tool_result is None or not hasattr(candidate_tool_result, "model_dump"):
+                    continue
+                tool_results_payload.append(candidate_tool_result.model_dump(mode="json"))
+            shop_lookup = {
+                int(candidate.shop_id): str(candidate.name)
+                for candidate in ranked_candidates
+                if getattr(candidate, "shop_id", None) not in (None, "") and getattr(candidate, "name", None)
+            }
+            final_answer_safety = apply_final_answer_safety(
+                answer_text=str(result.answer_text or ""),
+                answer_contract=answer_contract,
+                ranked_candidates=ranked_candidates,
+                evidence_claims=evidence_claims,
+                evidence_pack=request.rag_result.evidence_pack if request.rag_result is not None else None,
+                facet_result_bundle=facet_result_bundle,
+                user_need=request.user_need if hasattr(request, "user_need") else None,
+                route_gate=_as_mapping(turn.extra.get("route_gate")),
+                source_contract=source_contract.model_dump(mode="json"),
+                review_report=review_report.model_dump(mode="json"),
+                tool_results=tool_results_payload,
+                shop_lookup=shop_lookup,
+            )
+            if hasattr(result, "model_copy"):
+                result = result.model_copy(update={"answer_text": final_answer_safety.answer_text})
+            else:
+                result = result.__class__(**{**getattr(result, "__dict__", {}), "answer_text": final_answer_safety.answer_text})
             final_answer_audit = audit_final_answer(
                 answer_text=str(result.answer_text or ""),
                 answer_contract=answer_contract,
@@ -592,7 +621,7 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                 route_gate=_as_mapping(turn.extra.get("route_gate")),
                 source_contract=source_contract.model_dump(mode="json"),
                 review_report=review_report.model_dump(mode="json"),
-                tool_results=[coupon_tool_result.model_dump(mode="json")] if coupon_tool_result is not None and hasattr(coupon_tool_result, "model_dump") else [],
+                tool_results=tool_results_payload or ([coupon_tool_result.model_dump(mode="json")] if coupon_tool_result is not None and hasattr(coupon_tool_result, "model_dump") else []),
             )
             turn_extra = {**dict(turn.extra), "answer_confidence": result.confidence}
             if current_shop:
@@ -619,6 +648,7 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
             turn_extra["semantic_parse_result"] = semantic_parse_result.model_dump(mode="json")
             turn_extra["source_contract"] = source_contract.model_dump(mode="json")
             turn_extra["review_report"] = review_report.model_dump(mode="json")
+            turn_extra["final_answer_safety"] = final_answer_safety.to_dict()
             turn_extra["final_answer_audit"] = final_answer_audit.__dict__
             turn_extra["loop_counter"] = loop_counter.model_dump(mode="json")
             turn_extra["answer_contract"] = answer_contract.model_dump(mode="json")

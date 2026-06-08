@@ -14,7 +14,7 @@ from learning_agent_service.application.router.trace import (
     build_routing_trace_from_metrics,
     routing_trace_to_dict,
 )
-from learning_agent_service.testing import EvaluationHarness, HarnessRunResult
+from learning_agent_service.testing import EvaluationHarness, EvalCaseRecorder, HarnessRunResult, TraceWriter
 
 
 def _string_list(value: Any) -> tuple[str, ...]:
@@ -301,6 +301,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Path to write a JSON report.",
     )
     parser.add_argument(
+        "--trace-output",
+        default=None,
+        help="Optional JSONL path for per-case trace replay records.",
+    )
+    parser.add_argument(
         "--base-url",
         default="http://127.0.0.1:8000/internal/v1/chat/stream",
         help="Chat stream endpoint.",
@@ -315,6 +320,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     cases = load_golden_cases(args.cases)
     executor = _HttpChatExecutor(args.base_url, args.token)
     results = run_golden_cases(cases, executor.run_case)
+    trace_records: list[dict[str, Any]] = []
+    if args.trace_output:
+        recorder = EvalCaseRecorder(trace_writer=TraceWriter(args.trace_output))
+        trace_records = [
+            recorder.record_case(case.case_id, result, case=case, write=True)
+            for case, result in zip(cases, results)
+        ]
     report = EvaluationHarness().summarize(
         [
             HarnessRunResult(
@@ -338,6 +350,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         },
         "results": [asdict(result) for result in results],
     }
+    if trace_records:
+        output["trace_records"] = trace_records
+        output["trace_output"] = str(Path(args.trace_output).resolve())
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")

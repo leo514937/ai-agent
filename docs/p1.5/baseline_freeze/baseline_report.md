@@ -11,7 +11,6 @@
 - load_context
 - understand_turn
 - route_gate
-- plan_execute_subgraph
 - rag_subgraph
 - recommendation_subgraph
 - tool_subgraph
@@ -21,10 +20,10 @@
 
 ## Baseline Samples
 - direct_chat [direct_chat] -> `你好，我在。你可以直接告诉我想查什么、想解释什么，或者把问题贴出来。`
-- single_shop [single_shop] -> `海底捞火锅(水晶城购物中心店）：目前只能先给你一个部分判断。整体来看，这家店值得继续关注。`
-- query_merge_pronoun [query_merge] -> `海底捞火锅(水晶城购物中心店）当前有券信息可查，支持继续查看实时券详情。`
-- recommendation [recommendation] -> `你方便补充一下城市或商圈吗？`
-- mixed_facet [mixed_facet] -> `海底捞火锅(水晶城购物中心店）实时接口暂无可用券。`
+- single_shop [single_shop] -> `海底捞水晶城店怎么样：目前只能先给你一个部分判断。整体来看，这家店值得继续关注。`
+- query_merge_pronoun [query_merge] -> `它有券吗：目前只能先给你一个部分判断。整体来看，这家店值得继续关注。`
+- recommendation [recommendation] -> `我先帮你推荐以下这几家店铺： 1. 候选店A - 推荐理由：当前候选里它的综合信息比较靠前，值得优先查看。 - 适合场景：适合约会、聊天或轻松聚餐。 - 注意事项：建议先确认营业状态、预算和是否需要排队。 2. 候选店B - 推荐理由：当前`
+- mixed_facet [mixed_facet] -> `海底捞水晶城店有券吗，现在营业吗：目前只能先给你一个部分判断。整体来看，这家店值得继续关注。`
 - plan_execute [planning] -> `Plan execution completed successfully.`
 
 ## Test Summary

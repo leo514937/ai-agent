@@ -16,7 +16,6 @@ from learning_agent_service.application.workflow.adapters import WorkflowNodeAda
 from learning_agent_service.application.workflow.subgraphs import route_after_rag, route_after_understand
 from learning_agent_service.application.workflow.runner import SequentialWorkflowRunner
 from learning_agent_service.application.workflow.services import (
-    PlanExecuteSubgraphServices,
     RagSubgraphServices,
     ToolSubgraphServices,
     UnderstandTurnServices,
@@ -512,7 +511,6 @@ class RoutingDecisionMatrixTestCase(unittest.TestCase):
             ),
             rag_subgraph=RagSubgraphServices(),
             tool_subgraph=ToolSubgraphServices(),
-            plan_execute_subgraph=PlanExecuteSubgraphServices(),
             compose_answer=adapter.compose_answer,
             persist_session=adapter.persist_session,
             emit_final=adapter.emit_final,
@@ -579,7 +577,6 @@ class RoutingDecisionMatrixTestCase(unittest.TestCase):
             ),
             rag_subgraph=RagSubgraphServices(),
             tool_subgraph=ToolSubgraphServices(),
-            plan_execute_subgraph=PlanExecuteSubgraphServices(),
             compose_answer=adapter.compose_answer,
             persist_session=adapter.persist_session,
             emit_final=adapter.emit_final,

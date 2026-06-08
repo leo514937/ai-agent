@@ -100,7 +100,7 @@ class Day7LangGraphDefaultCutoverContractTestCase(unittest.TestCase):
 
         answer = build_multi_shop_recommendation_answer("附近餐厅", candidates, [], user_need=user_need)
 
-        self.assertIn("我帮你推荐以下这几家店铺", answer)
+        self.assertIn("我帮你推荐以下这几家店", answer)
         self.assertIn("适合约会", answer)
         self.assertIn("券", answer)
         self.assertIn("营业", answer)

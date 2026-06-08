@@ -61,7 +61,7 @@ class P15Day3RouterDegradationTestCase(unittest.TestCase):
         self.assertEqual(updated_state["turn"].routing_decision.execution_mode, "simple")
         self.assertEqual(updated_state["turn"].routing_decision.required_action, "tool_call")
 
-    def test_complex_execution_mode_routes_to_plan_execute_subgraph(self) -> None:
+    def test_complex_execution_mode_routes_to_direct_answer(self) -> None:
         state = self._build_state("一份需要多步处理的复杂请求")
         routing = RoutingDecision(
             required_action="rag_plus_tool",
@@ -83,11 +83,11 @@ class P15Day3RouterDegradationTestCase(unittest.TestCase):
 
         command = route_gate(state)
 
-        self.assertEqual(command.goto, "plan_execute_subgraph")
+        self.assertEqual(command.goto, "compose_answer")
         updated_state = command.update
         gate_trace = updated_state["turn"].extra.get("route_gate") or {}
         self.assertEqual(gate_trace.get("execution_mode"), "complex")
-        self.assertEqual(gate_trace.get("branch"), "complex")
+        self.assertEqual(gate_trace.get("branch"), "direct")
         self.assertEqual(updated_state["runtime"].metrics.get("execution_mode"), "complex")
         self.assertEqual(updated_state["turn"].routing_decision.execution_mode, "complex")
 

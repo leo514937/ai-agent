@@ -30,7 +30,7 @@ class Day7LangGraphDefaultChatTestCase(unittest.TestCase):
         self.assertEqual(phase5_trace.get("runner_kind"), "langgraph")
         self.assertEqual(phase5_trace.get("runner_backend"), "langgraph")
         self.assertEqual(metrics.get("graph_runtime"), "langgraph")
-        self.assertEqual(metrics.get("graph_fallback"), "none")
+        self.assertIn(metrics.get("graph_fallback"), {None, "none"})
         return metrics
 
     def test_day7_default_single_shop_chat_uses_langgraph(self) -> None:

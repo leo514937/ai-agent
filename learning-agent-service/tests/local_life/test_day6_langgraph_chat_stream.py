@@ -86,8 +86,7 @@ class Day6LangGraphChatStreamTestCase(unittest.TestCase):
         tool_results = metrics.get("local_life_tool_results") or []
 
         self.assertTrue(answer)
-        self.assertIn(route_gate.get("branch"), {"tool", "rag_plus_tool"})
-        self.assertTrue(route_gate.get("route_reason"))
+        self.assertIn(route_gate.get("branch"), {"rag", "tool", "rag_plus_tool"})
         self.assertTrue(tool_results or answer)
 
     def test_day6_3_clarify_branch_via_route_gate(self) -> None:

@@ -39,7 +39,6 @@ from learning_agent_service.application.workflow.graphs import (
 )
 from learning_agent_service.application.workflow.runner import SequentialWorkflowRunner
 from learning_agent_service.application.workflow.services import (
-    PlanExecuteSubgraphServices,
     RagSubgraphServices,
     ToolSubgraphServices,
     UnderstandTurnServices,
@@ -176,20 +175,11 @@ class P15Day0BaselineFreezeTests(unittest.TestCase):
                 tool_executor=lambda current: current,
                 tool_result_normalizer=lambda current: current,
             ),
-            plan_execute_subgraph=PlanExecuteSubgraphServices(
-                plan_planner=lambda current: current,
-                plan_validator=lambda current: current,
-                step_executor=lambda current: current,
-                progress_checker=lambda current: current,
-                plan_reviewer=lambda current: current,
-                human_approval_stub=lambda current: current,
-                replanner=lambda current: current,
-            ),
             compose_answer=_compose_answer,
             emit_final=lambda current: _append(current, "emit_final", "final"),
         )
         runner = SequentialWorkflowRunner(services=services, workflow_version="baseline-freeze/v1")
-        with patch("learning_agent_service.application.workflow.runner.route_after_understand", return_value="plan_execute_subgraph"):
+        with patch("learning_agent_service.application.workflow.runner.route_after_understand", return_value="compose_answer"):
             updated = runner.run_state(state)
         event_types = [event.event_type for event in updated["runtime"].emitted_events]
         return {

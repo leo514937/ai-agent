@@ -1,4 +1,18 @@
-graph TD
-  build_retrieval_plan --> execute_rag_pipeline
-  execute_rag_pipeline --> finalize_rag
-  finalize_rag --> END
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+	__start__([<p>__start__</p>]):::first
+	build_retrieval_plan(build_retrieval_plan)
+	execute_rag_pipeline(execute_rag_pipeline)
+	finalize_rag(finalize_rag)
+	__end__([<p>__end__</p>]):::last
+	__start__ --> build_retrieval_plan;
+	build_retrieval_plan --> execute_rag_pipeline;
+	execute_rag_pipeline --> finalize_rag;
+	finalize_rag --> __end__;
+	classDef default fill:#f2f0ff,line-height:1.2
+	classDef first fill-opacity:0
+	classDef last fill:#bfb6fc

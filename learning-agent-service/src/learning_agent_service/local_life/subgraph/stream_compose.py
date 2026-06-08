@@ -5,7 +5,7 @@ from learning_agent_service.domain.utils import as_mapping as _as_mapping
 from ..answer_sanitizer import sanitize_local_life_output
 from ..evidence_pack import build_evidence_pack
 from ..grounded_verifier import GroundedVerifier
-from ..response_builder import build_coupon_only_answer, build_response_bundle
+from ..response_builder import build_coupon_only_answer, build_response_bundle, build_single_shop_review_answer as _build_single_shop_review_answer
 
 from .helpers import *  # noqa: F403
 from .stream_context import StreamRunContext
@@ -417,7 +417,7 @@ class LocalLifeStreamComposeMixin:
         elif query_explicit_shop_name or current_shop_value or selected_shop_id is not None:
             bundle = bundle.model_copy(
                 update={
-                    "answer_text": _build_single_shop_review_answer(final_topic_name),
+                    "answer_text": _build_single_shop_review_answer(final_topic_name, ranked_candidates, evidence_claims),
                 }
             )
         if not bundle_metrics.get("answer_quality"):

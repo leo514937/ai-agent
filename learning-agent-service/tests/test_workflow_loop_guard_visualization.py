@@ -3,11 +3,22 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+import sys
+
+TESTS_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = TESTS_DIR.parent
+SRC_ROOT = PROJECT_ROOT / "src"
+for candidate in (str(TESTS_DIR), str(PROJECT_ROOT), str(SRC_ROOT)):
+    if candidate not in sys.path:
+        sys.path.insert(0, candidate)
+
+import _bootstrap  # noqa: F401
 
 from learning_agent_service.application.workflow.builder import _build_graph_config, write_langgraph_visualizations
 from learning_agent_service.application.workflow.plan_execute import PlanExecutionPolicy, ReactStepExecutor
 from learning_agent_service.domain.contracts import ChatTurnCommand, PlanStep
 from learning_agent_service.domain.state import build_initial_state
+from export_graph import main as export_graph_main
 
 
 class WorkflowLoopGuardVisualizationTests(unittest.TestCase):
@@ -81,6 +92,28 @@ class WorkflowLoopGuardVisualizationTests(unittest.TestCase):
             self.assertIn("rag_graph.mmd", written)
             self.assertIn("tool_graph.mmd", written)
             self.assertIn("recommendation_graph.mmd", written)
+            self.assertIn("full_graph.mmd", written)
+            self.assertIn("main_graph.png", written)
+            self.assertIn("rag_graph.png", written)
+            self.assertIn("tool_graph.png", written)
+            self.assertIn("recommendation_graph.png", written)
+            self.assertIn("full_graph.png", written)
+            self.assertTrue(Path(written["main_graph.png"]).exists())
+            self.assertTrue(Path(written["rag_graph.png"]).exists())
+            self.assertTrue(Path(written["tool_graph.png"]).exists())
+            self.assertTrue(Path(written["recommendation_graph.png"]).exists())
+            self.assertTrue(Path(written["full_graph.png"]).exists())
+
+    def test_export_graph_main_writes_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            exit_code = export_graph_main(["--output-dir", tmp_dir])
+            self.assertEqual(exit_code, 0)
+            self.assertTrue((Path(tmp_dir) / "main_graph.mmd").exists())
+            self.assertTrue((Path(tmp_dir) / "main_graph.png").exists())
+            self.assertTrue((Path(tmp_dir) / "full_graph.mmd").exists())
+            self.assertTrue((Path(tmp_dir) / "rag_graph.mmd").exists())
+            self.assertTrue((Path(tmp_dir) / "tool_graph.mmd").exists())
+            self.assertTrue((Path(tmp_dir) / "recommendation_graph.mmd").exists())
 
 
 if __name__ == "__main__":
