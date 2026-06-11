@@ -38,9 +38,14 @@ dev = [
   "pytest-mock>=3.14.0",
   "ruff>=0.8.0",
 ]
+ragas = [
+  "ragas>=0.4.0",
+  "rapidfuzz>=3.9.0",
+]
 
 [project.scripts]
 seed-local-life-knowledge = "learning_agent_service.rag.local_life_seed:main"
+run-ragas-eval = "learning_agent_service.rag.ragas_eval:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/learning_agent_service"]

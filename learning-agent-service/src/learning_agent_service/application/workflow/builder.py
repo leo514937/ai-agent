@@ -42,6 +42,7 @@ from learning_agent_service.local_life.final_answer_safety import apply_final_an
 from learning_agent_service.local_life.response_builder.bundle import build_response_bundle
 from learning_agent_service.local_life.business_metrics import business_metrics_collector, QueryMetrics
 from learning_agent_service.local_life.realtime_conflict_resolver import resolve_realtime_conflict, REALTIME_FACETS
+from learning_agent_service.local_life.retry_quality_evaluator import evaluate_retry_quality
 from learning_agent_service.application.router.stages.query_safety import check_query_safety
 from learning_agent_service.application.router.stages.top_level_intent_router import route_top_level_intent
 from .topology import MAIN_GRAPH_TOPOLOGY, describe_langgraph_topology as describe_main_graph_topology, export_langgraph_mermaid as export_main_graph_mermaid
@@ -1053,6 +1054,8 @@ def _collect_query_metrics(state: GraphState, bundle: Any = None) -> None:
     clarification_needed = bool(turn_extra.get("clarification_needed"))
 
     answer_text = str(getattr(turn, "final_answer", "") or "")
+    retry_quality = dict(turn_extra.get("retry_quality") or {})
+    review_report = turn_extra.get("review_report")
 
     metrics = QueryMetrics(
         query=raw_query,
@@ -1074,6 +1077,14 @@ def _collect_query_metrics(state: GraphState, bundle: Any = None) -> None:
         clarification_asked=clarification_asked,
         clarification_needed=clarification_needed,
         answer_text=answer_text,
+        retry_count=int(getattr(review_report, "retry_count", 0) or 0),
+        retry_improved=(
+            True
+            if retry_quality and float(retry_quality.get("improvement", 0.0) or 0.0) > 0
+            else False
+            if retry_quality
+            else None
+        ),
     )
 
     business_metrics_collector.record_query(metrics)
@@ -1137,6 +1148,10 @@ def _response_builder_node(state: GraphState, services: WorkflowServices) -> Gra
         dialog_ctx = DialogContext(
             current_state=DialogState(str(getattr(persistent, "dialog_state", "") or DialogState.IDLE.value)),
             transition_count=int(getattr(persistent, "dialog_transition_count", 0) or 0),
+            current_task=getattr(persistent, "dialog_task", None),
+            active_intent=getattr(persistent, "dialog_intent", None),
+            comparison_targets=list(getattr(persistent, "dialog_comparison_targets", []) or []),
+            pending_slots=list(getattr(persistent, "dialog_pending_slots", []) or []),
         )
         
         # Determine trigger based on current situation
@@ -1144,18 +1159,26 @@ def _response_builder_node(state: GraphState, services: WorkflowServices) -> Gra
         has_results = bool(turn_extra.get("evidence_claims"))
         answer_contract = turn_extra.get("answer_contract") or getattr(turn, "answer_contract", None)
         is_comparison = str(getattr(answer_contract, "answer_style", "") or "") == "comparison"
-        
+        has_error = bool(turn_extra.get("error") or getattr(state.get("runtime"), "error", None))
+        is_degraded = bool(turn_extra.get("degraded") or getattr(state.get("runtime"), "degrade_to", None))
+
         trigger = dialog_state_machine.determine_trigger(
             dialog_ctx,
             has_clarification=has_clarification,
             has_results=has_results,
             is_comparison=is_comparison,
+            has_error=has_error,
+            is_degraded=is_degraded,
         )
         
         if trigger:
             new_ctx = dialog_state_machine.transition(dialog_ctx, trigger)
             persistent.dialog_state = new_ctx.current_state.value
             persistent.dialog_transition_count = new_ctx.transition_count
+            persistent.dialog_task = new_ctx.current_task
+            persistent.dialog_intent = new_ctx.active_intent
+            persistent.dialog_comparison_targets = new_ctx.comparison_targets
+            persistent.dialog_pending_slots = new_ctx.pending_slots
     
     bundle = None
     try:
@@ -1254,12 +1277,26 @@ def _prepare_retry_node(state: GraphState) -> GraphState:
         repair_hint = getattr(review_report, "repair_hint", "")
         
         rewrite = RewriteDecision(
-            should_rewrite=True,
+            original_query=str(getattr(turn, "raw_query", "")),
             rewritten_query=str(getattr(turn, "raw_query", "")) + f" {repair_hint}",
+            preserved_constraints=[str(item) for item in getattr(review_report, "failed_facets", []) if str(item).strip()],
+            confidence=0.6,
+            should_retrieve=True,
             reason="retry_repair_answer",
-            top_k_override=10,
-            extra={"failed_facets": getattr(review_report, "failed_facets", [])}
         )
+
+        if "retry_snapshot" not in turn_extra:
+            turn_extra["retry_snapshot"] = {
+                "answer_text": str(
+                    getattr(turn, "final_answer", "")
+                    or turn_extra.get("plan_execution_answer")
+                    or turn_extra.get("preset_response_text")
+                    or ""
+                ).strip(),
+                "evidence_count": len(list(turn_extra.get("evidence_claims") or [])),
+                "tool_result_count": len(list(turn_extra.get("tool_results") or [])),
+                "retry_count": retry_count,
+            }
         
         turn_extra["rewrite_decision"] = rewrite
         routing = getattr(turn, "routing_decision", None)
@@ -1289,6 +1326,54 @@ def _route_after_contract_review(state: GraphState) -> str:
             return "prepare_retry"
             
     return "final_answer"
+
+
+def _apply_retry_quality_evaluation(
+    turn: Any,
+    turn_extra: dict[str, Any],
+    *,
+    answer_text: str,
+    evidence_claims: list[Any],
+    tool_results: list[Any],
+) -> tuple[Any, dict[str, Any]]:
+    retry_snapshot = dict(turn_extra.get("retry_snapshot") or {})
+    if not retry_snapshot:
+        return turn, turn_extra
+
+    pre_retry_answer = str(retry_snapshot.get("answer_text") or "").strip()
+    pre_retry_evidence_count = int(retry_snapshot.get("evidence_count") or 0)
+    quality = evaluate_retry_quality(
+        pre_retry_answer=pre_retry_answer,
+        post_retry_answer=str(answer_text or "").strip(),
+        pre_retry_evidence_count=pre_retry_evidence_count,
+        post_retry_evidence_count=len(evidence_claims),
+        has_tool_result=bool(tool_results),
+    )
+
+    reverted_to_pre_retry = False
+    if not quality.should_keep_retry and pre_retry_answer:
+        turn = turn.model_copy(update={"final_answer": pre_retry_answer})
+        answer_text = pre_retry_answer
+        reverted_to_pre_retry = True
+
+    retry_quality = {
+        "pre_retry_score": quality.pre_retry_score,
+        "post_retry_score": quality.post_retry_score,
+        "improvement": quality.improvement,
+        "should_keep_retry": quality.should_keep_retry,
+        "reason": quality.reason,
+        "reverted_to_pre_retry": reverted_to_pre_retry,
+    }
+    turn_extra["retry_quality"] = retry_quality
+
+    review_report = turn_extra.get("review_report")
+    if review_report is not None:
+        extra = dict(getattr(review_report, "extra", {}) or {})
+        extra["retry_quality"] = retry_quality
+        setattr(review_report, "extra", extra)
+        turn_extra["review_report"] = review_report
+
+    return turn, turn_extra
 
 
 def _final_answer_safety_node(state: GraphState) -> GraphState:
@@ -1333,6 +1418,13 @@ def _final_answer_safety_node(state: GraphState) -> GraphState:
         if plan_execution_answer:
             final_text = plan_execution_answer
         turn = turn.model_copy(update={"final_answer": final_text})
+    turn, turn_extra = _apply_retry_quality_evaluation(
+        turn,
+        turn_extra,
+        answer_text=str(getattr(turn, "final_answer", "") or raw_answer),
+        evidence_claims=evidence_claims,
+        tool_results=list(turn_extra.get("tool_results") or []),
+    )
     turn_extra["final_answer_safety"] = safety_result.to_dict() if hasattr(safety_result, "to_dict") else dict(safety_result)
     state["turn"] = turn.model_copy(update={"extra": turn_extra})
     runtime = state["runtime"]

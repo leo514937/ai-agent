@@ -127,7 +127,7 @@ def _apply_route_review(
 
         )
 
-    # Check for pronoun reference failure in sequential routing
+    from learning_agent_service.local_life.clarification_strategy import ClarificationStrategy
 
     has_pronoun = any(p in raw_query for p in ("这家", "那家", "它", "该店", "此店", "这店", "这个店", "那个店", "这间", "刚才那家", "这商家", "这个商家", "刚才那个"))
 
@@ -147,7 +147,15 @@ def _apply_route_review(
 
     )
 
-    if has_pronoun and not has_resolved_ref:
+    should_clarify, missing_slot, clarify_reason = ClarificationStrategy.should_clarify_target_shop(
+        raw_query=raw_query,
+        is_low_info=False,
+        has_explicit_shop_hint=False,
+        has_pronoun=has_pronoun,
+        has_resolved_ref=has_resolved_ref,
+    )
+
+    if should_clarify:
 
         return RoutingDecision(
 

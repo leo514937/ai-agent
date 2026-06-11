@@ -4,16 +4,14 @@ config:
     curve: linear
 ---
 graph TD;
-	__start__(<p>__start__</p>)
+	__start__([<p>__start__</p>]):::first
 	prepare_recommendation(prepare_recommendation)
-	dispatch_shop_analysis(dispatch_shop_analysis)
-	analyze_one_shop(analyze_one_shop)
-	reduce_shop_results(reduce_shop_results)
+	recommendation_executor(recommendation_executor)
 	finalize_recommendation(finalize_recommendation)
-	__end__(<p>__end__</p>)
+	__end__([<p>__end__</p>]):::last
 	__start__ --> prepare_recommendation;
-	dispatch_shop_analysis --> finalize_recommendation;
-	prepare_recommendation --> dispatch_shop_analysis;
+	prepare_recommendation --> recommendation_executor;
+	recommendation_executor --> finalize_recommendation;
 	finalize_recommendation --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0

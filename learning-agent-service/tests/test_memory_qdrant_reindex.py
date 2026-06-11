@@ -13,7 +13,7 @@ except ImportError:  # pragma: no cover - environment without SQLAlchemy
     create_engine = None
     sessionmaker = None
 
-from learning_agent_service.application.dependencies import _resolve_memory_vector_size
+from learning_agent_service.application.dependencies_impl import _resolve_memory_vector_size
 from learning_agent_service.domain import MemoryRecord, MemoryScope, MemorySource, MemoryStatus, MemoryType
 from learning_agent_service.infrastructure.db.factories import InfrastructureClients
 from learning_agent_service.infrastructure.db.models import Base

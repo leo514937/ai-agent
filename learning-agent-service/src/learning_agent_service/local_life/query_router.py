@@ -6,6 +6,7 @@ from typing import Any
 
 from learning_agent_service.domain.utils import compact_text as _compact_text
 
+from .scene_policy import ScenePolicy
 from .schemas import LocalLifeIntentType, LocalLifeSlots
 
 _REALTIME_KEYWORDS = (
@@ -139,6 +140,8 @@ class LocalLifeQueryRouter:
         compact = self._compact_text(query)
         candidate_ids = self._normalize_ids(candidate_shop_ids or slots_obj.shop_ids)
         structured_candidates = tuple(structured_candidates or ())
+        scene_detected = ScenePolicy.detect_scene(query)
+        scene_preferred_facets = tuple(ScenePolicy.get_preferred_facets(query))
 
         route, route_reason = self._infer_route(compact, intent=intent, slots=slots_obj)
         if route == "general_chat":
@@ -171,6 +174,10 @@ class LocalLifeQueryRouter:
             )
 
         if route == "compare_multi_parent":
+            preferred_roles = self._scene_aware_roles(
+                ("merchant_review_summary", "merchant_scene_fit", "merchant_pitfall_summary", "package_description"),
+                scene_detected=scene_detected,
+            )
             return LocalLifeRouteDecision(
                 route=route,
                 retrieval_strategy="business_candidates->multi_parent_rag->shop_rerank",
@@ -179,7 +186,7 @@ class LocalLifeQueryRouter:
                 parent_top_k=8,
                 child_top_k=40,
                 sibling_limit_per_parent=8,
-                preferred_roles=("merchant_review_summary", "merchant_scene_fit", "merchant_pitfall_summary", "package_description"),
+                preferred_roles=preferred_roles,
                 use_business_candidates=True,
                 use_qdrant=True,
                 extra=self._build_extra(
@@ -188,6 +195,8 @@ class LocalLifeQueryRouter:
                     slots=slots_obj,
                     query=compact,
                     structured_candidates=structured_candidates,
+                    scene_detected=scene_detected,
+                    scene_preferred_facets=scene_preferred_facets,
                 ),
             )
 
@@ -207,6 +216,10 @@ class LocalLifeQueryRouter:
             )
 
         if route == "structured_first":
+            preferred_roles = self._scene_aware_roles(
+                ("merchant_profile", "merchant_review_summary", "merchant_scene_fit"),
+                scene_detected=scene_detected,
+            )
             return LocalLifeRouteDecision(
                 route=route,
                 retrieval_strategy="business_candidates->parent_child_rag->shop_rerank",
@@ -215,7 +228,7 @@ class LocalLifeQueryRouter:
                 parent_top_k=5,
                 child_top_k=30,
                 sibling_limit_per_parent=6,
-                preferred_roles=("merchant_profile", "merchant_review_summary", "merchant_scene_fit"),
+                preferred_roles=preferred_roles,
                 use_business_candidates=True,
                 use_qdrant=True,
                 extra=self._build_extra(
@@ -224,9 +237,15 @@ class LocalLifeQueryRouter:
                     slots=slots_obj,
                     query=compact,
                     structured_candidates=structured_candidates,
+                    scene_detected=scene_detected,
+                    scene_preferred_facets=scene_preferred_facets,
                 ),
             )
 
+        preferred_roles = self._scene_aware_roles(
+            ("merchant_profile", "merchant_review_summary", "merchant_scene_fit"),
+            scene_detected=scene_detected,
+        )
         return LocalLifeRouteDecision(
             route="merchant_reasoning",
             retrieval_strategy="parent_child_rag->shop_rerank",
@@ -235,7 +254,7 @@ class LocalLifeQueryRouter:
             parent_top_k=5,
             child_top_k=30,
             sibling_limit_per_parent=6,
-            preferred_roles=("merchant_profile", "merchant_review_summary", "merchant_scene_fit"),
+            preferred_roles=preferred_roles,
             use_business_candidates=True,
             use_qdrant=True,
             extra=self._build_extra(
@@ -244,6 +263,8 @@ class LocalLifeQueryRouter:
                 slots=slots_obj,
                 query=compact,
                 structured_candidates=structured_candidates,
+                scene_detected=scene_detected,
+                scene_preferred_facets=scene_preferred_facets,
             ),
         )
 
@@ -283,6 +304,8 @@ class LocalLifeQueryRouter:
         slots: LocalLifeSlots,
         query: str,
         structured_candidates: Sequence[Any] | None = None,
+        scene_detected: str | None = None,
+        scene_preferred_facets: Sequence[str] | None = None,
     ) -> dict[str, Any]:
         extra: dict[str, Any] = {
             "route": route,
@@ -296,10 +319,19 @@ class LocalLifeQueryRouter:
                 or slots.price.target is not None
             ),
             "has_preferences": bool(slots.preferences),
+            "scene_detected": scene_detected,
+            "scene_preferred_facets": list(scene_preferred_facets or ()),
         }
         if structured_candidates:
             extra["structured_candidate_count"] = len(structured_candidates)
         return extra
+
+    @staticmethod
+    def _scene_aware_roles(preferred_roles: Sequence[str], *, scene_detected: str | None) -> tuple[str, ...]:
+        roles = list(preferred_roles)
+        if scene_detected and "merchant_scene_fit" in roles:
+            roles = ["merchant_scene_fit", *[role for role in roles if role != "merchant_scene_fit"]]
+        return tuple(roles)
 
     @staticmethod
     def _normalize_slots(slots: LocalLifeSlots | Mapping[str, Any] | None) -> LocalLifeSlots:

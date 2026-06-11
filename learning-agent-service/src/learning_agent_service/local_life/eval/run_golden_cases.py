@@ -54,6 +54,7 @@ class GoldenCase:
     expected_rag_mode: str | None = None
     expected_graph_runtime: str | None = "langgraph"
     expected_runner_kind: str | None = "langgraph"
+    intent: str | None = None
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any]) -> "GoldenCase":
@@ -63,7 +64,28 @@ class GoldenCase:
             turns = [turns]
         elif not isinstance(turns, Sequence) or isinstance(turns, (bytes, bytearray)):
             turns = [turns]
-        turns_tuple = tuple(_clean_text(item) for item in turns if _clean_text(item))
+
+        normalized_turns: list[str] = []
+        for item in turns:
+            text = ""
+            if isinstance(item, Mapping):
+                text = _clean_text(item.get("user") or item.get("query") or item.get("text"))
+            else:
+                text = _clean_text(item)
+            if text:
+                normalized_turns.append(text)
+
+        turns_tuple = tuple(normalized_turns)
+        expected_contains = (
+            raw.get("expected_contains")
+            or raw.get("expected_output_contains")
+            or expected.get("contains")
+        )
+        expected_not_contains = (
+            raw.get("expected_not_contains")
+            or raw.get("forbidden_output")
+            or expected.get("not_contains")
+        )
         query = _clean_text(raw.get("query") or (turns_tuple[-1] if turns_tuple else ""))
         return cls(
             case_id=_clean_text(raw.get("case_id") or raw.get("id") or query or "case"),
@@ -73,13 +95,14 @@ class GoldenCase:
             session_context=_as_mapping(raw.get("session_context")),
             client_context=_as_mapping(raw.get("client_context")),
             extra_payload=_as_mapping(raw.get("extra_payload")),
-            expected_contains=_string_list(raw.get("expected_contains") or expected.get("contains")),
-            expected_not_contains=_string_list(raw.get("expected_not_contains") or expected.get("not_contains")),
+            expected_contains=_string_list(expected_contains),
+            expected_not_contains=_string_list(expected_not_contains),
             expected_metrics=_as_mapping(raw.get("expected_metrics") or expected.get("metrics")),
             expected_route_branch=_clean_text(raw.get("expected_route_branch") or expected.get("route_branch")) or None,
             expected_rag_mode=_clean_text(raw.get("expected_rag_mode") or expected.get("rag_mode")) or None,
             expected_graph_runtime=_clean_text(raw.get("expected_graph_runtime") or expected.get("graph_runtime")) or "langgraph",
             expected_runner_kind=_clean_text(raw.get("expected_runner_kind") or expected.get("runner_kind")) or "langgraph",
+            intent=_clean_text(raw.get("intent")) or None,
         )
 
 

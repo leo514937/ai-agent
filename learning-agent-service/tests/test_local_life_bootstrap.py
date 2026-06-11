@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import _bootstrap  # noqa: F401
 
-from learning_agent_service.config.settings import OpenAISettings, QdrantSettings, Settings
+from learning_agent_service.config.settings_impl import OpenAISettings, QdrantSettings, Settings
 
 
 class _FakeBusinessClient:

@@ -1,9 +1,0 @@
-D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:49: UserWarning: Api key is used with an insecure connection.
-  client = QdrantClient(
-{"ts": "2026-05-21T12:43:08.603138+00:00", "level": "INFO", "logger": "httpx", "message": "HTTP Request: GET http://localhost:6333/collections/user_semantic_memory/exists \"HTTP/1.1 200 OK\""}
-{"ts": "2026-05-21T12:43:08.988234+00:00", "level": "INFO", "logger": "httpx", "message": "HTTP Request: POST http://localhost:6333/collections/local_life_knowledge_chunks/points/scroll \"HTTP/1.1 200 OK\""}
-INFO:     Started server process [18652]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
-{"ts": "2026-05-21T12:43:09.468869+00:00", "level": "INFO", "logger": "httpx", "message": "HTTP Request: GET http://localhost:6333 \"HTTP/1.1 200 OK\""}

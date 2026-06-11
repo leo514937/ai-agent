@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 import _bootstrap  # noqa: F401
 
-from learning_agent_service.application.dependencies import InfrastructureClients
-from learning_agent_service.config.settings import OpenAISettings, PostgresSettings, QdrantSettings, Settings
+from learning_agent_service.application.dependencies_impl import InfrastructureClients
+from learning_agent_service.config.settings_impl import OpenAISettings, PostgresSettings, QdrantSettings, Settings
 from learning_agent_service.infrastructure.db.openai_client import OpenAIRuntime
 
 try:  # pragma: no cover - optional runtime dependency
@@ -27,7 +27,7 @@ class MemoryVectorSizeProbeTestCase(unittest.TestCase):
         return sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False, future=True)
 
     def test_resolve_memory_vector_size_probes_embedding_when_missing(self) -> None:
-        dependencies_module = importlib.import_module("learning_agent_service.application.dependencies")
+        dependencies_module = importlib.import_module("learning_agent_service.application.dependencies_impl")
         settings = Settings(
             prefer_real_adapters=True,
             allow_in_memory_fallback=False,
@@ -49,7 +49,7 @@ class MemoryVectorSizeProbeTestCase(unittest.TestCase):
         mocked_embed.assert_called_once()
 
     def test_build_durable_memory_backend_infers_missing_vector_size(self) -> None:
-        dependencies_module = importlib.import_module("learning_agent_service.application.dependencies")
+        dependencies_module = importlib.import_module("learning_agent_service.application.dependencies_impl")
         session_factory = self._build_session_factory()
         settings = Settings(
             prefer_real_adapters=True,

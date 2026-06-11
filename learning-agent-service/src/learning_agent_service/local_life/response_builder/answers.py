@@ -6,6 +6,7 @@ from typing import Any
 from learning_agent_service.domain.utils import as_mapping as _as_mapping, clean_text as _clean_text
 
 from learning_agent_service.local_life.answer_contract import AnswerContract
+from learning_agent_service.local_life.answer_depth_policy import derive_answer_depth_policy
 from learning_agent_service.local_life.answer_linter import lint_answer
 from learning_agent_service.local_life.answer_planner import (
     EvidencePack,
@@ -13,6 +14,7 @@ from learning_agent_service.local_life.answer_planner import (
     LocalLifeAnswerPlan,
     parse_answer_plan_payload,
 )
+from learning_agent_service.local_life.answer_structure_composer import AnswerStructureComposer
 from learning_agent_service.local_life.facet_result_bundle import FacetResultBundle
 from learning_agent_service.local_life.realtime_contract import fallback_message_for_facet
 from learning_agent_service.local_life.schemas import (
@@ -160,6 +162,33 @@ def build_distance_only_answer(
     if distance_km is not None:
         return f"{topic_name}距离你约{_format_distance(distance_km)}。"
     return fallback_message_for_facet("distance_eta", topic_name) or f"抱歉，暂时无法确认与{topic_name}的距离。"
+
+def build_comparison_answer(
+    topic_name: str,
+    ranked_candidates: Sequence[RankedCandidate],
+    evidence_claims: Sequence[EvidenceClaim],
+    answer_contract: AnswerContract | None = None,
+    user_need: Any | None = None,
+    facet_result_bundle: FacetResultBundle | None = None,
+) -> str:
+    clean_count, strong_count, medium_count = _evidence_quality_counts(evidence_claims)
+    policy = derive_answer_depth_policy(
+        answer_contract,
+        clean_evidence_count=clean_count,
+        strong_evidence_count=strong_count,
+        medium_evidence_count=medium_count,
+    )
+    composer = AnswerStructureComposer()
+    result = composer.compose(
+        answer_contract=answer_contract,
+        topic_name=topic_name,
+        ranked_candidates=list(ranked_candidates),
+        evidence_claims=list(evidence_claims),
+        answer_depth_policy=policy,
+        user_need=user_need,
+        facet_result_bundle=facet_result_bundle,
+    )
+    return result.answer_text
 
 def build_single_shop_review_answer(topic_name: str, ranked_candidates: Sequence[RankedCandidate], evidence_claims: Sequence[EvidenceClaim]) -> str:
     sections = []
@@ -347,7 +376,14 @@ def validate_answer_against_contract(
                 facet_result_bundle=facet_result_bundle,
             )
         elif answer_contract.answer_style == "comparison":
-            return answer_text
+            return build_comparison_answer(
+                topic_name=topic_name,
+                ranked_candidates=ranked_candidates,
+                evidence_claims=evidence_claims,
+                answer_contract=answer_contract,
+                user_need=user_need,
+                facet_result_bundle=facet_result_bundle,
+            )
         else:
             return answer_text
 

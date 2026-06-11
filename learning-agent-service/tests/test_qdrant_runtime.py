@@ -7,9 +7,9 @@ from unittest.mock import patch
 
 import _bootstrap  # noqa: F401
 
-from learning_agent_service.application import dependencies as dependencies_module
-from learning_agent_service.application.dependencies import InfrastructureClients
-from learning_agent_service.config.settings import QdrantSettings, Settings
+import learning_agent_service.application.dependencies_impl as dependencies_module
+from learning_agent_service.application.dependencies_impl import InfrastructureClients
+from learning_agent_service.config.settings_impl import QdrantSettings, Settings
 from learning_agent_service.infrastructure.db.openai_client import OpenAIRuntime
 from learning_agent_service.infrastructure.db import qdrant as qdrant_module
 from learning_agent_service.infrastructure.db.errors import InfrastructureConfigurationError

@@ -136,7 +136,7 @@ class SequentialWorkflowRunner:
             if self._is_terminal(state):
                 return self._finalize_terminal(state)
             return self._finalize_terminal(state, default_terminal=TerminalEvent.FINAL)
-        if routing is not None and routing.blocked:
+        if routing is not None and routing.blocked and str(state["turn"].execution_mode).strip().lower() != "plan_execute":
             state = self._invoke_stage("compose_answer", self.services.compose_answer, state)
             state = self._materialize_pending_clarification_from_answer(state)
             if self._is_terminal(state):
@@ -436,7 +436,7 @@ class SequentialWorkflowRunner:
             state = self._finalize_terminal(state, default_terminal=TerminalEvent.FINAL)
             yield from drain_emitted_events()
             return
-        if routing is not None and routing.blocked:
+        if routing is not None and routing.blocked and str(state["turn"].execution_mode).strip().lower() != "plan_execute":
             self._emit_stage_event(state, "answer_stream_started", "compose_answer", "started", elapsed_ms=0.0)
             yield from drain_emitted_events()
             gen = self._invoke_stage_streaming("compose_answer", self.services.compose_answer, state)

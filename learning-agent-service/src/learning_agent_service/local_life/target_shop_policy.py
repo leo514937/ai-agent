@@ -439,17 +439,8 @@ class TargetShopPolicy:
                 "不吵",
             )
         )
-        if low_info and not has_explicit_shop_hint:
-            return TargetShop(
-                source="session",
-                resolution_source="missing",
-                confidence=0.0,
-                is_explicit_in_current_turn=False,
-                should_clarify=True,
-                reason="low_information_query",
-                candidate_shop_ids=[],
-            )
-
+        from learning_agent_service.local_life.clarification_strategy import ClarificationStrategy
+        
         has_pronoun = any(p in query_lower for p in _PRONOUNS)
         context_candidates: list[tuple[str, int | None, str | None]] = []
         for source_label, context_map in (("client_selected_shop", client_context_map), ("session_current_shop", session_context_map)):
@@ -470,6 +461,26 @@ class TargetShopPolicy:
             )
             if shop_id or shop_name:
                 context_candidates.append((source_label, int(shop_id) if shop_id not in (None, "") else None, str(shop_name) if shop_name not in (None, "") else None))
+
+        has_resolved_ref = bool(context_candidates) or bool(ranked_candidates)
+        should_clarify, missing_slot, clarify_reason = ClarificationStrategy.should_clarify_target_shop(
+            raw_query=raw_query,
+            is_low_info=low_info,
+            has_explicit_shop_hint=has_explicit_shop_hint,
+            has_pronoun=has_pronoun,
+            has_resolved_ref=has_resolved_ref,
+        )
+
+        if should_clarify:
+            return TargetShop(
+                source="session",
+                resolution_source="missing",
+                confidence=0.0,
+                is_explicit_in_current_turn=False,
+                should_clarify=True,
+                reason=clarify_reason or "clarification_needed",
+                candidate_shop_ids=[],
+            )
 
         if nearby_recommendation_like and not has_pronoun and not eff_explicit_name:
             return TargetShop(

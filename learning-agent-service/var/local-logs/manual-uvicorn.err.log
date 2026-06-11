@@ -1,2 +1,0 @@
-D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:49: UserWarning: Api key is used with an insecure connection.
-  client = QdrantClient(

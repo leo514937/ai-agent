@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from .scene_policy import ScenePolicy
 from .schemas import ContextRef, LocalLifeSlots, RequiredFacet, UserNeed
 
 # Keywords for checking facets in raw queries
@@ -267,16 +268,62 @@ class UserNeedParser:
 
         # 3. Missing slots determination
         missing_slots: list[str] = []
-        if (has_location_keyword or intent == "restaurant_recommendation") and not has_location_ctx:
+        from learning_agent_service.local_life.clarification_strategy import ClarificationStrategy
+
+        pending_ambiguity = ""
+        pending_clarification = session_ctx.get("pending_clarification")
+        if isinstance(pending_clarification, Mapping):
+            pending_ambiguity = str(pending_clarification.get("ambiguity_type") or "").strip().lower()
+        clarification_asked_slots: list[str] = []
+        if pending_ambiguity in {"location", "city", "area", "district", "region"}:
+            clarification_asked_slots.append("location")
+        elif pending_ambiguity in {"reference_clarify", "shop_name"}:
+            clarification_asked_slots.append("shop_name")
+        elif pending_ambiguity == "category":
+            clarification_asked_slots.append("category")
+
+        should_clarify_location = ClarificationStrategy.should_clarify_location(
+            is_recommendation=bool(has_location_keyword or intent == "restaurant_recommendation"),
+            has_location_slot=has_location_ctx,
+            has_explicit_shop=bool(slots.shop_query or slots.shop_ids),
+        )
+        if should_clarify_location:
             missing_slots.append("location")
 
         constraints: dict[str, Any] = {}
+        detected_scene = ScenePolicy.detect_scene(query)
+        if detected_scene:
+            constraints["scene_detected"] = detected_scene
+        scene_preferred_facets = ScenePolicy.get_preferred_facets(query)
+        if scene_preferred_facets:
+            constraints["scene_preferred_facets"] = scene_preferred_facets
         if slots.scene:
             constraints["scene"] = slots.scene
         if slots.preferences:
             constraints["preferences"] = list(slots.preferences)
         if slots.avoid:
             constraints["avoid"] = list(slots.avoid)
+        if clarification_asked_slots:
+            constraints["clarification_asked_slots"] = clarification_asked_slots
+
+        has_context_shop = bool(
+            session_ctx.get("selected_shop_id")
+            or session_ctx.get("current_shop_id")
+            or session_ctx.get("selected_shop_name")
+            or session_ctx.get("current_shop")
+            or client_ctx.get("selected_shop_id")
+            or client_ctx.get("shopId")
+            or client_ctx.get("selected_shop_name")
+            or client_ctx.get("shopName")
+        )
+        priority_slot = ClarificationStrategy.get_clarification_priority(
+            missing_slots=missing_slots,
+            intent=intent_str,
+            has_context_shop=has_context_shop,
+        )
+        if priority_slot:
+            constraints["clarification_priority_slot"] = priority_slot
+            missing_slots = [priority_slot, *[slot for slot in missing_slots if slot != priority_slot]]
 
         # Parse recommendation count
         recommendation_count = 3

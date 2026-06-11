@@ -10,8 +10,8 @@ import _bootstrap  # noqa: F401
 import httpx
 from openai import AuthenticationError
 
-from learning_agent_service.config.settings import Settings
-import learning_agent_service.config.settings as settings_module
+from learning_agent_service.config.settings_impl import Settings
+import learning_agent_service.config.settings_impl as settings_module
 from learning_agent_service.infrastructure.db.openai_client import FailoverOpenAIClient, OpenRouterFilterTransport
 
 

@@ -189,4 +189,36 @@ def __getattr__(name: str) -> Any:
         from .slot_extractor import extract_slots as value
 
         return value
+    if name in {"business_metrics_collector", "BusinessMetricsCollector", "QueryMetrics", "MetricsSummary"}:
+        from .business_metrics import (
+            business_metrics_collector as value_business_metrics_collector,
+            BusinessMetricsCollector as value_BusinessMetricsCollector,
+            QueryMetrics as value_QueryMetrics,
+            MetricsSummary as value_MetricsSummary,
+        )
+        value_map = {
+            "business_metrics_collector": value_business_metrics_collector,
+            "BusinessMetricsCollector": value_BusinessMetricsCollector,
+            "QueryMetrics": value_QueryMetrics,
+            "MetricsSummary": value_MetricsSummary,
+        }
+        return value_map[name]
+    if name in {"resolve_realtime_conflict", "should_use_tool_result_for_facet", "get_freshness_status", "REALTIME_FACETS", "DataSourcePriority", "ConflictResolution"}:
+        from .realtime_conflict_resolver import (
+            resolve_realtime_conflict as value_resolve_realtime_conflict,
+            should_use_tool_result_for_facet as value_should_use_tool_result_for_facet,
+            get_freshness_status as value_get_freshness_status,
+            REALTIME_FACETS as value_REALTIME_FACETS,
+            DataSourcePriority as value_DataSourcePriority,
+            ConflictResolution as value_ConflictResolution,
+        )
+        value_map = {
+            "resolve_realtime_conflict": value_resolve_realtime_conflict,
+            "should_use_tool_result_for_facet": value_should_use_tool_result_for_facet,
+            "get_freshness_status": value_get_freshness_status,
+            "REALTIME_FACETS": value_REALTIME_FACETS,
+            "DataSourcePriority": value_DataSourcePriority,
+            "ConflictResolution": value_ConflictResolution,
+        }
+        return value_map[name]
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

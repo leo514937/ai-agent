@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from learning_agent_service.application.dependencies import AppDependencies, build_dependencies
+from learning_agent_service.application.dependencies_impl import AppDependencies, build_dependencies
 from learning_agent_service.application.router import (
     _looks_like_unserviceable_location,
     build_initial_routing_decision,

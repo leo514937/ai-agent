@@ -9,20 +9,53 @@
 
 ### Main Graph Nodes
 - load_context
+- request_legality
+- illegal_request_response
+- hard_guard
+- clarification_or_reject
+- query_safety
+- safety_reject_response
+- query_merge_for_local_life
+- merged_query_safety
+- top_level_intent_router
+- identity_answer
+- capability_answer
+- direct_chat_answer
+- out_of_scope_response
 - understand_turn
-- route_gate
-- rag_subgraph
-- recommendation_subgraph
-- tool_subgraph
-- compose_answer
+- resolve_target_shop
+- build_answer_contract
+- build_source_contract
+- complexity_router
+- clarification_node
+- direct_executor
+- rule_review
+- workflow_executor
+- select_required_sources
+- rag_executor
+- tool_executor
+- recommendation_executor
+- merge_or_rank
+- contract_review
+- planner_node
+- plan_validator
+- plan_executor
+- execute_plan_step
+- collect_step_result
+- complex_review
+- final_answer
+- final_answer_safety
+- final_safety_fallback
+- repair_answer
+- final_with_limitations
 - persist_session
 - emit_final
 
 ## Baseline Samples
-- direct_chat [direct_chat] -> `你好，我在。你可以直接告诉我想查什么、想解释什么，或者把问题贴出来。`
+- direct_chat [direct_chat] -> `你好：目前只能先给你一个部分判断。整体来看，这家店值得继续关注。`
 - single_shop [single_shop] -> `海底捞水晶城店怎么样：目前只能先给你一个部分判断。整体来看，这家店值得继续关注。`
 - query_merge_pronoun [query_merge] -> `它有券吗：目前只能先给你一个部分判断。整体来看，这家店值得继续关注。`
-- recommendation [recommendation] -> `我先帮你推荐以下这几家店铺： 1. 候选店A - 推荐理由：当前候选里它的综合信息比较靠前，值得优先查看。 - 适合场景：适合约会、聊天或轻松聚餐。 - 注意事项：建议先确认营业状态、预算和是否需要排队。 2. 候选店B - 推荐理由：当前`
+- recommendation [recommendation] -> `我先帮你推荐以下这几家店铺：  1. 你附近候选店A - 推荐理由：当前候选里它的综合信息比较靠前，值得优先查看。 - 适合场景：适合约会、聊天或轻松聚餐。 - 注意事项：建议先确认营业状态、预算和是否需要排队。  2. 你附近候选店B -`
 - mixed_facet [mixed_facet] -> `海底捞水晶城店有券吗，现在营业吗：目前只能先给你一个部分判断。整体来看，这家店值得继续关注。`
 - plan_execute [planning] -> `Plan execution completed successfully.`
 

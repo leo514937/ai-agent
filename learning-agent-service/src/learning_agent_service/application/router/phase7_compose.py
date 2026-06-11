@@ -331,6 +331,8 @@ def _build_answer_contract(
     if not scope_kind:
         scope_kind = str(routing_extra.get("scope_kind") or "").strip() or None
     if not answer_style:
+        answer_style = str(routing_extra.get("answer_style") or "").strip() or None
+    if not answer_style:
         routing_action = str(getattr(routing, "required_action", "") or "").strip().lower() if routing is not None else ""
         raw_query_text = str(getattr(turn, "raw_query", "") or "")
         compact_query_text = raw_query_text.replace(" ", "")

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from learning_agent_service.config.settings import RedisSettings
+from learning_agent_service.config.settings_impl import RedisSettings
 
 from .errors import InfrastructureConfigurationError, require_dependency
 

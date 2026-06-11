@@ -389,11 +389,12 @@ class WorkflowNodeAdapterStagesFrontAMixin:
             model_gateway = getattr(self.container, "model_gateway", None)
             if model_gateway is None or not hasattr(model_gateway, "classify_turn"):
                 return state
-    
+
             turn = state["turn"]
             persistent = state["persistent"]
             routing = _routing_decision_for_turn(turn)
-            if routing is not None and (routing.blocked or routing.required_action in {"clarify", "reject", "direct_answer", "memory_update", "no_op"}):
+            allow_plan_execute = str(getattr(turn, "execution_mode", "") or "").strip().lower() == "plan_execute"
+            if routing is not None and not allow_plan_execute and (routing.blocked or routing.required_action in {"clarify", "reject", "direct_answer", "memory_update", "no_op"}):
                 return state
             if getattr(persistent, "pending_clarification", None) is not None and _pending_clarification_matches_query(turn.raw_query, persistent):
                 pending_restore = dict(dict(turn.extra).get("pending_clarification_restore") or {})
@@ -614,6 +615,27 @@ class WorkflowNodeAdapterStagesFrontAMixin:
             if routing.required_action in {"tool_call", "rag_plus_tool"}:
                 state = ensure_tool_plan(state)
             state = ensure_task_plan(state)
+            task_plan = getattr(state["turn"], "task_plan", None)
+            if (
+                getattr(state["turn"], "execution_mode", "") == "plan_execute"
+                and task_plan is not None
+                and getattr(task_plan, "enabled", False)
+                and hasattr(self, "plan_planner")
+            ):
+                state = self.plan_planner(state)
+                state = self.plan_validator(state)
+                for _ in range(2):
+                    state = self.step_executor(state)
+                    state = self.progress_checker(state)
+                    state = self.plan_reviewer(state)
+                    if getattr(state["turn"], "need_human_approval", False):
+                        if hasattr(self, "human_approval_stub"):
+                            state = self.human_approval_stub(state)
+                        break
+                    if not getattr(state["turn"], "need_replan", False):
+                        break
+                    state = self.replanner(state)
+                    state = self.plan_validator(state)
             state = _update_phase0_trace(
                 state,
                 parsed_intent=decision_result.intent.value if hasattr(decision_result.intent, "value") else str(decision_result.intent),

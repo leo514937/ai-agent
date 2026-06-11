@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from learning_agent_service.config.settings import ServiceSettings
+from learning_agent_service.config.settings_impl import ServiceSettings
 
 from .errors import InfrastructureError
 from .openai_client import OpenAIRuntime, build_openai_runtime

@@ -6,12 +6,12 @@ config:
 graph TD;
 	__start__([<p>__start__</p>]):::first
 	tool_plan(tool_plan)
-	execute_tool_pipeline(execute_tool_pipeline)
+	tool_executor(tool_executor)
 	finalize_tool(finalize_tool)
 	__end__([<p>__end__</p>]):::last
 	__start__ --> tool_plan;
-	execute_tool_pipeline --> finalize_tool;
-	tool_plan --> execute_tool_pipeline;
+	tool_executor --> finalize_tool;
+	tool_plan --> tool_executor;
 	finalize_tool --> __end__;
 	classDef default fill:#f2f0ff,line-height:1.2
 	classDef first fill-opacity:0

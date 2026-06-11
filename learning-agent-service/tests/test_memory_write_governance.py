@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import _bootstrap  # noqa: F401
 
-from learning_agent_service.application.dependencies import _build_semantic_memory_store
+from learning_agent_service.application.dependencies_impl import _build_semantic_memory_store
 from learning_agent_service.config import Settings
 from learning_agent_service.domain import (
     ClarificationCard,

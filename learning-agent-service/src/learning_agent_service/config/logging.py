@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from .settings import ObservabilitySettings
+from .settings_impl import ObservabilitySettings
 
 _LOG_CONTEXT = contextvars.ContextVar("learning_agent_log_context", default=None)
 _STANDARD_LOG_RECORD_FIELDS = set(logging.LogRecord("", 0, "", 0, "", (), None).__dict__.keys())

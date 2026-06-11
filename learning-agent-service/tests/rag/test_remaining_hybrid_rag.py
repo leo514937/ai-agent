@@ -314,7 +314,7 @@ def test_remote_reranker_respects_remote_order() -> None:
         enabled=True,
         model="cross-encoder",
     )
-    with patch("learning_agent_service.rag.retrieval.httpx.post", return_value=FakeResponse()):
+    with patch("learning_agent_service.rag.retrieval.shared.httpx.post", return_value=FakeResponse()):
         reranked = reranker.rerank(
             RetrievalPlan(
                 semantic_query="RAG retrieval",
@@ -343,7 +343,7 @@ def test_remote_reranker_timeout_falls_back_to_heuristic() -> None:
         enabled=True,
         model="cross-encoder",
     )
-    with patch("learning_agent_service.rag.retrieval.httpx.post", side_effect=TimeoutErrorStub("timeout")):
+    with patch("learning_agent_service.rag.retrieval.shared.httpx.post", side_effect=TimeoutErrorStub("timeout")):
         reranked = reranker.rerank(
             RetrievalPlan(
                 semantic_query="RAG retrieval",

@@ -184,22 +184,6 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                 or (state["persistent"].current_shop and str(state["persistent"].current_shop).strip() not in generic_shop_names)
                 or (state["persistent"].selected_shop_name and str(state["persistent"].selected_shop_name).strip() not in generic_shop_names)
             )
-            if has_specific_shop_context and coupon_query and getattr(answer_contract, "answer_style", None) != "coupon_only":
-                mixed_coupon_query = any(
-                    token in compact_raw_query
-                    for token in ("\u8425\u4e1a", "\u5f00\u95e8", "\u73af\u5883", "\u53e3\u5473", "\u670d\u52a1", "\u63a8\u8350", "\u5b89\u5168", "\u666f\u5982", "\u65f6\u95f4")
-                )
-                if not mixed_coupon_query:
-                    answer_contract = answer_contract.model_copy(
-                        update={
-                            "answer_style": "coupon_only",
-                            "allow_recommendation": False,
-                            "allow_extra_context": False,
-                            "realtime_required": True,
-                            "evidence_policy": "strict",
-                        }
-                    )
-    
             if current_shop and route_gate_branch in {"tool", "rag_plus_tool", "rag"} and str(final_response_mode or "").strip().lower() in {"warn_only", "ask_clarification"}:
                 final_response_mode = "partial_grounded"
 
@@ -610,6 +594,25 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                 result = result.model_copy(update={"answer_text": final_answer_safety.answer_text})
             else:
                 result = result.__class__(**{**getattr(result, "__dict__", {}), "answer_text": final_answer_safety.answer_text})
+            plan_summary = getattr(turn, "final_task_summary", None)
+            result_answer_text = str(getattr(result, "answer_text", "") or "").strip()
+            if plan_summary is not None and "Plan execution" not in result_answer_text:
+                summary_status = str(getattr(plan_summary, "status", "") or "").strip() or "unknown"
+                completed_steps = getattr(plan_summary, "completed_steps", None)
+                total_steps = getattr(plan_summary, "total_steps", None)
+                final_decision = str(getattr(plan_summary, "final_decision", "") or "").strip()
+                summary_lines = [f"Plan execution summary: {summary_status}"]
+                if completed_steps is not None and total_steps is not None:
+                    summary_lines[0] = f"{summary_lines[0]} ({completed_steps}/{total_steps})"
+                if final_decision:
+                    summary_lines.append(final_decision)
+                plan_summary_text = "\n".join(summary_lines)
+                if result_answer_text:
+                    plan_summary_text = f"{result_answer_text}\n\n{plan_summary_text}"
+                if hasattr(result, "model_copy"):
+                    result = result.model_copy(update={"answer_text": plan_summary_text})
+                else:
+                    result = result.__class__(**{**getattr(result, "__dict__", {}), "answer_text": plan_summary_text})
             final_answer_audit = audit_final_answer(
                 answer_text=str(result.answer_text or ""),
                 answer_contract=answer_contract,

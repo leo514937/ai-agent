@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
-from learning_agent_service.config.settings import OpenAISettings
+from learning_agent_service.config.settings_impl import OpenAISettings
 
 from .errors import InfrastructureConfigurationError, require_dependency
 

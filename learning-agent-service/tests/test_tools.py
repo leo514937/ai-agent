@@ -47,7 +47,7 @@ from learning_agent_service.tools.service import (
     ToolResultNormalizer as RuntimeToolResultNormalizer,
     build_default_tool_registry,
 )
-from learning_agent_service.application.dependencies import OpenAIAnswerComposeAdapter
+from learning_agent_service.application.dependencies_impl import OpenAIAnswerComposeAdapter
 from learning_agent_service.application.router import build_initial_routing_decision
 from learning_agent_service.infrastructure.db.openai_client import OpenAIRuntime
 

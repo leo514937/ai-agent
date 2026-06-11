@@ -63,6 +63,8 @@ def _route_decision_for_turn(turn) -> str:
 
 
 def route_after_load_context(state: GraphState) -> str:
+    if str(getattr(state["turn"], "execution_mode", "") or "").strip().lower() == "plan_execute":
+        return "understand_turn"
     routing = state["turn"].routing_decision
     if routing is not None and (routing.blocked or str(routing.required_action).strip().lower() in _DIRECT_ACTIONS):
         return "compose_answer"
@@ -90,33 +92,6 @@ def route_gate(state: GraphState) -> Command:
         "clarify": "clarify",
     }
     effective_action = effective_action_map.get(branch, str(getattr(routing, "required_action", "") or "").strip().lower() if routing is not None else None)
-    if routing is not None and effective_action and effective_action != str(getattr(routing, "required_action", "") or "").strip().lower():
-        routing = routing.model_copy(
-            update={
-                "required_action": effective_action,
-                "blocked": False,
-                "blocked_reason": None,
-                "should_retrieve": effective_action in {"rag_retrieval", "rag_plus_tool"},
-                "should_call_tool": effective_action in {"tool_call", "rag_plus_tool"},
-                "should_use_memory": effective_action not in {"clarify", "reject", "no_op"},
-                "should_persist_memory": effective_action not in {"clarify", "reject", "no_op"},
-                "should_vectorize_memory": effective_action not in {"clarify", "reject", "no_op"},
-                "should_emit_retrieval_events": effective_action in {"rag_retrieval", "rag_plus_tool"},
-            }
-        )
-        turn_extra = dict(turn.extra)
-        turn_extra["routing_decision"] = routing.model_dump(mode="json")
-        state["turn"] = turn.model_copy(update={"routing_decision": routing, "extra": turn_extra})
-        turn = state["turn"]
-    if branch == "complex" and str(getattr(turn, "execution_mode", "") or "").strip().lower() != "plan_execute":
-        # Normalize the complex routing branch into the plan executor's execution mode.
-        state["turn"] = turn.model_copy(
-            update={
-                "execution_mode": "plan_execute",
-                "task_complexity": "complex",
-            }
-        )
-        turn = state["turn"]
     required_action = str(getattr(routing, "required_action", "") or "").strip().lower() if routing is not None else None
     route_candidate = str(getattr(routing, "route_candidate", "") or "").strip().lower() if routing is not None else None
     route_reason = str(getattr(routing, "route_reason", "") or "").strip() if routing is not None else ""
@@ -252,6 +227,7 @@ def route_gate(state: GraphState) -> Command:
 
     turn_extra = dict(turn.extra)
     turn_extra["route_gate"] = gate_trace
+    turn_extra["execution_mode"] = execution_mode
     turn_extra["routing_contract"] = routing_contract.model_dump(mode="json")
     state["turn"] = turn.model_copy(update={
         "routing_contract": routing_contract,
@@ -706,6 +682,8 @@ def route_after_understand(state: GraphState) -> str:
     routing = state["turn"].routing_decision
     if routing is not None and (routing.blocked or str(routing.required_action).strip().lower() in _DIRECT_ACTIONS):
         return "compose_answer"
+    if getattr(state["turn"], "final_task_summary", None) is not None:
+        return "compose_answer"
     if should_run_rag(state):
         return "rag_subgraph"
     if should_run_tools(state):
@@ -761,6 +739,20 @@ def route_decider(state: GraphState) -> str:
         or (route_candidate.startswith("local_life.") and "recommend" in route_candidate)
         or recommendation_like_query
     )
+
+    coupon_like_query = any(token in compact_query_text for token in ("券", "优惠", "代金券", "团购"))
+    generic_search_query = any(token in compact_query_text for token in ("附近", "周边", "推荐", "找个", "搜", "查附近", "有什么"))
+    explicit_target_shop = any(
+        str(source or "").strip()
+        for source in (
+            extra.get("explicit_query_shop"),
+            extra.get("target_shop_name"),
+            extra.get("current_shop"),
+            extra.get("selected_shop_name"),
+        )
+    ) or extra.get("selected_shop_id") is not None or extra.get("target_shop_id") is not None
+    if coupon_like_query and not explicit_target_shop and not generic_search_query:
+        return "clarify"
 
     if routing.blocked and effective_action == action:
         return "clarify"

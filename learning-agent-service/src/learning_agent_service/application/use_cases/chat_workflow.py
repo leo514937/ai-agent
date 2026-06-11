@@ -11,6 +11,7 @@ from ..workflow.adapters import WorkflowNodeAdapter
 from ..workflow.builder import create_workflow_runner
 from ..workflow.services import (
     RagSubgraphServices,
+    PlanExecuteSubgraphServices,
     ToolSubgraphServices,
     UnderstandTurnServices,
     WorkflowServices,
@@ -92,6 +93,15 @@ class ChatWorkflowService:
                 tool_planner=adapter.tool_planner,
                 tool_executor=adapter.tool_executor,
                 tool_result_normalizer=adapter.tool_result_normalizer,
+            ),
+            plan_execute=PlanExecuteSubgraphServices(
+                plan_planner=adapter.plan_planner,
+                plan_validator=adapter.plan_validator,
+                step_executor=adapter.step_executor,
+                progress_checker=adapter.progress_checker,
+                plan_reviewer=adapter.plan_reviewer,
+                human_approval_stub=adapter.human_approval_stub,
+                replanner=adapter.replanner,
             ),
             compose_answer=adapter.compose_answer,
             persist_session=adapter.persist_session,

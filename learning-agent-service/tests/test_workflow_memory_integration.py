@@ -7,8 +7,8 @@ from unittest.mock import patch
 import _bootstrap  # noqa: F401
 
 from learning_agent_service.api.contracts import ChatStreamRequest
-from learning_agent_service.config.settings import Settings
-from learning_agent_service.config.settings import OpenAISettings, PostgresSettings, QdrantSettings, RedisSettings
+from learning_agent_service.config.settings_impl import Settings
+from learning_agent_service.config.settings_impl import OpenAISettings, PostgresSettings, QdrantSettings, RedisSettings
 from learning_agent_service.infrastructure.db.models import Base
 from learning_agent_service.infrastructure.db.factories import InfrastructureClients
 from learning_agent_service.infrastructure.repositories.memory_trace_repository import MemoryTraceRepository
@@ -39,7 +39,7 @@ class WorkflowMemoryIntegrationTestCase(unittest.TestCase):
 
     def _load_runtime_stack(self):
         try:
-            dependencies_module = importlib.import_module("learning_agent_service.application.dependencies")
+            dependencies_module = importlib.import_module("learning_agent_service.application.dependencies_impl")
             service_module = importlib.import_module("learning_agent_service.application.service")
         except Exception as exc:
             self.skipTest(f"application runtime modules are not available: {exc}")

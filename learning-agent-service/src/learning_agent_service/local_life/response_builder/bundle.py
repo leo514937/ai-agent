@@ -127,7 +127,7 @@ def build_response_bundle(
     inferred_topic = _infer_topic_from_query(raw_query)
     if inferred_topic:
         current_topic = inferred_topic
-        if not current_shop or current_shop in {"本地生活推荐", slots.category, slots.scene} or inferred_topic not in str(current_shop):
+        if not current_shop or current_shop in {"本地生活推荐", slots.category, slots.scene}:
             current_shop = inferred_topic
     model_answer = _clean_text(model_hint.get("answer_text"))
     req_facet_names = [f.name for f in getattr(user_need, "required_facets", []) or []] if user_need is not None else []
@@ -192,13 +192,13 @@ def build_response_bundle(
             user_need and any(getattr(f, "name", str(f)) == "open_status" for f in getattr(user_need, "required_facets", []) or [])
         )
         if has_coupon_query:
-            answer_text = f"{shop_name}实时接口暂无可用券。"
+            answer_text = model_answer or f"{shop_name}实时接口暂无可用券。"
         elif has_open_query:
-            answer_text = f"{shop_name}暂时无法确认当前营业状态。"
+            answer_text = model_answer or f"{shop_name}暂时无法确认当前营业状态。"
         elif answer_contract is not None and answer_contract.answer_style == "single_shop_review":
-            answer_text = build_single_shop_review_answer(shop_name, [], evidence_claims)
+            answer_text = model_answer or build_single_shop_review_answer(shop_name, [], evidence_claims)
         else:
-            answer_text = f"抱歉，系统里暂时没有查到{shop_name}的相关信息。"
+            answer_text = model_answer or f"抱歉，系统里暂时没有查到{shop_name}的相关信息。"
         
 
         bundle = LocalLifeResponseBundle(

@@ -7,7 +7,7 @@ from .logging import (
     configure_logging,
     get_log_context,
 )
-from .settings import (
+from .settings_impl import (
     AppSettings,
     ObservabilitySettings,
     OpenAISettings,

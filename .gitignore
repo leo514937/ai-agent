@@ -46,4 +46,6 @@ var/
 scratch/
 **/scratch/
 pyrightconfig.json
-
+.venv/
+*.sqlite
+*.sqlite-journal

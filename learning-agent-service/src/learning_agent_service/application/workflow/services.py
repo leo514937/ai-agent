@@ -40,6 +40,17 @@ class ToolSubgraphServices:
 
 
 @dataclass
+class PlanExecuteSubgraphServices:
+    plan_planner: StateHandler = passthrough_handler
+    plan_validator: StateHandler = passthrough_handler
+    step_executor: StateHandler = passthrough_handler
+    progress_checker: StateHandler = passthrough_handler
+    plan_reviewer: StateHandler = passthrough_handler
+    human_approval_stub: StateHandler = passthrough_handler
+    replanner: StateHandler = passthrough_handler
+
+
+@dataclass
 class WorkflowServices:
     load_context: StateHandler = passthrough_handler
     consume_pending_clarification: StateHandler = passthrough_handler
@@ -47,6 +58,7 @@ class WorkflowServices:
     understand_turn: UnderstandTurnServices = field(default_factory=UnderstandTurnServices)
     rag_subgraph: RagSubgraphServices = field(default_factory=RagSubgraphServices)
     tool_subgraph: ToolSubgraphServices = field(default_factory=ToolSubgraphServices)
+    plan_execute: PlanExecuteSubgraphServices = field(default_factory=PlanExecuteSubgraphServices)
     compose_answer: StateHandler = passthrough_handler
     persist_session: StateHandler = passthrough_handler
     emit_final: StateHandler = passthrough_handler

@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from learning_agent_service.config.settings import get_settings
+from learning_agent_service.config.settings_impl import get_settings
 from learning_agent_service.infrastructure.db.openai_client import build_openai_runtime
 from learning_agent_service.infrastructure.db.qdrant import build_qdrant_runtime
 from learning_agent_service.local_life.ranker import rerank_parent_evidences
@@ -1435,7 +1435,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     settings = get_settings()
     qdrant_runtime = build_qdrant_runtime(settings.qdrant)
     openai_runtime = build_openai_runtime(settings.openai)
-    from learning_agent_service.application.dependencies import OpenAIEmbeddingAdapter
+    from learning_agent_service.application.dependencies_impl import OpenAIEmbeddingAdapter
 
     retriever = LocalLifeParentChildRetriever(
         qdrant_client=qdrant_runtime.client,

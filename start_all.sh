@@ -462,6 +462,8 @@ echo -e "    - 前端地址: http://localhost:3001"
 echo -e "    - 后端接口: http://localhost:8081"
 echo -e ""
 echo -e "${BLUE}>>> 请在 IDE 中启动 Java 主程序 (HmDianPingApplication)。${NC}"
+echo -e "${BLUE}>>> 正在打开已激活虚拟环境的终端，方便你随时运行 ragas 评测...${NC}"
+powershell.exe -NoProfile -Command "Start-Process powershell -ArgumentList '-NoExit', '-Command', 'cd learning-agent-service; .\.venv\Scripts\activate.ps1'"
 echo -e "----------------------------------------------------"
 
 follow_python_service_logs() {

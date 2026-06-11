@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import _bootstrap  # noqa: F401
 
-from learning_agent_service.config.settings import Settings
+from learning_agent_service.config.settings_impl import Settings
 from learning_agent_service.domain import MemoryRecord, MemoryScope, MemorySource, MemoryStatus, MemoryType
 from learning_agent_service.local_life.schemas import LocationNorm, QueryUnderstandingResult, TimeNorm
 from learning_agent_service.local_life.slot_extractor import extract_slots

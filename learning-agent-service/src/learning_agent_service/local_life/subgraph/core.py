@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 from learning_agent_service.domain.utils import as_mapping as _as_mapping
+from learning_agent_service.config.settings_impl import Settings, get_settings
 
 from .helpers import *  # noqa: F403
 from learning_agent_service.adapters.java_business import JavaBusinessClient
-from learning_agent_service.config.settings import Settings
-from learning_agent_service.config.settings_impl import get_settings
 from learning_agent_service.local_life.catalog import get_default_catalog
 from learning_agent_service.local_life.assistant import LocalLifeModelAssistant
 from learning_agent_service.local_life.query_router import LocalLifeQueryRouter
 from learning_agent_service.safety.guards import LocalLifeSafetyGuard
 
-from .stream import LocalLifeSubgraphRunMixin
+from .stream_stages import LocalLifeSubgraphRunMixin
 
 
 class LocalLifeSubgraph(LocalLifeSubgraphRunMixin):

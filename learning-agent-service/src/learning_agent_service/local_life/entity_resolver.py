@@ -448,33 +448,55 @@ class EntityResolver:
 
 
 def _explicit_entity_from_query_v2(raw_query: str) -> str | None:
-    text = (raw_query or "").strip()
+    text = _clean_text(raw_query).strip()
     if not text:
         return None
-    compact = _clean_text(text).replace(" ", "")
-    compact = compact.rstrip("\u3002\uff01\uff1f?!")
+    text = text.rstrip("\u3002\uff01\uff1f?!")
 
-    suffix_patterns = (
-        "\u600e\u4e48\u6837$",
-        "\u597d\u4e0d\u597d$",
-        "\u503c\u4e0d\u503c\u5f97$",
-        "\u9002\u5408\u7ea6\u4f1a\u5417$",
-        "\u9002\u5408\u7ea6\u4f1a$",
-        "\u6709\u5238\u5417$",
-        "\u73b0\u5728\u8425\u4e1a\u5417$",
-        "\u73b0\u5728\u8fd8\u8425\u4e1a\u5417$",
-        "\u8425\u4e1a\u5417$",
-        "\u591a\u5c11\u94b1$",
-        "\u600e\u4e48\u8d70$",
-        "\u5728\u54ea\u91cc$",
-        "\u5728\u54ea$",
-    )
-    for pattern_text in suffix_patterns:
-        match = re.search(pattern_text, compact, flags=re.IGNORECASE)
-        if match and match.end() == len(compact):
-            candidate = compact[: match.start()].strip(" \u3001,\u3002\uff01\uff1f?!")
+    def _finalize(candidate: str) -> str | None:
+        cleaned = _strip_facet_suffixes(candidate.strip(" \u3001,\u3002\uff01\uff1f?!;；的"))
+        cleaned = cleaned.strip(" \u3001,\u3002\uff01\uff1f?!;；的")
+        if not cleaned or cleaned in _PRONOUNS:
+            return None
+        if any(cleaned.startswith(pronoun) for pronoun in _PRONOUNS):
+            return None
+        compact = cleaned.replace(" ", "")
+        generic_query_tokens = ("附近", "推荐", "餐厅", "饭店", "美食", "店铺", "店家", "一家", "几家")
+        has_entity_shape = any(token in compact for token in ("(", "（", ")", "店", "馆", "楼")) or bool(re.search(r"[A-Za-z0-9]", cleaned))
+        if not has_entity_shape and any(token in compact for token in generic_query_tokens):
+            return None
+        return cleaned
+
+    for pronoun in sorted(_PRONOUNS, key=len, reverse=True):
+        idx = text.find(pronoun)
+        if idx > 0:
+            candidate = _finalize(text[:idx])
             if candidate:
                 return candidate
+
+    suffixes = tuple(
+        dict.fromkeys(
+            [
+                "什么",
+                "哪家",
+                "哪个好",
+                "行不行",
+                "可以吗",
+                "多少钱",
+                "怎么走",
+                "在哪里",
+                "在哪",
+                *_EXPLICIT_SUFFIXES,
+            ]
+        )
+    )
+    for suffix in sorted(suffixes, key=len, reverse=True):
+        match = re.match(rf"^(?P<name>.+?)(?:\s+)?{re.escape(suffix)}$", text, flags=re.IGNORECASE)
+        if not match:
+            continue
+        candidate = _finalize(match.group("name"))
+        if candidate:
+            return candidate
     return None
 
 

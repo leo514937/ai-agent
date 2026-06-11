@@ -2,7 +2,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:  # pragma: no cover - import-time typing only
     from .bootstrap import BootstrapResult, bootstrap_application
-    from .dependencies import ApplicationRuntime
+    from .dependencies_impl import ApplicationRuntime
     from .service import WorkflowLearningAgentService, create_learning_agent_service
 
 __all__ = [
@@ -16,7 +16,7 @@ __all__ = [
 
 def __getattr__(name: str) -> Any:
     if name == "ApplicationRuntime":
-        from .dependencies import ApplicationRuntime as value
+        from .dependencies_impl import ApplicationRuntime as value
 
         return value
     if name == "BootstrapResult":

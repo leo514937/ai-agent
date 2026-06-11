@@ -188,20 +188,18 @@ class LocalLifeStreamRetrieveMixin:
                         exact_matches.append(shop)
                 if exact_matches:
                     structured_candidates = exact_matches
-        elif target_shop and target_shop.shop_name and query_route.route == "realtime_tool":
-            structured_candidates = self.business_client.search_candidates(
-                query=target_shop.shop_name,
-                slots=slots,
-                limit=getattr(self.settings, "local_life_candidate_limit", 5),
-            )
-            normalized_query = target_shop.shop_name.strip()
-            filtered_by_name = []
-            for shop in structured_candidates:
-                s_name = str(getattr(shop, "name", "") or "")
-                if _is_name_match(normalized_query, s_name):
-                    filtered_by_name.append(shop)
-            if filtered_by_name:
-                structured_candidates = filtered_by_name
+        elif target_shop and query_route.route == "realtime_tool":
+            if target_shop.shop_id is not None:
+                try:
+                    structured_candidates = [self.business_client.get_shop_detail(int(target_shop.shop_id))]
+                except Exception:
+                    _LOGGER.exception("local_life_realtime_target_shop_detail_failed")
+            elif target_shop.shop_name and query_route.use_business_candidates:
+                structured_candidates = self.business_client.search_candidates(
+                    query=target_shop.shop_name,
+                    slots=slots,
+                    limit=getattr(self.settings, "local_life_candidate_limit", 5),
+                )
 
         if slots.category and slots.category.strip() and query_route.use_business_candidates and not eff_resolved_shop_ids:
             normalized_cat = slots.category.strip()

@@ -2,6 +2,8 @@ from typing import Iterable
 
 from learning_agent_service.domain.utils import clean_text as _clean_text
 from learning_agent_service.domain.utils import as_mapping as _as_mapping
+from learning_agent_service.api.contracts import ApprovalRequiredPayload
+from learning_agent_service.application.workflow.adapters import _build_recommendation_answer_text
 from ..answer_sanitizer import sanitize_local_life_output
 from ..evidence_pack import build_evidence_pack
 from ..grounded_verifier import GroundedVerifier
@@ -149,6 +151,17 @@ class LocalLifeStreamComposeMixin:
             elif extra_summaries_text:
                 tool_summary_text = extra_summaries_text
         compact_query = str(command.message or "").replace(" ", "")
+        has_session_shop = any(
+            _clean_text(value)
+            for value in (
+                persistent.current_shop,
+                persistent.selected_shop_name,
+                client_context.get("shopName") if isinstance(client_context, Mapping) else None,
+                client_context.get("shop_name") if isinstance(client_context, Mapping) else None,
+                client_context.get("selected_shop_name") if isinstance(client_context, Mapping) else None,
+                client_context.get("current_shop") if isinstance(client_context, Mapping) else None,
+            )
+        )
         recommendation_like_query = any(
             token in compact_query
             for token in ("附近", "周边", "推荐", "几家", "多推荐", "多家")
@@ -283,9 +296,9 @@ class LocalLifeStreamComposeMixin:
                 )
             )
         )
-        if recommendation_clear_session_shop and not query_explicit_shop_name:
+        if recommendation_clear_session_shop and not query_explicit_shop_name and not has_session_shop:
             current_shop_value = None
-        if recommendation_like_query and not query_explicit_shop_name:
+        if recommendation_like_query and not query_explicit_shop_name and not has_session_shop:
             current_topic_value = command.message or current_topic_value
             current_shop_value = None
         if command.message and _clean_text(current_shop_value) == _clean_text(command.message):
@@ -415,11 +428,12 @@ class LocalLifeStreamComposeMixin:
                 }
             )
         elif query_explicit_shop_name or current_shop_value or selected_shop_id is not None:
-            bundle = bundle.model_copy(
-                update={
-                    "answer_text": _build_single_shop_review_answer(final_topic_name, ranked_candidates, evidence_claims),
-                }
-            )
+            if not (response_hint and response_hint.get("answer_text")):
+                bundle = bundle.model_copy(
+                    update={
+                        "answer_text": _build_single_shop_review_answer(final_topic_name, ranked_candidates, evidence_claims),
+                    }
+                )
         if not bundle_metrics.get("answer_quality"):
             final_answer_text = str(bundle.answer_text or "")
             final_answer_char_count = len(final_answer_text)

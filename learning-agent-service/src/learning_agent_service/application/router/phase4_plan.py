@@ -48,13 +48,17 @@ def _task_plan_enabled(turn: Any, routing: RoutingDecision | None) -> tuple[bool
 
         return False, "routing_missing"
 
+    plan_mode = str(getattr(turn, "execution_mode", "") or "").strip().lower()
+    if plan_mode == "plan_execute":
+        return True, "plan_execute_override"
+
     action = str(getattr(routing, "required_action", "") or "").strip().lower()
 
-    if routing.blocked:
+    if routing.blocked and plan_mode != "plan_execute":
 
         return False, "routing_blocked"
 
-    if action != "rag_plus_tool":
+    if action != "rag_plus_tool" and plan_mode != "plan_execute":
 
         return False, "not_rag_plus_tool"
 
@@ -64,7 +68,7 @@ def _task_plan_enabled(turn: Any, routing: RoutingDecision | None) -> tuple[bool
 
         return False, "missing_required_facets"
 
-    if list(getattr(routing, "missing_slots", []) or []):
+    if list(getattr(routing, "missing_slots", []) or []) and plan_mode != "plan_execute":
 
         return False, "missing_slots"
 
@@ -469,6 +473,51 @@ def ensure_task_plan(state: Any) -> Any:
         return state
 
 
+
+    explicit_plan = list(getattr(turn, "plan", []) or [])
+    if explicit_plan and getattr(turn, "task_plan", None) is None:
+        task_plan = TaskPlan(
+            enabled=True,
+            trigger_reason="explicit_plan",
+            summary=str(getattr(turn, "raw_query", "") or "").strip(),
+            route_candidate=getattr(routing, "route_candidate", None),
+            task_complexity="complex",
+            execution_mode=str(getattr(turn, "execution_mode", "plan_execute") or "plan_execute"),
+            can_fallback_to_legacy=True,
+            required_facets=list(getattr(routing, "extra", {}).get("required_facets") or []),
+            optional_facets=list(getattr(routing, "extra", {}).get("optional_facets") or []),
+            steps=explicit_plan,
+            failure_reason=None,
+            extra={
+                "source": "explicit_plan",
+                "task_plan_step_count": len(explicit_plan),
+                "task_plan_step_ids": [step.step_id for step in explicit_plan],
+            },
+        )
+        turn_extra = _apply_phase1_routing_extra(dict(turn.extra), routing)
+        turn_extra["task_plan"] = task_plan.model_dump(mode="json")
+        turn_extra["task_plan_status"] = "reused"
+        turn_extra["task_plan_failure_reason"] = None
+        state["turn"] = turn.model_copy(
+            update={
+                "task_plan": task_plan,
+                "plan": list(task_plan.steps),
+                "task_complexity": getattr(task_plan, "task_complexity", "complex"),
+                "execution_mode": getattr(task_plan, "execution_mode", "plan_execute"),
+                "extra": turn_extra,
+            }
+        )
+        state = _update_phase3_trace(
+            state,
+            task_plan_status="reused",
+            task_plan_failure_reason=None,
+            task_plan_enabled=True,
+            task_plan_trigger_reason="explicit_plan",
+            task_plan_step_count=len(getattr(task_plan, "steps", []) or []),
+            task_plan_step_ids=[step.step_id for step in getattr(task_plan, "steps", []) or []],
+            task_plan_route_candidate=getattr(task_plan, "route_candidate", None),
+        )
+        return state
 
     task_plan = getattr(turn, "task_plan", None)
 

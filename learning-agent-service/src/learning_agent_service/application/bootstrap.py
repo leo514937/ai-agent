@@ -6,7 +6,7 @@ from typing import Any
 
 from learning_agent_service.config import configure_logging, get_settings
 
-from .dependencies import AppDependencies, ApplicationRuntime, _load_qdrant_knowledge_chunks, build_dependencies
+from .dependencies_impl import AppDependencies, ApplicationRuntime, _load_qdrant_knowledge_chunks, build_dependencies
 from .service import WorkflowLearningAgentService, create_learning_agent_service
 
 

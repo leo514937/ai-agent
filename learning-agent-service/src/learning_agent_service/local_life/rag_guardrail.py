@@ -8,6 +8,7 @@ from typing import Any
 from learning_agent_service.domain.utils import as_mapping as _as_mapping
 
 from .answer_contract import AnswerContract
+from .scene_policy import ScenePolicy
 from .rag_relevance import (
     compatible_facets,
     extract_facet,
@@ -17,6 +18,7 @@ from .rag_relevance import (
     normalize_facet,
     support_level,
 )
+from .realtime_conflict_resolver import resolve_realtime_conflict
 
 
 def _shop_id(item: Any) -> int | None:
@@ -167,16 +169,35 @@ class LocalLifeRagGuardrail:
             level = support_level(score)
             drop_reason = None
 
+            claim_text_str = _claim_text(item)
+            has_coupon_text = any(token in claim_text_str for token in ("券", "优惠", "套餐", "团购", "代金券", "票"))
+            has_open_text = any(token in claim_text_str for token in ("营业", "开门", "关门", "营业时间", "关店"))
+
             if rag_mode == "single_shop_rag" and target_shop_id is not None and shop_id is not None and shop_id != target_shop_id:
                 drop_reason = "cross_shop"
             elif facet in forbidden_facets:
                 drop_reason = "forbidden_facet"
-            elif facet in realtime_facets:
-                drop_reason = "realtime_facet_from_rag"
+            elif facet in realtime_facets or ("coupon" in realtime_facets and has_coupon_text) or ("open_status" in realtime_facets and has_open_text):
+                # Use conflict resolver to determine if we should drop or keep
+                effective_facet = facet or ("coupon" if has_coupon_text else "open_status")
+                resolution = resolve_realtime_conflict(
+                    facet=effective_facet,
+                    tool_result=None,  # Tool results not available at guardrail time
+                    rag_result=claim_text_str,
+                )
+                # If no tool result available, RAG data is the only source - keep it as fallback
+                if resolution is None or resolution.chosen_source == "rag":
+                    drop_reason = None
+                else:
+                    drop_reason = "realtime_facet_from_rag"
             elif not facet_match:
                 drop_reason = "forbidden_facet"
             elif level in {"weak", "irrelevant"}:
                 drop_reason = "low_relevance"
+            else:
+                scene_ok, scene_reason = ScenePolicy.apply(latest_turn_message or raw_query, claim_text_str)
+                if not scene_ok:
+                    drop_reason = "scene_policy_violation"
 
             judgement = EvidenceJudgement(
                 evidence_id=_chunk_id(item),
@@ -297,6 +318,7 @@ class LocalLifeRagGuardrail:
             "dropped_by_shop_count": rejection_counts.get("cross_shop", 0),
             "dropped_by_facet_count": rejection_counts.get("forbidden_facet", 0) + rejection_counts.get("realtime_facet_from_rag", 0),
             "dropped_by_relevance_count": rejection_counts.get("low_relevance", 0),
+            "dropped_by_scene_count": rejection_counts.get("scene_policy_violation", 0),
             "dropped_by_sibling_count": rejection_counts.get("sibling_limit", 0),
             "final_clean_evidence_count": len(kept_items),
             "strong_evidence_count": strong_count,

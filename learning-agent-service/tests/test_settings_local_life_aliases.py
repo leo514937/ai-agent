@@ -13,7 +13,7 @@ for candidate in (str(TESTS_DIR), str(PROJECT_ROOT), str(SRC_ROOT)):
     if candidate not in sys.path:
         sys.path.insert(0, candidate)
 
-from learning_agent_service.config.settings import Settings
+from learning_agent_service.config.settings_impl import Settings
 
 
 class SettingsLocalLifeAliasTestCase(unittest.TestCase):

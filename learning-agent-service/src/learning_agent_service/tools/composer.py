@@ -173,6 +173,7 @@ class AnswerComposer:
         already_streamed: bool = False,
     ) -> AnswerComposeResult:
         normalized = str(answer_text or "").strip()
+        normalized = self._append_plan_summary(request, normalized)
 
         if normalized and not already_streamed:
             self._emit_fallback_answer_stream(request, normalized)
@@ -617,6 +618,35 @@ class AnswerComposer:
 
     def _append_auxiliary_sections(self, request: AnswerComposeRequest, answer: str, *, include_auxiliary: bool) -> str:
         return answer
+
+    @staticmethod
+    def _append_plan_summary(request: AnswerComposeRequest, answer: str) -> str:
+        plan_summary = request.plan_summary
+        if plan_summary is None:
+            return answer
+
+        answer_text = str(answer or "").strip()
+        if "Plan execution" in answer_text:
+            return answer_text
+
+        status = str(getattr(plan_summary, "status", "") or "").strip() or "unknown"
+        completed_steps = getattr(plan_summary, "completed_steps", None)
+        total_steps = getattr(plan_summary, "total_steps", None)
+        final_decision = str(getattr(plan_summary, "final_decision", "") or "").strip()
+        key_findings = [str(item).strip() for item in getattr(plan_summary, "key_findings", []) or [] if str(item).strip()]
+
+        summary_lines = [f"Plan execution summary: {status}"]
+        if completed_steps is not None and total_steps is not None:
+            summary_lines[0] = f"{summary_lines[0]} ({completed_steps}/{total_steps})"
+        if final_decision:
+            summary_lines.append(final_decision)
+        if key_findings:
+            summary_lines.append("Key findings: " + "；".join(key_findings[:3]))
+
+        summary_text = "\n".join(summary_lines)
+        if not answer_text:
+            return summary_text
+        return f"{answer_text}\n\n{summary_text}"
 
     @staticmethod
     def _facet_labels(facets: Sequence[str]) -> list[str]:

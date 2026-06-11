@@ -10,7 +10,7 @@ import _bootstrap  # noqa: F401
 
 from learning_agent_service.application.use_cases.chat_workflow import ChatWorkflowService
 from learning_agent_service.application.service import WorkflowLearningAgentService
-from learning_agent_service.application.dependencies import OpenAIBackedModelGateway
+from learning_agent_service.application.dependencies_impl import OpenAIBackedModelGateway
 from learning_agent_service.application.workflow.adapters import WorkflowNodeAdapter
 from learning_agent_service.domain import ChatTurnCommand, PersistentSessionContext, SseEnvelope, TurnUnderstandingRequest
 from learning_agent_service.domain.errors import TerminalEvent, WorkflowErrorCode, build_error

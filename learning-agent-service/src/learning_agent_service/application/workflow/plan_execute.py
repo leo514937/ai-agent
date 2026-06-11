@@ -595,7 +595,8 @@ class ReactStepExecutor:
             if not registry.is_registered(tool_name):
                 continue
             spec = registry.get(tool_name).spec
-            if execution_mode not in spec.allowed_execution_modes and "auto" not in spec.allowed_execution_modes:
+            mode_allowed = execution_mode in spec.allowed_execution_modes or "auto" in spec.allowed_execution_modes
+            if not mode_allowed and not self._tool_requires_approval(tool_name, step):
                 continue
             candidates.append(tool_name)
         return candidates

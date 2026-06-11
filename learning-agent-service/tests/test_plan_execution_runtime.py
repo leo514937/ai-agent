@@ -16,7 +16,7 @@ from learning_agent_service.domain.enums import IntentType, RagStatus
 class PlanExecutionRuntimeTestCase(unittest.TestCase):
     def _load_runtime_stack(self):
         try:
-            dependencies_module = importlib.import_module("learning_agent_service.application.dependencies")
+            dependencies_module = importlib.import_module("learning_agent_service.application.dependencies_impl")
             service_module = importlib.import_module("learning_agent_service.application.service")
         except Exception as exc:
             self.skipTest("application runtime modules are not available in this slice: {error}".format(error=exc))

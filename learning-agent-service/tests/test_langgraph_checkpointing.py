@@ -18,7 +18,7 @@ from learning_agent_service.application.workflow import (
     create_workflow_runner,
 )
 from learning_agent_service.api.contracts import SseEnvelope
-from learning_agent_service.config.settings import Settings
+from learning_agent_service.config.settings_impl import Settings
 from learning_agent_service.domain import ChatTurnCommand, build_initial_state
 from learning_agent_service.domain.errors import TerminalEvent
 from learning_agent_service.domain.enums import TurnDecision
@@ -33,7 +33,7 @@ class LangGraphCheckpointingTestCase(unittest.TestCase):
         self.assertTrue(settings.workflow_checkpoint_sqlite_path)
 
     def test_build_dependencies_wires_sqlite_checkpointer(self) -> None:
-        dependencies_module = importlib.import_module("learning_agent_service.application.dependencies")
+        dependencies_module = importlib.import_module("learning_agent_service.application.dependencies_impl")
         runtime_settings = Settings(
             prefer_real_adapters=False,
             allow_in_memory_fallback=True,

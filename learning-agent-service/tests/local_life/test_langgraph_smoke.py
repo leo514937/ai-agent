@@ -26,7 +26,13 @@ class LangGraphSmokeTestCase(unittest.TestCase):
         topology = describe_langgraph_topology()
         self.assertIn("load_context", topology["nodes"])
         self.assertIn("emit_final", topology["nodes"])
-        self.assertIn(("persist_session", "emit_final"), topology["edges"])
+        self.assertIn("response_builder", topology["nodes"])
+        edge_pairs = {
+            (edge["source"], edge["target"]) if isinstance(edge, dict) else tuple(edge[:2])
+            for edge in topology["edges"]
+        }
+        self.assertIn(("persist_session", "emit_final"), edge_pairs)
+        self.assertIn(("final_answer_safety", "response_builder"), edge_pairs)
         mermaid = export_langgraph_mermaid()
         self.assertIn("graph TD", mermaid)
         self.assertIn("emit_final --> END", mermaid)

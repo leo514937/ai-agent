@@ -422,8 +422,8 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                         turn_extra.get("graph_fallback_reason")
                         or state["persistent"].extra.get("graph_fallback_reason")
                     )
+                routing_action = str(getattr(routing, "required_action", "") or "").strip().lower() if routing is not None else ""
                 if not route_gate:
-                    routing_action = str(getattr(routing, "required_action", "") or "").strip().lower() if routing is not None else ""
                     route_gate_branch = "direct"
                     if routing_action == "clarify":
                         route_gate_branch = "clarify"

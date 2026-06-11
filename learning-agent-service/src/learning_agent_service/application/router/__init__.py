@@ -76,6 +76,7 @@ from .stages import route_execution_mode
 
 from .phase3_review import _apply_route_review
 
+from .stages.hard_guard import check_hard_guard
 from .phase4_plan import (
     _build_task_plan,
     _task_plan_enabled,
@@ -172,6 +173,7 @@ __all__ = [
     "_route_review_reason",
     "_routing_from_turn",
     "_semantic_route_for_query",
+    "check_hard_guard",
     "route_execution_mode",
     "_task_plan_enabled",
     "_task_plan_required_facets",

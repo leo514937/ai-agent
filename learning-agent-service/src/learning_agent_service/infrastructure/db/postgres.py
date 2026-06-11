@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from learning_agent_service.config.settings import PostgresSettings
+from learning_agent_service.config.settings_impl import PostgresSettings
 
 from .errors import InfrastructureConfigurationError, require_dependency
 from .models import SQLALCHEMY_AVAILABLE, Base

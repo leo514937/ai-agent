@@ -8,7 +8,7 @@ from dataclasses import asdict, is_dataclass
 from typing import Any
 
 from learning_agent_service.adapters.java_business import JavaBusinessClient
-from learning_agent_service.application.dependencies import OpenAIEmbeddingAdapter
+from learning_agent_service.application.dependencies_impl import OpenAIEmbeddingAdapter
 from learning_agent_service.config import get_settings
 from learning_agent_service.infrastructure.db.openai_client import build_openai_runtime
 from learning_agent_service.infrastructure.db.qdrant import build_qdrant_runtime
