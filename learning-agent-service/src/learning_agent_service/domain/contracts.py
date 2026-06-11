@@ -216,7 +216,7 @@ class ReviewReport(CoreModel):
     repair_hint: str = ""
     retry_target: str | None = None
     retry_count: int = 0
-    max_retry_count: int = 0
+    max_retry_count: int = 1
     target_step_id: str | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
 
@@ -762,6 +762,14 @@ class PersistentSessionContext(CoreModel):
     stage_status: str | None = None
     stage_timeline: list[dict[str, Any]] = Field(default_factory=list)
     extra: dict[str, Any] = Field(default_factory=dict)
+    
+    # Dialog state machine fields
+    dialog_state: str | None = None  # DialogState value
+    dialog_task: str | None = None  # current_task
+    dialog_intent: str | None = None  # active_intent
+    dialog_comparison_targets: list[str] = Field(default_factory=list)
+    dialog_pending_slots: list[str] = Field(default_factory=list)
+    dialog_transition_count: int = 0
 
 
 class TurnRuntimeState(CoreModel):
