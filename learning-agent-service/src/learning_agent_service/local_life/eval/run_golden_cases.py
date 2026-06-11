@@ -14,6 +14,7 @@ from learning_agent_service.application.router.trace import (
     build_routing_trace_from_metrics,
     routing_trace_to_dict,
 )
+from learning_agent_service.local_life.failure_mode_mapping import failure_mode_detector
 from learning_agent_service.testing import EvaluationHarness, EvalCaseRecorder, HarnessRunResult, TraceWriter
 
 
@@ -174,6 +175,41 @@ def evaluate_golden_case(case: GoldenCase, result: Mapping[str, Any] | HarnessRu
         if observed != expected_value:
             failures.append(f"metric:{metric_key}")
 
+    target_shop_id_str = _clean_text((case.session_context or {}).get("shop_id"))
+    try:
+        target_shop_id = int(target_shop_id_str) if target_shop_id_str else None
+    except Exception:
+        target_shop_id = None
+
+    answer_shop_ids = []
+    for shop in (actual_trace.get("shops") or []):
+        try:
+            answer_shop_ids.append(int(shop.get("id")))
+        except Exception:
+            pass
+
+    answer_contract = metrics.get("answer_contract") or {}
+    allowed_facets = answer_contract.get("allowed_facets") or []
+    forbidden_facets = answer_contract.get("forbidden_facets") or []
+    realtime_facets = answer_contract.get("realtime_facets") or []
+    route_branch = _clean_text((metrics.get("route_gate") or {}).get("branch")) or "unknown"
+    tool_called = route_branch in ("tool_call", "rag_plus_tool")
+    evidence_count = int(metrics.get("evidence_count") or 0)
+
+    detected = failure_mode_detector.detect_failure_modes(
+        query=case.query,
+        answer=actual_answer,
+        route=route_branch,
+        tool_called=tool_called,
+        evidence_count=evidence_count,
+        target_shop_id=target_shop_id,
+        answer_shop_ids=answer_shop_ids,
+        allowed_facets=allowed_facets,
+        forbidden_facets=forbidden_facets,
+        realtime_facets=realtime_facets,
+    )
+    actual_trace["detected_failures"] = [m.mode_id for m in detected]
+
     return GoldenCaseResult(
         case_id=case.case_id,
         passed=not failures,
@@ -253,6 +289,7 @@ class _HttpChatExecutor:
             "route_gate": metrics.get("route_gate") or {},
             "metrics": metrics,
             "routing_trace": routing_trace,
+            "shops": last_result.get("shops") or [],
         }
         return HarnessRunResult(
             case_id=case.case_id,
@@ -340,6 +377,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             for result in results
         ]
     )
+    from collections import Counter
+    detected_counter = Counter()
+    for res in results:
+        for mode_id in res.actual_trace.get("detected_failures", []):
+            detected_counter[mode_id] += 1
+
     output = {
         "report": {
             "total_cases": report.total_cases,
@@ -347,6 +390,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "failed_cases": report.failed_cases,
             "failure_buckets": report.failure_buckets,
             "metric_summary": report.metric_summary,
+            "business_metrics": dict(detected_counter),
         },
         "results": [asdict(result) for result in results],
     }
@@ -358,6 +402,61 @@ def main(argv: Sequence[str] | None = None) -> int:
     output_path.write_text(json.dumps(output, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(output["report"], ensure_ascii=False, indent=2))
     return 0
+
+
+def run_evaluation() -> dict[str, Any]:
+    """Run evaluation and return results in CI-friendly format."""
+    from pathlib import Path
+    
+    cases_path = Path(__file__).parent.parent.parent.parent.parent / "eval" / "local_life" / "golden_cases.jsonl"
+    if not cases_path.exists():
+        return {
+            "total": 0,
+            "passed": 0,
+            "failed": 0,
+            "pass_rate": 0.0,
+            "failures": [],
+            "error": f"Golden cases file not found: {cases_path}",
+        }
+    
+    cases = load_golden_cases(cases_path)
+    if not cases:
+        return {
+            "total": 0,
+            "passed": 0,
+            "failed": 0,
+            "pass_rate": 0.0,
+            "failures": [],
+            "error": "No golden cases found",
+        }
+    
+    executor = _HttpChatExecutor(
+        base_url="http://127.0.0.1:8000/internal/v1/chat/stream",
+        token="local-learning-agent-token",
+    )
+    
+    results = run_golden_cases(cases, executor.run_case)
+    
+    total = len(results)
+    passed = sum(1 for r in results if r.passed)
+    failed = total - passed
+    pass_rate = passed / total if total > 0 else 0.0
+    
+    failures = []
+    for result in results:
+        if not result.passed:
+            failures.append({
+                "case_id": result.case_id,
+                "reason": "; ".join(result.failures) if result.failures else "unknown",
+            })
+    
+    return {
+        "total": total,
+        "passed": passed,
+        "failed": failed,
+        "pass_rate": pass_rate,
+        "failures": failures,
+    }
 
 
 if __name__ == "__main__":
