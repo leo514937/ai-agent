@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from learning_agent_service.local_life.boundary_prompts import get_boundary_prompt
+
 
 class RealtimeContract(BaseModel):
     facet: str
@@ -19,17 +21,17 @@ _REALTIME_CONTRACTS: dict[str, RealtimeContract] = {
     "coupon": RealtimeContract(
         facet="coupon",
         allowed_tools=["get_coupon_list"],
-        fallback_message="我暂时没有查到这家店的实时优惠券信息，建议以店铺页面显示为准。",
+        fallback_message=get_boundary_prompt("no_coupon_evidence"),
     ),
     "open_status": RealtimeContract(
         facet="open_status",
         allowed_tools=["check_open_status"],
-        fallback_message="我暂时无法确认这家店当前是否营业，建议以店铺页面实时状态为准。",
+        fallback_message=get_boundary_prompt("no_open_status"),
     ),
     "distance_eta": RealtimeContract(
         facet="distance_eta",
         allowed_tools=["get_distance_eta"],
-        fallback_message="我暂时无法确认这家店与你的实时距离信息，建议以地图页面显示为准。",
+        fallback_message=get_boundary_prompt("no_distance_info"),
     ),
 }
 

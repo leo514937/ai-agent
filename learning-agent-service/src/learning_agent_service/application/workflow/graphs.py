@@ -9,8 +9,6 @@ from ...domain.state import GraphState, clone_graph_state
 from .services import PlanExecuteSubgraphServices, RagSubgraphServices, ToolSubgraphServices
 from .state import append_runtime_error as _append_state_runtime_error
 from .subgraphs import (
-    _ensure_plan_progress_state,
-    _ensure_plan_summary,
     _ensure_rag_result,
     _ensure_raw_tool_result,
     _ensure_tool_result,
@@ -20,9 +18,11 @@ from .subgraphs import (
     _tool_stage_detail,
     can_enter_retrieval,
     route_after_rag,
-    route_after_rag_graph,
     should_run_tools,
 )
+from ..router.base import _update_phase3_trace
+from .topology import MAIN_GRAPH_TOPOLOGY, describe_langgraph_topology as describe_main_graph_topology, export_langgraph_mermaid as export_main_graph_mermaid
+from ...local_life.boundary_prompts import get_boundary_prompt
 
 StateGraph: Any = None
 Send: Any = None
@@ -56,15 +56,15 @@ _RAG_TOPOLOGY = _GraphTopology(
     terminal="END",
     nodes=(
         "build_retrieval_plan",
-        "recall_rag",
+        "rag_executor",
         "filter_rag",
         "rerank_rag",
         "build_evidence_pack",
         "finalize_rag",
     ),
     edges=(
-        ("build_retrieval_plan", "recall_rag"),
-        ("recall_rag", "filter_rag"),
+        ("build_retrieval_plan", "rag_executor"),
+        ("rag_executor", "filter_rag"),
         ("filter_rag", "rerank_rag"),
         ("rerank_rag", "build_evidence_pack"),
         ("build_evidence_pack", "finalize_rag"),
@@ -77,14 +77,18 @@ _PLAN_EXECUTE_TOPOLOGY = _GraphTopology(
     terminal="END",
     nodes=(
         "planner_node",
+        "plan_validator",
         "plan_executor",
+        "execute_plan_step",
         "collect_step_result",
         "complex_review",
         "finalize_plan_execute",
     ),
     edges=(
-        ("planner_node", "plan_executor"),
-        ("plan_executor", "collect_step_result"),
+        ("planner_node", "plan_validator"),
+        ("plan_validator", "plan_executor"),
+        ("plan_executor", "execute_plan_step"),
+        ("execute_plan_step", "collect_step_result"),
         ("collect_step_result", "complex_review"),
         ("complex_review", "plan_executor"),
         ("complex_review", "finalize_plan_execute"),
@@ -97,12 +101,12 @@ _TOOL_TOPOLOGY = _GraphTopology(
     terminal="END",
     nodes=(
         "tool_plan",
-        "execute_tool_pipeline",
+        "tool_executor",
         "finalize_tool",
     ),
     edges=(
-        ("tool_plan", "execute_tool_pipeline"),
-        ("execute_tool_pipeline", "finalize_tool"),
+        ("tool_plan", "tool_executor"),
+        ("tool_executor", "finalize_tool"),
         ("finalize_tool", "END"),
     ),
 )
@@ -112,62 +116,17 @@ _RECOMMENDATION_TOPOLOGY = _GraphTopology(
     terminal="END",
     nodes=(
         "prepare_recommendation",
-        "dispatch_shop_analysis",
-        "analyze_one_shop",
-        "reduce_shop_results",
+        "recommendation_executor",
         "finalize_recommendation",
     ),
     edges=(
-        ("prepare_recommendation", "dispatch_shop_analysis"),
-        ("dispatch_shop_analysis", "analyze_one_shop"),
-        ("analyze_one_shop", "reduce_shop_results"),
-        ("reduce_shop_results", "finalize_recommendation"),
+        ("prepare_recommendation", "recommendation_executor"),
+        ("recommendation_executor", "finalize_recommendation"),
         ("finalize_recommendation", "END"),
     ),
 )
 
-_MAIN_TOPOLOGY = _GraphTopology(
-    entry_point="load_context",
-    terminal="END",
-    nodes=(
-        "load_context",
-        "understand_turn",
-        "rule_review",
-        "route_gate",
-        "plan_execute_subgraph",
-        "rag_subgraph",
-        "recommendation_subgraph",
-        "tool_subgraph",
-        "merge_rank_node",
-        "contract_review",
-        "compose_answer",
-        "persist_session",
-        "emit_final",
-    ),
-    edges=(
-        ("START", "load_context"),
-        ("load_context", "understand_turn"),
-        ("load_context", "compose_answer"),
-        ("understand_turn", "rule_review"),
-        ("understand_turn", "compose_answer"),
-        ("rule_review", "route_gate"),
-        ("route_gate", "compose_answer"),
-        ("route_gate", "tool_subgraph"),
-        ("route_gate", "rag_subgraph"),
-        ("route_gate", "recommendation_subgraph"),
-        ("route_gate", "plan_execute_subgraph"),
-        ("rag_subgraph", "tool_subgraph"),
-        ("rag_subgraph", "merge_rank_node"),
-        ("recommendation_subgraph", "merge_rank_node"),
-        ("tool_subgraph", "merge_rank_node"),
-        ("plan_execute_subgraph", "merge_rank_node"),
-        ("merge_rank_node", "contract_review"),
-        ("contract_review", "compose_answer"),
-        ("compose_answer", "persist_session"),
-        ("persist_session", "emit_final"),
-        ("emit_final", "END"),
-    ),
-)
+_MAIN_TOPOLOGY = MAIN_GRAPH_TOPOLOGY
 
 _GRAPH_CACHE: dict[tuple[str, int], Any] = {}
 _RECOMMENDATION_BRANCH_CACHE: dict[str, GraphState] = {}
@@ -329,6 +288,89 @@ def _prepare_plan_execute(state: GraphState) -> GraphState:
     return clone_graph_state(state)
 
 
+def _ensure_plan_progress_state(state: GraphState) -> GraphState:
+    turn = state["turn"]
+    plan = list(getattr(turn, "plan", []) or [])
+    normalized_plan = []
+    for item in plan:
+        if hasattr(item, "model_dump"):
+            normalized_plan.append(item)
+            continue
+        if isinstance(item, dict):
+            try:
+                from ...domain.contracts import PlanStep
+
+                normalized_plan.append(PlanStep.model_validate(item))
+            except Exception:
+                continue
+    step_results = list(getattr(turn, "step_results", []) or [])
+    current_step_index = int(getattr(turn, "current_step_index", 0) or 0)
+    current_step = getattr(turn, "current_step", None)
+    if current_step is None and normalized_plan:
+        safe_index = min(max(current_step_index, 0), len(normalized_plan) - 1)
+        current_step = normalized_plan[safe_index]
+    state["turn"] = turn.model_copy(
+        update={
+            "plan": normalized_plan,
+            "step_results": step_results,
+            "current_step_index": max(0, current_step_index),
+            "current_step": current_step,
+            "need_replan": bool(getattr(turn, "need_replan", False)),
+            "need_human_approval": bool(getattr(turn, "need_human_approval", False)),
+        }
+    )
+    return state
+
+
+def _ensure_plan_summary(state: GraphState) -> GraphState:
+    turn = state["turn"]
+    summary = getattr(turn, "final_task_summary", None)
+    if summary is None:
+        plan = list(getattr(turn, "plan", []) or [])
+        step_results = list(getattr(turn, "step_results", []) or [])
+        completed_steps = len([item for item in step_results if getattr(item, "status", None) == "success"])
+        total_steps = len(plan)
+        if getattr(turn, "need_human_approval", False):
+            status = "need_approval"
+        elif getattr(turn, "need_replan", False) and completed_steps < total_steps:
+            status = "partial" if completed_steps > 0 else "failed"
+        elif total_steps and completed_steps >= total_steps:
+            status = "completed"
+        elif completed_steps > 0:
+            status = "partial"
+        else:
+            status = "failed"
+
+        key_findings: list[str] = []
+        for result in step_results:
+            observations = list(getattr(result, "observations", []) or [])
+            if observations:
+                key_findings.append(str(observations[0]))
+        final_decision = getattr(turn, "replan_reason", None) or getattr(turn, "final_answer", None)
+        if not final_decision and step_results:
+            last_result = step_results[-1]
+            payload = getattr(last_result, "result", None)
+            if isinstance(payload, dict):
+                final_decision = str(payload.get("summary") or payload.get("detail") or "")
+            elif isinstance(payload, str):
+                final_decision = payload
+        if not final_decision:
+            final_decision = "等待人工审批" if getattr(turn, "need_human_approval", False) else "计划已完成"
+
+        from ...domain.contracts import PlanExecutionSummary
+
+        summary = PlanExecutionSummary(
+            status=status,  # type: ignore[arg-type]
+            completed_steps=completed_steps,
+            total_steps=total_steps,
+            key_findings=key_findings[:5],
+            final_decision=final_decision,
+        )
+
+    state["turn"] = turn.model_copy(update={"final_task_summary": summary})
+    return state
+
+
 def _planner_node(state: GraphState, services: PlanExecuteSubgraphServices) -> GraphState:
     turn = state["turn"]
     if turn.task_plan is None and turn.execution_mode != "plan_execute" and not (
@@ -344,11 +386,20 @@ def _planner_node(state: GraphState, services: PlanExecuteSubgraphServices) -> G
     state = _mark_stage(state, "plan_execute", "running", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])))
     state = services.plan_planner(state)
     state = _ensure_plan_progress_state(state)
-    state = services.plan_validator(state)
     return state
 
 
-def _plan_executor(state: GraphState, services: PlanExecuteSubgraphServices) -> GraphState:
+def _plan_validator(state: GraphState, services: PlanExecuteSubgraphServices) -> GraphState:
+    state = services.plan_validator(state)
+    return _ensure_plan_progress_state(state)
+
+
+def _plan_executor(state: GraphState) -> GraphState:
+    state = _ensure_plan_progress_state(state)
+    return state
+
+
+def _execute_plan_step(state: GraphState, services: PlanExecuteSubgraphServices) -> GraphState:
     state = services.step_executor(state)
     state = _ensure_plan_progress_state(state)
     return state
@@ -463,7 +514,7 @@ def _execute_tool_pipeline(state: GraphState, services: ToolSubgraphServices) ->
                 "tool_result": NormalizedToolResult(
                     status=ToolExecutionStatus.DEGRADED,
                     tool_name=tool_name,
-                    normalized_output={"status": "degraded", "error": str(exc), "message": "实时券信息暂不可用"},
+                    normalized_output={"status": "degraded", "error": str(exc), "message": get_boundary_prompt("service_unavailable")},
                     used_tools=[tool_name],
                 ),
             }
@@ -784,14 +835,14 @@ def _contract_review(state: GraphState) -> GraphState:
 def _build_rag_graph(services: RagSubgraphServices):
     graph = StateGraph(GraphState)  # type: ignore[type-var]
     graph.add_node("build_retrieval_plan", _prepare_rag)
-    graph.add_node("recall_rag", lambda state: _recall_rag(state, services))
+    graph.add_node("rag_executor", lambda state: _recall_rag(state, services))
     graph.add_node("filter_rag", _filter_rag)
     graph.add_node("rerank_rag", _rerank_rag)
     graph.add_node("build_evidence_pack", lambda state: _build_evidence_pack(state, services))
     graph.add_node("finalize_rag", _finalize_rag)
     graph.set_entry_point("build_retrieval_plan")
-    graph.add_edge("build_retrieval_plan", "recall_rag")
-    graph.add_edge("recall_rag", "filter_rag")
+    graph.add_edge("build_retrieval_plan", "rag_executor")
+    graph.add_edge("rag_executor", "filter_rag")
     graph.add_edge("filter_rag", "rerank_rag")
     graph.add_edge("rerank_rag", "build_evidence_pack")
     graph.add_edge("build_evidence_pack", "finalize_rag")
@@ -802,13 +853,17 @@ def _build_rag_graph(services: RagSubgraphServices):
 def _build_plan_execute_graph(services: PlanExecuteSubgraphServices):
     graph = StateGraph(GraphState)  # type: ignore[type-var]
     graph.add_node("planner_node", _prepare_plan_execute)
-    graph.add_node("plan_executor", lambda state: _plan_executor(state, services))
+    graph.add_node("plan_validator", lambda state: _plan_validator(state, services))
+    graph.add_node("plan_executor", _plan_executor)
+    graph.add_node("execute_plan_step", lambda state: _execute_plan_step(state, services))
     graph.add_node("collect_step_result", lambda state: _collect_step_result(state, services))
     graph.add_node("complex_review", lambda state: _complex_review(state, services))
     graph.add_node("finalize_plan_execute", _finalize_plan_execute)
     graph.set_entry_point("planner_node")
-    graph.add_edge("planner_node", "plan_executor")
-    graph.add_edge("plan_executor", "collect_step_result")
+    graph.add_edge("planner_node", "plan_validator")
+    graph.add_edge("plan_validator", "plan_executor")
+    graph.add_edge("plan_executor", "execute_plan_step")
+    graph.add_edge("execute_plan_step", "collect_step_result")
     graph.add_edge("collect_step_result", "complex_review")
     graph.add_edge("complex_review", "plan_executor")
     graph.add_edge("complex_review", "finalize_plan_execute")
@@ -819,11 +874,11 @@ def _build_plan_execute_graph(services: PlanExecuteSubgraphServices):
 def _build_tool_graph(services: ToolSubgraphServices):
     graph = StateGraph(GraphState)  # type: ignore[type-var]
     graph.add_node("tool_plan", _prepare_tool)
-    graph.add_node("execute_tool_pipeline", lambda state: _execute_tool_pipeline(state, services))
+    graph.add_node("tool_executor", lambda state: _execute_tool_pipeline(state, services))
     graph.add_node("finalize_tool", _finalize_tool)
     graph.set_entry_point("tool_plan")
-    graph.add_edge("tool_plan", "execute_tool_pipeline")
-    graph.add_edge("execute_tool_pipeline", "finalize_tool")
+    graph.add_edge("tool_plan", "tool_executor")
+    graph.add_edge("tool_executor", "finalize_tool")
     graph.add_edge("finalize_tool", END)
     return graph.compile()
 
@@ -832,7 +887,7 @@ def _build_recommendation_graph(services: RagSubgraphServices):
     graph = StateGraph(GraphState)  # type: ignore[type-var]
     graph.add_node("prepare_recommendation", _prepare_recommendation)
     graph.add_node(
-        "dispatch_shop_analysis",
+        "recommendation_executor",
         lambda state: (
             lambda result: {
                 "shop_analyses": list(result.get("shop_analyses", []) or []),
@@ -841,12 +896,10 @@ def _build_recommendation_graph(services: RagSubgraphServices):
             }
         )(_execute_recommendation_pipeline(clone_graph_state(state), services)),
     )
-    graph.add_node("analyze_one_shop", lambda state: _analyze_one_shop(state, services))
-    graph.add_node("reduce_shop_results", _reduce_shop_results)
     graph.add_node("finalize_recommendation", _finalize_recommendation)
     graph.set_entry_point("prepare_recommendation")
-    graph.add_edge("prepare_recommendation", "dispatch_shop_analysis")
-    graph.add_edge("dispatch_shop_analysis", "finalize_recommendation")
+    graph.add_edge("prepare_recommendation", "recommendation_executor")
+    graph.add_edge("recommendation_executor", "finalize_recommendation")
     graph.add_edge("finalize_recommendation", END)
     return graph.compile()
 
@@ -872,7 +925,12 @@ def describe_langgraph_topology() -> dict[str, Any]:
         "entry_point": _MAIN_TOPOLOGY.entry_point,
         "terminal": _MAIN_TOPOLOGY.terminal,
         "nodes": list(_MAIN_TOPOLOGY.nodes),
-        "edges": [tuple(edge) for edge in _MAIN_TOPOLOGY.edges],
+        "edges": [
+            (edge.source, edge.target)
+            if getattr(edge, "label", None) is None
+            else (edge.source, edge.target, edge.label)
+            for edge in _MAIN_TOPOLOGY.edges
+        ],
     }
 
 
@@ -920,10 +978,7 @@ def export_rag_graph_mermaid() -> str:
 
 
 def export_langgraph_mermaid() -> str:
-    lines = ["graph TD"]
-    for left, right in _MAIN_TOPOLOGY.edges:
-        lines.append(f"  {left} --> {right}")
-    return "\n".join(lines)
+    return export_main_graph_mermaid()
 
 
 def export_plan_execute_graph_mermaid() -> str:
