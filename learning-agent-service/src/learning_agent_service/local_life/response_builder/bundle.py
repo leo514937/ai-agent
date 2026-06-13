@@ -102,6 +102,49 @@ def _merge_model_answer_once(
         return answer_text
     return f"{model_answer}\n{answer_text}" if answer_text else model_answer
 
+
+def _build_llm_evidence_context(
+    *,
+    current_topic: str | None,
+    ranked_candidates: Sequence[Any],
+    evidence_claims: Sequence[Any],
+    raw_query: str | None,
+) -> str:
+    """Build evidence context string for LLM prompt."""
+    lines: list[str] = []
+    if current_topic:
+        lines.append(f"店铺/主题: {current_topic}")
+    if raw_query:
+        lines.append(f"用户问题: {raw_query}")
+    if ranked_candidates:
+        lines.append("候选店铺:")
+        for i, c in enumerate(ranked_candidates[:5], 1):
+            name = getattr(c, "name", "") or str(c)
+            features = getattr(c, "structured_features", {}) or {}
+            score = features.get("score")
+            price = features.get("avg_price")
+            distance = features.get("distance_km")
+            parts = [f"{i}. {name}"]
+            if score is not None:
+                parts.append(f"评分{score}")
+            if price is not None:
+                parts.append(f"人均{_format_price(price)}")
+            if distance is not None:
+                parts.append(f"距离{_format_distance(distance)}")
+            reason = _candidate_reason(c) if hasattr(c, "structured_features") else ""
+            if reason:
+                parts.append(f"特色:{reason}")
+            lines.append("  ".join(parts))
+    if evidence_claims:
+        claim_texts = []
+        for claim in evidence_claims[:5]:
+            text = getattr(claim, "text", "") or str(claim)
+            if text:
+                claim_texts.append(text)
+        if claim_texts:
+            lines.append("评价信息: " + "; ".join(claim_texts))
+    return "\n".join(lines) if lines else "暂无详细信息"
+
 def build_response_bundle(
     *,
     raw_query: str,

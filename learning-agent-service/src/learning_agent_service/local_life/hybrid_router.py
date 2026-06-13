@@ -856,7 +856,7 @@ def build_routing_decision_from_hybrid_router(
     
     # 处理 intent 映射
     intent_mapping = {
-        "greeting": "identity",
+        "greeting": "greeting",
         "detail": "local_life",
         "recommend": "local_life",
         "compare": "local_life",

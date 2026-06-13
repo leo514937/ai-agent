@@ -492,17 +492,24 @@ class WorkflowNodeAdapterMainGraphMixin:
             reason = existing_intent_info.get("reason", "")
             matched_signals = existing_intent_info.get("matched_signals", [])
         else:
-            intent = "local_life"
+            routing_intent_name = str(getattr(getattr(routing, "intent", None), "name", "") or "").strip().lower() if routing is not None else ""
+            if routing_intent_name and routing_intent_name not in ("", "unknown"):
+                intent = routing_intent_name
+                confidence = float(getattr(routing, "confidence", 0.8) or 0.8)
+                reason = str(getattr(routing, "route_reason", "") or "").strip() or "from_routing_decision"
+                source = "routing_decision"
+            else:
+                intent = "local_life"
+                confidence = 0.8
+                reason = "default_local_life"
+                source = "default"
             requires_current_shop = False
             requires_candidate_context = False
-            source = "default"
-            confidence = 0.8
-            reason = "default_local_life"
             matched_signals = []
 
         if intent in {"identity", "capability", "help"}:
             route = "identity_answer" if intent == "identity" else "capability_answer"
-        elif intent in {"direct_chat"}:
+        elif intent in {"greeting", "direct_chat"}:
             route = "direct_chat_answer"
         elif intent in {"unsafe", "math_or_code", "document_or_knowledge", "planning", "out_of_scope"}:
             route = "out_of_scope_response"

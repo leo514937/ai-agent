@@ -207,7 +207,7 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                     or (session_shop_name and str(session_shop_name).strip() not in generic_shop_names)
                 )
                 response_node = str(turn_extra.get("response_node") or "").strip().lower()
-                direct_non_local_response = response_node in {"direct_chat_answer", "out_of_scope_response", "safety_reject_response"}
+                direct_non_local_response = response_node in {"identity_answer", "capability_answer", "direct_chat_answer", "out_of_scope_response", "safety_reject_response", "illegal_request_response"}
                 raw_query_text = str(turn.raw_query or "")
                 compact_query_text = raw_query_text.replace(" ", "")
                 inferred_coupon = any(token in compact_query_text for token in ("券", "优惠", "领券", "打折", "代金券", "折扣", "有券", "团购"))
@@ -453,9 +453,9 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                 elif out_of_scope_query:
                     answer_style = "clarification"
                 elif explicit_query_shop or target_shop_name:
-                    answer_style = answer_style or "single_shop_review"
+                    answer_style = answer_style or ("single_shop_review" if not direct_non_local_response else None)
                 else:
-                    answer_style = answer_style or "single_shop_review"
+                    answer_style = answer_style or ("single_shop_review" if not direct_non_local_response else None)
                 if explicit_query_shop or recommendation_like_query:
                     priority_source = "current_query"
                 elif target_shop_source in {"session", "pronoun_session"} or session_shop_name:
@@ -720,18 +720,19 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                     final_metrics["route_gate"] = route_gate
                     final_metrics["routing_decision"] = routing.model_dump(mode="json")
                 if (
-                    has_specific_shop_context
+                    not direct_non_local_response
+                    and has_specific_shop_context
                     and any(token in raw_query_compact for token in coupon_query_tokens)
                     and not review_like_query
                     and not any(token in final_answer_text for token in ("券", "优惠", "团购"))
                 ):
                     final_answer_text = f"{current_shop_name}实时接口暂无可用券。"
-                if has_specific_shop_context and any(token in raw_query_compact for token in coupon_query_tokens) and not review_like_query and (
+                if not direct_non_local_response and has_specific_shop_context and any(token in raw_query_compact for token in coupon_query_tokens) and not review_like_query and (
                     "当前有券信息可查，支持继续查看实时券详情" in final_answer_text
                     or "实时券信息暂不可用，请稍后再试" in final_answer_text
                 ):
                     final_answer_text = f"{current_shop_name}实时券信息暂不可用，请稍后再试。"
-                if has_specific_shop_context and any(token in raw_query_compact for token in ("排队", "等位", "候位")) and "排队" not in final_answer_text:
+                if not direct_non_local_response and has_specific_shop_context and any(token in raw_query_compact for token in ("排队", "等位", "候位")) and "排队" not in final_answer_text:
                     final_answer_text = f"{current_shop_name}排队情况建议结合实时到店确认。"
                 if answer_style == "coupon_only":
                     clarification_like_coupon_text = any(
@@ -808,7 +809,7 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                             focus_hint=focus_hint,
                             fallback_text=f"{current_city_name or '你附近'}暂时还没有足够信息，我先给你列出几家候选店，供你继续筛选。",
                         )
-                elif answer_style == "single_shop_review" or route_gate.get("branch") == "merchant_detail":
+                elif (answer_style == "single_shop_review" or route_gate.get("branch") == "merchant_detail") and not direct_non_local_response:
                     if len(final_answer_text) < 120 or not all(
                         phrase in final_answer_text for phrase in ("总体结论", "核心优点", "可能不足", "适合场景", "到店建议")
                     ):
@@ -856,7 +857,7 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                     answer_style = "single_shop_review"
 
                 response_node = str(turn_extra.get("response_node") or "").strip().lower()
-                direct_non_local_response = response_node in {"direct_chat_answer", "out_of_scope_response", "safety_reject_response"}
+                direct_non_local_response = response_node in {"identity_answer", "capability_answer", "direct_chat_answer", "out_of_scope_response", "safety_reject_response", "illegal_request_response"}
                 if response_node == "out_of_scope_response":
                     inferred_out_of_scope = True
                 if direct_non_local_response:
@@ -915,7 +916,7 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                 if explicit_query_shop and review_like_query and not recommendation_like_query and answer_style == "single_shop_review":
                     final_answer_text = _build_single_shop_review_answer(current_shop_name)
 
-                if any(token in raw_query_compact for token in coupon_query_tokens) and not review_like_query and (
+                if not direct_non_local_response and any(token in raw_query_compact for token in coupon_query_tokens) and not review_like_query and (
                     any(
                         token in final_answer_text
                         for token in ("我先按你的问题理解为", "如果你愿意补充一点上下文", "原理、流程、示例或排错思路")
