@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict
+from collections.abc import Mapping
 from typing import Any
 
 from learning_agent_service.application.router.base import should_run_tool
@@ -718,15 +719,35 @@ class WorkflowNodeAdapterMainGraphMixin:
 
             retry_count = int(getattr(review_report, "retry_count", 0)) + 1
             setattr(review_report, "retry_count", retry_count)
-            repair_hint = getattr(review_report, "repair_hint", "")
-            rewrite = RewriteDecision(
-                original_query=str(getattr(turn, "raw_query", "")),
-                rewritten_query=str(getattr(turn, "raw_query", "")) + f" {repair_hint}",
-                preserved_constraints=[str(item) for item in getattr(review_report, "failed_facets", []) if str(item).strip()],
-                confidence=0.6,
-                should_retrieve=True,
-                reason="retry_repair_answer",
-            )
+            decision = str(getattr(review_report, "decision", "") or "").strip()
+            failure_category = str(getattr(review_report, "extra", {}).get("failure_category") or "").strip()
+            retry_reason = str(getattr(review_report, "reason", "") or "").strip() or failure_category or "retry_requested"
+            if decision == "retry_tool":
+                tool_result = getattr(turn, "tool_result", None)
+                raw_tool_result = getattr(turn, "raw_tool_result", None)
+                active_tool_result = tool_result or raw_tool_result
+                if isinstance(active_tool_result, Mapping):
+                    tool_name = str(active_tool_result.get("tool_name", "") or "").strip()
+                else:
+                    tool_name = str(getattr(active_tool_result, "tool_name", "") or "").strip()
+                rewrite = RewriteDecision(
+                    original_query=str(getattr(turn, "raw_query", "")),
+                    rewritten_query=str(getattr(turn, "raw_query", "")),
+                    preserved_constraints=[str(item) for item in [tool_name, failure_category, getattr(review_report, "retry_target", "")] if str(item).strip()],
+                    confidence=0.55,
+                    should_retrieve=True,
+                    reason="retry_tool_failure",
+                )
+            else:
+                repair_hint = getattr(review_report, "repair_hint", "")
+                rewrite = RewriteDecision(
+                    original_query=str(getattr(turn, "raw_query", "")),
+                    rewritten_query=str(getattr(turn, "raw_query", "")) + f" {repair_hint}",
+                    preserved_constraints=[str(item) for item in getattr(review_report, "failed_facets", []) if str(item).strip()],
+                    confidence=0.6,
+                    should_retrieve=True,
+                    reason="retry_repair_answer",
+                )
             if "retry_snapshot" not in turn_extra:
                 turn_extra["retry_snapshot"] = {
                     "answer_text": str(
@@ -738,6 +759,10 @@ class WorkflowNodeAdapterMainGraphMixin:
                     "evidence_count": len(list(turn_extra.get("evidence_claims") or [])),
                     "tool_result_count": len(list(turn_extra.get("tool_results") or [])),
                     "retry_count": retry_count,
+                    "retry_origin": "tool" if decision == "retry_tool" else "answer",
+                    "tool_name": tool_name if decision == "retry_tool" else None,
+                    "retry_reason": retry_reason,
+                    "failure_category": failure_category or None,
                 }
             turn_extra["rewrite_decision"] = rewrite
             routing = getattr(turn, "routing_decision", None)
@@ -860,6 +885,28 @@ class WorkflowNodeAdapterMainGraphMixin:
 
         persistent = state.get("persistent")
         if persistent:
+            semantic_context = turn_extra.get("semantic_context")
+            if isinstance(semantic_context, Mapping):
+                follow_up_kind = str(semantic_context.get("follow_up_kind") or "").strip()
+                if follow_up_kind == "comparison_completion":
+                    persistent.dialog_state = persistent.dialog_state or "comparing"
+                    persistent.dialog_task = "comparison"
+                elif follow_up_kind in {"intent_ellipsis", "constraint_inheritance"}:
+                    persistent.dialog_state = persistent.dialog_state or "follow_up"
+                    persistent.dialog_task = "recommendation"
+                elif follow_up_kind == "entity_reference":
+                    persistent.dialog_state = persistent.dialog_state or "follow_up"
+                    persistent.dialog_task = "detail"
+                comparison_targets = semantic_context.get("comparison_targets")
+                if isinstance(comparison_targets, list):
+                    target_names = [
+                        str(item.get("name") or item.get("shop_name") or item.get("target") or "").strip()
+                        for item in comparison_targets
+                        if isinstance(item, Mapping)
+                    ]
+                    target_names = [name for name in target_names if name]
+                    if target_names and not getattr(persistent, "dialog_comparison_targets", None):
+                        persistent.dialog_comparison_targets = list(dict.fromkeys(target_names))
             dialog_ctx = DialogContext(
                 current_state=DialogState(str(getattr(persistent, "dialog_state", "") or DialogState.IDLE.value)),
                 transition_count=int(getattr(persistent, "dialog_transition_count", 0) or 0),
@@ -894,6 +941,7 @@ class WorkflowNodeAdapterMainGraphMixin:
         bundle = None
         try:
             from learning_agent_service.local_life.schemas import LocalLifeSlots
+            turn_extra["answer_text"] = str(getattr(turn, "final_answer", "") or turn_extra.get("answer_text") or "").strip()
 
             bundle = build_response_bundle(
                 raw_query=str(getattr(turn, "raw_query", "") or ""),

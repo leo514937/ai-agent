@@ -71,6 +71,8 @@ class PersistentSessionContext:
     current_topic: str | None = None
     current_shop: str | None = None
     current_shop_anchor: Mapping[str, Any] = field(default_factory=dict)
+    current_scene: str | None = None
+    current_constraints: Mapping[str, Any] = field(default_factory=dict)
     recent_entities: tuple[str, ...] = ()
     pending_user_need: Mapping[str, Any] = field(default_factory=dict)
     clarification_result: Mapping[str, Any] = field(default_factory=dict)
@@ -83,6 +85,12 @@ class PersistentSessionContext:
     summary_version: int = 0
     summary_updated_at: datetime | None = None
     pending_clarification: Mapping[str, Any] | None = None
+    dialog_state: str | None = None
+    dialog_task: str | None = None
+    dialog_intent: str | None = None
+    dialog_comparison_targets: tuple[str, ...] = ()
+    dialog_pending_slots: tuple[str, ...] = ()
+    dialog_transition_count: int = 0
     extra: Mapping[str, Any] = field(default_factory=dict)
 
 
@@ -147,6 +155,9 @@ class MemoryRecallPlan:
 class SessionUpdate:
     current_topic: str | None = None
     current_shop: str | None = None
+    current_shop_anchor: Mapping[str, Any] = field(default_factory=dict)
+    current_scene: str | None = None
+    current_constraints: Mapping[str, Any] = field(default_factory=dict)
     recent_entities: tuple[str, ...] = ()
     clarification_result: Mapping[str, Any] = field(default_factory=dict)
     last_retrieval_topic: str | None = None
@@ -157,6 +168,12 @@ class SessionUpdate:
     summary_version: int = 0
     summary_updated_at: datetime | None = None
     pending_clarification: Mapping[str, Any] | None = None
+    dialog_state: str | None = None
+    dialog_task: str | None = None
+    dialog_intent: str | None = None
+    dialog_comparison_targets: tuple[str, ...] = ()
+    dialog_pending_slots: tuple[str, ...] = ()
+    dialog_transition_count: int = 0
     extra: Mapping[str, Any] = field(default_factory=dict)
 
 

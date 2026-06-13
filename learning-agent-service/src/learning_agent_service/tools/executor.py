@@ -65,61 +65,75 @@ class ToolExecutor:
             )
 
         timeout_seconds = self._resolve_timeout_seconds(selection, registered_tool)
-        try:
-            raw_output = await asyncio.wait_for(
-                self._invoke_handler(registered_tool, payload),
-                timeout=timeout_seconds,
-            )
-            validated_output = registered_tool.spec.output_model.model_validate(raw_output)
-            return ToolExecutionResult(
-                tool_name=selection.tool_name,
-                status="ok",
-                output=validated_output.model_dump(mode="json"),
-                retryable=False,
-                degraded=False,
-                approval_required=approval_required,
-                approval_status="approved" if approval_required else approval_status or None,
-                approval_request=approval_request,
-                duration_ms=self._elapsed_ms(start),
-            )
-        except (TimeoutError, asyncio.TimeoutError, asyncio.CancelledError):
-            return self._error_result(
-                selection,
-                error_code="LEARN-5301",
-                error_message="Tool execution timed out",
-                retryable=registered_tool.spec.retryable,
-                degraded=registered_tool.spec.degrade_to is not None,
-                degrade_to=registered_tool.spec.degrade_to,
-                start=start,
-                approval_required=approval_required,
-                approval_status=approval_status or ("approved" if approval_required else None),
-                approval_request=approval_request,
-            )
-        except ValidationError as exc:
-            return self._error_result(
-                selection,
-                error_code="LEARN-5302",
-                error_message=str(exc),
-                retryable=False,
-                degraded=False,
-                start=start,
-                approval_required=approval_required,
-                approval_status=approval_status or ("approved" if approval_required else None),
-                approval_request=approval_request,
-            )
-        except Exception as exc:  # pragma: no cover - defensive branch
-            return self._error_result(
-                selection,
-                error_code="LEARN-5300",
-                error_message=str(exc),
-                retryable=registered_tool.spec.retryable,
-                degraded=registered_tool.spec.degrade_to is not None,
-                degrade_to=registered_tool.spec.degrade_to,
-                start=start,
-                approval_required=approval_required,
-                approval_status=approval_status or ("approved" if approval_required else None),
-                approval_request=approval_request,
-            )
+        max_attempts = 2 if registered_tool.spec.retryable else 1
+        last_error_code = "LEARN-5300"
+        last_error_message = "Tool execution failed"
+        for attempt in range(max_attempts):
+            try:
+                raw_output = await asyncio.wait_for(
+                    self._invoke_handler(registered_tool, payload),
+                    timeout=timeout_seconds,
+                )
+                validated_output = registered_tool.spec.output_model.model_validate(raw_output)
+                return ToolExecutionResult(
+                    tool_name=selection.tool_name,
+                    status="ok",
+                    output=validated_output.model_dump(mode="json"),
+                    retryable=False,
+                    degraded=False,
+                    approval_required=approval_required,
+                    approval_status="approved" if approval_required else approval_status or None,
+                    approval_request=approval_request,
+                    duration_ms=self._elapsed_ms(start),
+                )
+            except (TimeoutError, asyncio.TimeoutError, asyncio.CancelledError):
+                last_error_code = "LEARN-5301"
+                last_error_message = "Tool execution timed out"
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(0.05 * (2 ** attempt))
+                    continue
+                return self._error_result(
+                    selection,
+                    error_code=last_error_code,
+                    error_message=last_error_message,
+                    retryable=registered_tool.spec.retryable,
+                    degraded=registered_tool.spec.degrade_to is not None,
+                    degrade_to=registered_tool.spec.degrade_to,
+                    start=start,
+                    approval_required=approval_required,
+                    approval_status=approval_status or ("approved" if approval_required else None),
+                    approval_request=approval_request,
+                )
+            except ValidationError as exc:
+                return self._error_result(
+                    selection,
+                    error_code="LEARN-5302",
+                    error_message=str(exc),
+                    retryable=False,
+                    degraded=False,
+                    start=start,
+                    approval_required=approval_required,
+                    approval_status=approval_status or ("approved" if approval_required else None),
+                    approval_request=approval_request,
+                )
+            except Exception as exc:  # pragma: no cover - defensive branch
+                last_error_code = "LEARN-5300"
+                last_error_message = str(exc)
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(0.05 * (2 ** attempt))
+                    continue
+                return self._error_result(
+                    selection,
+                    error_code=last_error_code,
+                    error_message=last_error_message,
+                    retryable=registered_tool.spec.retryable,
+                    degraded=registered_tool.spec.degrade_to is not None,
+                    degrade_to=registered_tool.spec.degrade_to,
+                    start=start,
+                    approval_required=approval_required,
+                    approval_status=approval_status or ("approved" if approval_required else None),
+                    approval_request=approval_request,
+                )
 
     async def _invoke_handler(self, registered_tool: RegisteredTool, payload: Any) -> Any:
         result = registered_tool.handler(payload)

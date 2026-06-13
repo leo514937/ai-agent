@@ -284,6 +284,11 @@ class EvidenceGovernanceService:
                 "extra": dict(plan.retrieval_filters.extra),
             },
             preferred_chunk_types=plan.preferred_chunk_types,
+            retrieval_mode="normal" if status == "ok" else "degraded",
+            fallback_reason="" if status == "ok" else retention_reason,
+            empty_reason=None if evidence_items else "no_evidence_items",
+            kept_count=len(evidence_items),
+            rejected_count=len(rejected),
         )
         evidence_trace = replace(
             evidence_trace,

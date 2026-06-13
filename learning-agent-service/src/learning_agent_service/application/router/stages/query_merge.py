@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from ....domain.contracts import PersistentSessionContext
+from ....local_life.context_recovery import recover_follow_up_context
 from ....local_life.entity_resolver import _explicit_entity_from_query
 from ....local_life.target_shop_policy import _PRONOUNS
 
@@ -58,6 +59,11 @@ def merge_local_life_query_context(
 ) -> LocalLifeQueryMergeResult:
     parser_slots = dict(parser_slots or {})
     client_context = dict(client_context or {})
+    recovery = recover_follow_up_context(
+        raw_query,
+        client_context=client_context,
+        session_context=persistent.model_dump(mode="json"),
+    )
 
     merged_slots: dict[str, Any] = dict(parser_slots)
     explicit_query_shop = _explicit_entity_from_query(raw_query)
@@ -71,12 +77,21 @@ def merge_local_life_query_context(
         or client_context.get("current_shop")
         or client_context.get("shopName")
         or client_context.get("shop_name")
+        or (recovery.anchor_shop.name if recovery.anchor_shop and recovery.anchor_shop.name else None)
     ) or None
 
-    if explicit_query_shop:
+    if recovery.follow_up_kind == "entity_reference" and explicit_query_shop:
         current_shop = explicit_query_shop
         merged_slots["shop_name"] = explicit_query_shop
         merged_slots["shop_query"] = explicit_query_shop
+    elif recovery.follow_up_kind == "comparison_completion":
+        if current_shop:
+            merged_slots.setdefault("shop_name", current_shop)
+            merged_slots.setdefault("shop_query", current_shop)
+    elif recovery.follow_up_kind in {"intent_ellipsis", "constraint_inheritance"}:
+        if current_shop:
+            merged_slots.setdefault("shop_name", current_shop)
+            merged_slots.setdefault("shop_query", current_shop)
     elif recommendation_like and not any(pronoun in compact for pronoun in _PRONOUNS):
         current_shop = None
         merged_slots.pop("shop_name", None)
@@ -93,6 +108,21 @@ def merge_local_life_query_context(
     candidate_shop_ids = list(dict.fromkeys(candidate_shop_ids))
 
     comparison_shop_ids = _as_int_list(client_context.get("comparison_shop_ids"))
+    tool_input = merged_slots.get("tool_input") if isinstance(merged_slots.get("tool_input"), dict) else {}
+    if isinstance(tool_input, dict):
+        for item in tool_input.get("comparison_targets") or []:
+            if isinstance(item, Mapping):
+                candidate_id = item.get("shop_id") or item.get("id")
+                if candidate_id not in (None, ""):
+                    try:
+                        comparison_shop_ids.append(int(candidate_id))
+                    except Exception:
+                        continue
+    for item in persistent.dialog_comparison_targets or []:
+        try:
+            comparison_shop_ids.append(int(item))
+        except Exception:
+            continue
 
     if not target_reference:
         target_reference = current_shop or _normalize_text(merged_slots.get("shop_name")) or _normalize_text(merged_slots.get("shop_query")) or None
@@ -116,7 +146,7 @@ def merge_local_life_query_context(
         missing_slots.append("shop_name")
 
     merged_query = _normalize_text(raw_query)
-    if current_shop and any(pronoun in compact for pronoun in _PRONOUNS):
+    if recovery.follow_up_kind == "entity_reference" and current_shop and any(pronoun in compact for pronoun in _PRONOUNS):
         merged_query = f"{merged_query} (refers to: {current_shop})"
 
     confidence = 0.0
@@ -141,5 +171,6 @@ def merge_local_life_query_context(
             "raw_query": _normalize_text(raw_query),
             "current_shop_from_context": current_shop,
             "candidate_count": len(candidate_shop_ids),
+            "context_recovery": recovery.to_dict(),
         },
     )

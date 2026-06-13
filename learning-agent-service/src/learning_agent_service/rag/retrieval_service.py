@@ -46,6 +46,20 @@ class HybridRetrieverService:
         self._hyde_enabled = hyde_enabled
 
     def retrieve(self, plan: RetrievalPlan) -> HybridRecallResult:
+        def _intent_and_slots(current_plan: RetrievalPlan) -> tuple[str, dict[str, Any]]:
+            intent = str(
+                current_plan.extra.get("intent")
+                or current_plan.extra.get("top_level_intent")
+                or current_plan.extra.get("route_candidate")
+                or ""
+            ).strip()
+            slots = dict(current_plan.extra.get("context_slots", {}) or {})
+            if not slots and isinstance(current_plan.extra.get("slots"), dict):
+                slots = dict(current_plan.extra.get("slots") or {})
+            if not slots:
+                slots["query"] = current_plan.extra.get("raw_query", "")
+            return intent, slots
+
         plan = replace(
             plan,
             extra={
@@ -58,13 +72,10 @@ class HybridRetrieverService:
             },
         )
         plan = self._apply_hyde(plan) or plan
+        query_intent, query_slots = _intent_and_slots(plan)
         started_at = time.perf_counter()
         route_hits, route_stats = self._collect_route_hits(plan)
         rrf_started_at = time.perf_counter()
-        query_intent = str(plan.extra.get("intent") or "").strip()
-        query_slots = dict(plan.extra.get("context_slots", {}))
-        if not query_slots:
-            query_slots["query"] = plan.extra.get("raw_query", "")
         fused_hits = self._limit_fused_hits(
             self._fusion.fuse(
                 route_hits,
@@ -82,6 +93,7 @@ class HybridRetrieverService:
             hyde_plan = self._retry_with_hyde(plan)
             if hyde_plan is not None:
                 plan = hyde_plan
+                query_intent, query_slots = _intent_and_slots(plan)
                 route_hits, route_stats = self._collect_route_hits(plan)
                 rrf_started_at = time.perf_counter()
                 fused_hits = self._limit_fused_hits(
@@ -101,6 +113,7 @@ class HybridRetrieverService:
             if rewritten_plan is not None:
                 llm_rewrite_applied = True
                 plan = rewritten_plan
+                query_intent, query_slots = _intent_and_slots(plan)
                 route_hits, route_stats = self._collect_route_hits(plan)
                 rrf_started_at = time.perf_counter()
                 fused_hits = self._limit_fused_hits(
@@ -193,6 +206,7 @@ class HybridRetrieverService:
             reranked_hits=resolved_reranked_hits,
             metrics=metrics,
             final_retrieval_filters=_serialize_final_filters(plan),
+            retrieval_mode=retrieval_mode,
         )
         retrieval_strategy = "dense+sparse+metadata->rrf->rerank"
         if plan.hyde_applied:
@@ -594,7 +608,13 @@ class HybridRetrieverService:
         reranked_hits: Sequence[RecallHit],
         metrics: Mapping[str, Any],
         final_retrieval_filters: Mapping[str, Any],
+        retrieval_mode: str,
     ) -> RetrievalTrace:
+        route_hit_counts = {route: len(hits) for route, hits in route_hits.items()}
+        kept_count = len(reranked_hits)
+        rejected_count = max(len(fused_hits) - kept_count, 0)
+        fallback_reason = str(metrics.get("fallback_reason", "") or "").strip()
+        empty_reason = str(fallback_reason or metrics.get("empty_reason") or "no_results").strip() if not kept_count else None
         return RetrievalTrace(
             raw_query=_sanitize_trace_text(plan.extra.get("raw_query") or ""),
             semantic_query=_sanitize_trace_text(plan.semantic_query),
@@ -611,17 +631,29 @@ class HybridRetrieverService:
             evidence_rejected=(),
             degraded=any(bool(stats.get("degraded")) for stats in route_stats.values()),
             empty=not bool(reranked_hits),
+            retrieval_mode=retrieval_mode,
+            fallback_reason=fallback_reason,
+            empty_reason=empty_reason,
+            kept_count=kept_count,
+            rejected_count=rejected_count,
+            route_hit_counts=route_hit_counts,
             metrics=dict(metrics),
             extra={
                 "retrieval_strategy": "dense+sparse+metadata->rrf->rerank"
                 + ("+multiquery" if (plan.step_back_query or plan.rewritten_queries or plan.supplemental_queries) else ""),
+                "retrieval_mode": retrieval_mode,
+                "retrieval_mode_reason": metrics.get("retrieval_mode_reason", ""),
                 "degraded_routes": [route for route, stats in route_stats.items() if stats.get("degraded")],
                 "working_routes": [route for route, stats in route_stats.items() if stats.get("working")],
                 "failed_routes": [route for route, stats in route_stats.items() if stats.get("state") == "failed"],
                 "empty_routes": [route for route, stats in route_stats.items() if stats.get("state") == "empty"],
                 "skipped_routes": [route for route, stats in route_stats.items() if stats.get("state") == "skipped"],
+                "route_hit_counts": route_hit_counts,
+                "kept_count": kept_count,
+                "rejected_count": rejected_count,
                 "route_stats": dict(route_stats),
-                "fallback_reason": metrics.get("fallback_reason", ""),
+                "fallback_reason": fallback_reason,
+                "empty_reason": empty_reason,
                 "fallback_reason_by_route": dict(metrics.get("fallback_reason_by_route", {})),
                 "query_plan": plan.extra,
                 "step_back_query": plan.step_back_query,

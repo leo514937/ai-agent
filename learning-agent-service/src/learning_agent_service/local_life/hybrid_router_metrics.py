@@ -1,6 +1,27 @@
 """混合路由器监控指标"""
 
-from prometheus_client import Counter, Histogram
+from __future__ import annotations
+
+from typing import Any
+
+try:
+    from prometheus_client import Counter, Histogram
+except Exception:  # pragma: no cover - optional dependency
+    class _NoOpMetric:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self._args = args
+            self._kwargs = kwargs
+
+        def labels(self, *args: Any, **kwargs: Any) -> "_NoOpMetric":
+            return self
+
+        def inc(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+        def observe(self, *_args: Any, **_kwargs: Any) -> None:
+            return None
+
+    Counter = Histogram = _NoOpMetric
 
 # 路由请求计数
 ROUTING_REQUESTS = Counter(

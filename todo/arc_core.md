@@ -26,6 +26,7 @@ flowchart TD
     TLI -->|direct_chat| DCA[direct_chat_answer]
     TLI -->|out_of_scope| OOS[out_of_scope_response]
     TLI -->|unsafe| SR
+    TLI -->|direct_answer_fallback| FA[final_answer]
     TLI -->|local_life / recommendation / comparison / planning| RTS[resolve_target_shop]
 
     RTS -->|missing_target| CL[clarification_node]

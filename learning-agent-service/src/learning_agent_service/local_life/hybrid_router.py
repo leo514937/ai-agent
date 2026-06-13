@@ -5,7 +5,7 @@ import re
 import random
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 from datetime import datetime
 from collections.abc import Mapping
@@ -45,6 +45,10 @@ class LLMRouteDecision:
     route: str            # 路由: realtime_tool, compare_multi_parent, structured_first, merchant_reasoning, guide_rule_rag, general_chat
     slots: dict[str, Any] = field(default_factory=dict)  # 提取的槽位
     reasoning: str = ""   # 推理过程（可选，用于调试）
+    fallback_reason: str | None = None
+    rollout_stage: str | None = None
+    rollout_key: str | None = None
+    rollout_bucket: int | None = None
     
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -54,6 +58,10 @@ class LLMRouteDecision:
             "route": self.route,
             "slots": self.slots,
             "reasoning": self.reasoning,
+            "fallback_reason": self.fallback_reason,
+            "rollout_stage": self.rollout_stage,
+            "rollout_key": self.rollout_key,
+            "rollout_bucket": self.rollout_bucket,
         }
 
 
@@ -68,6 +76,11 @@ class RoutingTraceLog:
     final_decision: LLMRouteDecision
     latency_ms: float
     timestamp: float
+    llm_error_type: str | None = None
+    fallback_reason: str | None = None
+    rollout_stage: str | None = None
+    rollout_key: str | None = None
+    rollout_bucket: int | None = None
     
     def to_log_dict(self) -> dict[str, Any]:
         return {
@@ -76,6 +89,11 @@ class RoutingTraceLog:
             "session_id": self.session_id,
             "llm_decision": self.llm_decision.to_dict() if self.llm_decision else None,
             "fallback_used": self.fallback_used,
+            "llm_error_type": self.llm_error_type,
+            "fallback_reason": self.fallback_reason,
+            "rollout_stage": self.rollout_stage,
+            "rollout_key": self.rollout_key,
+            "rollout_bucket": self.rollout_bucket,
             "final_intent": self.final_decision.intent,
             "final_route": self.final_decision.route,
             "final_confidence": self.final_decision.confidence,
@@ -111,6 +129,10 @@ class HybridRouter:
         fallback_used = False
         trace_id = str(uuid.uuid4())
         llm_error_type = None
+        fallback_reason = None
+        rollout_stage = None
+        rollout_key = None
+        rollout_bucket = None
 
         # 1. 尝试LLM路由
         cfg = get_settings()
@@ -120,37 +142,73 @@ class HybridRouter:
             rollout_stage = cfg.hybrid_router.hybrid_router_rollout_stage
             
             # 根据灰度阶段判断是否使用LLM
-            should_use_llm = self._should_use_llm_by_rollout(
-                rollout_stage, traffic_percentage, trace_id
+            rollout_key = self._build_rollout_stable_key(query, session_context, client_context)
+            should_use_llm, rollout_bucket = self._should_use_llm_by_rollout(
+                rollout_stage, traffic_percentage, rollout_key
             )
             
             if should_use_llm:
                 try:
                     llm_decision = self._route_with_llm(query, session_context, client_context)
-                    if llm_decision.confidence >= cfg.hybrid_router.hybrid_router_fallback_confidence_threshold:
+                    if (
+                        llm_decision.intent == "unknown"
+                        and llm_decision.confidence <= 0.0
+                        and str(llm_decision.reasoning).startswith("LLM响应解析失败")
+                    ):
+                        fallback_reason = "parse_error"
+                        final_decision = replace(
+                            self.fallback_engine.route(query, session_context, client_context),
+                            fallback_reason=fallback_reason,
+                        )
+                        fallback_used = True
+                        llm_error_type = "parse_error"
+                    elif llm_decision.confidence >= cfg.hybrid_router.hybrid_router_fallback_confidence_threshold:
                         final_decision = llm_decision
                     else:
                         # LLM置信度低，降级到规则
-                        final_decision = self.fallback_engine.route(query, client_context)
+                        fallback_reason = "low_confidence"
+                        final_decision = replace(
+                            self.fallback_engine.route(query, session_context, client_context),
+                            fallback_reason=fallback_reason,
+                        )
                         fallback_used = True
                         llm_error_type = "low_confidence"
                 except TimeoutError:
                     # LLM超时，降级到规则
-                    final_decision = self.fallback_engine.route(query, client_context)
+                    fallback_reason = "timeout"
+                    final_decision = replace(
+                        self.fallback_engine.route(query, session_context, client_context),
+                        fallback_reason=fallback_reason,
+                    )
                     fallback_used = True
                     llm_error_type = "timeout"
                 except Exception as e:
                     # LLM调用失败，降级到规则
-                    final_decision = self.fallback_engine.route(query, client_context)
+                    fallback_reason = type(e).__name__
+                    final_decision = replace(
+                        self.fallback_engine.route(query, session_context, client_context),
+                        fallback_reason=fallback_reason,
+                    )
                     fallback_used = True
                     llm_error_type = type(e).__name__
             else:
                 # 流量控制：未命中的流量使用规则引擎
-                final_decision = self.fallback_engine.route(query, client_context)
+                fallback_reason = "rollout_excluded"
+                final_decision = replace(
+                    self.fallback_engine.route(query, session_context, client_context),
+                    fallback_reason=fallback_reason,
+                    rollout_stage=rollout_stage,
+                    rollout_key=rollout_key,
+                    rollout_bucket=rollout_bucket,
+                )
                 fallback_used = True
         else:
             # 禁用LLM，直接使用规则
-            final_decision = self.fallback_engine.route(query, client_context)
+            fallback_reason = "llm_disabled" if not use_llm or not cfg.hybrid_router.enable_hybrid_router_llm else "fallback_only"
+            final_decision = replace(
+                self.fallback_engine.route(query, session_context, client_context),
+                fallback_reason=fallback_reason,
+            )
             fallback_used = True
 
         latency_ms = (time.time() - start_time) * 1000
@@ -171,45 +229,84 @@ class HybridRouter:
             final_decision=final_decision,
             latency_ms=latency_ms,
             timestamp=time.time(),
+            llm_error_type=llm_error_type,
+            fallback_reason=fallback_reason or getattr(final_decision, "fallback_reason", None),
+            rollout_stage=rollout_stage,
+            rollout_key=rollout_key,
+            rollout_bucket=rollout_bucket,
         )
 
         return final_decision, trace
+
+    def _build_rollout_stable_key(
+        self,
+        query: str,
+        session_context: dict[str, Any] | None,
+        client_context: dict[str, Any] | None,
+    ) -> str:
+        normalized_query = re.sub(r"\s+", " ", str(query or "")).strip()
+        stable_session = {
+            "session_id": (session_context or {}).get("session_id"),
+            "current_shop": (session_context or {}).get("current_shop"),
+            "current_topic": (session_context or {}).get("current_topic"),
+            "selected_shop_name": (session_context or {}).get("selected_shop_name"),
+            "selected_shop_id": (session_context or {}).get("selected_shop_id"),
+            "last_intent": (session_context or {}).get("last_intent"),
+        }
+        stable_client = {
+            "city": (client_context or {}).get("city"),
+            "shopId": (client_context or {}).get("shopId"),
+            "shopName": (client_context or {}).get("shopName"),
+            "page": (client_context or {}).get("page"),
+            "location": (client_context or {}).get("location"),
+        }
+        content = json.dumps(
+            {
+                "query": normalized_query,
+                "session": stable_session,
+                "client": stable_client,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
+        return hashlib.md5(content.encode("utf-8")).hexdigest()
 
     def _should_use_llm_by_rollout(
         self,
         rollout_stage: str,
         traffic_percentage: float,
-        trace_id: str,
-    ) -> bool:
+        rollout_key: str,
+    ) -> tuple[bool, int | None]:
         """根据灰度阶段和流量百分比决定是否使用LLM
         
         Args:
             rollout_stage: 灰度阶段 (disabled/testing/canary/progressive/full)
             traffic_percentage: LLM路由流量百分比 (0-100)
-            trace_id: 追踪ID，用于一致性哈希
+            rollout_key: 稳定哈希键，用于一致性路由
             
         Returns:
-            True表示使用LLM，False表示使用规则引擎
+            (是否使用LLM, 归一化桶位)
         """
         # 完全禁用LLM
         if rollout_stage == "disabled":
-            return False
+            return False, None
         
         # 测试阶段：仅开发环境使用
         if rollout_stage == "testing":
             cfg = get_settings()
-            return cfg.environment == "development"
+            return cfg.environment == "development", None
         
         # 全量阶段：100%使用LLM
         if rollout_stage == "full":
-            return True
+            return True, 100
         
         # 金丝雀/渐进阶段：根据流量百分比决定
-        # 使用trace_id的一致性哈希，确保相同查询总是走相同路径
-        hash_value = int(hashlib.md5(trace_id.encode()).hexdigest()[:8], 16)
+        # 使用稳定键的一致性哈希，确保相同请求总是走相同路径
+        hash_value = int(hashlib.md5(rollout_key.encode()).hexdigest()[:8], 16)
         percentage_hash = (hash_value % 100) + 1  # 1-100
         
-        return percentage_hash <= traffic_percentage
+        return percentage_hash <= traffic_percentage, percentage_hash
 
     def _route_with_llm(
         self,
@@ -313,6 +410,7 @@ class HybridRouter:
                     ],
                     temperature=0.1,
                     max_output_tokens=500,
+                    timeout=self._llm_timeout,
                 )
 
                 output = getattr(response, "output", [])
@@ -355,10 +453,14 @@ class HybridRouter:
             context_parts = []
             if "current_shop" in session_context:
                 context_parts.append(f"当前店铺: {session_context['current_shop']}")
+            if "current_topic" in session_context:
+                context_parts.append(f"当前话题: {session_context['current_topic']}")
+            if "selected_shop_name" in session_context:
+                context_parts.append(f"已选店铺: {session_context['selected_shop_name']}")
             if "recent_shops" in session_context:
-                context_parts.append(f"最近问过的店: {', '.join(session_context['recent_shops'][:3])}")
+                context_parts.append(f"最近店铺: {', '.join(session_context['recent_shops'][:3])}")
             if "last_intent" in session_context:
-                context_parts.append(f"上一轮意图: {session_context['last_intent']}")
+                context_parts.append(f"上轮意图: {session_context['last_intent']}")
             if context_parts:
                 parts.append("会话上下文: " + "; ".join(context_parts))
 
@@ -461,6 +563,10 @@ class FallbackRuleEngine:
     # 本地生活领域关键词（精简版）
     _LOCAL_LIFE_KEYWORDS = ("附近", "推荐", "好吃的", "火锅", "餐厅", "饭店", "优惠", "优惠券", "券", "团购", "营业", "海底捞", "巴奴", "地址", "位置", "排队", "带小孩", "朋友聚餐", "深夜", "商务宴请", "家庭聚餐", "约会", "一个人")
 
+    # 适配/场景类追问关键词
+    _SUITABILITY_KEYWORDS = ("适合", "合适", "怎么样", "好不好", "行不行")
+    _PERSON_SCENE_KEYWORDS = ("带父母", "带家人", "带小孩", "约会", "家庭聚餐", "朋友聚餐", "商务宴请")
+
     # 实时工具关键词
     _REALTIME_KEYWORDS = ("营业", "开门", "关门", "几点", "离我多远", "怎么去", "有券", "团购", "预约", "订座", "退款", "取消")
 
@@ -482,13 +588,25 @@ class FallbackRuleEngine:
                 found.append(match.group())
         return found
 
+    def _has_session_shop_context(self, session_context: dict[str, Any] | None) -> bool:
+        if not session_context:
+            return False
+        return bool(
+            session_context.get("current_shop")
+            or session_context.get("current_topic")
+            or session_context.get("selected_shop_name")
+            or session_context.get("selected_shop_id")
+        )
+
     def route(
         self,
         query: str,
+        session_context: dict[str, Any] | None = None,
         client_context: dict[str, Any] | None = None,
     ) -> LLMRouteDecision:
         """使用规则进行路由"""
         compact = query.replace(" ", "").lower()
+        has_session_shop_context = self._has_session_shop_context(session_context)
 
         # 1. 安全检查
         if any(kw in compact for kw in self._UNSAFE_KEYWORDS):
@@ -530,9 +648,35 @@ class FallbackRuleEngine:
                 reasoning="能力查询",
             )
 
-        # 5. 本地生活领域判断
-        if any(kw in compact for kw in self._LOCAL_LIFE_KEYWORDS):
-            # 5.1 实时工具
+        # 5. ????????
+        local_life_hint = any(kw in compact for kw in self._LOCAL_LIFE_KEYWORDS)
+        if not local_life_hint:
+            local_life_hint = any(kw in compact for kw in self._SUITABILITY_KEYWORDS) and (
+                has_session_shop_context or any(kw in compact for kw in self._PERSON_SCENE_KEYWORDS)
+            )
+        if not local_life_hint and has_session_shop_context:
+            local_life_hint = any(
+                kw in compact
+                for kw in (
+                    "??",
+                    "??",
+                    "???",
+                    "???",
+                    "???",
+                    "???",
+                    "???",
+                    "??",
+                    "????",
+                    "????",
+                    "????",
+                    "??",
+                    "??",
+                    "?",
+                )
+            )
+
+        if local_life_hint:
+            # 5.1 ????
             if any(kw in compact for kw in self._REALTIME_KEYWORDS):
                 shop_names = self._extract_shop_names(query)
                 return LLMRouteDecision(
@@ -541,10 +685,10 @@ class FallbackRuleEngine:
                     confidence=0.85,
                     route="realtime_tool",
                     slots={"shop_name": ",".join(shop_names)} if shop_names else {},
-                    reasoning="实时工具查询",
+                    reasoning="??????",
                 )
 
-            # 5.1.1 地址查询（特殊处理）
+            # 5.1.1 ??????????
             if any(kw in compact for kw in self._ADDRESS_KEYWORDS):
                 shop_names = self._extract_shop_names(query)
                 return LLMRouteDecision(
@@ -553,10 +697,10 @@ class FallbackRuleEngine:
                     confidence=0.85,
                     route="realtime_tool",
                     slots={"shop_name": ",".join(shop_names)} if shop_names else {},
-                    reasoning="地址/位置查询",
+                    reasoning="??/????",
                 )
 
-            # 5.2 比较查询
+            # 5.2 ????
             if any(kw in compact for kw in self._COMPARE_KEYWORDS):
                 shop_names = self._extract_shop_names(query)
                 return LLMRouteDecision(
@@ -565,26 +709,26 @@ class FallbackRuleEngine:
                     confidence=0.80,
                     route="compare_multi_parent",
                     slots={"shop_name": ",".join(shop_names)} if shop_names else {},
-                    reasoning="比较查询",
+                    reasoning="????",
                 )
 
-            # 5.3 推荐查询
-            if "推荐" in compact or "附近" in compact or "好吃的" in compact or any(kw in compact for kw in self._SCENE_KEYWORDS):
+            # 5.3 ????
+            if any(token in compact for token in ("推荐", "附近", "好吃")) or any(kw in compact for kw in self._SCENE_KEYWORDS):
                 return LLMRouteDecision(
                     intent="recommend",
                     domain="local_life",
                     confidence=0.75,
                     route="structured_first",
-                    reasoning="推荐查询",
+                    reasoning="????",
                 )
 
-            # 5.4 默认：merchant_reasoning
+            # 5.4 ???merchant_reasoning
             return LLMRouteDecision(
                 intent="detail",
                 domain="local_life",
                 confidence=0.60,
                 route="merchant_reasoning",
-                reasoning="本地生活详情查询（默认）",
+                reasoning="????????????",
             )
 
         # 6. 兜底：out_of_scope
@@ -716,7 +860,7 @@ def build_routing_decision_from_hybrid_router(
         "detail": "local_life",
         "recommend": "local_life",
         "compare": "local_life",
-        "coupon": "local_life",
+        "coupon": "package_or_coupon",
         "open_status": "local_life",
         "navigation": "local_life",
         "booking": "local_life",
@@ -730,6 +874,14 @@ def build_routing_decision_from_hybrid_router(
     }
     
     mapped_intent = intent_mapping.get(intent_name, "local_life")
+    compact_query = normalized_query.replace(" ", "")
+    if (
+        required_action == "clarify"
+        and mapped_intent == "local_life"
+        and any(token in compact_query for token in ("券", "优惠", "团购", "套餐"))
+    ):
+        mapped_intent = "package_or_coupon"
+    route_candidate = "local_life.package_or_coupon" if mapped_intent == "package_or_coupon" else mapped_intent
     
     # 创建 RoutingDecision
     route = RoutingDecision(
@@ -759,7 +911,7 @@ def build_routing_decision_from_hybrid_router(
         resolved_references=[],
         route_reason=reason or f"hybrid_router:{route_type}",
         safeguards_triggered=[],
-        route_candidate=mapped_intent,
+        route_candidate=route_candidate,
         preferred_chunk_roles=[],
         tool_candidates=[],
         clarification_question=clarification_question,
@@ -770,10 +922,11 @@ def build_routing_decision_from_hybrid_router(
             "top_level_intent": mapped_intent,
             "top_level_intent_reason": reason,
             "hybrid_router_route": route_type,
-            "hybrid_router_slots": slots,
-            "trace_id": trace.trace_id,
-            "fallback_used": trace.fallback_used,
-        },
-    )
+        "hybrid_router_slots": slots,
+        "trace_id": trace.trace_id,
+        "fallback_used": trace.fallback_used,
+        "hybrid_router_llm_error_type": trace.llm_error_type,
+    },
+)
     
     return route

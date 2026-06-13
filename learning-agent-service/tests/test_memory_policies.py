@@ -232,6 +232,79 @@ class MemoryPolicyTestCase(unittest.TestCase):
         self.assertLessEqual(len(plan.state_memories), 8)
         self.assertGreaterEqual(plan.token_budget, 1200)
 
+    def test_injection_policy_merges_semantic_and_procedural_sources(self) -> None:
+        pack = RetrievedMemoryPack(
+            prompt_memories=[],
+            state_memories=[],
+            tool_memories=[
+                MemoryRecord(
+                    memory_id="mem-tool-legacy",
+                    user_id="user-1",
+                    type=MemoryType.PROCEDURAL,
+                    scope=MemoryScope.USER,
+                    status=MemoryStatus.ACTIVE,
+                    content={"sop": "tool"},
+                    summary="tool memory",
+                    source_turn_id="turn-1",
+                    confidence=0.7,
+                    importance=0.65,
+                )
+            ],
+            semantic_memories=[
+                MemoryRecord(
+                    memory_id="mem-semantic",
+                    user_id="user-1",
+                    type=MemoryType.SEMANTIC,
+                    scope=MemoryScope.USER,
+                    status=MemoryStatus.ACTIVE,
+                    content={"fact": "semantic"},
+                    summary="semantic memory",
+                    source_turn_id="turn-1",
+                    confidence=0.9,
+                    importance=0.95,
+                )
+            ],
+            episodic_memories=[],
+            procedural_memories=[
+                MemoryRecord(
+                    memory_id="mem-procedural",
+                    user_id="user-1",
+                    type=MemoryType.PROCEDURAL,
+                    scope=MemoryScope.USER,
+                    status=MemoryStatus.ACTIVE,
+                    content={"sop": "procedural"},
+                    summary="procedural memory",
+                    source_turn_id="turn-1",
+                    confidence=0.85,
+                    importance=0.9,
+                )
+            ],
+            rag_memories=[
+                MemoryRecord(
+                    memory_id="mem-rag",
+                    user_id="user-1",
+                    type=MemoryType.SEMANTIC,
+                    scope=MemoryScope.USER,
+                    status=MemoryStatus.ACTIVE,
+                    content={"fact": "rag"},
+                    summary="rag memory",
+                    source_turn_id="turn-1",
+                    confidence=0.8,
+                    importance=0.8,
+                )
+            ],
+            excluded_memories=[],
+            retrieval_reason="unit-test",
+            total_token_estimate=160,
+            source_memory_ids=["mem-semantic", "mem-rag", "mem-procedural", "mem-tool-legacy"],
+        )
+
+        plan = MemoryInjectionPolicy().build(pack)
+
+        self.assertEqual([record.memory_id for record in plan.semantic_memories], ["mem-semantic", "mem-rag"])
+        self.assertEqual([record.memory_id for record in plan.procedural_memories], ["mem-procedural", "mem-tool-legacy"])
+        self.assertEqual([record.memory_id for record in plan.rag_memories], ["mem-semantic", "mem-rag"])
+
     def test_retrieval_policy_uses_custom_keyword_strategy(self) -> None:
         long_term_store = InMemoryLongTermMemoryStore()
         long_term_store.upsert(

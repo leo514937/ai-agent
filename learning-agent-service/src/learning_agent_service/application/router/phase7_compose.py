@@ -363,16 +363,23 @@ def _build_answer_contract(
         or any(token in compact_query_text for token in ("对比", "比较", "区别", "差别", "哪家更", "哪个更", "更便宜", "更适合", "更好"))
         and any(token in compact_query_text for token in ("和", "比", "vs"))
     )
+    multi_facet_requested = len(required_facets) > 1 or len(
+        [
+            facet
+            for facet in required_facets
+            if str((facet or {}).get("name") or "").strip() not in {"location", "category"}
+        ]
+    ) > 1
     if routing_action == "direct_answer" and route_candidate == "out_of_scope":
         answer_style = None
+    elif multi_facet_requested or sum(1 for flag in (inferred_coupon, inferred_open, inferred_distance) if flag) > 1:
+        answer_style = "facet_multi"
     elif inferred_coupon and not inferred_open and not inferred_distance:
         answer_style = "coupon_only"
     elif inferred_open and not inferred_coupon and not inferred_distance:
         answer_style = "open_status_only"
     elif inferred_distance and not inferred_coupon and not inferred_open:
         answer_style = "distance_only"
-    elif sum(1 for flag in (inferred_coupon, inferred_open, inferred_distance) if flag) > 1:
-        answer_style = "facet_multi"
     elif inferred_comparison or str(routing_extra.get("top_level_intent") or "").strip().lower() in {"comparison", "restaurant_comparison", "local_life_comparison"}:
         answer_style = "comparison"
     elif any(token in compact_query_text for token in ("附近", "周边", "推荐", "几家", "多推荐", "多家")):

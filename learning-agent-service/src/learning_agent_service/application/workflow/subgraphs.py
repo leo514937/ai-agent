@@ -11,10 +11,9 @@ from ...domain.contracts import (
     RoutingContract,
 )
 from ...domain.enums import RagStatus, ToolExecutionStatus
-from ...domain.state import GraphState
+from ...domain.state import GraphState, clone_graph_state
 from ..router.base import should_run_tool as routing_should_run_tool
 from ..router.phase5_retrieval import can_enter_retrieval
-from ..router.phase6_tool import can_enter_tool
 from ..router.stages import route_execution_mode
 from .state import append_runtime_error as _append_state_runtime_error
 from .state import append_stage_timeline_entry as _append_stage_timeline_entry
@@ -29,6 +28,12 @@ from .services import (
 _RETRIEVAL_ACTIONS = {"rag_retrieval", "rag_plus_tool"}
 _TOOL_ACTIONS = {"tool_call", "rag_plus_tool"}
 _DIRECT_ACTIONS = {"direct_answer", "clarify", "memory_update", "no_op", "reject"}
+
+
+@dataclass
+class RouteGateCommand:
+    goto: str
+    update: GraphState
 
 
 def _status_text(value) -> str | None:
@@ -48,28 +53,27 @@ def _route_decision_for_turn(turn) -> str:
     return "no_op"
 
 
-def route_after_load_context(state: GraphState) -> str:
-    if str(getattr(state["turn"], "execution_mode", "") or "").strip().lower() == "plan_execute":
-        return "understand_turn"
-    routing = state["turn"].routing_decision
-    if routing is not None and (routing.blocked or str(routing.required_action).strip().lower() in _DIRECT_ACTIONS):
-        return "compose_answer"
-    return "understand_turn"
-
-
-def run_load_context_node(state: GraphState, load_context_fn) -> GraphState:
-    state = load_context_fn(state)
-    return state
-
-
-def route_gate(state: GraphState) -> GraphState:
+def route_gate(state: GraphState) -> RouteGateCommand:
     turn = state["turn"]
     runtime = state["runtime"]
     routing = getattr(turn, "routing_decision", None)
     execution_mode = route_execution_mode(routing).execution_mode if routing is not None else "simple"
     branch = route_decider(state)
-    if routing is not None and str(getattr(routing, "required_action", "") or "").strip().lower() == "clarify":
-        branch = "clarify"
+    if routing is not None:
+        required_action = str(getattr(routing, "required_action", "") or "").strip().lower()
+        if execution_mode == "complex":
+            branch = "direct"
+        elif required_action in {"clarify", "tool_call", "rag_plus_tool", "rag_retrieval", "direct_answer", "memory_update", "no_op", "reject"}:
+            branch = {
+                "clarify": "clarify",
+                "tool_call": "tool",
+                "rag_plus_tool": "rag_plus_tool",
+                "rag_retrieval": "rag",
+                "direct_answer": "direct",
+                "memory_update": "direct",
+                "no_op": "direct",
+                "reject": "direct",
+            }[required_action]
     effective_action_map = {
         "recommendation": "rag_plus_tool",
         "tool": "tool_call",
@@ -245,7 +249,7 @@ def route_gate(state: GraphState) -> GraphState:
         "recommendation": "recommendation_subgraph",
         "direct": "compose_answer",
     }
-    return state
+    return RouteGateCommand(goto=target_map.get(branch, "compose_answer"), update=state)
 
 
 def _stage_entry(stage: str, status: str, *, route_decision: str | None = None, route_reason: str | None = None, detail=None):
@@ -383,10 +387,27 @@ def _tool_stage_detail(turn) -> dict[str, object]:
 
 
 def run_understand_turn(state: GraphState, services: UnderstandTurnServices) -> GraphState:
+    try:
+        from .graphs import build_understand_turn_graph
+
+        compiled_graph = build_understand_turn_graph(services)
+    except Exception:
+        compiled_graph = None
+    if compiled_graph is not None:
+        return compiled_graph.invoke(clone_graph_state(state))
+
     state = services.parse_intent_slots(state)
     state = services.resolve_reference(state)
     state = services.ambiguity_check(state)
     state = services.rag_gate(state)
+    return _finalize_understand_turn(state, services)
+
+
+def _prepare_understand_turn(state: GraphState) -> GraphState:
+    return clone_graph_state(state)
+
+
+def _finalize_understand_turn(state: GraphState, services: UnderstandTurnServices) -> GraphState:
     rag_gate = dict(state["turn"].extra.get("rag_gate", {}))
     routing = state["turn"].routing_decision
     if routing is not None and routing.blocked:
@@ -499,16 +520,6 @@ def run_rag_subgraph(state: GraphState, services: RagSubgraphServices) -> GraphS
 
 
 def run_recommendation_subgraph(state: GraphState, services: RagSubgraphServices) -> GraphState:
-    try:
-        from .graphs import build_recommendation_graph
-        compiled_graph = build_recommendation_graph(services)
-    except Exception:
-        compiled_graph = None
-    if compiled_graph is not None:
-        from ...domain.state import clone_graph_state
-        result = compiled_graph.invoke(clone_graph_state(state))
-        return result
-
     from .graphs import _execute_recommendation_pipeline, _finalize_recommendation, _prepare_recommendation
 
     state = _prepare_recommendation(state)
@@ -802,15 +813,6 @@ def route_decider(state: GraphState) -> str:
     if effective_action in {"direct_answer", "memory_update", "no_op", "reject"}:
         return "direct"
     return "direct"
-
-
-def route_after_rag(state: GraphState) -> str:
-    routing = state["turn"].routing_decision
-    if routing is not None:
-        if str(routing.required_action).strip().lower() == "rag_plus_tool" and can_enter_tool(state).allowed:
-            return "tool_subgraph"
-        return "compose_answer"
-    return "compose_answer"
 
 
 def _filter_evidence_by_contract(state: GraphState) -> GraphState:

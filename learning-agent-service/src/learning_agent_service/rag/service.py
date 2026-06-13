@@ -365,6 +365,12 @@ def _trace_from_payload(payload: object) -> RetrievalTrace | None:
             retrieval_filters=DomainRagAdapter().to_internal_filters(payload.get("retrieval_filters", {})),
             final_retrieval_filters=dict(payload.get("final_retrieval_filters", {})),
             preferred_chunk_types=tuple(payload.get("preferred_chunk_types", [])),
+            retrieval_mode=str(payload.get("retrieval_mode") or "normal"),
+            fallback_reason=str(payload.get("fallback_reason") or ""),
+            empty_reason=payload.get("empty_reason"),
+            kept_count=int(payload.get("kept_count") or 0),
+            rejected_count=int(payload.get("rejected_count") or 0),
+            route_hit_counts=dict(payload.get("route_hit_counts", {})),
             metrics=dict(payload.get("metrics", {})),
             extra=dict(payload.get("extra", {})),
         )

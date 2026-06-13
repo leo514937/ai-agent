@@ -712,6 +712,10 @@ class AnswerComposeRequest(CoreModel):
     memory_injection_plan: MemoryInjectionPlan | None
     entity_join_result: EntityJoinResult | None = None
     answer_contract: AnswerContract | None = None
+    answer_depth_policy: dict[str, Any] | None = None
+    ranked_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    facet_result_bundle: dict[str, Any] | None = None
+    answer_context: dict[str, Any] | None = None
     routing_decision: RoutingDecision | None = None
     evidence_quality: EvidenceQualityDecision | None = None
     final_response_mode: str | None = None

@@ -34,6 +34,7 @@ class WorkflowNodeAdapterStagesFrontAMixin:
             state = _copy_state(state)
             turn = state["turn"]
             persistent = state["persistent"]
+            had_pending_clarification = getattr(persistent, "pending_clarification", None) is not None
             persistent, turn = _restore_pending_clarification_from_result(
                 runtime=state["runtime"],
                 turn=turn,
@@ -95,34 +96,58 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                 client_context=state["runtime"].client_context,
             )
             turn = _store_routing_decision(turn, routing)
-            should_consume_pending = (
-                getattr(persistent, "pending_clarification", None) is not None
-                and _pending_clarification_matches_query(turn.raw_query, persistent)
-            )
-            if routing.required_action in {"clarify", "reject", "direct_answer", "memory_update", "no_op"}:
-                if should_consume_pending:
-                    state["turn"] = turn
-                    runtime = state["runtime"]
-                    metrics = dict(runtime.metrics)
-                    metrics["memory_retrieval_skipped"] = not routing.should_use_memory
-                    metrics["routing_decision"] = routing.model_dump(mode="json")
-                    metrics["routing_required_action"] = routing.required_action
-                    metrics["routing_reason"] = routing.route_reason
-                    state["runtime"] = runtime.model_copy(update={"metrics": metrics})
-                    state = _update_phase0_trace(
-                        state,
-                        harness_mode=str((state.get("runtime_context", {}) or {}).get("harness_mode") or (state["runtime"].extra or {}).get("harness_mode") or "off"),
-                        initial_routing_decision=routing.model_dump(mode="json"),
-                        initial_route_reason=routing.route_reason,
-                        initial_route_candidate=routing.route_candidate,
-                        initial_required_action=routing.required_action,
-                        retrieval_plan_status="not_attempted",
-                        retrieval_plan_failure_reason=None,
-                        tool_plan_status="not_attempted",
-                        tool_plan_failure_reason=None,
+            pending_match = getattr(persistent, "pending_clarification", None) is not None
+            if pending_match:
+                if had_pending_clarification:
+                    state = self.consume_pending_clarification(state)
+                    turn = state["turn"]
+                    persistent = state["persistent"]
+                    routing = _routing_decision_for_turn(turn)
+                else:
+                    pending_restore = dict(dict(turn.extra).get("pending_clarification_restore") or {})
+                    original_query = str(
+                        pending_restore.get("original_query")
+                        or getattr(persistent, "clarification_result", {}).get("original_query")
+                        or ""
+                    ).strip()
+                    original_route = str(
+                        pending_restore.get("original_route")
+                        or getattr(persistent, "clarification_result", {}).get("original_route")
+                        or "rag_retrieval"
+                    ).strip() or "rag_retrieval"
+                    routing = build_initial_routing_decision(
+                        original_query or turn.raw_query,
+                        persistent,
+                        client_context=state["runtime"].client_context,
                     )
-                    _log_routing_decision(state, stage="load_context_pending_clarification")
-                    return state
+                    routing = _apply_route_review(
+                        routing,
+                        raw_query=original_query or turn.raw_query,
+                        persistent=persistent,
+                        client_context=state["runtime"].client_context,
+                    )
+                    routing = routing.model_copy(
+                        update={
+                            "required_action": original_route,
+                            "blocked": False,
+                            "blocked_reason": None,
+                        }
+                    )
+                    turn_extra = dict(turn.extra)
+                    turn_extra["routing_decision"] = routing.model_dump(mode="json")
+                    turn_extra["routing_trace"] = routing_trace_payload(routing)
+                    turn_extra["pending_clarification_restore"] = {
+                        "original_query": original_query,
+                        "original_intent": str(
+                            pending_restore.get("original_intent")
+                            or getattr(persistent, "clarification_result", {}).get("original_intent")
+                            or "local_life_recommend"
+                        ).strip() or "local_life_recommend",
+                        "original_route": original_route,
+                    }
+                    turn = turn.model_copy(update={"routing_decision": routing, "extra": turn_extra})
+                    state["turn"] = turn
+            if routing.required_action in {"clarify", "reject", "direct_answer", "memory_update", "no_op"}:
                 if routing.required_action == "clarify":
                     clarification_result, pending_clarification = self._build_pending_clarification_state(
                         runtime=state["runtime"],
@@ -195,12 +220,16 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                         "reason": vote.reason,
                     },
                 }
+                if pending_match:
+                    cached_vote["reason"] = "pending_clarification"
+                    cached_vote["response_kind"] = "pending_clarification"
+                    cached_vote["final_vote"] = "allow"
                 turn_extra = dict(turn.extra)
                 turn_extra["rag_gate"] = {
                     **dict(turn_extra.get("rag_gate", {})),
                     "precheck_vote": vote.vote,
-                    "precheck_reason": vote.reason,
-                    "precheck_response_kind": vote.response_kind,
+                    "precheck_reason": "pending_clarification" if pending_match else vote.reason,
+                    "precheck_response_kind": "pending_clarification" if pending_match else vote.response_kind,
                 }
                 turn_extra["cached_rag_gate_vote"] = cached_vote
                 turn = turn.model_copy(update={"extra": turn_extra})
@@ -225,6 +254,74 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                 tool_plan_status="not_attempted",
                 tool_plan_failure_reason=None,
             )
+            memory_retrieval_summary = {
+                "attempted": False,
+                "status": "skipped",
+                "reason": "routing_disallowed",
+                "retrieved_count": 0,
+                "injected_count": 0,
+            }
+            if routing.should_use_memory:
+                memory_orchestrator = getattr(self.container, "memory_orchestrator", None)
+                if (
+                    memory_orchestrator is not None
+                    and hasattr(memory_orchestrator, "retrieve_for_state")
+                    and hasattr(memory_orchestrator, "build_injection_plan")
+                    and hasattr(memory_orchestrator, "attach_to_state")
+                ):
+                    try:
+                        memory_retrieval_summary["attempted"] = True
+                        pack = memory_orchestrator.retrieve_for_state(state)
+                        injection = memory_orchestrator.build_injection_plan(pack)
+                        state = memory_orchestrator.attach_to_state(state, pack, injection)
+                        memory_retrieval_summary.update(
+                            {
+                                "status": "retrieved",
+                                "reason": getattr(pack, "retrieval_reason", None) or "retrieved",
+                                "retrieved_count": len(list(getattr(pack, "source_memory_ids", []) or [])),
+                                "injected_count": len(
+                                    list(getattr(injection, "prompt_memories", []) or [])
+                                    + list(getattr(injection, "state_memories", []) or [])
+                                    + list(getattr(injection, "tool_memories", []) or [])
+                                    + list(getattr(injection, "semantic_memories", []) or [])
+                                    + list(getattr(injection, "episodic_memories", []) or [])
+                                    + list(getattr(injection, "procedural_memories", []) or [])
+                                    + list(getattr(injection, "rag_memories", []) or [])
+                                ),
+                            }
+                        )
+                    except Exception as exc:  # pragma: no cover - defensive fallback
+                        memory_retrieval_summary.update(
+                            {
+                                "attempted": True,
+                                "status": "failed",
+                                "reason": str(exc) or "memory_retrieval_failed",
+                            }
+                        )
+                else:
+                    memory_retrieval_summary.update(
+                        {
+                            "attempted": True,
+                            "status": "unavailable",
+                            "reason": "memory_orchestrator_unavailable",
+                        }
+                    )
+            runtime = state["runtime"]
+            metrics = dict(runtime.metrics)
+            metrics.update(
+                {
+                    "memory_retrieval_attempted": bool(memory_retrieval_summary["attempted"]),
+                    "memory_retrieval_status": memory_retrieval_summary["status"],
+                    "memory_retrieval_reason": memory_retrieval_summary["reason"],
+                    "memory_retrieval_skipped": not routing.should_use_memory,
+                    "memory_retrieved_count": memory_retrieval_summary["retrieved_count"],
+                    "memory_injected_count": memory_retrieval_summary["injected_count"],
+                }
+            )
+            state["runtime"] = runtime.model_copy(update={"metrics": metrics})
+            turn_extra = dict(state["turn"].extra)
+            turn_extra["memory_retrieval"] = memory_retrieval_summary
+            state["turn"] = state["turn"].model_copy(update={"extra": turn_extra})
             _log_routing_decision(state, stage="load_context")
             return state
     
@@ -379,6 +476,14 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                 persistent=routing_context,
                 client_context=runtime.client_context,
             )
+            if original_route:
+                routing = routing.model_copy(
+                    update={
+                        "required_action": original_route,
+                        "blocked": False,
+                        "blocked_reason": None,
+                    }
+                )
             turn_extra = dict(state["turn"].extra)
             turn_extra["routing_decision"] = routing.model_dump(mode="json")
             turn_extra["routing_trace"] = routing_trace_payload(routing)
@@ -423,22 +528,26 @@ class WorkflowNodeAdapterStagesFrontAMixin:
             persistent = state["persistent"]
             routing = _routing_decision_for_turn(turn)
             allow_plan_execute = str(getattr(turn, "execution_mode", "") or "").strip().lower() == "plan_execute"
-            if routing is not None and not allow_plan_execute and (routing.blocked or routing.required_action in {"clarify", "reject", "direct_answer", "memory_update", "no_op"}):
-                return state
-            if getattr(persistent, "pending_clarification", None) is not None and _pending_clarification_matches_query(turn.raw_query, persistent):
+            pending_match = getattr(persistent, "pending_clarification", None) is not None
+            if pending_match:
                 pending_restore = dict(dict(turn.extra).get("pending_clarification_restore") or {})
                 original_query = str(
                     pending_restore.get("original_query")
                     or getattr(persistent, "clarification_result", {}).get("original_query")
                     or ""
                 ).strip()
+                original_route = str(
+                    pending_restore.get("original_route")
+                    or getattr(persistent, "clarification_result", {}).get("original_route")
+                    or "rag_retrieval"
+                ).strip() or "rag_retrieval"
                 restored_persistent: dict[str, Any] = {}
                 if original_query:
                     if str(getattr(persistent, "current_topic", "") or "").strip() != original_query:
                         restored_persistent["current_topic"] = original_query
                     if str(getattr(persistent, "last_retrieval_topic", "") or "").strip() != original_query:
                         restored_persistent["last_retrieval_topic"] = original_query
-    
+
                 ambiguity_type = str(getattr(persistent.pending_clarification, "ambiguity_type", "") or "").strip().lower()
                 if ambiguity_type in {"location", "city", "area", "district", "region"}:
                     try:
@@ -470,6 +579,30 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                         pass
                 if restored_persistent:
                     state["persistent"] = persistent.model_copy(update=restored_persistent)
+                routing = build_initial_routing_decision(
+                    original_query or turn.raw_query,
+                    state["persistent"],
+                    client_context=state["runtime"].client_context,
+                )
+                routing = _apply_route_review(
+                    routing,
+                    raw_query=original_query or turn.raw_query,
+                    persistent=state["persistent"],
+                    client_context=state["runtime"].client_context,
+                )
+                routing = routing.model_copy(
+                    update={
+                        "required_action": original_route,
+                        "blocked": False,
+                        "blocked_reason": None,
+                    }
+                )
+                turn_extra = dict(turn.extra)
+                turn_extra["routing_decision"] = routing.model_dump(mode="json")
+                turn_extra["routing_trace"] = routing_trace_payload(routing)
+                state["turn"] = turn.model_copy(update={"routing_decision": routing, "extra": turn_extra})
+                return state
+            if routing is not None and not allow_plan_execute and (routing.blocked or routing.required_action in {"clarify", "reject", "direct_answer", "memory_update", "no_op"}):
                 return state
             runtime = state["runtime"]
             command = ChatTurnCommand(
@@ -537,6 +670,54 @@ class WorkflowNodeAdapterStagesFrontAMixin:
     
             turn_extra = {**dict(turn.extra), **dict(getattr(result, "extra", {}) or {})}
             turn_extra["needs_query_rewrite"] = bool(getattr(decision_result, "needs_query_rewrite", False))
+            semantic_context = turn_extra.get("semantic_context")
+            if isinstance(semantic_context, Mapping):
+                persistent_updates: dict[str, Any] = {}
+                anchor = semantic_context.get("anchor_shop")
+                if isinstance(anchor, Mapping):
+                    anchor_payload = {k: v for k, v in dict(anchor).items() if v not in (None, "", [], {}, ())}
+                    if anchor_payload:
+                        persistent_updates["current_shop_anchor"] = anchor_payload
+                        anchor_name = str(anchor_payload.get("name") or anchor_payload.get("shop_name") or "").strip()
+                        anchor_id = anchor_payload.get("shop_id") or anchor_payload.get("id")
+                        if anchor_name and not getattr(state["persistent"], "current_shop", None):
+                            persistent_updates.setdefault("current_shop", anchor_name)
+                        if anchor_id not in (None, "") and not getattr(state["persistent"], "selected_shop_id", None):
+                            persistent_updates.setdefault("selected_shop_id", anchor_id)
+                inherited_constraints = semantic_context.get("inherited_constraints")
+                if isinstance(inherited_constraints, Mapping) and inherited_constraints:
+                    merged_constraints = dict(getattr(state["persistent"], "current_constraints", {}) or {})
+                    merged_constraints.update({k: v for k, v in dict(inherited_constraints).items() if v not in (None, "", [], {}, ())})
+                    persistent_updates["current_constraints"] = merged_constraints
+                    if merged_constraints.get("scene") and not getattr(state["persistent"], "current_scene", None):
+                        persistent_updates["current_scene"] = str(merged_constraints.get("scene"))
+                comparison_targets = semantic_context.get("comparison_targets")
+                if isinstance(comparison_targets, list):
+                    target_names = [
+                        str(item.get("name") or item.get("shop_name") or item.get("target") or "").strip()
+                        for item in comparison_targets
+                        if isinstance(item, Mapping)
+                    ]
+                    target_names = [name for name in target_names if name]
+                    if target_names:
+                        persistent_updates["dialog_comparison_targets"] = list(dict.fromkeys(target_names))
+                follow_up_kind = str(semantic_context.get("follow_up_kind") or "").strip()
+                promoted_intent = str(semantic_context.get("promoted_intent") or "").strip()
+                if follow_up_kind:
+                    if follow_up_kind == "comparison_completion":
+                        persistent_updates["dialog_state"] = "comparing"
+                        persistent_updates["dialog_task"] = "comparison"
+                        persistent_updates["dialog_intent"] = promoted_intent or "compare"
+                    elif follow_up_kind in {"intent_ellipsis", "constraint_inheritance"}:
+                        persistent_updates["dialog_state"] = "follow_up"
+                        persistent_updates["dialog_task"] = "recommendation"
+                        persistent_updates["dialog_intent"] = promoted_intent or "recommend"
+                    elif follow_up_kind == "entity_reference":
+                        persistent_updates["dialog_state"] = "follow_up"
+                        persistent_updates["dialog_task"] = "detail"
+                        persistent_updates["dialog_intent"] = promoted_intent or "detail"
+                if persistent_updates:
+                    state["persistent"] = state["persistent"].model_copy(update=persistent_updates)
             reference_resolution = _coerce_reference_resolution(
                 getattr(result, "reference_resolution", None)
                 or turn_extra.get("reference_resolution")

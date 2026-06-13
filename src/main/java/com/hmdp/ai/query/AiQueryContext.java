@@ -5,7 +5,9 @@ import com.hmdp.dto.UserDTO;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -31,6 +33,11 @@ public class AiQueryContext {
     private Double x;
     private Double y;
     private String location;
+    private Map<String, Object> currentShopAnchor = new LinkedHashMap<>();
+    private List<String> dialogComparisonTargets = new ArrayList<>();
+    private Map<String, Object> currentConstraints = new LinkedHashMap<>();
+    private String followUpKind;
+    private Boolean needsClarification;
     private Map<String, Object> rawContext = new LinkedHashMap<>();
 
     public static AiQueryContext from(Map<String, Object> context, UserDTO currentUser) {
@@ -58,6 +65,21 @@ public class AiQueryContext {
                 asString(source, "city"),
                 asString(source, "area")
         ));
+        result.setCurrentShopAnchor(firstMap(source, "current_shop_anchor", "currentShopAnchor", "shopAnchor"));
+        result.setDialogComparisonTargets(firstStringList(source, "dialog_comparison_targets", "dialogComparisonTargets", "comparisonTargets"));
+        Map<String, Object> mergedConstraints = firstMap(source, "current_constraints", "currentConstraints", "confirmed_constraints");
+        if (mergedConstraints.isEmpty()) {
+            mergedConstraints = new LinkedHashMap<>();
+        }
+        putIfNotBlank(mergedConstraints, "category", asString(source, "category"), asString(source, "current_category"), asString(source, "typeName"));
+        putIfNotBlank(mergedConstraints, "scene", asString(source, "scene"), asString(source, "current_scene"));
+        putIfNotBlank(mergedConstraints, "city", asString(source, "city"), asString(source, "current_city"));
+        putIfNotBlank(mergedConstraints, "area", asString(source, "area"), asString(source, "district"));
+        putIfNotBlank(mergedConstraints, "price_range", asString(source, "price_range"), asString(source, "budget"));
+        putIfNotBlank(mergedConstraints, "preferences", asString(source, "preferences"), asString(source, "current_preferences"));
+        result.setCurrentConstraints(mergedConstraints);
+        result.setFollowUpKind(firstNonBlank(asString(source, "follow_up_kind"), asString(source, "followUpKind")));
+        result.setNeedsClarification(firstBoolean(source, "needs_clarification", "needsClarification", "clarificationNeeded"));
 
         if (currentUser != null) {
             if (result.getUserId() == null) {
@@ -71,7 +93,9 @@ public class AiQueryContext {
     }
 
     public boolean hasShopContext() {
-        return shopId != null || StrUtil.isNotBlank(shopName);
+        return shopId != null
+                || StrUtil.isNotBlank(shopName)
+                || !currentShopAnchor.isEmpty();
     }
 
     public boolean hasBlogContext() {
@@ -80,6 +104,18 @@ public class AiQueryContext {
 
     public boolean hasTypeContext() {
         return typeId != null || StrUtil.isNotBlank(typeName);
+    }
+
+    public boolean hasComparisonContext() {
+        return !dialogComparisonTargets.isEmpty();
+    }
+
+    public boolean hasConstraintContext() {
+        return !currentConstraints.isEmpty();
+    }
+
+    public boolean requiresClarification() {
+        return Boolean.TRUE.equals(needsClarification);
     }
 
     private static String asString(Map<String, Object> source, String key) {
@@ -140,5 +176,79 @@ public class AiQueryContext {
             }
         }
         return null;
+    }
+
+    private static Map<String, Object> firstMap(Map<String, Object> source, String... keys) {
+        for (String key : keys) {
+            Object value = source.get(key);
+            if (value instanceof Map<?, ?>) {
+                Map<?, ?> map = (Map<?, ?>) value;
+                Map<String, Object> result = new LinkedHashMap<>();
+                for (Map.Entry<?, ?> entry : map.entrySet()) {
+                    if (entry.getKey() != null) {
+                        result.put(String.valueOf(entry.getKey()), entry.getValue());
+                    }
+                }
+                if (!result.isEmpty()) {
+                    return result;
+                }
+            }
+        }
+        return new LinkedHashMap<>();
+    }
+
+    private static List<String> firstStringList(Map<String, Object> source, String... keys) {
+        for (String key : keys) {
+            Object value = source.get(key);
+            if (value instanceof Iterable<?>) {
+                Iterable<?> iterable = (Iterable<?>) value;
+                List<String> result = new ArrayList<>();
+                for (Object item : iterable) {
+                    String text = item == null ? null : String.valueOf(item);
+                    if (StrUtil.isNotBlank(text)) {
+                        result.add(text);
+                    }
+                }
+                if (!result.isEmpty()) {
+                    return result;
+                }
+            } else if (value instanceof String && StrUtil.isNotBlank((String) value)) {
+                List<String> result = new ArrayList<>();
+                result.add((String) value);
+                return result;
+            }
+        }
+        return new ArrayList<>();
+    }
+
+    private static Boolean firstBoolean(Map<String, Object> source, String... keys) {
+        for (String key : keys) {
+            Object value = source.get(key);
+            if (value instanceof Boolean) {
+                return (Boolean) value;
+            }
+            if (value instanceof String && StrUtil.isNotBlank((String) value)) {
+                String text = (String) value;
+                if ("true".equalsIgnoreCase(text) || "1".equals(text) || "yes".equalsIgnoreCase(text)) {
+                    return Boolean.TRUE;
+                }
+                if ("false".equalsIgnoreCase(text) || "0".equals(text) || "no".equalsIgnoreCase(text)) {
+                    return Boolean.FALSE;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static void putIfNotBlank(Map<String, Object> target, String key, String... values) {
+        if (target == null || StrUtil.isBlank(key) || target.containsKey(key)) {
+            return;
+        }
+        for (String value : values) {
+            if (StrUtil.isNotBlank(value)) {
+                target.put(key, value);
+                return;
+            }
+        }
     }
 }

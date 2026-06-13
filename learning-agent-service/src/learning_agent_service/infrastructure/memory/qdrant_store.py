@@ -408,7 +408,12 @@ class QdrantLongTermMemoryIndex:
         self.last_error = None
         vector = self._embed_query(query or "")
         if vector is None:
-            return []
+            return self._search_text_fallback(
+                query=query or "",
+                user_id=user_id,
+                limit=limit,
+                memory_types=memory_types,
+            )
         query_points = getattr(self.client, "query_points", None)
         if callable(query_points):
             try:
@@ -452,6 +457,56 @@ class QdrantLongTermMemoryIndex:
             except Exception:
                 self.last_error = "search_failed"
         return self._search_fallback(vector=vector, user_id=user_id, limit=limit, memory_types=memory_types)
+
+    def _search_text_fallback(
+        self,
+        *,
+        query: str,
+        user_id: str,
+        limit: int,
+        memory_types: Sequence[Any] | None = None,
+    ) -> Sequence[MemoryRecord]:
+        normalized_types = set(_normalize_memory_types(memory_types) or [])
+        normalized_query = str(query or "").strip().lower()
+        if not normalized_query:
+            return []
+
+        def _score(candidate_text: str) -> float:
+            text = str(candidate_text or "").strip().lower()
+            if not text:
+                return 0.0
+            if normalized_query in text or text in normalized_query:
+                return 1.0
+            query_chars = {ch for ch in normalized_query if ch.isalnum() or "\u4e00" <= ch <= "\u9fff"}
+            text_chars = {ch for ch in text if ch.isalnum() or "\u4e00" <= ch <= "\u9fff"}
+            if not query_chars or not text_chars:
+                return 0.0
+            overlap = len(query_chars & text_chars) / float(len(query_chars))
+            return overlap
+
+        scored: list[tuple[float, dict[str, Any]]] = []
+        for point in self.fallback_points.values():
+            payload = point.get("payload", {})
+            if payload.get("user_id") != user_id:
+                continue
+            if not _payload_is_searchable(payload):
+                continue
+            if normalized_types and str(payload.get("memory_type") or "").strip().lower() not in normalized_types:
+                continue
+            candidate_text = " ".join(
+                [
+                    str(payload.get("summary") or ""),
+                    str(payload.get("content") or ""),
+                    " ".join(str(item) for item in payload.get("tags") or []),
+                    " ".join(str(item) for item in payload.get("entities") or []),
+                ]
+            )
+            score = _score(candidate_text)
+            if score > 0:
+                scored.append((score, payload))
+
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [self._payload_to_record(payload) for _, payload in scored[:limit]]
 
     def _search_fallback(
         self,

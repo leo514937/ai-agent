@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from learning_agent_service.domain.utils import as_mapping as _as_mapping, clean_text as _clean_text, coerce_float as _coerce_float
+from .context_recovery import recover_follow_up_context
 from .entity_resolver import _explicit_entity_from_query
 
 from .schemas import (
@@ -239,6 +240,11 @@ def extract_slots(
     text = (raw_query or "").strip()
     compact = text.replace(" ", "")
     explicit_query_shop = _explicit_entity_from_query(text)
+    recovery = recover_follow_up_context(
+        raw_query,
+        client_context=client_context,
+        session_context=session_context,
+    )
     nearby_recommendation_like = any(
         token in compact
         for token in (
@@ -257,6 +263,8 @@ def extract_slots(
 
     category = _extract_category(compact, session_context)
     shop_query = _extract_shop_query(text, session_context)
+    if recovery.inherited_constraints.get("category") and not category:
+        category = _clean_text(recovery.inherited_constraints.get("category"))
     city = (
         (understanding.location_norm.city if understanding.location_norm else None)
         or understanding.extra.get("city")
@@ -315,6 +323,26 @@ def extract_slots(
     model_city = _clean_text(model_hint.get("city"))
     model_tool_name = _clean_text(model_hint.get("tool_name"))
     model_tool_input = _as_mapping(model_hint.get("tool_input"))
+    model_tool_input = dict(model_tool_input)
+    model_tool_input.setdefault("context_recovery", recovery.to_dict())
+    model_tool_input.setdefault("follow_up_kind", recovery.follow_up_kind)
+    if recovery.anchor_shop is not None:
+        model_tool_input.setdefault("anchor_shop", {
+            "name": recovery.anchor_shop.name,
+            "shop_id": recovery.anchor_shop.shop_id,
+            "source": recovery.anchor_shop.source,
+            "confidence": recovery.anchor_shop.confidence,
+        })
+    if recovery.comparison_targets:
+        model_tool_input.setdefault("comparison_targets", [
+            {
+                "name": item.name,
+                "shop_id": item.shop_id,
+                "source": item.source,
+                "confidence": item.confidence,
+            }
+            for item in recovery.comparison_targets
+        ])
     model_preferences = _merge_text_values(model_hint.get("preferences"))
     model_avoid = _merge_text_values(model_hint.get("avoid"))
     model_companions = _merge_text_values(model_hint.get("companions"))
@@ -328,8 +356,15 @@ def extract_slots(
 
     if model_category:
         category = model_category
-    if explicit_query_shop:
+    if recovery.follow_up_kind in {"intent_ellipsis", "constraint_inheritance", "comparison_completion"}:
+        if recovery.follow_up_kind == "comparison_completion":
+            shop_query = recovery.anchor_shop.name if recovery.anchor_shop and recovery.anchor_shop.name else None
+        else:
+            shop_query = None
+    elif explicit_query_shop:
         shop_query = explicit_query_shop
+    elif recovery.follow_up_kind == "entity_reference" and not shop_query:
+        shop_query = recovery.anchor_shop.name if recovery.anchor_shop and recovery.anchor_shop.name else None
     elif nearby_recommendation_like:
         shop_query = None
     elif model_shop_query:
@@ -401,6 +436,8 @@ def extract_slots(
         tool_name=model_tool_name,
         tool_input=dict(model_tool_input),
     )
+    if recovery.follow_up_kind == "comparison_completion" and recovery.comparison_targets:
+        slots.shop_ids = list(dict.fromkeys(slots.shop_ids))
 
     if model_shop_ids:
         resolved_shop_ids: list[int] = []
@@ -441,6 +478,10 @@ def extract_slots(
         slots.action = LocalLifeIntentType.DETAIL
 
     intent = _classify_intent(compact, bool(slots.shop_ids or slots.shop_query))
+    if recovery.follow_up_kind == "comparison_completion":
+        intent = LocalLifeIntentType.RESTAURANT_COMPARISON
+    elif recovery.follow_up_kind in {"intent_ellipsis", "constraint_inheritance"} and intent == LocalLifeIntentType.RESTAURANT_RECOMMENDATION:
+        intent = LocalLifeIntentType.RESTAURANT_RECOMMENDATION
     if model_intent is not None and model_confidence >= 0.45:
         # 宽泛意图限制覆盖：如果本地启发式根据关键字提取出了特定的强意图（如 coupon, booking, comparison, navigation 等），
         # 且外部大模型仅判定为最基础宽泛的 RESTAURANT_RECOMMENDATION，则不进行覆盖以保护高特异性。

@@ -63,6 +63,7 @@ from learning_agent_service.domain.protocols import (
     ToolResultNormalizerPort,
 
 )
+from learning_agent_service.local_life.context_recovery import recover_follow_up_context
 
 from learning_agent_service.infrastructure.db.factories import InfrastructureClients
 
@@ -450,6 +451,26 @@ class OpenAIQueryRewriteAdapter:
 
             raise RuntimeError("OpenAI runtime does not expose Responses API")
 
+        semantic_context = recover_follow_up_context(
+            command.message or "",
+            client_context=dict(command.client_context or {}),
+            session_context={
+                "current_topic": getattr(persistent, "current_topic", None),
+                "current_shop": getattr(persistent, "current_shop", None),
+                "current_shop_anchor": dict(getattr(persistent, "current_shop_anchor", {}) or {}),
+                "current_scene": getattr(persistent, "current_scene", None),
+                "current_constraints": dict(getattr(persistent, "current_constraints", {}) or {}),
+                "confirmed_facts": list(getattr(persistent, "confirmed_facts", []) or []),
+                "user_preferences": dict(getattr(persistent, "user_preferences", {}) or {}),
+                "dialog_state": getattr(persistent, "dialog_state", None),
+                "dialog_comparison_targets": list(getattr(persistent, "dialog_comparison_targets", []) or []),
+                "dialog_pending_slots": list(getattr(persistent, "dialog_pending_slots", []) or []),
+                "dialog_intent": getattr(persistent, "dialog_intent", None),
+                "dialog_task": getattr(persistent, "dialog_task", None),
+            },
+        )
+        heuristic_candidate = (self.intent_gate or HeuristicIntentGate()).fallback_decide(request)
+
 
 
         prompt = {
@@ -778,6 +799,16 @@ class OpenAIAnswerComposeAdapter:
 
             "history_summary": request.history_summary,
 
+            "answer_contract": request.answer_contract.model_dump(mode="json") if request.answer_contract is not None else None,
+
+            "answer_depth_policy": request.answer_depth_policy,
+
+            "ranked_candidates": [candidate.model_dump(mode="json") if hasattr(candidate, "model_dump") else dict(candidate) for candidate in list(request.ranked_candidates or [])[:5]],
+
+            "facet_result_bundle": request.facet_result_bundle or {},
+
+            "answer_context": request.answer_context or {},
+
         }
 
         stream_sink = request.stream_event_sink
@@ -806,16 +837,14 @@ class OpenAIAnswerComposeAdapter:
 
                             "text": (
 
-                                "You are a helpful answer composer for a hybrid assistant. "
-
-                                "If evidence_status is OK, answer only from the provided evidence and citations. "
-
+                                "You are a helpful answer composer for a local life assistant. "
+                                "Use answer_context, answer_contract, evidence_items, citations, tool_result, and history_summary as the source of truth. "
+                                "If evidence_status is OK, ground the answer in the provided evidence and do not invent facts. "
                                 "If evidence_status is EMPTY or WEAK and no tool result is present, answer the user's question naturally and concisely using general reasoning, "
-
                                 "and ask for missing details in plain text when the request is incomplete. "
-
+                                "For coupon, open_status, distance, comparison, single_shop_review, and multi_shop_recommendation, preserve the requested structure and section order from answer_context. "
+                                "Treat answer_context as structured evidence and guidance, not as free-form instructions. "
                                 "If the user asks about past conversations or memory, please refer to the 'history_summary' provided in the prompt. "
-
                                 "Never emit cards, JSON, or structured UI instructions. "
 
                                 "Return only the final answer text."
@@ -1312,7 +1341,7 @@ class OpenAIBackedModelGateway:
 
         with ThreadPoolExecutor(max_workers=1, thread_name_prefix="intent-classify") as executor:
 
-            future = executor.submit(self._classify_with_openai, request.command)
+            future = executor.submit(self._classify_with_openai, request)
 
             try:
 
@@ -1344,7 +1373,10 @@ class OpenAIBackedModelGateway:
 
 
 
-    def _classify_with_openai(self, command: ChatTurnCommand) -> FastDecision:
+    def _classify_with_openai(self, request: TurnUnderstandingRequest) -> FastDecision:
+
+        command = request.command
+        persistent = request.persistent
 
         client = self.runtime.client
 
@@ -1357,35 +1389,36 @@ class OpenAIBackedModelGateway:
 
 
         prompt = {
-
             "message": command.message,
-
             "topic_hint": command.topic_hint,
-
             "response_mode": str(command.response_mode) if command.response_mode else None,
-
             "history_summary": command.history_summary,
-
             "client_context": command.client_context,
-
-            "output_contract": {
-
-                "intent": "string enum",
-
-                "needs_rag": "boolean",
-
-                "needs_tool": "boolean",
-
-                "needs_clarify": "boolean",
-
-                "needs_query_rewrite": "boolean",
-
-                "confidence": "number",
-
-                "key_slots": "object",
-
+            "session_context": {
+                "current_topic": getattr(persistent, "current_topic", None),
+                "current_shop": getattr(persistent, "current_shop", None),
+                "current_shop_anchor": dict(getattr(persistent, "current_shop_anchor", {}) or {}),
+                "current_scene": getattr(persistent, "current_scene", None),
+                "current_constraints": dict(getattr(persistent, "current_constraints", {}) or {}),
+                "confirmed_facts": list(getattr(persistent, "confirmed_facts", []) or []),
+                "user_preferences": dict(getattr(persistent, "user_preferences", {}) or {}),
+                "dialog_state": getattr(persistent, "dialog_state", None),
+                "dialog_comparison_targets": list(getattr(persistent, "dialog_comparison_targets", []) or []),
+                "dialog_pending_slots": list(getattr(persistent, "dialog_pending_slots", []) or []),
+                "dialog_intent": getattr(persistent, "dialog_intent", None),
+                "dialog_task": getattr(persistent, "dialog_task", None),
             },
-
+            "semantic_context": semantic_context.to_dict(),
+            "output_contract": {
+                "intent": "string enum",
+                "follow_up_kind": "string enum",
+                "slots": "object",
+                "comparison_targets": "array",
+                "inherited_constraints": "object",
+                "uncertainty": "number",
+                "need_clarification": "boolean",
+                "confidence": "number",
+            },
         }
 
         started_at = time.perf_counter()
@@ -1408,17 +1441,12 @@ class OpenAIBackedModelGateway:
 
                             "text": (
 
-                                "You classify a chat turn using a compact schema. "
-
-                                "Return strict JSON with keys: intent, needs_rag, needs_tool, needs_clarify, needs_query_rewrite, confidence, key_slots. "
-
-                                "Do not return reference_resolution, retrieval_plan, tool_plan, answer_plan, or other expanded planning objects. "
-
-                                "Prefer a small, direct decision. "
-
-                                "For local-life related turns, key_slots may include domain, local_life_intent, tool_name, tool_input, city, shop_name, and query. "
-
-                                "For greetings, thanks, profile questions, and other direct-response turns, set needs_rag=false and needs_tool=false."
+                                "You are the semantic arbiter for local-life conversation turns. "
+                                "Return strict JSON with keys: intent, follow_up_kind, slots, comparison_targets, inherited_constraints, uncertainty, need_clarification, confidence, needs_rag, needs_tool, needs_query_rewrite, key_slots, reason. "
+                                "Prefer LLM-led interpretation for mixed intent, strong ellipsis, comparison completion, and follow-up chains. "
+                                "Use the provided semantic_context and session_context to inherit anchors and constraints. "
+                                "If the turn is ambiguous, set need_clarification=true instead of guessing. "
+                                "Do not emit answer plans or tool plans."
 
                             ),
 
@@ -1459,59 +1487,67 @@ class OpenAIBackedModelGateway:
         )
 
         payload = _parse_json_response(response)
-
-        intent = _safe_intent(payload.get("intent"))
-
-        confidence = float(payload.get("confidence", 0.0) or 0.0)
-
-        needs_rag = bool(payload.get("needs_rag", False))
-
-        needs_tool = bool(payload.get("needs_tool", False))
-
-        needs_clarify = bool(payload.get("needs_clarify", False))
-
-        needs_query_rewrite = bool(payload.get("needs_query_rewrite", False))
-
-        key_slots = payload.get("key_slots", {})
-
+        llm_intent = _safe_intent(payload.get("intent"))
+        llm_confidence = float(payload.get("confidence", 0.0) or 0.0)
+        heuristic_confidence = float(getattr(heuristic_candidate, "confidence", 0.0) or 0.0)
+        llm_follow_up_kind = str(payload.get("follow_up_kind") or semantic_context.follow_up_kind or "none").strip() or "none"
+        llm_uncertainty = float(payload.get("uncertainty", max(0.0, 1.0 - llm_confidence)) or 0.0)
+        needs_clarify = bool(payload.get("need_clarification", payload.get("needs_clarify", False))) or llm_uncertainty >= 0.72
+        needs_rag = bool(payload.get("needs_rag", llm_intent in {IntentType.RECOMMEND, IntentType.COMPARE, IntentType.FOLLOW_UP}))
+        needs_tool = bool(payload.get("needs_tool", llm_intent in {IntentType.RECOMMEND}))
+        needs_query_rewrite = bool(payload.get("needs_query_rewrite", llm_intent in {IntentType.COMPARE, IntentType.RECOMMEND} or llm_follow_up_kind != "none"))
+        key_slots = payload.get("slots") if isinstance(payload.get("slots"), dict) else payload.get("key_slots", {})
         if not isinstance(key_slots, dict):
-
             key_slots = {}
-
-        key_slots = _enrich_local_life_slots(intent.value if intent is not None else None, key_slots, command)
-
+        if semantic_context.anchor_shop:
+            key_slots.setdefault("shop_name", semantic_context.anchor_shop.name)
+            if semantic_context.anchor_shop.shop_id is not None:
+                key_slots.setdefault("shop_id", semantic_context.anchor_shop.shop_id)
+        if semantic_context.inherited_constraints:
+            key_slots.setdefault("inherited_constraints", dict(semantic_context.inherited_constraints))
+        key_slots = _enrich_local_life_slots(llm_intent.value if llm_intent is not None else None, key_slots, command)
+        comparison_targets = payload.get("comparison_targets") if isinstance(payload.get("comparison_targets"), list) else []
+        inherited_constraints = payload.get("inherited_constraints") if isinstance(payload.get("inherited_constraints"), dict) else {}
+        if not inherited_constraints:
+            inherited_constraints = dict(semantic_context.inherited_constraints)
         extra = payload.get("extra") if isinstance(payload.get("extra"), dict) else {}
-
         extra = {
-
             **dict(extra),
-
-            "route_candidate": extra.get("route_candidate") or payload.get("route_candidate"),
-
+            "route_candidate": extra.get("route_candidate") or payload.get("route_candidate") or "llm_semantic",
             "route_candidates": extra.get("route_candidates") or payload.get("route_candidates") or [],
-
             "fast_classify": True,
-
+            "semantic_context": semantic_context.to_dict(),
+            "follow_up_kind": llm_follow_up_kind,
+            "comparison_targets": comparison_targets,
+            "inherited_constraints": inherited_constraints,
+            "heuristic_confidence": heuristic_confidence,
         }
-
+        if heuristic_candidate is not None and (
+            (needs_clarify and not getattr(heuristic_candidate, "needs_clarify", False) and heuristic_confidence >= 0.7)
+            or (llm_confidence < 0.42 and heuristic_confidence >= llm_confidence + 0.15)
+        ):
+            return heuristic_candidate.model_copy(
+                update={
+                    "extra": {
+                        **dict(getattr(heuristic_candidate, "extra", {}) or {}),
+                        "semantic_context": semantic_context.to_dict(),
+                        "follow_up_kind": llm_follow_up_kind,
+                        "comparison_targets": comparison_targets,
+                        "inherited_constraints": inherited_constraints,
+                        "llm_confidence": llm_confidence,
+                        "heuristic_confidence": heuristic_confidence,
+                    }
+                }
+            )
         return FastDecision(
-
-            intent=intent,
-
+            intent=llm_intent,
             needs_rag=needs_rag,
-
             needs_tool=needs_tool,
-
             needs_clarify=needs_clarify,
-
             needs_query_rewrite=needs_query_rewrite,
-
-            confidence=max(0.0, min(confidence, 1.0)),
-
+            confidence=max(0.0, min(max(llm_confidence, heuristic_confidence * 0.85), 1.0)),
             key_slots=key_slots,
-
             extra=extra,
-
         )
 
 

@@ -27,10 +27,48 @@ from learning_agent_service.application.router.phase7_compose import (
     _build_semantic_parse_result,
     _build_source_contract,
 )
+from learning_agent_service.local_life.answer_depth_policy import derive_answer_depth_policy
 from learning_agent_service.local_life.final_answer_audit import audit_final_answer
 from learning_agent_service.local_life.final_answer_safety import apply_final_answer_safety
 from learning_agent_service.local_life.response_builder import build_coupon_only_answer
 from learning_agent_service.memory import MemoryCapabilityError as _MemoryCapabilityError
+
+
+def _ranked_candidate_context(candidate: Any) -> dict[str, Any]:
+    candidate_map = _as_mapping(candidate)
+    structured = _as_mapping(candidate_map.get("structured_features"))
+    return {
+        "shop_id": candidate_map.get("shop_id"),
+        "name": candidate_map.get("name") or candidate_map.get("shop_name"),
+        "score": structured.get("score"),
+        "distance_km": structured.get("distance_km"),
+        "avg_price": structured.get("avg_price"),
+        "matched_requirements": list(candidate_map.get("matched_requirements") or []),
+        "explainable_reasons": list(candidate_map.get("explainable_reasons") or []),
+        "voucher_count": len(list(candidate_map.get("vouchers") or [])),
+    }
+
+
+def _facet_tool_context(facet_result_bundle: Any) -> dict[str, Any]:
+    bundle = _as_mapping(facet_result_bundle)
+    tool_results: list[dict[str, Any]] = []
+    for result in list(bundle.get("tool_results") or []):
+        result_map = _as_mapping(result)
+        tool_results.append(
+            {
+                "facet": result_map.get("facet"),
+                "shop_id": result_map.get("shop_id"),
+                "status": result_map.get("status"),
+                "tool_name": result_map.get("tool_name"),
+                "data": _as_mapping(result_map.get("data")),
+            }
+        )
+    return {
+        "coupon_result": _as_mapping(bundle.get("coupon_result")),
+        "open_status_result": _as_mapping(bundle.get("open_status_result")),
+        "distance_eta_result": _as_mapping(bundle.get("distance_eta_result")),
+        "tool_results": tool_results,
+    }
 
 
 
@@ -94,6 +132,53 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
             entity_join_result = _build_entity_join_result(turn)
             answer_contract = _build_answer_contract(turn, routing, evidence_quality, entity_join_result)
             client_context = dict(runtime.client_context)
+            current_shop = str(
+                turn.extra.get("current_shop")
+                or state["persistent"].current_shop
+                or state["persistent"].selected_shop_name
+                or ""
+            ).strip() or None
+            ranked_candidates = [
+                _ranked_candidate_context(candidate)
+                for candidate in list(turn.extra.get("ranked_candidates") or [])[:5]
+            ]
+            facet_result_bundle = _facet_tool_context(turn.extra.get("facet_result_bundle"))
+            evidence_pack = getattr(turn.rag_result, "evidence_pack", None)
+            clean_evidence_count = len(list(getattr(evidence_pack, "items", []) or [])) if evidence_pack is not None else 0
+            strong_evidence_count = len(list(getattr(evidence_pack, "strong_items", []) or [])) if evidence_pack is not None else 0
+            medium_evidence_count = len(list(getattr(evidence_pack, "weak_items", []) or [])) if evidence_pack is not None else 0
+            answer_depth_policy = None
+            try:
+                answer_depth_policy = derive_answer_depth_policy(
+                    answer_contract,
+                    clean_evidence_count=clean_evidence_count,
+                    strong_evidence_count=strong_evidence_count,
+                    medium_evidence_count=medium_evidence_count,
+                ).model_dump(mode="json")
+            except Exception:
+                answer_depth_policy = None
+            answer_context = {
+                "answer_style": getattr(answer_contract, "answer_style", None),
+                "scope_kind": getattr(answer_contract, "scope_kind", None),
+                "required_facets": list(getattr(answer_contract, "allowed_facets", []) or []),
+                "forbidden_facets": list(getattr(answer_contract, "forbidden_facets", []) or []),
+                "allow_recommendation": bool(getattr(answer_contract, "allow_recommendation", False)),
+                "allow_extra_context": bool(getattr(answer_contract, "allow_extra_context", False)),
+                "realtime_required": bool(getattr(answer_contract, "realtime_required", False)),
+                "current_topic": str(getattr(turn, "current_topic", "") or getattr(state["persistent"], "current_topic", "") or "").strip() or None,
+                "current_shop": current_shop,
+                "selected_shop_id": selected_shop_id,
+                "history_summary": state["persistent"].history_summary,
+                "ranked_candidates": ranked_candidates,
+                "facet_result_bundle": facet_result_bundle,
+                "answer_depth_policy": answer_depth_policy,
+                "evidence_pack": {
+                    "evidence_status": getattr(evidence_pack, "evidence_status", None),
+                    "item_count": clean_evidence_count,
+                    "strong_item_count": strong_evidence_count,
+                    "weak_item_count": medium_evidence_count,
+                } if evidence_pack is not None else None,
+            }
             try:
                 from ...local_life.entity_resolver import _explicit_entity_from_query
             except Exception:  # pragma: no cover - defensive fallback for import cycles
@@ -132,6 +217,7 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
             out_of_scope_route = route_candidate_name == "out_of_scope" or intent_name == "out_of_scope" or top_level_intent_name == "out_of_scope"
             raw_query_text = str(turn.raw_query or "")
             compact_query_text = raw_query_text.replace(" ", "")
+            routing_action = str(getattr(routing, "required_action", "") or "").strip().lower() if routing is not None else ""
             fresh_query_shop = _explicit_entity_from_query(raw_query_text) if _explicit_entity_from_query is not None else None
             if fresh_query_shop and not out_of_scope_route:
                 explicit_query_shop = fresh_query_shop
@@ -148,9 +234,8 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                 explicit_query_shop = None
             elif recommendation_like_query and not explicit_query_shop:
                 route_review_shop_name = ""
-            if not explicit_query_shop and route_review_shop_name:
+            if routing_action != "clarify" and not explicit_query_shop and route_review_shop_name:
                 explicit_query_shop = route_review_shop_name
-            routing_action = str(getattr(routing, "required_action", "") or "").strip().lower() if routing is not None else ""
             if routing_action == "clarify" and route_gate_branch != "clarify":
                 route_gate = {
                     **route_gate,
@@ -298,6 +383,8 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                     current_shop = selected_shop_name
                     persistent_updates["current_shop"] = current_shop
                     persistent_updates["selected_shop_name"] = current_shop
+            answer_context["selected_shop_id"] = selected_shop_id
+            answer_context["current_shop"] = current_shop
     
             if selected_shop_id is not None:
                 persistent_updates["selected_shop_id"] = selected_shop_id
@@ -415,6 +502,19 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                     turn_extra["route_reason"] = routing.route_reason
                     turn_extra["route_candidate"] = routing.route_candidate
                     turn = turn.model_copy(update={"extra": turn_extra})
+            elif routing_action == "clarify" and not explicit_shop_context:
+                route_gate = {
+                    **route_gate,
+                    "branch": "clarify",
+                    "required_action": "clarify",
+                }
+                route_gate_branch = "clarify"
+                turn = _store_routing_decision(turn, routing)
+                turn_extra = dict(getattr(turn, "extra", {}) or {})
+                turn_extra["route_gate"] = route_gate
+                turn_extra["route_reason"] = routing.route_reason if routing is not None else turn_extra.get("route_reason")
+                turn_extra["route_candidate"] = routing.route_candidate if routing is not None else turn_extra.get("route_candidate")
+                turn = turn.model_copy(update={"extra": turn_extra})
             if routing is not None and route_gate_branch == "clarify" and recommendation_like_query:
                 routing = routing.model_copy(update={"required_action": "rag_plus_tool"})
                 route_gate_branch = "recommendation"
@@ -438,6 +538,10 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                 memory_injection_plan=turn.memory_injection_plan,
                 entity_join_result=entity_join_result,
                 answer_contract=answer_contract,
+                answer_depth_policy=answer_depth_policy,
+                ranked_candidates=ranked_candidates,
+                facet_result_bundle=facet_result_bundle,
+                answer_context=answer_context,
                 routing_decision=routing,
                 evidence_quality=evidence_quality,
                 final_response_mode=final_response_mode,

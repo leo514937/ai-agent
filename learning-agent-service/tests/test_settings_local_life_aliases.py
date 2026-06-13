@@ -20,13 +20,12 @@ class SettingsLocalLifeAliasTestCase(unittest.TestCase):
     def test_short_env_aliases_are_accepted_for_langgraph_flags(self) -> None:
         env = {
             "LOCAL_LIFE_USE_LANGGRAPH": "false",
-            "LOCAL_LIFE_LANGGRAPH_FALLBACK_LEGACY": "false",
         }
         with patch.dict(os.environ, env, clear=False):
             settings = Settings()
 
         self.assertFalse(settings.local_life_use_langgraph)
-        self.assertFalse(settings.local_life_langgraph_fallback_legacy)
+        self.assertFalse(hasattr(settings, "local_life_langgraph_fallback_legacy"))
 
 
 if __name__ == "__main__":

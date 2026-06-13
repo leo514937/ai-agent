@@ -76,6 +76,9 @@ class SessionMemoryUpdater:
         return SessionUpdate(
             current_topic=topic,
             current_shop=current.current_shop,
+            current_shop_anchor=dict(current.current_shop_anchor),
+            current_scene=current.current_scene,
+            current_constraints=dict(current.current_constraints),
             recent_entities=deduped_entities,
             clarification_result=_mapping_dict(clarification_result),
             last_retrieval_topic=topic or current.last_retrieval_topic,
@@ -92,6 +95,12 @@ class SessionMemoryUpdater:
             summary_version=current.summary_version + (1 if summary_changed else 0),
             summary_updated_at=datetime.now(timezone.utc) if summary_changed else current.summary_updated_at,
             pending_clarification=_mapping_dict(clarification_result) or current.pending_clarification,
+            dialog_state=current.dialog_state,
+            dialog_task=current.dialog_task,
+            dialog_intent=current.dialog_intent,
+            dialog_comparison_targets=tuple(current.dialog_comparison_targets),
+            dialog_pending_slots=tuple(current.dialog_pending_slots),
+            dialog_transition_count=current.dialog_transition_count,
         )
 
     def merge_context(self, current: PersistentSessionContext, update: SessionUpdate) -> PersistentSessionContext:
@@ -100,6 +109,9 @@ class SessionMemoryUpdater:
         return PersistentSessionContext(
             current_topic=update.current_topic or current.current_topic,
             current_shop=update.current_shop or current.current_shop,
+            current_shop_anchor=dict(update.current_shop_anchor or current.current_shop_anchor),
+            current_scene=update.current_scene or current.current_scene,
+            current_constraints=dict(update.current_constraints or current.current_constraints),
             recent_entities=update.recent_entities or current.recent_entities,
             clarification_result=update.clarification_result or current.clarification_result,
             user_preferences=current.user_preferences,
@@ -111,6 +123,12 @@ class SessionMemoryUpdater:
             summary_version=update.summary_version or current.summary_version,
             summary_updated_at=update.summary_updated_at or current.summary_updated_at,
             pending_clarification=update.pending_clarification,
+            dialog_state=update.dialog_state or current.dialog_state,
+            dialog_task=update.dialog_task or current.dialog_task,
+            dialog_intent=update.dialog_intent or current.dialog_intent,
+            dialog_comparison_targets=update.dialog_comparison_targets or current.dialog_comparison_targets,
+            dialog_pending_slots=update.dialog_pending_slots or current.dialog_pending_slots,
+            dialog_transition_count=update.dialog_transition_count or current.dialog_transition_count,
             extra=extra,
         )
 
@@ -422,19 +440,6 @@ class MemoryPromotionPolicy:
                 "summary_version": updated_context.summary_version,
                 "summary_updated_at": updated_context.summary_updated_at,
             },
-        )
-
-    @staticmethod
-    def build_write_plan_legacy(result: MemoryPromotionResult) -> DurableMemoryWritePlan:
-        return DurableMemoryWritePlan(
-            session_update=result.session_update,
-            preference_patch=result.preference_patch,
-            session_preference_patch=result.session_preference_patch,
-            profile_updates=result.profile_updates,
-            semantic_facts=result.semantic_facts,
-            weak_topics=result.weak_topics,
-            durable_fact_requests=result.durable_fact_requests,
-            outbox_events=result.outbox_events,
         )
 
     def _should_promote_semantic_fact(

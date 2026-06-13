@@ -58,6 +58,8 @@ def build_initial_routing_decision(
         session_context = {
             "session_id": getattr(persistent, "session_id", None),
             "current_shop": getattr(persistent, "current_shop", None),
+            "current_topic": getattr(persistent, "current_topic", None),
+            "selected_shop_name": getattr(persistent, "selected_shop_name", None),
             "recent_shops": getattr(persistent, "recent_entities", []) or [],
             "last_intent": getattr(persistent, "last_intent", None),
         }
@@ -251,6 +253,13 @@ def build_initial_routing_decision(
             "hybrid_router_slots": llm_slots,
         },
     )
+    compact_query = normalized_query.replace(" ", "")
+    if (
+        required_action == "clarify"
+        and route.route_candidate == "local_life"
+        and any(token in compact_query for token in ("券", "优惠", "团购", "套餐"))
+    ):
+        route = route.model_copy(update={"route_candidate": "local_life.package_or_coupon"})
     route = _annotate_execution_mode(route)
 
     # Follow-up reference detection: if query is ambiguous/low-information and there's

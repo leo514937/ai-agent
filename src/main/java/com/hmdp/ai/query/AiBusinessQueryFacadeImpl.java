@@ -62,6 +62,52 @@ public class AiBusinessQueryFacadeImpl implements AiBusinessQueryFacade {
     @Override
     public AiQueryContext resolveContext(Map<String, Object> context, UserDTO currentUser) {
         AiQueryContext result = AiQueryContext.from(context, currentUser);
+        if (result.getShopId() == null && !result.getCurrentShopAnchor().isEmpty()) {
+            Object anchorShopId = result.getCurrentShopAnchor().get("shop_id");
+            if (anchorShopId == null) {
+                anchorShopId = result.getCurrentShopAnchor().get("shopId");
+            }
+            if (anchorShopId == null) {
+                anchorShopId = result.getCurrentShopAnchor().get("id");
+            }
+            if (anchorShopId instanceof Number) {
+                result.setShopId(((Number) anchorShopId).longValue());
+            }
+            if (StrUtil.isBlank(result.getShopName())) {
+                Object anchorName = result.getCurrentShopAnchor().get("name");
+                if (anchorName == null) {
+                    anchorName = result.getCurrentShopAnchor().get("shop_name");
+                }
+                if (anchorName == null) {
+                    anchorName = result.getCurrentShopAnchor().get("shopName");
+                }
+                if (anchorName != null) {
+                    result.setShopName(String.valueOf(anchorName));
+                }
+            }
+        }
+        if (StrUtil.isBlank(result.getTypeName()) && result.hasConstraintContext()) {
+            Object category = result.getCurrentConstraints().get("category");
+            if (category != null) {
+                result.setTypeName(String.valueOf(category));
+            }
+        }
+        Map<String, Object> rawContext = result.getRawContext();
+        if (rawContext != null) {
+            if (!result.getCurrentShopAnchor().isEmpty()) {
+                rawContext.put("current_shop_anchor", new LinkedHashMap<>(result.getCurrentShopAnchor()));
+            }
+            if (!result.getDialogComparisonTargets().isEmpty()) {
+                rawContext.put("dialog_comparison_targets", new ArrayList<>(result.getDialogComparisonTargets()));
+            }
+            if (!result.getCurrentConstraints().isEmpty()) {
+                rawContext.put("current_constraints", new LinkedHashMap<>(result.getCurrentConstraints()));
+            }
+            if (result.getFollowUpKind() != null) {
+                rawContext.put("follow_up_kind", result.getFollowUpKind());
+            }
+            rawContext.put("needs_clarification", result.requiresClarification());
+        }
         Blog currentBlog = resolveBlog(result.getBlogId());
         if (currentBlog != null) {
             result.setBlogId(currentBlog.getId());
@@ -110,10 +156,11 @@ public class AiBusinessQueryFacadeImpl implements AiBusinessQueryFacade {
         if (containsAny(text, "推荐", "附近", "找店", "找一家", "想吃", "想去", "预算", "适合")) {
             return AiRouteType.RECOMMEND;
         }
-        if (context != null && context.hasShopContext() && containsAny(text, "值不值", "口碑", "评价", "评论", "评分", "详情", "怎么样", "好不好")) {
+        boolean merchantReference = containsAny(text, "这家", "这家店", "这个店", "该店", "门店", "这间", "当前这家");
+        if (context != null && context.hasShopContext() && merchantReference && containsAny(text, "值不值", "口碑", "评价", "评论", "评分", "详情", "怎么样", "好不好")) {
             return AiRouteType.DETAIL;
         }
-        if (containsAny(text, "值不值", "口碑", "评价", "评论", "评分", "详情", "怎么样", "好不好")) {
+        if (context != null && context.hasShopContext() && merchantReference && containsAny(text, "值不值", "口碑", "评价", "评论", "评分", "详情", "怎么样", "好不好")) {
             return AiRouteType.DETAIL;
         }
         return AiRouteType.FAQ;
@@ -201,6 +248,9 @@ public class AiBusinessQueryFacadeImpl implements AiBusinessQueryFacade {
         if (shop == null) {
             AiShopDetailDigest digest = new AiShopDetailDigest();
             digest.setContext(safeContext);
+            digest.setKnownConstraints(new LinkedHashMap<>(safeContext.getCurrentConstraints()));
+            digest.setComparisonTargets(new ArrayList<>(safeContext.getDialogComparisonTargets()));
+            digest.setFollowUpKind(safeContext.getFollowUpKind());
             digest.setHighlights(Collections.singletonList("当前没有定位到具体店铺，可先补充店名或从店铺页进入。"));
             digest.setSummary("未找到店铺详情数据。");
             return digest;
@@ -218,6 +268,9 @@ public class AiBusinessQueryFacadeImpl implements AiBusinessQueryFacade {
         digest.setVouchers(vouchers);
         digest.setBlogs(blogs);
         digest.setUserContext(userContext);
+        digest.setKnownConstraints(new LinkedHashMap<>(safeContext.getCurrentConstraints()));
+        digest.setComparisonTargets(new ArrayList<>(safeContext.getDialogComparisonTargets()));
+        digest.setFollowUpKind(safeContext.getFollowUpKind());
         digest.setHighlights(buildShopHighlights(shop, type, vouchers, blogs, userContext));
         digest.setSummary(buildShopSummary(shop, type, vouchers, blogs, userContext));
         return digest;
@@ -245,6 +298,9 @@ public class AiBusinessQueryFacadeImpl implements AiBusinessQueryFacade {
         digest.setShopType(type);
         digest.setCandidates(candidates);
         digest.setCompareAxes(defaultCompareAxes());
+        digest.setComparisonTargets(new ArrayList<>(safeContext.getDialogComparisonTargets()));
+        digest.setKnownConstraints(new LinkedHashMap<>(safeContext.getCurrentConstraints()));
+        digest.setFollowUpKind(safeContext.getFollowUpKind());
         digest.setHighlights(buildCompareHighlights(candidates, baseShop, typeId));
         digest.setSummary(buildCompareSummary(candidates, baseShop, type));
         return digest;

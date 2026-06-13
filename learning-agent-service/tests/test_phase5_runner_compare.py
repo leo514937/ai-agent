@@ -11,7 +11,6 @@ except Exception:  # pragma: no cover - optional dependency or import error
     create_workflow_runner = None  # type: ignore[assignment]
 
 from learning_agent_service.application.workflow.services import WorkflowServices
-from learning_agent_service.application.workflow.subgraphs import route_after_understand
 from learning_agent_service.domain import (
     ChatTurnCommand,
     PersistentSessionContext,
@@ -19,10 +18,7 @@ from learning_agent_service.domain import (
     build_initial_state,
 )
 from learning_agent_service.testing.harness import (
-    EvaluationHarness,
-    HarnessCase,
     HarnessRunResult,
-    ReplayHarness,
     TraceHarnessRecorder,
 )
 
@@ -73,13 +69,15 @@ class Phase5RunnerCompareTestCase(unittest.TestCase):
             session_id="session-phase5",
             turn_id="turn-phase5",
             user_id="user-phase5",
-            message="给我一个简短回答",
+            message="缁欐垜涓€涓畝鐭洖绛?",
             page="assistant",
             client_context={},
         )
 
     def _run_and_record(self, runner, case_id: str):
-        state = runner.run(self._build_command(), persistent_context=PersistentSessionContext())
+        state = runner.run_state(
+            build_initial_state(self._build_command(), persistent=PersistentSessionContext())
+        )
         recorded = TraceHarnessRecorder().record(state, case_id=case_id)
         return HarnessRunResult(
             case_id=case_id,
@@ -90,43 +88,29 @@ class Phase5RunnerCompareTestCase(unittest.TestCase):
             failures=[],
         )
 
-    def test_runner_trace_records_runner_kind(self) -> None:
+    def test_runner_trace_records_langgraph_runner_kind(self) -> None:
         if not LANGGRAPH_AVAILABLE:
             self.skipTest("langgraph is not installed")
 
         services = self._build_services()
-        sequential_runner = create_workflow_runner(services, prefer_langgraph=False, workflow_version="phase5/v1")
+        runner = create_workflow_runner(services, prefer_langgraph=False, workflow_version="phase5/v1")
 
-        result = self._run_and_record(sequential_runner, "sequential-case")
+        result = self._run_and_record(runner, "langgraph-case")
 
-        self.assertEqual(result.actual_trace["phase5_trace"]["runner_kind"], "sequential")
-        self.assertEqual(result.actual_trace["phase5_trace"]["runner_backend"], "sequential")
+        self.assertEqual(result.actual_trace["phase5_trace"]["runner_kind"], "langgraph")
+        self.assertEqual(result.actual_trace["phase5_trace"]["runner_backend"], "langgraph")
         self.assertTrue(result.actual_trace["phase5_trace"]["compare_ready"])
 
-    def test_runner_compare_reports_path_difference(self) -> None:
+    def test_runner_factory_ignores_legacy_preference_flag(self) -> None:
         if not LANGGRAPH_AVAILABLE:
             self.skipTest("langgraph is not installed")
 
         services = self._build_services()
-        sequential_runner = create_workflow_runner(services, prefer_langgraph=False, workflow_version="phase5/v1")
+        baseline_runner = create_workflow_runner(services, prefer_langgraph=True, workflow_version="phase5/v1")
         langgraph_runner = create_workflow_runner(services, prefer_langgraph=True, workflow_version="phase5/v1")
-        case = HarnessCase(case_id="phase5-case", query="给我一个简短回答")
-
-        replay = ReplayHarness()
-        comparison = replay.compare_case(
-            case,
-            lambda _case: self._run_and_record(sequential_runner, "baseline"),
-            lambda _case: self._run_and_record(langgraph_runner, "candidate"),
-            comparison_fields=("phase5_trace", "phase0_trace", "phase3_trace", "phase4_trace", "actual_response_mode", "actual_answer"),
-        )
-        report = EvaluationHarness().summarize_comparisons([comparison])
-
-        self.assertTrue(comparison.passed)
-        self.assertIn("phase5_trace", comparison.differences)
-        self.assertEqual(comparison.baseline.actual_trace["phase5_trace"]["runner_kind"], "sequential")
-        self.assertEqual(comparison.candidate.actual_trace["phase5_trace"]["runner_kind"], "langgraph")
-        self.assertEqual(report.changed_cases, 1)
-        self.assertEqual(report.case_status_counts["changed"], 1)
+        self.assertEqual(type(baseline_runner), type(langgraph_runner))
+        self.assertEqual(baseline_runner.runner_kind, "langgraph")
+        self.assertEqual(langgraph_runner.runner_kind, "langgraph")
 
 
 if __name__ == "__main__":

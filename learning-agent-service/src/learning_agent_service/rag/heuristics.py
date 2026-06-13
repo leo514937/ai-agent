@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 from learning_agent_service.domain import (
     FastDecision,
@@ -15,6 +16,7 @@ from .domain_rules import (
     load_domain_rules_config,
     get_all_domain_tokens,
 )
+from learning_agent_service.local_life.context_recovery import recover_follow_up_context
 
 _domain_rules: DomainRulesConfig | None = None
 
@@ -74,9 +76,18 @@ class HeuristicIntentGate:
         if approval_resume is not None:
             return _turn_result_to_fast_decision(approval_resume)
 
+        semantic_context = recover_follow_up_context(
+            message,
+            client_context=dict(command.client_context or {}),
+            session_context=_session_context_snapshot(persistent),
+        )
+        if _needs_llm_semantics(message, lowered, persistent, semantic_context):
+            return None
+
         local_life = _classify_local_life_turn(command, message, lowered, style or OutputStyle.DETAILED, persistent)
         if local_life is not None:
-            return _turn_result_to_fast_decision(local_life)
+            decision = _turn_result_to_fast_decision(local_life)
+            return _attach_semantic_context(decision, semantic_context)
 
         return None
 
@@ -106,6 +117,11 @@ class HeuristicIntentGate:
                 extra={"route_candidate": "empty", "direct_response_kind": "empty"},
             )
 
+        semantic_context = recover_follow_up_context(
+            message,
+            client_context=dict(command.client_context or {}),
+            session_context=_session_context_snapshot(persistent),
+        )
         chinese_follow_up = _looks_like_follow_up_query(message, lowered, persistent)
         if _looks_like_profile_query(message, lowered):
             return FastDecision(
@@ -132,12 +148,14 @@ class HeuristicIntentGate:
                         direct_response_kind="profile",
                     ),
                     "direct_response_kind": "profile",
+                    "semantic_context": semantic_context.to_dict(),
+                    "follow_up_kind": semantic_context.follow_up_kind,
                 },
             )
 
         local_life = _classify_local_life_turn(command, message, lowered, style, persistent)
         if local_life is not None:
-            return _turn_result_to_fast_decision(local_life)
+            return _attach_semantic_context(_turn_result_to_fast_decision(local_life), semantic_context)
 
         intent = IntentType.EXPLAIN
         confidence = 0.72
@@ -186,6 +204,10 @@ class HeuristicIntentGate:
                     chosen_decision=TurnDecision.TOOL_THEN_ANSWER if needs_tool else TurnDecision.RETRIEVE_THEN_ANSWER,
                     chosen_intent=intent,
                 ),
+                "semantic_context": semantic_context.to_dict(),
+                "follow_up_kind": semantic_context.follow_up_kind,
+                "comparison_targets": [item.name for item in semantic_context.comparison_targets if item.name],
+                "inherited_constraints": dict(semantic_context.inherited_constraints),
             },
         )
 
@@ -196,6 +218,59 @@ class HeuristicModelGateway:
 
     def classify_turn(self, request: TurnUnderstandingRequest) -> FastDecision:
         return self._gate.fallback_decide(request)
+
+
+def _attach_semantic_context(decision: FastDecision, semantic_context) -> FastDecision:
+    extra = dict(decision.extra or {})
+    extra.setdefault("semantic_context", semantic_context.to_dict())
+    extra.setdefault("follow_up_kind", semantic_context.follow_up_kind)
+    extra.setdefault("comparison_targets", [item.name for item in semantic_context.comparison_targets if item.name])
+    extra.setdefault("inherited_constraints", dict(semantic_context.inherited_constraints))
+    extra.setdefault("need_clarification", bool(semantic_context.follow_up_kind == "none" and semantic_context.confidence < 0.45))
+    return decision.model_copy(update={"extra": extra})
+
+
+def _session_context_snapshot(persistent) -> dict[str, Any]:
+    return {
+        "current_topic": getattr(persistent, "current_topic", None),
+        "current_shop": getattr(persistent, "current_shop", None),
+        "current_shop_anchor": dict(getattr(persistent, "current_shop_anchor", {}) or {}),
+        "current_scene": getattr(persistent, "current_scene", None),
+        "current_constraints": dict(getattr(persistent, "current_constraints", {}) or {}),
+        "confirmed_facts": list(getattr(persistent, "confirmed_facts", []) or []),
+        "user_preferences": dict(getattr(persistent, "user_preferences", {}) or {}),
+        "dialog_state": getattr(persistent, "dialog_state", None),
+        "dialog_comparison_targets": list(getattr(persistent, "dialog_comparison_targets", []) or []),
+        "dialog_pending_slots": list(getattr(persistent, "dialog_pending_slots", []) or []),
+        "dialog_intent": getattr(persistent, "dialog_intent", None),
+        "dialog_task": getattr(persistent, "dialog_task", None),
+    }
+
+
+def _needs_llm_semantics(message: str, lowered: str, persistent, semantic_context) -> bool:
+    compact = message.replace(" ", "")
+    if semantic_context.follow_up_kind in {"comparison_completion", "intent_ellipsis"}:
+        return True
+    if semantic_context.follow_up_kind == "constraint_inheritance":
+        return len(compact) <= 18
+    if semantic_context.follow_up_kind == "entity_reference":
+        return False
+
+    signal_count = sum(
+        1
+        for flag in (
+            any(token in compact for token in ("比", "比较", "对比", "和")),
+            any(token in compact for token in ("券", "优惠", "套餐")),
+            any(token in compact for token in ("父母", "长辈", "约会", "家庭", "场景", "适合")),
+            any(token in compact for token in ("便宜", "贵", "价格", "预算")),
+        )
+        if flag
+    )
+    if signal_count >= 2:
+        return True
+    if len(compact) >= 20 and any(token in compact for token in _LOCAL_LIFE_DOMAIN_TOKENS):
+        return True
+    return False
 
 
 def _contains_reference_token(message: str, lowered: str) -> bool:

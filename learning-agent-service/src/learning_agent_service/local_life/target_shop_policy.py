@@ -7,6 +7,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 from learning_agent_service.domain.utils import clean_text as _clean_text
 
+from .context_recovery import recover_follow_up_context
+
 _PRONOUNS = (
     "这家",
     "这店",
@@ -336,6 +338,11 @@ class TargetShopPolicy:
         client_context_map = dict(client_context or {})
         session_context_map = dict(session_context or {})
         query_lower = raw_query.strip().lower()
+        recovery = recover_follow_up_context(
+            raw_query,
+            client_context=client_context_map,
+            session_context=session_context_map,
+        )
         generic_query_like = _looks_like_generic_query_entity(raw_query)
         low_info = is_low_information_query(raw_query)
 
@@ -375,6 +382,21 @@ class TargetShopPolicy:
             or eff_explicit_name.lower().strip() in ("assistant", "ai", "general", "none")
         ):
             eff_explicit_name = None
+        if recovery.follow_up_kind in {"intent_ellipsis", "constraint_inheritance", "comparison_completion"} and not explicit_entity:
+            eff_explicit_name = None
+
+        if recovery.follow_up_kind in {"intent_ellipsis", "constraint_inheritance", "comparison_completion"} and recovery.anchor_shop and recovery.anchor_shop.name and not eff_explicit_name:
+            return TargetShop(
+                shop_id=recovery.anchor_shop.shop_id,
+                shop_name=recovery.anchor_shop.name,
+                raw_mention=raw_query,
+                source="session",
+                resolution_source="session_current",
+                confidence=max(0.8, recovery.confidence),
+                is_explicit_in_current_turn=False,
+                reason=f"follow-up recovered from {recovery.follow_up_kind}",
+                candidate_shop_ids=[recovery.anchor_shop.shop_id] if recovery.anchor_shop.shop_id is not None else [],
+            )
 
         if eff_explicit_name:
             alias_shop_id, alias_shop_name, alias_source = _resolve_alias_from_contexts(

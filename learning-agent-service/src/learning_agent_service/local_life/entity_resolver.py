@@ -243,7 +243,7 @@ class EntityResolver:
                     if ee_lower in bm_name_lower or bm_name_lower in ee_lower:
                         has_match = True
                         
-                    if True:
+                    if has_match:
                         matched_ids = []
                         for item in catalog_matches:
                             if getattr(item, "id", None) is not None:
@@ -441,7 +441,7 @@ class EntityResolver:
             negative_categories=list(dict.fromkeys(slots.avoid or [])),
             clarification_action=clarification_action,
             forbid_global_fallback=forbid_global_fallback,
-            reason="explicit_entity" if explicit_entity else ("pronoun_reference" if pronoun_only else "session_context"),
+            reason="explicit_entity" if explicit_entity else ("session_context" if pronoun_only else "session_context"),
             source=shop_context_source or ("query" if explicit_entity else ("reference" if pronoun_only else "session")),
             shop_context_source=shop_context_source,
             target_shop=target_shop,

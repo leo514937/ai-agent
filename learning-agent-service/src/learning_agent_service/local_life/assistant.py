@@ -189,9 +189,11 @@ class LocalLifeModelAssistant:
         approval_required: bool = False,
         answer_contract: Any | None = None,
     ) -> dict[str, Any]:
+        slots_map = _as_mapping(slots)
+        context_recovery = _as_mapping(slots_map.get("tool_input")).get("context_recovery") if _as_mapping(slots_map.get("tool_input")) else None
         prompt = build_answer_planner_request(
             raw_query=raw_query,
-            slots=_as_mapping(slots),
+            slots=slots_map,
             ranked_candidates=[_as_mapping(item) for item in ranked_candidates or []],
             evidence_pack=evidence_pack,
             evidence_claims=[_as_mapping(item) for item in evidence_claims or []] or None,
@@ -204,6 +206,7 @@ class LocalLifeModelAssistant:
             clarification=_as_mapping(clarification),
             approval_required=approval_required,
             answer_contract=answer_contract,
+            context_recovery=context_recovery,
         )
         if evidence_claims:
             prompt["evidence_claims"] = [_as_mapping(item) for item in evidence_claims]

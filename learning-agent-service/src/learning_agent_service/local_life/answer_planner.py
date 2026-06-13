@@ -385,6 +385,7 @@ def build_answer_planner_request(
     clarification: Mapping[str, Any] | Any | None = None,
     approval_required: bool = False,
     answer_contract: Any | None = None,
+    context_recovery: Mapping[str, Any] | Any | None = None,
 ) -> dict[str, Any]:
     pruned_context = prune_context_for_contract(
         answer_contract,
@@ -435,6 +436,7 @@ def build_answer_planner_request(
         "clarification": _as_mapping(clarification),
         "approval_required": approval_required,
         "answer_contract": _as_mapping(answer_contract) if answer_contract is not None else {},
+        "context_recovery": _as_mapping(context_recovery),
         "answer_depth_policy": {
             "answer_style": answer_depth_policy.answer_style,
             "depth_level": answer_depth_policy.depth_level,

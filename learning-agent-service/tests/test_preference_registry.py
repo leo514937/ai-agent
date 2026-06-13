@@ -103,17 +103,18 @@ class PreferenceRegistryTestCase(unittest.TestCase):
         )
 
         profile = service._preference_profile("user-1", {})
+        diagnostics = profile.extra["preference_profile_diagnostics"]
         understanding = QueryUnderstandingResult(
-            normalized_query="今天想找川菜",
-            semantic_query="今天想找川菜",
-            keyword_query="川菜",
+            normalized_query="??????",
+            semantic_query="??????",
+            keyword_query="??",
             time_norm=TimeNorm(),
             location_norm=LocationNorm(),
         )
 
         slots, _, _ = extract_slots(
             understanding,
-            "今天想找川菜",
+            "??????",
             session_context=profile.extra,
             model_hint={},
         )
@@ -121,6 +122,28 @@ class PreferenceRegistryTestCase(unittest.TestCase):
         self.assertIn("spicy", slots.avoid)
         self.assertEqual(profile.extra["local_life_avoid"], ["spicy"])
         self.assertEqual(profile.extra["preferred_output_style"], "concise")
+        self.assertEqual(diagnostics["profile_projection_store"]["state"], "loaded")
+        self.assertEqual(diagnostics["profile_projection_store"]["count"], 2)
+        self.assertEqual(diagnostics["preference_store"]["state"], "unavailable")
+
+
+
+    def test_preference_profile_exposes_diagnostics_for_store_errors(self) -> None:
+        projection_store = SimpleNamespace(list_active=lambda user_id: (_ for _ in ()).throw(RuntimeError("projection failed")))
+        preference_store = SimpleNamespace(get=lambda user_id: (_ for _ in ()).throw(RuntimeError("preference failed")))
+        service = MemoryService(
+            session_store=SimpleNamespace(load=lambda *args, **kwargs: None, save=lambda *args, **kwargs: None, load_any=lambda *args, **kwargs: None),
+            async_log_store=SimpleNamespace(append=lambda *args, **kwargs: None),
+            settings=Settings(prefer_real_adapters=False, allow_in_memory_fallback=True),
+            profile_projection_store=projection_store,
+            preference_store=preference_store,
+        )
+
+        profile = service._preference_profile("user-1", {})
+        diagnostics = profile.extra["preference_profile_diagnostics"]
+
+        self.assertEqual(diagnostics["profile_projection_store"]["state"], "error")
+        self.assertEqual(diagnostics["preference_store"]["state"], "error")
 
 
 if __name__ == "__main__":

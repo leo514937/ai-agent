@@ -9,7 +9,7 @@ from learning_agent_service.local_life.schemas import LocalLifeSlots
 
 from .helpers import Any, GraphState, Mapping, _build_recommendation_answer_text, _build_single_shop_review_answer, _phase2_evidence_pack, _routing_decision_for_turn
 from ..state import append_runtime_event as _append_state_runtime_event
-from learning_agent_service.local_life.entity_resolver import _explicit_entity_from_query
+from learning_agent_service.local_life.entity_resolver import _explicit_entity_from_query, _strip_facet_suffixes
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -38,7 +38,9 @@ def _fresh_entity_from_query_text(raw_query: str) -> str | None:
         if compact.endswith(suffix):
             prefix = compact[: -len(suffix)].strip(" 的,，。！？?")
             if prefix:
-                return prefix
+                cleaned = _strip_facet_suffixes(prefix)
+                if cleaned:
+                    return cleaned
     return None
 
 
@@ -177,7 +179,7 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                     or any(token in compact_query_text for token in ("附近", "周边", "推荐", "几家", "多推荐", "多家"))
                 )
                 review_like_query = any(token in compact_query_text for token in review_query_tokens)
-                explicit_query_shop = _fresh_entity_from_query_text(turn.raw_query) or _explicit_entity_from_query(turn.raw_query)
+                explicit_query_shop = _explicit_entity_from_query(turn.raw_query) or _fresh_entity_from_query_text(turn.raw_query)
                 if not explicit_query_shop:
                     extra_explicit_query_shop = str(turn_extra.get("explicit_query_shop") or "").strip()
                     if extra_explicit_query_shop:
@@ -198,6 +200,12 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                 if recommendation_like_query and not explicit_query_shop and not route_review_shop_name:
                     session_shop_name = None
                 target_shop_name = explicit_query_shop or (route_review_shop_name if not recommendation_like_query else None) or session_shop_name
+                explicit_shop_context = bool(
+                    (explicit_query_shop and explicit_query_shop not in generic_shop_names)
+                    or (route_review_shop_name and route_review_shop_name not in generic_shop_names)
+                    or (target_shop_name and str(target_shop_name).strip() not in generic_shop_names)
+                    or (session_shop_name and str(session_shop_name).strip() not in generic_shop_names)
+                )
                 response_node = str(turn_extra.get("response_node") or "").strip().lower()
                 direct_non_local_response = response_node in {"direct_chat_answer", "out_of_scope_response", "safety_reject_response"}
                 raw_query_text = str(turn.raw_query or "")
@@ -556,7 +564,7 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                 if latest_turn_message:
                     final_metrics["latest_turn_message"] = latest_turn_message
                 if not explicit_query_shop:
-                    explicit_query_shop = _fresh_entity_from_query_text(str(turn.raw_query or "")) or _explicit_entity_from_query(str(turn.raw_query or ""))
+                    explicit_query_shop = _explicit_entity_from_query(str(turn.raw_query or "")) or _fresh_entity_from_query_text(str(turn.raw_query or ""))
                 current_shop_name = (
                     explicit_query_shop
                     or (turn_extra.get("current_shop") if not recommendation_like_query else None)
@@ -641,7 +649,7 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
 
                 final_answer_text = str(turn.final_answer or "").strip()
                 if not explicit_query_shop:
-                    explicit_query_shop = _fresh_entity_from_query_text(str(turn.raw_query or "")) or _explicit_entity_from_query(str(turn.raw_query or ""))
+                    explicit_query_shop = _explicit_entity_from_query(str(turn.raw_query or "")) or _fresh_entity_from_query_text(str(turn.raw_query or ""))
                 current_shop_name = (
                     explicit_query_shop
                     or (turn_extra.get("current_shop") if not recommendation_like_query else None)
@@ -795,7 +803,7 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                             focus_hint = "优先看评分"
                         final_answer_text = _build_recommendation_answer_text(
                             fallback_names,
-                            limit=3,
+                            limit=(1 if any(token in compact_query_text for token in ("一家", "一間", "1家", "1個")) else 3),
                             scene_hint=scene_hint,
                             focus_hint=focus_hint,
                             fallback_text=f"{current_city_name or '你附近'}暂时还没有足够信息，我先给你列出几家候选店，供你继续筛选。",

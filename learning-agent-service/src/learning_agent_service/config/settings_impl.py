@@ -300,7 +300,6 @@ class Settings(BaseSettings):
     workflow_checkpoint_enabled: bool = True
     workflow_checkpoint_sqlite_path: str = "var/langgraph/checkpoints.sqlite"
     local_life_use_langgraph: bool = True
-    local_life_langgraph_fallback_legacy: bool = True
     local_life_require_langgraph_in_test: bool = True
     local_life_trace_enabled: bool = True
     local_life_answer_linter_enabled: bool = True
@@ -484,18 +483,6 @@ class Settings(BaseSettings):
                 "local_life_use_langgraph",
                 _env_bool_any(
                     ("LEARNING_AGENT_LOCAL_LIFE_USE_LANGGRAPH", "LOCAL_LIFE_USE_LANGGRAPH"),
-                    True,
-                ),
-            )
-        )
-        local_life_langgraph_fallback_legacy = bool(
-            data.pop(
-                "local_life_langgraph_fallback_legacy",
-                _env_bool_any(
-                    (
-                        "LEARNING_AGENT_LOCAL_LIFE_LANGGRAPH_FALLBACK_LEGACY",
-                        "LOCAL_LIFE_LANGGRAPH_FALLBACK_LEGACY",
-                    ),
                     True,
                 ),
             )
@@ -1222,7 +1209,6 @@ class Settings(BaseSettings):
         data.setdefault("workflow_checkpoint_enabled", workflow_checkpoint_enabled)
         data.setdefault("workflow_checkpoint_sqlite_path", workflow_checkpoint_sqlite_path)
         data.setdefault("local_life_use_langgraph", local_life_use_langgraph)
-        data.setdefault("local_life_langgraph_fallback_legacy", local_life_langgraph_fallback_legacy)
         data.setdefault("local_life_require_langgraph_in_test", local_life_require_langgraph_in_test)
         data.setdefault("local_life_trace_enabled", local_life_trace_enabled)
         data.setdefault("local_life_answer_linter_enabled", local_life_answer_linter_enabled)

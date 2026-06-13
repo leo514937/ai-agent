@@ -77,7 +77,10 @@ def build_coupon_only_answer(
     shop_id = ranked_candidates[0].shop_id if ranked_candidates else None
     tool_result = _tool_result_for_facet(facet_result_bundle, "coupon", shop_id=shop_id)
     if tool_result is not None and tool_result.status in {"timeout", "error", "degraded", "unsupported"}:
-        return fallback_message_for_facet("coupon", topic_name) or f"{topic_name}暂时无法确认实时优惠券信息。"
+        fallback_text = fallback_message_for_facet("coupon", topic_name)
+        if fallback_text:
+            return f"实时优惠券信息：{fallback_text}"
+        return f"{topic_name}实时优惠券信息暂时无法确认，建议以店铺页面显示为准。"
 
     coupon_count = _coupon_tool_count(facet_result_bundle, shop_id=shop_id)
     if coupon_count is None:
@@ -116,7 +119,7 @@ def build_coupon_only_answer(
     if coupon_claims:
         return f"{topic_name}实时接口未查到当前可用券。虽然知识库里有优惠或套餐线索：{coupon_claims}，但历史描述需以实时接口为准。"
         
-    return f"{topic_name}实时接口暂无可用券。"
+    return f"{topic_name}实时优惠券信息暂时不可用，当前接口暂无可用券。"
 
 def build_open_status_only_answer(
     topic_name: str,
@@ -189,105 +192,6 @@ def build_comparison_answer(
         facet_result_bundle=facet_result_bundle,
     )
     return result.answer_text
-
-def build_single_shop_review_answer(topic_name: str, ranked_candidates: Sequence[RankedCandidate], evidence_claims: Sequence[EvidenceClaim]) -> str:
-    sections = []
-    display_name = topic_name or ""
-    if ranked_candidates:
-        cand = ranked_candidates[0]
-        score_val = cand.structured_features.get("score")
-        score_text = f"{float(score_val):.1f}" if score_val is not None else "0.0"
-        name_to_show = display_name or cand.name
-        sections.append(f"{name_to_show}：评分{score_text}，人均约{_format_price(cand.structured_features.get('avg_price'))}，距你约{_format_distance(cand.structured_features.get('distance_km'))}。{_candidate_reason(cand)}。")
-    elif display_name:
-        sections.append(f"{display_name}：评价证据有限，暂时没有足够信息判断环境。")
-    env_summary = _summarize_environment_claims(evidence_claims)
-    sections.append(env_summary)
-    return "\n".join(sections)
-
-def build_multi_shop_recommendation_answer(
-    topic_name: str,
-    ranked_candidates: Sequence[RankedCandidate],
-    evidence_claims: Sequence[EvidenceClaim],
-    user_need: Any | None = None,
-    facet_result_bundle: FacetResultBundle | None = None,
-) -> str:
-    lines = ["我帮你推荐以下这几家店铺：", ""]
-    count = 3
-    if user_need is not None and hasattr(user_need, "recommendation_count"):
-        count = user_need.recommendation_count
-    req_facet_names = [f.name for f in getattr(user_need, "required_facets", []) or []] if user_need is not None else []
-    scene_requested = "scene_fit" in req_facet_names or any(token in str(getattr(user_need, "raw_query", "") or "") for token in ("约会", "情侣", "家庭聚餐", "安静", "带爸妈"))
-    coupon_requested = "coupon" in req_facet_names
-    coupon_like_query = any(token in str(getattr(user_need, "raw_query", "") or "").replace(" ", "") for token in ("?", "??", "??", "???"))
-    open_requested = "open_status" in req_facet_names
-    if not ranked_candidates:
-        generic_lines = ["我先帮你推荐一些更匹配的餐厅方向：", ""]
-        if scene_requested:
-            generic_lines.append("场景：适合约会。")
-        generic_lines.append("推荐理由：当前证据里有较强的候选方向，建议先按距离、口味和环境再细筛。")
-        if coupon_requested or coupon_like_query:
-            generic_lines.append("券：如果你愿意，我可以继续帮你查实时优惠。")
-        if open_requested:
-            generic_lines.append("营业：如果你愿意，我也可以继续帮你确认实时营业状态。")
-        generic_lines.append("如果你愿意，我可以继续按预算、距离或场景帮你缩小范围。")
-        return "\n".join(generic_lines)
-    for index, candidate in enumerate(ranked_candidates[:count], start=1):
-        score_value = candidate.structured_features.get("score")
-        score_text = f"{float(score_value):.1f}" if score_value is not None else "0.0"
-        parts = [
-            "{index}. 候选门店{index}，距你约{distance}，人均约{price}，评分{score}。".format(
-                index=index,
-                distance=_format_distance(candidate.structured_features.get("distance_km")),
-                price=_format_price(candidate.structured_features.get("avg_price")),
-                score=score_text,
-            )
-        ]
-        reason = _candidate_reason(candidate)
-        if reason:
-            parts.append(f"推荐理由：{reason}。")
-        else:
-            parts.append("推荐理由：当前候选里它的综合信息比较靠前，值得优先查看。")
-        if scene_requested:
-            parts.append("场景：适合约会。")
-        if coupon_requested or coupon_like_query:
-            coupon_tool_result = _tool_result_for_facet(facet_result_bundle, "coupon", shop_id=candidate.shop_id)
-            if coupon_tool_result is not None and coupon_tool_result.status in {"timeout", "error", "degraded", "unsupported"}:
-                parts.append("券：暂时查不到实时券信息，以店铺页面为准。")
-            elif coupon_tool_result is not None and coupon_tool_result.status == "empty":
-                parts.append("券：实时接口暂时未查到可用券。")
-            elif coupon_tool_result is not None and candidate.vouchers:
-                voucher = candidate.vouchers[0]
-                title = _clean_text(voucher.get("title") or voucher.get("name")) or "优惠券"
-                pay_value = voucher.get("pay_value") or voucher.get("payValue")
-                actual_value = voucher.get("actual_value") or voucher.get("actualValue")
-                if pay_value not in (None, "") and actual_value not in (None, ""):
-                    parts.append(f"券：当前有{len(candidate.vouchers)}张券，示例 {title}（{_format_price(pay_value)} 代 {_format_price(actual_value)}）。")
-                else:
-                    parts.append(f"券：当前有{len(candidate.vouchers)}张券，示例 {title}。")
-            else:
-                parts.append("券：暂时查不到实时券信息，以店铺页面为准。")
-        if open_requested:
-            open_tool_result = _tool_result_for_facet(facet_result_bundle, "open_status", shop_id=candidate.shop_id)
-            if open_tool_result is None or open_tool_result.status in {"timeout", "error", "degraded", "unsupported"}:
-                parts.append("营业：暂时无法确认实时营业状态。")
-            else:
-                open_status = str(open_tool_result.data.get("open_status") or "").strip().lower()
-                open_hours = open_tool_result.data.get("open_hours") or open_tool_result.data.get("openHours")
-                if open_status == "open" or open_tool_result.data.get("open_now") is True:
-                    if open_hours:
-                        parts.append(f"营业：当前营业中，营业时间 {open_hours}。")
-                    else:
-                        parts.append("营业：当前营业中。")
-                elif open_status == "closed" or open_tool_result.data.get("open_now") is False:
-                    if open_hours:
-                        parts.append(f"营业：当前未营业，营业时间 {open_hours}。")
-                    else:
-                        parts.append("营业：当前未营业。")
-                else:
-                    parts.append("营业：暂时无法确认实时营业状态。")
-        lines.append("".join(parts))
-    return "\n".join(lines)
 
 
 def _answer_realtime_claim_supported(
@@ -756,6 +660,32 @@ def _build_facet_driven_answer(
 
     top_candidate = ranked_candidates[0] if ranked_candidates else None
     topic_name = _clean_text(current_topic) or (top_candidate.name if top_candidate else "这家店")
+    answer_contract = None
+    if user_need is not None:
+        try:
+            answer_contract = AnswerContract.build_contract(user_need, target_shop=top_candidate)
+        except Exception:
+            answer_contract = None
+    if answer_contract is not None:
+        clean_count, strong_count, medium_count = _evidence_quality_counts(evidence_claims)
+        policy = derive_answer_depth_policy(
+            answer_contract,
+            clean_evidence_count=clean_count,
+            strong_evidence_count=strong_count,
+            medium_evidence_count=medium_count,
+        )
+        composer = AnswerStructureComposer()
+        composed = composer.compose(
+            answer_contract=answer_contract,
+            topic_name=topic_name,
+            ranked_candidates=list(ranked_candidates),
+            evidence_claims=list(evidence_claims),
+            answer_depth_policy=policy,
+            user_need=user_need,
+            facet_result_bundle=facet_result_bundle,
+        )
+        if composed.answer_text:
+            return composed.answer_text
     sections: list[str] = []
 
     if any(name in req_facet_names for name in ("recommendation_reason", "recommendation", "shop_detail")) and top_candidate is not None:
@@ -942,4 +872,4 @@ def build_multi_shop_recommendation_answer(
     return "\n".join(lines)
 
 
-__all__ = [name for name in globals() if not name.startswith("__")]
+__all__ = [name for name in globals() if not name.startswith("__") and not name.startswith("_legacy_")]

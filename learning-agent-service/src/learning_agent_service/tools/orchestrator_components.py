@@ -897,6 +897,7 @@ class ToolResultNormalizer:
                 "errors": normalized.errors,
                 "degraded": normalized.degraded,
                 "retryable": normalized.retryable,
+                "retry_reason": failure_category if normalized.retryable else None,
                 "degrade_to": normalized.degrade_to,
                 "approval_required": payload.approval_required,
                 "approval_status": payload.approval_status,

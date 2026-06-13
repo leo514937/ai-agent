@@ -81,7 +81,16 @@ class AnswerContract(BaseModel):
                 and any(token in compact_query for token in ("和", "比", "vs"))
             )
         )
-        
+        multi_facet_requested = len(user_focused_facets) > 1 or len(req_facet_names) > 1
+
+        if multi_facet_requested:
+            allowed_facets = ["environment", "taste", "service", "coupon", "open_status", "distance_eta", "distance", "price", "shop_detail", "recommendation_reason"]
+            if target_shop and (target_shop.shop_id is not None or target_shop.shop_name is not None):
+                forbidden_facets = ["recommendation"]
+                answer_style = "facet_multi"
+            else:
+                forbidden_facets = []
+                answer_style = "multi_shop_recommendation"
         # Determine base allowed and forbidden facets
         # Default facets to consider: "coupon", "open_status", "distance_eta", "price", "scene_fit", "environment", "taste", "service", "recommendation", "recommendation_reason", "shop_detail"
         if len(user_focused_facets) == 1 and user_focused_facets[0] == "coupon":
@@ -96,6 +105,15 @@ class AnswerContract(BaseModel):
             allowed_facets = ["distance_eta", "distance"]
             forbidden_facets = ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "price"]
             answer_style = "distance_only"
+        elif sum(1 for flag in (inferred_coupon, inferred_open, inferred_distance) if flag) > 1:
+            if target_shop and (target_shop.shop_id is not None or target_shop.shop_name is not None):
+                allowed_facets = ["environment", "taste", "service", "coupon", "open_status", "distance_eta", "distance", "price", "shop_detail", "recommendation_reason"]
+                forbidden_facets = ["recommendation"]
+                answer_style = "facet_multi"
+            else:
+                allowed_facets = ["environment", "taste", "service", "coupon", "open_status", "distance_eta", "distance", "price", "shop_detail", "recommendation_reason"]
+                forbidden_facets = []
+                answer_style = "multi_shop_recommendation"
         elif inferred_coupon and not inferred_open and not inferred_distance:
             allowed_facets = ["coupon"]
             forbidden_facets = ["environment", "taste", "service", "recommendation", "scene_fit", "open_status", "distance_eta", "price"]
@@ -108,15 +126,6 @@ class AnswerContract(BaseModel):
             allowed_facets = ["distance_eta", "distance"]
             forbidden_facets = ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "price"]
             answer_style = "distance_only"
-        elif sum(1 for flag in (inferred_coupon, inferred_open, inferred_distance) if flag) > 1:
-            if target_shop and (target_shop.shop_id is not None or target_shop.shop_name is not None):
-                allowed_facets = ["environment", "taste", "service", "coupon", "open_status", "distance_eta", "distance", "price", "shop_detail", "recommendation_reason"]
-                forbidden_facets = ["recommendation"]
-                answer_style = "facet_multi"
-            else:
-                allowed_facets = ["environment", "taste", "service", "coupon", "open_status", "distance_eta", "distance", "price", "shop_detail", "recommendation_reason"]
-                forbidden_facets = []
-                answer_style = "multi_shop_recommendation"
         elif inferred_comparison:
             allowed_facets = ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "distance_eta", "distance", "price", "shop_detail", "recommendation_reason"]
             forbidden_facets = []

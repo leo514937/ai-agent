@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -54,6 +55,52 @@ from .presentation import (
     _filter_citations_by_shop_ids,
     _reply_items_from_strings,
 )
+
+
+def _normalize_merge_text(text: str | None) -> str:
+    compact = _clean_text(text).replace(" ", "")
+    if not compact:
+        return ""
+    return re.sub(r"[\W_]+", "", compact).lower()
+
+
+def _answer_text_contains_equivalent(answer_text: str, model_answer: str) -> bool:
+    answer_text = _clean_text(answer_text)
+    model_answer = _clean_text(model_answer)
+    if not answer_text or not model_answer:
+        return False
+    if answer_text == model_answer:
+        return True
+    if answer_text.startswith(model_answer) or answer_text.endswith(model_answer):
+        return True
+    if model_answer.startswith(answer_text) or model_answer.endswith(answer_text):
+        return True
+    answer_norm = _normalize_merge_text(answer_text)
+    model_norm = _normalize_merge_text(model_answer)
+    if not answer_norm or not model_norm:
+        return False
+    return answer_norm == model_norm or model_norm in answer_norm or answer_norm in model_norm
+
+
+def _merge_model_answer_once(
+    answer_text: str,
+    model_answer: str,
+    *,
+    answer_contract: AnswerContract | None,
+    plan_usable: bool,
+    route_decision: str | None,
+) -> str:
+    model_answer = _clean_text(model_answer)
+    answer_text = _clean_text(answer_text)
+    if (
+        not model_answer
+        or answer_contract is not None
+        or plan_usable
+        or str(route_decision or "").strip().lower() == "rag_plus_tool"
+        or _answer_text_contains_equivalent(answer_text, model_answer)
+    ):
+        return answer_text
+    return f"{model_answer}\n{answer_text}" if answer_text else model_answer
 
 def build_response_bundle(
     *,
@@ -176,7 +223,6 @@ def build_response_bundle(
     # handle them so all facets (coupon, open_status, etc.) are represented.
     # Also skip in clarify mode since the clarification question should be used.
     _req_facet_count = len(getattr(user_need, "required_facets", None) or []) if user_need else 0
-    print(f"[DEBUG response_builder] raw_query: {raw_query}, ranked_candidates: {ranked_candidates}, current_shop: {current_shop}, selected_shop_id: {selected_shop_id}")
     generic_shop_names = {"这家店", "这家", "这店", "该商家", "商家", "当前店家"}
     has_specific_shop_context = bool(current_shop and str(current_shop).strip() not in generic_shop_names)
     if not ranked_candidates and has_specific_shop_context and _req_facet_count <= 1 and mode != "clarify":
@@ -305,7 +351,9 @@ def build_response_bundle(
             for claim in evidence_claims
             if getattr(claim, "shop_id", None) in allowed_shop_ids
         ]
-    if plan_usable and answer_plan_model is not None:
+    if model_answer:
+        answer_text = model_answer
+    if plan_usable and answer_plan_model is not None and not model_answer:
         answer_text = answer_plan_model.answer_text or answer_plan_model.recommendation_summary or model_answer or ""
         if approval_required and answer_plan_model.decision_type in {"booking", "order"}:
             action_label = "订座" if answer_plan_model.decision_type == "booking" else "下单"
@@ -319,7 +367,7 @@ def build_response_bundle(
                 + (f"\n\n{answer_text}" if answer_text else "")
             )
 
-    elif approval_required and transaction_draft:
+    elif approval_required and transaction_draft and not model_answer:
         action = transaction_draft.get("action") or mode
         action_label = {
             "booking": "订座",
@@ -332,9 +380,7 @@ def build_response_bundle(
             f"我已经为你整理好{action_label}草案：{shop_name or '目标商户'}。"
             "确认后我再继续执行，避免直接误操作。"
         )
-        if model_answer:
-            answer_text = f"{answer_text}\n\n{model_answer}"
-    elif str(route_decision or "").strip().lower() == "rag_plus_tool":
+    elif str(route_decision or "").strip().lower() == "rag_plus_tool" and not model_answer:
         answer_text = _build_facet_driven_answer(
             current_topic=current_topic,
             ranked_candidates=ranked_candidates,
@@ -342,7 +388,7 @@ def build_response_bundle(
             user_need=user_need,
             facet_result_bundle=facet_result_bundle,
         )
-    elif recommendation_like_query:
+    elif recommendation_like_query and not model_answer:
         answer_text = build_multi_shop_recommendation_answer(
             current_topic,
             ranked_candidates,
@@ -350,7 +396,7 @@ def build_response_bundle(
             user_need=user_need,
             facet_result_bundle=facet_result_bundle,
         )
-    elif user_need is not None and getattr(user_need, "required_facets", None):
+    elif user_need is not None and getattr(user_need, "required_facets", None) and not model_answer:
         answer_text = _build_facet_driven_answer(
             current_topic=current_topic,
             ranked_candidates=ranked_candidates,
@@ -358,7 +404,7 @@ def build_response_bundle(
             user_need=user_need,
             facet_result_bundle=facet_result_bundle,
         )
-    elif ranked_candidates:
+    elif ranked_candidates and not model_answer:
         summary = model_answer or "我按“{summary}”筛了一下，优先推荐这几家：".format(
             summary="、".join(
                 item
@@ -409,7 +455,7 @@ def build_response_bundle(
                 answer_text = model_answer or "我暂时没有筛到特别合适的店，你可以再补充一下口味、预算或者距离，我继续帮你找。"
 
     dynamic_facet_names = {"coupon", "open_status", "distance_eta"}
-    if user_need is not None and len([name for name in req_facet_names if name in dynamic_facet_names]) > 1:
+    if user_need is not None and len([name for name in req_facet_names if name in dynamic_facet_names]) > 1 and not model_answer:
         answer_text = _build_facet_driven_answer(
             current_topic=current_topic,
             ranked_candidates=ranked_candidates,
@@ -421,7 +467,7 @@ def build_response_bundle(
     # Ensure answer_contract style is respected for building response text
     # Skip answer_contract override in clarify mode – the model_answer
     # already carries the clarification question and must not be replaced.
-    if answer_contract is not None and mode != "clarify" and not plan_usable:
+    if answer_contract is not None and mode != "clarify" and not plan_usable and not model_answer:
         guardrail_degraded_answer = _build_guardrail_degraded_answer(
             answer_contract=answer_contract,
             evidence_pack=evidence_pack_model,
@@ -462,6 +508,16 @@ def build_response_bundle(
             facet_result_bundle=facet_result_bundle,
             user_need=user_need,
         )
+    elif answer_contract is not None and model_answer:
+        answer_text = validate_answer_against_contract(
+            answer_text=answer_text,
+            answer_contract=answer_contract,
+            topic_name=current_topic,
+            ranked_candidates=ranked_candidates,
+            evidence_claims=evidence_claims,
+            facet_result_bundle=facet_result_bundle,
+            user_need=user_need,
+        )
     elif answer_contract is not None and answer_contract.answer_style == "comparison":
         pass # Keep original comparison text
     elif answer_contract is not None and answer_contract.answer_style == "clarification":
@@ -474,7 +530,7 @@ def build_response_bundle(
     scene_query = any(token in query_text for token in ("环境", "氛围", "场景", "适合", "口味", "服务", "推荐"))
     generic_topic_names = {"这家店", "这家", "这店", "该商家", "商家", "当前店家"}
     has_specific_topic = bool(str(current_topic or "").strip() and str(current_topic or "").strip() not in generic_topic_names)
-    if has_specific_topic and coupon_query and not (open_query or distance_query or scene_query):
+    if has_specific_topic and coupon_query and not (open_query or distance_query or scene_query) and not model_answer:
         coupon_answer = build_coupon_only_answer(
             topic_name=current_topic or "这家店",
             ranked_candidates=ranked_candidates,
@@ -483,15 +539,6 @@ def build_response_bundle(
         )
         if coupon_answer:
             answer_text = coupon_answer
-
-    if (
-        model_answer
-        and answer_contract is None
-        and not plan_usable
-        and str(route_decision or "").strip().lower() != "rag_plus_tool"
-        and not answer_text.startswith(model_answer)
-    ):
-        answer_text = f"{model_answer}\n{answer_text}" if answer_text else model_answer
 
     draft_answer_before_quality = answer_text
     clean_evidence_count, strong_evidence_count, medium_evidence_count = _evidence_quality_counts(evidence_claims)
@@ -517,20 +564,19 @@ def build_response_bundle(
     )
     answer_text = quality_result.final_answer
 
-    if answer_plan_model is not None and verification_model is not None and verification_model.passed:
+    if answer_plan_model is not None and verification_model is not None and verification_model.passed and not model_answer:
         if approval_required:
             answer_text = draft_answer_before_quality
         elif answer_plan_model.answer_text:
             answer_text = answer_plan_model.answer_text
 
-    if (
-        model_answer
-        and answer_contract is None
-        and not plan_usable
-        and str(route_decision or "").strip().lower() != "rag_plus_tool"
-        and not answer_text.startswith(model_answer)
-    ):
-        answer_text = f"{model_answer}\n{answer_text}" if answer_text else model_answer
+    answer_text = _merge_model_answer_once(
+        answer_text,
+        model_answer,
+        answer_contract=answer_contract,
+        plan_usable=plan_usable,
+        route_decision=route_decision,
+    )
 
     if model_answer and source_mode == "java_business":
         model_index = answer_text.find(model_answer)

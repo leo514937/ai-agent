@@ -437,6 +437,12 @@ class RetrievalTrace:
     evidence_rejected: tuple[RetrievalTraceItem, ...] = ()
     degraded: bool = False
     empty: bool = False
+    retrieval_mode: str = "normal"
+    fallback_reason: str = ""
+    empty_reason: str | None = None
+    kept_count: int = 0
+    rejected_count: int = 0
+    route_hit_counts: Mapping[str, int] = field(default_factory=dict)
     metrics: Mapping[str, Any] = field(default_factory=dict)
     extra: Mapping[str, Any] = field(default_factory=dict)
 
@@ -457,6 +463,12 @@ class RetrievalTrace:
             "evidence_rejected": [item.to_dict() for item in self.evidence_rejected],
             "degraded": self.degraded,
             "empty": self.empty,
+            "retrieval_mode": self.retrieval_mode,
+            "fallback_reason": self.fallback_reason,
+            "empty_reason": self.empty_reason,
+            "kept_count": self.kept_count,
+            "rejected_count": self.rejected_count,
+            "route_hit_counts": dict(self.route_hit_counts),
             "metrics": dict(self.metrics),
             "extra": dict(self.extra),
         }

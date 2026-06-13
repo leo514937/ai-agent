@@ -1042,24 +1042,45 @@ class MemoryService:
 
     def _preference_profile(self, user_id: str, user_preferences: Mapping[str, Any]) -> UserPreferenceProfile:
         stored_preferences: dict[str, Any] = {}
+        diagnostics: dict[str, Any] = {
+            "profile_projection_store": {
+                "available": self.profile_projection_store is not None and hasattr(self.profile_projection_store, "list_active"),
+                "state": "unavailable",
+                "count": 0,
+                "error": None,
+            },
+            "preference_store": {
+                "available": self.preference_store is not None,
+                "state": "unavailable",
+                "count": 0,
+                "error": None,
+            },
+        }
         if self.profile_projection_store is not None and hasattr(self.profile_projection_store, "list_active"):
-            try:
-                rows = self._call_with_timeout(
-                    lambda: list(self.profile_projection_store.list_active(user_id)),
-                    timeout_seconds=0.5,
-                )
+            status, rows = self._call_with_timeout(
+                lambda: list(self.profile_projection_store.list_active(user_id)),
+                timeout_seconds=0.5,
+            )
+            if status == "ok":
+                diagnostics["profile_projection_store"]["count"] = len(rows or [])
+                diagnostics["profile_projection_store"]["state"] = "empty" if not rows else "loaded"
                 for row in rows or []:
                     key = getattr(row, "preference_key", None)
                     value = getattr(row, "current_value", None)
                     if key and value is not None:
                         stored_preferences[str(key)] = value
-            except Exception:
-                pass
+            else:
+                diagnostics["profile_projection_store"]["state"] = "error"
+                diagnostics["profile_projection_store"]["error"] = "timeout" if status == "timeout" else str(rows)
         if self.preference_store is not None:
-            try:
-                model = self._call_with_timeout(lambda: self.preference_store.get(user_id), timeout_seconds=0.5)
-            except Exception:
-                # 偏好画像失败不应阻塞 session 落盘，直接退化为当前会话偏好。
+            status, model = self._call_with_timeout(lambda: self.preference_store.get(user_id), timeout_seconds=0.5)
+            if status == "ok":
+                diagnostics["preference_store"]["state"] = "empty" if model is None else "loaded"
+                diagnostics["preference_store"]["count"] = 1 if model is not None else 0
+            else:
+                diagnostics["preference_store"]["state"] = "error"
+                diagnostics["preference_store"]["error"] = "timeout" if status == "timeout" else str(model)
+                # ?????????? session ???????????????
                 model = None
             if model is not None:
                 stored_preferences.update(
@@ -1078,13 +1099,16 @@ class MemoryService:
             or stored_preferences.get("answer_style"),
             answer_style_counter=counter if isinstance(counter, Mapping) else {},
             extra={
-                key: value
-                for key, value in stored_preferences.items()
-                if key
-                not in {
-                    "answer_style",
-                    "answer_style_counter",
-                }
+                "preference_profile_diagnostics": diagnostics,
+                **{
+                    key: value
+                    for key, value in stored_preferences.items()
+                    if key
+                    not in {
+                        "answer_style",
+                        "answer_style_counter",
+                    }
+                },
             },
         )
 
@@ -1103,10 +1127,8 @@ class MemoryService:
         try:
             status, value = result_queue.get(timeout=timeout_seconds)
         except queue.Empty:
-            return None
-        if status != "ok":
-            return None
-        return value
+            return "timeout", None
+        return status, value
 
     @staticmethod
     def _merge_user_preferences(
@@ -1122,6 +1144,9 @@ class MemoryService:
         return MemoryPersistentSessionContext(
             current_topic=context.current_topic,
             current_shop=context.current_shop,
+            current_shop_anchor=dict(context.current_shop_anchor),
+            current_scene=context.current_scene,
+            current_constraints=dict(context.current_constraints),
             recent_entities=tuple(context.recent_entities),
             clarification_result=dict(context.clarification_result),
             user_preferences=dict(context.user_preferences),
@@ -1133,6 +1158,12 @@ class MemoryService:
             summary_version=context.summary_version,
             summary_updated_at=context.summary_updated_at,
             pending_clarification=pending,
+            dialog_state=context.dialog_state,
+            dialog_task=context.dialog_task,
+            dialog_intent=context.dialog_intent,
+            dialog_comparison_targets=tuple(context.dialog_comparison_targets),
+            dialog_pending_slots=tuple(context.dialog_pending_slots),
+            dialog_transition_count=context.dialog_transition_count,
             extra=dict(context.extra),
         )
 
@@ -1151,6 +1182,9 @@ class MemoryService:
             update={
                 "current_topic": context.current_topic,
                 "current_shop": context.current_shop,
+                "current_shop_anchor": dict(context.current_shop_anchor or {}),
+                "current_scene": context.current_scene,
+                "current_constraints": dict(context.current_constraints or {}),
                 "recent_entities": list(context.recent_entities),
                 "clarification_result": dict(context.clarification_result),
                 "user_preferences": dict(context.user_preferences),
@@ -1162,6 +1196,12 @@ class MemoryService:
                 "summary_version": context.summary_version,
                 "summary_updated_at": context.summary_updated_at,
                 "pending_clarification": pending_clarification,
+                "dialog_state": context.dialog_state,
+                "dialog_task": context.dialog_task,
+                "dialog_intent": context.dialog_intent,
+                "dialog_comparison_targets": list(context.dialog_comparison_targets),
+                "dialog_pending_slots": list(context.dialog_pending_slots),
+                "dialog_transition_count": context.dialog_transition_count,
                 "extra": dict(context.extra),
             }
         )

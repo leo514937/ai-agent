@@ -33,19 +33,14 @@ from .runner import BaseWorkflowRunner, _update_phase5_trace
 from .services import WorkflowServices
 from .state import append_runtime_event as _append_state_runtime_event
 from ...domain.errors import TerminalEvent
+from ...local_life.business_metrics import QueryMetrics, business_metrics_collector
+from ...local_life.retry_quality_evaluator import evaluate_retry_quality
 from ...domain.state import GraphState, clone_graph_state
 from ...domain import ChatTurnCommand, build_initial_state
 from ...domain.contracts import PersistentSessionContext, SseEnvelope
 from collections.abc import Iterable, Mapping
 from .topology import MAIN_GRAPH_TOPOLOGY, describe_langgraph_topology as describe_main_graph_topology, export_langgraph_mermaid as export_main_graph_mermaid
 from .subgraphs import (
-    run_load_context_node,
-    run_rag_subgraph,
-    run_recommendation_subgraph,
-    run_tool_subgraph,
-    run_understand_turn,
-    route_after_rag,
-    route_after_understand,
     route_gate,
     route_decider,
 )
@@ -777,7 +772,62 @@ def _final_answer_node(state: GraphState, services: WorkflowServices) -> GraphSt
 
 
 def _collect_query_metrics(state: GraphState, bundle: Any = None) -> None:
-    return None
+    turn = state["turn"]
+    turn_extra = _turn_extra(state)
+    persistent = state.get("persistent")
+
+    raw_query = str(getattr(turn, "raw_query", "") or "")
+    answer_contract = turn_extra.get("answer_contract") or getattr(turn, "answer_contract", None)
+    intent = str(getattr(answer_contract, "intent", "") or turn_extra.get("intent", "") or "")
+    route = str(_routing_action(state) or "")
+    answer_style = str(getattr(answer_contract, "answer_style", "") or "")
+
+    target_shop_id = turn_extra.get("selected_shop_id") or getattr(persistent, "selected_shop_id", None)
+    answer_shop_ids = list(turn_extra.get("answer_shop_ids") or [])
+    forbidden_facets = list(getattr(answer_contract, "forbidden_facets", []) or [])
+    realtime_facets = list(getattr(answer_contract, "realtime_facets", []) or [])
+    evidence_claims = list(turn_extra.get("evidence_claims") or [])
+    tool_results = list(turn_extra.get("tool_results") or [])
+
+    degraded = bool(turn_extra.get("degraded") or getattr(state["runtime"], "degrade_to", ""))
+    degraded_reason = str(getattr(state["runtime"], "degrade_to", "") or turn_extra.get("degraded_reason", "") or "")
+    fallback = bool(turn_extra.get("fallback"))
+    clarification_asked = bool(turn_extra.get("clarification_asked"))
+    clarification_needed = bool(turn_extra.get("clarification_needed"))
+    answer_text = str(getattr(turn, "final_answer", "") or "")
+    retry_quality = dict(turn_extra.get("retry_quality") or {})
+    review_report = turn_extra.get("review_report")
+
+    metrics = QueryMetrics(
+        query=raw_query,
+        intent=intent,
+        route=route,
+        answer_style=answer_style,
+        single_shop_mode=answer_style == "single_shop_review",
+        recommendation_mode=answer_style == "multi_shop_recommendation",
+        tool_called=bool(tool_results),
+        tools_called=[str(item.get("tool_name", "")) for item in tool_results if isinstance(item, dict)],
+        evidence_count=len(evidence_claims),
+        target_shop_id=target_shop_id,
+        answer_shop_ids=answer_shop_ids,
+        forbidden_facets=forbidden_facets,
+        realtime_facets=realtime_facets,
+        degraded=degraded,
+        degraded_reason=degraded_reason or None,
+        fallback=fallback,
+        clarification_asked=clarification_asked,
+        clarification_needed=clarification_needed,
+        answer_text=answer_text,
+        retry_count=int(getattr(review_report, "retry_count", 0) or 0),
+        retry_improved=(
+            True
+            if retry_quality and float(retry_quality.get("improvement", 0.0) or 0.0) > 0
+            else False
+            if retry_quality
+            else None
+        ),
+    )
+    business_metrics_collector.record_query(metrics)
 
 
 def _resolve_facet_conflicts(state: GraphState) -> None:
@@ -807,13 +857,12 @@ def _route_after_contract_review(state: GraphState) -> str:
         return "final_answer"
     
     decision = getattr(review_report, "decision", "")
-    if decision == "repair_answer":
+    if decision in {"repair_answer", "retry_tool"}:
         retry_count = int(getattr(review_report, "retry_count", 0))
         max_retry_count = int(getattr(review_report, "max_retry_count", 0))
-        
         if retry_count < max_retry_count:
             return "prepare_retry"
-            
+
     return "final_answer"
 
 
@@ -825,6 +874,40 @@ def _apply_retry_quality_evaluation(
     evidence_claims: list[Any],
     tool_results: list[Any],
 ) -> tuple[Any, dict[str, Any]]:
+    retry_snapshot = dict(turn_extra.get("retry_snapshot") or {})
+    if not retry_snapshot:
+        return turn, turn_extra
+
+    pre_retry_answer = str(retry_snapshot.get("answer_text") or "").strip()
+    pre_retry_evidence_count = int(retry_snapshot.get("evidence_count") or 0)
+    quality = evaluate_retry_quality(
+        pre_retry_answer=pre_retry_answer,
+        post_retry_answer=str(answer_text or "").strip(),
+        pre_retry_evidence_count=pre_retry_evidence_count,
+        post_retry_evidence_count=len(evidence_claims),
+        has_tool_result=bool(tool_results),
+    )
+
+    reverted_to_pre_retry = False
+    if not quality.should_keep_retry and pre_retry_answer:
+        turn = turn.model_copy(update={"final_answer": pre_retry_answer})
+        answer_text = pre_retry_answer
+        reverted_to_pre_retry = True
+
+    retry_quality = {
+        "pre_retry_score": quality.pre_retry_score,
+        "post_retry_score": quality.post_retry_score,
+        "improvement": quality.improvement,
+        "should_keep_retry": quality.should_keep_retry,
+        "reason": quality.reason,
+        "reverted_to_pre_retry": reverted_to_pre_retry,
+    }
+    turn_extra["retry_quality"] = retry_quality
+
+    review_report = turn_extra.get("review_report")
+    if review_report is not None:
+        review_report.extra = dict(getattr(review_report, "extra", {}) or {})
+        review_report.extra["retry_quality"] = retry_quality
     return turn, turn_extra
 
 
@@ -1367,6 +1450,7 @@ def write_langgraph_visualizations(
     services: WorkflowServices | None = None,
 ) -> dict[str, str]:
     from .graphs import (
+        build_understand_turn_graph,
         export_rag_graph_mermaid,
         export_recommendation_graph_mermaid,
         export_tool_graph_mermaid,
@@ -1485,6 +1569,7 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None
     if not LANGGRAPH_AVAILABLE:
         raise RuntimeError("langgraph is not installed")
 
+    from .graphs import build_rag_graph, build_recommendation_graph, build_tool_graph, build_understand_turn_graph
     from langgraph.types import RetryPolicy
 
     workflow_retry_policy = RetryPolicy(
@@ -1632,7 +1717,7 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None
     graph.add_node("capability_answer", lambda state: _capability_answer_node(state, services), retry_policy=workflow_retry_policy)
     graph.add_node("direct_chat_answer", lambda state: _direct_chat_answer_node(state, services), retry_policy=workflow_retry_policy)
     graph.add_node("out_of_scope_response", lambda state: _out_of_scope_response_node(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("understand_turn", lambda state: run_understand_turn(state, services.understand_turn), retry_policy=workflow_retry_policy)
+    graph.add_node("understand_turn", build_understand_turn_graph(services.understand_turn), retry_policy=workflow_retry_policy)
     graph.add_node("resolve_target_shop", lambda state: _resolve_target_shop_stage(state, services), retry_policy=workflow_retry_policy)
     graph.add_node("build_answer_contract", lambda state: _build_answer_contract_stage(state, services), retry_policy=workflow_retry_policy)
     graph.add_node("build_source_contract", lambda state: _build_source_contract_stage(state, services), retry_policy=workflow_retry_policy)
@@ -1642,9 +1727,9 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None
     graph.add_node("rule_review", _rule_review_stage, retry_policy=workflow_retry_policy)
     graph.add_node("workflow_executor", lambda state: _workflow_executor_stage(state, services), retry_policy=workflow_retry_policy)
     graph.add_node("select_required_sources", _select_required_sources_stage, retry_policy=workflow_retry_policy)
-    graph.add_node("rag_executor", lambda state: run_rag_subgraph(state, services.rag_subgraph), retry_policy=workflow_retry_policy)
-    graph.add_node("tool_executor", lambda state: run_tool_subgraph(state, services.tool_subgraph), retry_policy=workflow_retry_policy)
-    graph.add_node("recommendation_executor", lambda state: run_recommendation_subgraph(state, services.rag_subgraph), retry_policy=workflow_retry_policy)
+    graph.add_node("rag_executor", build_rag_graph(services.rag_subgraph), retry_policy=workflow_retry_policy)
+    graph.add_node("tool_executor", build_tool_graph(services.tool_subgraph), retry_policy=workflow_retry_policy)
+    graph.add_node("recommendation_executor", build_recommendation_graph(services.rag_subgraph), retry_policy=workflow_retry_policy)
     graph.add_node("merge_or_rank", lambda state: _merge_or_rank_node(state, services), retry_policy=workflow_retry_policy)
     graph.add_node("contract_review", lambda state: _contract_review_node(state, services), retry_policy=workflow_retry_policy)
     graph.add_node("prepare_retry", lambda state: _prepare_retry_node(state, services), retry_policy=workflow_retry_policy)
@@ -1847,10 +1932,10 @@ def create_workflow_runner(
     workflow_version: str = "learn-agent/v1",
     checkpointer: Any = None,
 ):
-    if prefer_langgraph and LANGGRAPH_AVAILABLE:
-        return LangGraphWorkflowRunner(
-            services=services,
-            workflow_version=workflow_version,
-            checkpointer=checkpointer,
-        )
-    return SequentialWorkflowRunner(services=services, workflow_version=workflow_version)
+    if not LANGGRAPH_AVAILABLE:
+        raise RuntimeError("langgraph is required for workflow execution")
+    return LangGraphWorkflowRunner(
+        services=services,
+        workflow_version=workflow_version,
+        checkpointer=checkpointer,
+    )

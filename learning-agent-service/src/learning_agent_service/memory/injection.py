@@ -29,8 +29,8 @@ class MemoryInjectionPolicy:
     def build(self, pack: RetrievedMemoryPack) -> MemoryInjectionPlan:
         prompt = self._dedupe(self._priority_slice(pack.prompt_memories, self.config.prompt_limit))
         state = self._dedupe(self._priority_slice(pack.state_memories, self.config.state_limit))
-        semantic_source = pack.semantic_memories or pack.rag_memories
-        procedural_source = pack.procedural_memories or pack.tool_memories
+        semantic_source = self._dedupe([*pack.semantic_memories, *pack.rag_memories])
+        procedural_source = self._dedupe([*pack.procedural_memories, *pack.tool_memories])
         semantic = self._dedupe(self._priority_slice(semantic_source, self.config.semantic_limit))
         episodic = self._dedupe(self._priority_slice(pack.episodic_memories, self.config.episodic_limit))
         procedural = self._dedupe(self._priority_slice(procedural_source, self.config.procedural_limit))

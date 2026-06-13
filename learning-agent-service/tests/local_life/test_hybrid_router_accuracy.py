@@ -13,7 +13,9 @@ from learning_agent_service.local_life.hybrid_router import HybridRouter
 def load_golden_cases() -> list[dict]:
     """Load golden cases from JSONL file."""
     cases = []
-    with open("eval/local_life/golden_cases.jsonl", "r", encoding="utf-8") as f:
+    project_root = Path(__file__).resolve().parents[2]
+    golden_path = project_root / "eval" / "local_life" / "golden_cases.jsonl"
+    with open(golden_path, "r", encoding="utf-8") as f:
         for line in f:
             if line.strip():
                 cases.append(json.loads(line))

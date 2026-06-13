@@ -354,6 +354,12 @@ class DomainRagAdapter:
                 retrieval_filters=self.to_internal_filters(debug.get("retrieval_filters", {})),
                 final_retrieval_filters=dict(debug.get("final_retrieval_filters", {})),
                 preferred_chunk_types=tuple(debug.get("preferred_chunk_types", [])),
+                retrieval_mode=str(debug.get("retrieval_mode") or "normal"),
+                fallback_reason=str(debug.get("fallback_reason") or ""),
+                empty_reason=debug.get("empty_reason"),
+                kept_count=int(debug.get("kept_count") or 0),
+                rejected_count=int(debug.get("rejected_count") or 0),
+                route_hit_counts=dict(debug.get("route_hit_counts", {})),
                 metrics=dict(debug.get("metrics", {})),
                 extra=dict(debug.get("extra", {})),
             )

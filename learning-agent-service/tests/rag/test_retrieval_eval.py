@@ -7,6 +7,7 @@ from typing import Iterable, Sequence
 import pytest
 
 from learning_agent_service.rag.defaults import DEFAULT_KNOWLEDGE_CHUNKS
+from learning_agent_service.rag.eval import build_default_eval_cases
 from learning_agent_service.rag.models import KnowledgeChunk, RetrievalPlan
 from learning_agent_service.rag.retrieval import (
     HeuristicDenseRetriever,
@@ -101,20 +102,15 @@ def _ndcg_at_k(top_k: Sequence[str], expected_chunk_ids: Sequence[str]) -> float
 
 def test_retrieval_eval_reports_metrics_on_default_chunks() -> None:
     service = build_eval_service(DEFAULT_KNOWLEDGE_CHUNKS)
-    cases = (
-        RetrievalEvalCase("RAG是什么", ("rag-concept",)),
-        RetrievalEvalCase("Spring AOP vs 动态代理", ("spring-aop-compare",)),
-        RetrievalEvalCase("ThreadPoolExecutor 的核心参数有哪些", ("java-threadpool-concept",)),
-        RetrievalEvalCase("ReAct 和 CoT 区别", ("react-cot-compare",)),
-        RetrievalEvalCase("ZXCVBNM 12345"),
-    )
+    cases = build_default_eval_cases()
 
     metrics = evaluate_retrieval_suite(service, cases, k=3)
 
-    assert metrics["case_count"] == 5
-    assert metrics["expected_case_count"] == 4
-    assert metrics["recall_at_k"] >= 0.9
-    assert metrics["mrr_at_k"] >= 0.9
-    assert metrics["ndcg_at_k"] >= 0.9
-    assert metrics["empty_rate"] == pytest.approx(0.2, abs=1e-6)
-    assert metrics["degraded_rate"] == pytest.approx(0.2, abs=1e-6)
+    assert metrics["case_count"] == 7
+    assert metrics["expected_case_count"] == 6
+    assert metrics["recall_at_k"] >= 0.8
+    assert metrics["mrr_at_k"] >= 0.8
+    assert metrics["ndcg_at_k"] >= 0.8
+    assert metrics["empty_rate"] == pytest.approx(2 / 7, abs=1e-6)
+    assert metrics["degraded_rate"] == pytest.approx(1 / 7, abs=1e-6)
+

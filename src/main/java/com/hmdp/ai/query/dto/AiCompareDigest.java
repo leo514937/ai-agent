@@ -8,6 +8,8 @@ import lombok.NoArgsConstructor;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * 对比场景的只读输入数据。
@@ -21,6 +23,9 @@ public class AiCompareDigest {
     private ShopType shopType;
     private List<Shop> candidates = new ArrayList<>();
     private List<String> compareAxes = new ArrayList<>();
+    private List<String> comparisonTargets = new ArrayList<>();
+    private Map<String, Object> knownConstraints = new LinkedHashMap<>();
+    private String followUpKind;
     private List<String> highlights = new ArrayList<>();
     private String summary;
 }

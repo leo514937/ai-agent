@@ -8,7 +8,7 @@ from learning_agent_service.application.router.phase1_intent import build_rewrit
 from learning_agent_service.application.router.phase2_slots import build_evidence_quality
 from learning_agent_service.application.router.phase5_retrieval import can_enter_retrieval
 from learning_agent_service.application.router.phase6_tool import ensure_tool_plan
-from learning_agent_service.domain.contracts import CitationBuildRequest, EvidenceEvaluationRequest, HybridRetrieveRequest, QueryRewriteRequest, ToolExecutionCommand, ToolNormalizationRequest, ToolPlanningRequest
+from learning_agent_service.domain.contracts import CitationBuildRequest, EvidenceEvaluationRequest, HybridRetrieveRequest, QueryRewriteRequest, ReviewReport, ToolExecutionCommand, ToolNormalizationRequest, ToolPlanningRequest
 
 from .helpers import Any, ClarificationCard, GraphState, Mapping, _append_stage_metric, _apply_phase1_routing_extra, _build_phase2_trace, _build_raw_retrieval_plan, _coerce_retrieval_plan, _emit_stage_state, _mark_degrade, _QUERY_REWRITE_TIMEOUT_SECONDS, _routing_decision_for_turn
 
@@ -553,6 +553,21 @@ class WorkflowNodeAdapterStagesFrontBMixin:
                 "degraded": bool(getattr(result, "degraded", False)),
                 "retryable": bool(getattr(result, "retryable", False)),
                 "degrade_to": getattr(result, "degrade_to", None),
+                "failure_category": getattr(result, "extra", {}).get("failure_category"),
+                "retry_reason": getattr(result, "extra", {}).get("retry_reason"),
             }
+            if bool(getattr(result, "retryable", False)) and turn_extra.get("review_report") is None:
+                turn_extra["review_report"] = ReviewReport(
+                    decision="retry_tool",
+                    reason=str(getattr(result, "extra", {}).get("retry_reason") or getattr(result, "extra", {}).get("failure_category") or "retryable_tool_failure"),
+                    retry_target=str(result.tool_name or ""),
+                    retry_count=0,
+                    max_retry_count=1,
+                    extra={
+                        "retry_origin": "tool",
+                        "failure_category": getattr(result, "extra", {}).get("failure_category"),
+                        "retryable": True,
+                    },
+                )
             state["turn"] = turn.model_copy(update={"tool_result": result, "extra": turn_extra})
             return state

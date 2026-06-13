@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import _bootstrap  # noqa: F401
 
@@ -15,7 +15,11 @@ from learning_agent_service.domain import (
     ChatTurnCommand,
     ClarificationCard,
     ClarificationOption,
+    MemoryInjectionPlan,
+    MemoryRecord,
+    MemoryType,
     PersistentSessionContext,
+    RetrievedMemoryPack,
     ReferenceResolutionResult,
     RetrievalPlan,
     ToolSelection,
@@ -24,6 +28,7 @@ from learning_agent_service.domain import (
 )
 from learning_agent_service.domain.enums import IntentType, OutputStyle, TurnDecision
 from learning_agent_service.infrastructure.repositories.in_memory import InMemorySessionContextStore
+from learning_agent_service.memory.orchestrator import MemoryOrchestrator
 from learning_agent_service.rag.rewrite import QueryRewriteContext, QueryRewriteService
 
 
@@ -83,6 +88,72 @@ class WorkflowRagGateTestCase(unittest.TestCase):
         self.assertEqual(loaded["runtime"].metrics["memory_retrieval_skipped"], True)
         self.assertEqual(loaded["turn"].routing_decision.required_action, "direct_answer")
         self.assertNotIn("rag_gate", loaded["turn"].extra)
+
+    def test_load_context_retrieves_and_injects_memory_before_compose_answer(self) -> None:
+        session_store = SimpleNamespace(load=MagicMock(return_value=PersistentSessionContext()))
+        gate = SimpleNamespace(
+            precheck=MagicMock(
+                return_value=SimpleNamespace(
+                    vote="allow",
+                    reason="allow_memory",
+                    confidence=0.98,
+                    response_kind="allow",
+                )
+            )
+        )
+        orchestrator = MemoryOrchestrator(session_store=SimpleNamespace())
+        memory_record = MemoryRecord(
+            memory_id="mem-1",
+            content="记忆内容",
+            summary="记忆摘要",
+            type=MemoryType.SEMANTIC,
+        )
+        pack = RetrievedMemoryPack(
+            prompt_memories=[memory_record],
+            source_memory_ids=["mem-1"],
+            retrieval_reason="mock_retrieval",
+        )
+        injection = MemoryInjectionPlan(prompt_memories=[memory_record])
+
+        routing = build_initial_routing_decision("请帮我回忆一下", PersistentSessionContext()).model_copy(
+            update={
+                "required_action": "rag_retrieval",
+                "should_use_memory": True,
+                "should_retrieve": True,
+                "route_reason": "memory_enabled",
+            }
+        )
+
+        with patch("learning_agent_service.application.workflow.adapters.stages_front_a.build_initial_routing_decision", return_value=routing), patch(
+            "learning_agent_service.application.workflow.adapters.stages_front_a._apply_route_review",
+            side_effect=lambda decision, **kwargs: decision,
+        ):
+            with patch.object(orchestrator, "retrieve_for_state", return_value=pack) as retrieve_mock, patch.object(
+                orchestrator, "build_injection_plan", return_value=injection
+            ) as build_plan_mock, patch.object(orchestrator, "attach_to_state", wraps=orchestrator.attach_to_state) as attach_mock:
+                container = SimpleNamespace(
+                    session_context_store=session_store,
+                    memory_orchestrator=orchestrator,
+                    rag_route_gate=gate,
+                )
+                adapter = WorkflowNodeAdapter(container)
+
+                state = self._build_state("附近有什么推荐菜")
+                loaded = adapter.load_context(state)
+
+        self.assertTrue(retrieve_mock.called)
+        self.assertTrue(build_plan_mock.called)
+        self.assertTrue(attach_mock.called)
+        self.assertIsNotNone(loaded["turn"].retrieved_memory_pack)
+        self.assertIsNotNone(loaded["turn"].memory_injection_plan)
+        self.assertEqual(loaded["turn"].memory_injection_plan.prompt_memories[0].memory_id, "mem-1")
+        self.assertEqual(loaded["runtime"].metrics["memory_retrieval_status"], "retrieved")
+        self.assertFalse(loaded["runtime"].metrics["memory_retrieval_skipped"])
+        self.assertEqual(loaded["runtime"].metrics["memory_injected_count"], 1)
+        self.assertEqual(loaded["runtime"].client_context["memory_prompt_count"], 1)
+        self.assertEqual(loaded["turn"].extra["memory_retrieval"]["reason"], "mock_retrieval")
+        self.assertIsNotNone(loaded["turn"].memory_injection_plan)
+        self.assertEqual(loaded["turn"].memory_injection_plan.prompt_memories[0].memory_id, "mem-1")
 
     def test_run_understand_turn_skips_rewrite_when_gate_denies(self) -> None:
         rewrite_query = MagicMock()

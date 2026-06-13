@@ -10,6 +10,8 @@ import lombok.NoArgsConstructor;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * 店铺详情页的只读摘要数据。
@@ -24,6 +26,9 @@ public class AiShopDetailDigest {
     private List<Voucher> vouchers = new ArrayList<>();
     private List<Blog> blogs = new ArrayList<>();
     private AiUserContextDigest userContext;
+    private Map<String, Object> knownConstraints = new LinkedHashMap<>();
+    private List<String> comparisonTargets = new ArrayList<>();
+    private String followUpKind;
     private List<String> highlights = new ArrayList<>();
     private String summary;
 }

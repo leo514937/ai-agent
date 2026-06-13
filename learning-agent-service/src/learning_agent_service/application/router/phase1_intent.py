@@ -1043,7 +1043,16 @@ def apply_fast_decision_to_routing(
 
     extra["fast_decision_intent"] = fast_result.intent.value if fast_result.intent else None
 
-    extra["fast_decision_route_candidate"] = fast_result.extra.get("route_candidate") if isinstance(fast_result.extra, Mapping) else None
+    route_candidate = fast_result.extra.get("route_candidate") if isinstance(fast_result.extra, Mapping) else routing.route_candidate
+    route_candidate = str(route_candidate or "").strip().lower() or None
+    compact_query = normalize_query(routing.raw_query).replace(" ", "")
+    if (
+        route_candidate == "local_life"
+        and required_action == "clarify"
+        and any(token in compact_query for token in ("券", "优惠", "团购", "套餐"))
+    ):
+        route_candidate = "local_life.package_or_coupon"
+    extra["fast_decision_route_candidate"] = route_candidate
 
 
 
@@ -1079,7 +1088,7 @@ def apply_fast_decision_to_routing(
 
             "route_reason": routing.route_reason or intent_name or routing.input_quality.reason,
 
-            "route_candidate": fast_result.extra.get("route_candidate") if isinstance(fast_result.extra, Mapping) else routing.route_candidate,
+            "route_candidate": route_candidate,
 
             "preferred_chunk_roles": preferred_chunk_roles,
 

@@ -1,11 +1,15 @@
 from datetime import datetime, timezone
 
+from types import SimpleNamespace
+
 from learning_agent_service.application.workflow.builder import (
     _apply_retry_quality_evaluation,
     _collect_query_metrics,
     _prepare_retry_node,
 )
 from learning_agent_service.domain.contracts import GraphRuntimeMeta, PersistentSessionContext, ReviewReport, TurnRuntimeState
+from learning_agent_service.application.workflow.adapters.stages_main_graph import WorkflowNodeAdapterMainGraphMixin
+from learning_agent_service.tools.models import NormalizedToolResult
 from learning_agent_service.local_life.business_metrics import business_metrics_collector
 
 
@@ -43,12 +47,57 @@ def test_prepare_retry_node_stores_retry_snapshot():
     )
     state = _build_state(turn=turn)
 
-    updated = _prepare_retry_node(state)
+    services = SimpleNamespace(main_graph=WorkflowNodeAdapterMainGraphMixin())
+    updated = _prepare_retry_node(state, services)
     turn_extra = updated["turn"].extra
 
     assert turn_extra["retry_snapshot"]["answer_text"].startswith("这是一段较完整的原始回答")
     assert turn_extra["retry_snapshot"]["evidence_count"] == 2
     assert turn_extra["review_report"].retry_count == 1
+    assert turn_extra["rewrite_decision"].should_retrieve is True
+
+
+def test_prepare_retry_node_handles_retryable_tool_failure():
+    turn = TurnRuntimeState(
+        raw_query="????????",
+        tool_result={
+            "status": "failed",
+            "tool_name": "get_coupon_list",
+            "normalized_output": {},
+            "used_tools": ["get_coupon_list"],
+            "approval_required": False,
+            "approval_status": None,
+            "approval_request": {},
+            "extra": {
+                "retryable": True,
+                "degraded": True,
+                "failure_category": "timeout",
+                "retry_reason": "timeout",
+            },
+        },
+        extra={
+            "tool_results": [{"tool_name": "get_coupon_list"}],
+            "review_report": ReviewReport(
+                decision="retry_tool",
+                reason="timeout",
+                retry_target="get_coupon_list",
+                retry_count=0,
+                max_retry_count=1,
+                extra={"failure_category": "timeout"},
+            ),
+        },
+    )
+    state = _build_state(turn=turn)
+
+    services = SimpleNamespace(main_graph=WorkflowNodeAdapterMainGraphMixin())
+    updated = _prepare_retry_node(state, services)
+    turn_extra = updated["turn"].extra
+
+    assert turn_extra["review_report"].retry_count == 1
+    assert turn_extra["retry_snapshot"]["retry_origin"] == "tool"
+    assert turn_extra["retry_snapshot"]["tool_name"] == "get_coupon_list"
+    assert turn_extra["retry_snapshot"]["failure_category"] == "timeout"
+    assert turn_extra["rewrite_decision"].reason == "retry_tool_failure"
     assert turn_extra["rewrite_decision"].should_retrieve is True
 
 

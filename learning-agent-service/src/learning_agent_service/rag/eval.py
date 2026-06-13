@@ -37,10 +37,12 @@ def build_eval_service(chunks: Iterable[KnowledgeChunk]) -> HybridRetrieverServi
 
 def build_default_eval_cases() -> tuple[RetrievalEvalCase, ...]:
     return (
-        RetrievalEvalCase("RAG是什么", ("rag-concept",)),
-        RetrievalEvalCase("Spring AOP vs 动态代理", ("spring-aop-compare",)),
-        RetrievalEvalCase("ThreadPoolExecutor 的核心参数有哪些", ("java-threadpool-concept",)),
-        RetrievalEvalCase("ReAct 和 CoT 区别", ("react-cot-compare",)),
+        RetrievalEvalCase("RAG???", ("rag-concept",)),
+        RetrievalEvalCase("Spring AOP vs ????", ("spring-aop-compare",)),
+        RetrievalEvalCase("Spring AOP ??????????", ("spring-aop-compare",)),
+        RetrievalEvalCase("ThreadPoolExecutor ????????", ("java-threadpool-concept",)),
+        RetrievalEvalCase("ReAct ? CoT ??", ("react-cot-compare",)),
+        RetrievalEvalCase("????????????", ("family-dinner-restaurant",)),
         RetrievalEvalCase("ZXCVBNM 12345"),
     )
 

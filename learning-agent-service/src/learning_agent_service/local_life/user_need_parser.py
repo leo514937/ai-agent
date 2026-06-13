@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from .context_recovery import recover_follow_up_context
 from .scene_policy import ScenePolicy
 from .schemas import ContextRef, LocalLifeSlots, RequiredFacet, UserNeed
 
@@ -32,6 +33,34 @@ def _has_explicit_entity_in_query(query: str, slots: LocalLifeSlots) -> bool:
     return True
 
 
+def _add_shop_ref(
+    context_refs: list[ContextRef],
+    *,
+    shop_id: Any = None,
+    shop_name: Any = None,
+    source: str,
+    confidence: float = 0.9,
+) -> None:
+    sid = None
+    try:
+        if shop_id not in (None, ""):
+            sid = str(int(shop_id))
+    except Exception:
+        sid = None
+    name = str(shop_name).strip() if shop_name not in (None, "") else None
+    if sid is None and name is None:
+        return
+    context_refs.append(
+        ContextRef(
+            type="shop",
+            id=sid,
+            name=name,
+            source=source,
+            confidence=confidence,
+        )
+    )
+
+
 class UserNeedParser:
     @staticmethod
     def parse(
@@ -51,6 +80,11 @@ class UserNeedParser:
         context_refs: list[ContextRef] = []
         has_pronoun = any(p in normalized_query for p in PRONOUNS)
         has_explicit_entity = _has_explicit_entity_in_query(normalized_query, slots)
+        recovery = recover_follow_up_context(
+            query,
+            client_context=dict(client_ctx),
+            session_context=dict(session_ctx),
+        )
 
         # 隐式指代消解：如果意图是商户特异性的（如查券、查详情、导航等），且用户未显式提及店名或ID，
         # 则视为隐式指代，自动从 session 历史中提取最近提到的商户，行为等同于“这家/它”
@@ -128,6 +162,54 @@ class UserNeedParser:
                                         )
                                     )
                                     break
+
+        if not context_refs and recovery.follow_up_kind in {"intent_ellipsis", "constraint_inheritance", "comparison_completion"}:
+            anchor = recovery.anchor_shop
+            if anchor is not None:
+                _add_shop_ref(
+                    context_refs,
+                    shop_id=anchor.shop_id,
+                    shop_name=anchor.name,
+                    source="context_recovery_anchor",
+                    confidence=max(0.85, anchor.confidence),
+                )
+            else:
+                fallback_shop_id = session_ctx.get("selected_shop_id") or session_ctx.get("current_shop_id")
+                fallback_shop_name = session_ctx.get("selected_shop_name") or session_ctx.get("current_shop")
+                if fallback_shop_id not in (None, "") or fallback_shop_name:
+                    _add_shop_ref(
+                        context_refs,
+                        shop_id=fallback_shop_id,
+                        shop_name=fallback_shop_name,
+                        source="context_recovery_session",
+                        confidence=0.82,
+                    )
+                else:
+                    last_candidates = session_ctx.get("last_candidates") or []
+                    if isinstance(last_candidates, list):
+                        for item in last_candidates:
+                            if isinstance(item, Mapping):
+                                sid = item.get("shop_id") or item.get("id")
+                                sname = item.get("name") or item.get("shop_name")
+                                if sid is not None or sname:
+                                    _add_shop_ref(
+                                        context_refs,
+                                        shop_id=sid,
+                                        shop_name=sname,
+                                        source="context_recovery_candidates",
+                                        confidence=0.78,
+                                    )
+                                    break
+
+            if recovery.follow_up_kind == "comparison_completion":
+                for target in recovery.comparison_targets:
+                    _add_shop_ref(
+                        context_refs,
+                        shop_id=target.shop_id,
+                        shop_name=target.name,
+                        source="comparison_target",
+                        confidence=max(0.8, target.confidence),
+                    )
 
         # 2. Extract Required and Optional Facets
         required_facets: list[RequiredFacet] = []

@@ -1,23 +1,25 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 
 from ...domain.contracts import Citation, EvidencePack, EvidenceItem
 from ...domain.state import GraphState, clone_graph_state
-from .services import PlanExecuteSubgraphServices, RagSubgraphServices, ToolSubgraphServices
+from .services import PlanExecuteSubgraphServices, RagSubgraphServices, ToolSubgraphServices, UnderstandTurnServices
 from .state import append_runtime_error as _append_state_runtime_error
 from .subgraphs import (
     _ensure_rag_result,
     _ensure_raw_tool_result,
     _ensure_tool_result,
     _filter_evidence_by_contract,
+    _finalize_understand_turn,
     _mark_stage,
+    _prepare_understand_turn,
     _route_decision_for_turn,
     _tool_stage_detail,
     can_enter_retrieval,
-    route_after_rag,
     should_run_tools,
 )
 from ..router.base import _update_phase3_trace
@@ -72,6 +74,25 @@ _RAG_TOPOLOGY = _GraphTopology(
     ),
 )
 
+_UNDERSTAND_TOPOLOGY = _GraphTopology(
+    entry_point="parse_intent_slots",
+    terminal="END",
+    nodes=(
+        "parse_intent_slots",
+        "resolve_reference",
+        "ambiguity_check",
+        "rag_gate",
+        "finalize_understand_turn",
+    ),
+    edges=(
+        ("parse_intent_slots", "resolve_reference"),
+        ("resolve_reference", "ambiguity_check"),
+        ("ambiguity_check", "rag_gate"),
+        ("rag_gate", "finalize_understand_turn"),
+        ("finalize_understand_turn", "END"),
+    ),
+)
+
 _PLAN_EXECUTE_TOPOLOGY = _GraphTopology(
     entry_point="planner_node",
     terminal="END",
@@ -116,12 +137,17 @@ _RECOMMENDATION_TOPOLOGY = _GraphTopology(
     terminal="END",
     nodes=(
         "prepare_recommendation",
-        "recommendation_executor",
+        "dispatch_shop_analysis",
+        "analyze_one_shop",
+        "reduce_shop_results",
         "finalize_recommendation",
     ),
     edges=(
-        ("prepare_recommendation", "recommendation_executor"),
-        ("recommendation_executor", "finalize_recommendation"),
+        ("prepare_recommendation", "dispatch_shop_analysis"),
+        ("dispatch_shop_analysis", "analyze_one_shop"),
+        ("analyze_one_shop", "reduce_shop_results"),
+        ("reduce_shop_results", "dispatch_shop_analysis"),
+        ("reduce_shop_results", "finalize_recommendation"),
         ("finalize_recommendation", "END"),
     ),
 )
@@ -171,8 +197,34 @@ def _recall_rag(state: GraphState, services: RagSubgraphServices) -> GraphState:
             route_reason=str(state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])),
             detail={"evidence_count": len(state["turn"].evidence_pack.items) if state["turn"].evidence_pack else 0},
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.exception("RAG recall stage failed.")
+        from learning_agent_service.domain.errors import WorkflowErrorCode, build_error
+
+        err = build_error(
+            WorkflowErrorCode.INTERNAL_ERROR,
+            stage="retrieval",
+            message=f"RAG recall failed: {exc}",
+            retryable=False,
+            is_terminal=False,
+        )
+        state = _append_state_runtime_error(state, err)
+        runtime = state["runtime"]
+        metrics = dict(getattr(runtime, "metrics", {}) or {})
+        metrics["rag_degraded"] = True
+        metrics["rag_error"] = str(exc)
+        state["runtime"] = runtime.model_copy(update={"metrics": metrics, "degrade_to": "retrieval_degraded"})
+        turn = state["turn"]
+        turn_extra = dict(turn.extra)
+        failures = list(turn_extra.get("rag_stage_failures", []) or [])
+        failures.append({"stage": "recall", "error": str(exc)})
+        turn_extra["rag_stage_failures"] = failures
+        turn_extra["rag_failure_reason"] = str(exc)
+        state["turn"] = turn.model_copy(update={"extra": turn_extra})
+        raise
     return state
 
 
@@ -181,8 +233,34 @@ def _filter_rag(state: GraphState) -> GraphState:
     try:
         state = state
         state = _filter_evidence_by_contract(state)
-    except Exception:
-        pass
+    except Exception as exc:
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.exception("RAG filtering stage failed.")
+        from learning_agent_service.domain.errors import WorkflowErrorCode, build_error
+
+        err = build_error(
+            WorkflowErrorCode.INTERNAL_ERROR,
+            stage="retrieval",
+            message=f"RAG filtering failed: {exc}",
+            retryable=False,
+            is_terminal=False,
+        )
+        state = _append_state_runtime_error(state, err)
+        runtime = state["runtime"]
+        metrics = dict(getattr(runtime, "metrics", {}) or {})
+        metrics["rag_degraded"] = True
+        metrics["rag_filter_error"] = str(exc)
+        state["runtime"] = runtime.model_copy(update={"metrics": metrics, "degrade_to": "retrieval_degraded"})
+        turn = state["turn"]
+        turn_extra = dict(turn.extra)
+        failures = list(turn_extra.get("rag_stage_failures", []) or [])
+        failures.append({"stage": "filter", "error": str(exc)})
+        turn_extra["rag_stage_failures"] = failures
+        turn_extra["rag_failure_reason"] = str(exc)
+        state["turn"] = turn.model_copy(update={"extra": turn_extra})
+        raise
     return state
 
 
@@ -223,8 +301,34 @@ def _rerank_rag(state: GraphState) -> GraphState:
 def _build_evidence_pack(state: GraphState, services: RagSubgraphServices) -> GraphState:
     try:
         state = services.citation_builder(state)
-    except Exception:
-        pass
+    except Exception as exc:
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.exception("RAG evidence pack construction failed.")
+        from learning_agent_service.domain.errors import WorkflowErrorCode, build_error
+
+        err = build_error(
+            WorkflowErrorCode.INTERNAL_ERROR,
+            stage="retrieval",
+            message=f"RAG evidence pack failed: {exc}",
+            retryable=False,
+            is_terminal=False,
+        )
+        state = _append_state_runtime_error(state, err)
+        runtime = state["runtime"]
+        metrics = dict(getattr(runtime, "metrics", {}) or {})
+        metrics["rag_degraded"] = True
+        metrics["rag_citation_error"] = str(exc)
+        state["runtime"] = runtime.model_copy(update={"metrics": metrics, "degrade_to": "retrieval_degraded"})
+        turn = state["turn"]
+        turn_extra = dict(turn.extra)
+        failures = list(turn_extra.get("rag_stage_failures", []) or [])
+        failures.append({"stage": "citation", "error": str(exc)})
+        turn_extra["rag_stage_failures"] = failures
+        turn_extra["rag_failure_reason"] = str(exc)
+        state["turn"] = turn.model_copy(update={"extra": turn_extra})
+        raise
     return _ensure_rag_result(state)
 
 
@@ -501,6 +605,11 @@ def _execute_tool_pipeline(state: GraphState, services: ToolSubgraphServices) ->
 
         turn = state["turn"]
         tool_name = turn.tool_plan.tool_name if turn.tool_plan else "unknown_tool"
+        turn_extra = dict(turn.extra)
+        failures = list(turn_extra.get("tool_stage_failures", []) or [])
+        failures.append({"stage": "execute", "tool_name": tool_name, "error": str(exc)})
+        turn_extra["tool_stage_failures"] = failures
+        turn_extra["tool_failure_reason"] = str(exc)
         state["turn"] = turn.model_copy(
             update={
                 "raw_tool_result": ToolExecutionResult(
@@ -518,6 +627,7 @@ def _execute_tool_pipeline(state: GraphState, services: ToolSubgraphServices) ->
                     used_tools=[tool_name] if tool_name else [],
                     approval_status=None,
                 ),
+                "extra": turn_extra,
             }
         )
 
@@ -541,6 +651,9 @@ def _prepare_recommendation(state: GraphState) -> GraphState:
     runtime = state["runtime"]
     turn_extra = dict(turn.extra)
     turn_extra["recommendation_mode"] = True
+    turn_extra["recommendation_candidates"] = _recommendation_candidate_shop_ids(state)
+    turn_extra["recommendation_index"] = 0
+    turn_extra["recommendation_done"] = False
     turn_extra["route_gate"] = {**dict(turn_extra.get("route_gate", {}) or {}), "branch": "recommendation"}
     state["turn"] = turn.model_copy(update={"extra": turn_extra})
 
@@ -572,6 +685,31 @@ def _recommendation_candidate_shop_ids(state: GraphState) -> list[int]:
         if candidate_id not in candidate_ids:
             candidate_ids.append(candidate_id)
     return candidate_ids
+
+
+def _dispatch_recommendation_shop(state: GraphState) -> GraphState:
+    turn = state["turn"]
+    turn_extra = dict(getattr(turn, "extra", {}) or {})
+    candidates = list(turn_extra.get("recommendation_candidates") or _recommendation_candidate_shop_ids(state))
+    index = int(turn_extra.get("recommendation_index", 0) or 0)
+    shop_id = candidates[index] if 0 <= index < len(candidates) else None
+    routing = getattr(turn, "routing_contract", None)
+    if routing is not None:
+        state["turn"] = turn.model_copy(
+            update={
+                "routing_contract": routing.model_copy(
+                    update={
+                        "target_shop_id": shop_id,
+                        "candidate_shop_ids": [shop_id] if shop_id is not None else [],
+                        "recommendation_mode": True,
+                    }
+                )
+            }
+        )
+    turn_extra["recommendation_current_shop_id"] = shop_id
+    turn_extra["recommendation_has_more"] = index < max(0, len(candidates))
+    state["turn"] = state["turn"].model_copy(update={"extra": turn_extra})
+    return state
 
 
 def _analysis_score_from_state(state: GraphState) -> float:
@@ -640,6 +778,8 @@ def _store_recommendation_branch_state(state: GraphState, shop_id: Any) -> str:
 
 
 def _analyze_one_shop(state: GraphState, services: RagSubgraphServices) -> GraphState:
+    if bool(getattr(state["turn"], "extra", {}).get("recommendation_done")):
+        return state
     branch_id = state.get("branch_id")  # type: ignore[typeddict-item]
     if branch_id is not None:
         cached_state = _RECOMMENDATION_BRANCH_CACHE.pop(str(branch_id), None)
@@ -669,6 +809,10 @@ def _analyze_one_shop(state: GraphState, services: RagSubgraphServices) -> Graph
         "summary": str(analysis_turn.extra.get("route_reason") or analysis_turn.extra.get("recommendation_analysis_reason") or "shop_analysis"),
     }
     state["shop_analyses"] = list(state.get("shop_analyses", []) or []) + [analysis]
+    turn_extra = dict(getattr(state["turn"], "extra", {}) or {})
+    turn_extra["recommendation_index"] = int(turn_extra.get("recommendation_index", 0) or 0) + 1
+    turn_extra["recommendation_last_shop_id"] = shop_id
+    state["turn"] = state["turn"].model_copy(update={"extra": turn_extra})
     runtime = state["runtime"]
     metrics = dict(runtime.metrics)
     metrics["shop_analysis_count"] = len(state["shop_analyses"])
@@ -677,6 +821,8 @@ def _analyze_one_shop(state: GraphState, services: RagSubgraphServices) -> Graph
 
 
 def _reduce_shop_results(state: GraphState) -> GraphState:
+    if bool(getattr(state["turn"], "extra", {}).get("recommendation_done")):
+        return _ensure_rag_result(state)
     analyses = list(state.get("shop_analyses", []) or [])
     if not analyses:
         return _ensure_rag_result(state)
@@ -711,6 +857,17 @@ def _reduce_shop_results(state: GraphState) -> GraphState:
     return _ensure_rag_result(state)
 
 
+def _route_recommendation_after_reduce(state: GraphState) -> str:
+    if bool(getattr(state["turn"], "extra", {}).get("recommendation_done")):
+        return "finalize_recommendation"
+    turn_extra = dict(getattr(state["turn"], "extra", {}) or {})
+    candidates = list(turn_extra.get("recommendation_candidates") or _recommendation_candidate_shop_ids(state))
+    index = int(turn_extra.get("recommendation_index", 0) or 0)
+    if index < len(candidates):
+        return "dispatch_shop_analysis"
+    return "finalize_recommendation"
+
+
 def _dispatch_recommendation_send(state: GraphState):
     candidate_shop_ids = _recommendation_candidate_shop_ids(state)
     if not candidate_shop_ids:
@@ -731,31 +888,59 @@ def _execute_recommendation_pipeline(state: GraphState, services: RagSubgraphSer
     candidate_shop_ids = _recommendation_candidate_shop_ids(state)
     if not candidate_shop_ids:
         state = _analyze_one_shop(state, services)
-        return _reduce_shop_results(state)
+        state = _reduce_shop_results(state)
+        turn_extra = dict(state["turn"].extra)
+        turn_extra["recommendation_done"] = True
+        turn_extra["recommendation_index"] = len(candidate_shop_ids)
+        state["turn"] = state["turn"].model_copy(update={"extra": turn_extra})
+        return state
     turn = state["turn"]
     routing = getattr(turn, "routing_contract", None)
     base_state = clone_graph_state(state)
     analyses: list[dict[str, Any]] = []
     max_rounds = int(state.get("runtime_context", {}).get("recommendation_expand_max_rounds", len(candidate_shop_ids)) or len(candidate_shop_ids))
-    for shop_id in candidate_shop_ids[: max(1, max_rounds)]:
-        branch_state = _prepare_recommendation_branch_state(base_state, shop_id)
-        branch_state = _analyze_one_shop(branch_state, services)
-        analysis = list(branch_state.get("shop_analyses", []) or [])[-1] if branch_state.get("shop_analyses") else {}
-        if analysis:
-            analyses.append(dict(analysis))
+    branch_shop_ids = candidate_shop_ids[: max(1, max_rounds)]
+    if branch_shop_ids:
+        def _run_branch(shop_id: int) -> dict[str, Any] | None:
+            branch_state = _prepare_recommendation_branch_state(base_state, shop_id)
+            branch_state = _analyze_one_shop(branch_state, services)
+            if branch_state.get("shop_analyses"):
+                analysis = list(branch_state.get("shop_analyses", []) or [])[-1]
+                return dict(analysis) if analysis else None
+            return None
+
+        max_workers = min(max(1, len(branch_shop_ids)), 8)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {executor.submit(_run_branch, shop_id): shop_id for shop_id in branch_shop_ids}
+            for future in as_completed(futures):
+                try:
+                    analysis = future.result()
+                except Exception:
+                    continue
+                if analysis:
+                    analyses.append(dict(analysis))
     if not analyses:
         state = _analyze_one_shop(state, services)
-        return _reduce_shop_results(state)
+        state = _reduce_shop_results(state)
+        turn_extra = dict(state["turn"].extra)
+        turn_extra["recommendation_done"] = True
+        turn_extra["recommendation_index"] = len(candidate_shop_ids)
+        state["turn"] = state["turn"].model_copy(update={"extra": turn_extra})
+        return state
     state["shop_analyses"] = analyses
     state = _reduce_shop_results(state)
     if routing is not None:
         state["turn"] = state["turn"].model_copy(update={"routing_contract": routing})
+    turn_extra = dict(state["turn"].extra)
+    turn_extra["recommendation_done"] = True
+    turn_extra["recommendation_index"] = len(candidate_shop_ids)
+    state["turn"] = state["turn"].model_copy(update={"extra": turn_extra})
     return state
 
 
 def _finalize_recommendation(state: GraphState) -> GraphState:
-    state = _reduce_shop_results(state)
     state = _mark_stage(state, "recommendation", "completed", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])), detail={"branch": "recommendation"})
+    state = _ensure_rag_result(state)
     return state
 
 
@@ -848,6 +1033,22 @@ def _build_rag_graph(services: RagSubgraphServices):
     return graph.compile()
 
 
+def _build_understand_turn_graph(services: UnderstandTurnServices):
+    graph = StateGraph(GraphState)  # type: ignore[type-var]
+    graph.add_node("parse_intent_slots", lambda state: services.parse_intent_slots(_prepare_understand_turn(state)))
+    graph.add_node("resolve_reference", lambda state: services.resolve_reference(state))
+    graph.add_node("ambiguity_check", lambda state: services.ambiguity_check(state))
+    graph.add_node("rag_gate", lambda state: services.rag_gate(state))
+    graph.add_node("finalize_understand_turn", lambda state: _finalize_understand_turn(state, services))
+    graph.set_entry_point("parse_intent_slots")
+    graph.add_edge("parse_intent_slots", "resolve_reference")
+    graph.add_edge("resolve_reference", "ambiguity_check")
+    graph.add_edge("ambiguity_check", "rag_gate")
+    graph.add_edge("rag_gate", "finalize_understand_turn")
+    graph.add_edge("finalize_understand_turn", END)
+    return graph.compile()
+
+
 def _build_plan_execute_graph(services: PlanExecuteSubgraphServices):
     graph = StateGraph(GraphState)  # type: ignore[type-var]
     graph.add_node("planner_node", _prepare_plan_execute)
@@ -884,26 +1085,25 @@ def _build_tool_graph(services: ToolSubgraphServices):
 def _build_recommendation_graph(services: RagSubgraphServices):
     graph = StateGraph(GraphState)  # type: ignore[type-var]
     graph.add_node("prepare_recommendation", _prepare_recommendation)
-    graph.add_node(
-        "recommendation_executor",
-        lambda state: (
-            lambda result: {
-                "shop_analyses": list(result.get("shop_analyses", []) or []),
-                "runtime": result["runtime"],
-                "turn": result["turn"],
-            }
-        )(_execute_recommendation_pipeline(clone_graph_state(state), services)),
-    )
+    graph.add_node("dispatch_shop_analysis", lambda state: clone_graph_state(state))
+    graph.add_node("analyze_one_shop", lambda state: _execute_recommendation_pipeline(clone_graph_state(state), services))
+    graph.add_node("reduce_shop_results", _reduce_shop_results)
     graph.add_node("finalize_recommendation", _finalize_recommendation)
     graph.set_entry_point("prepare_recommendation")
-    graph.add_edge("prepare_recommendation", "recommendation_executor")
-    graph.add_edge("recommendation_executor", "finalize_recommendation")
+    graph.add_edge("prepare_recommendation", "dispatch_shop_analysis")
+    graph.add_edge("dispatch_shop_analysis", "analyze_one_shop")
+    graph.add_edge("analyze_one_shop", "reduce_shop_results")
+    graph.add_edge("reduce_shop_results", "finalize_recommendation")
     graph.add_edge("finalize_recommendation", END)
     return graph.compile()
 
 
 def build_rag_graph(services: RagSubgraphServices):
     return _graph_cached("rag", services, lambda: _build_rag_graph(services))
+
+
+def build_understand_turn_graph(services: UnderstandTurnServices):
+    return _graph_cached("understand_turn", services, lambda: _build_understand_turn_graph(services))
 
 
 def build_plan_execute_graph(services: PlanExecuteSubgraphServices):
@@ -933,6 +1133,15 @@ def describe_rag_graph_topology() -> dict[str, Any]:
         "terminal": _RAG_TOPOLOGY.terminal,
         "nodes": list(_RAG_TOPOLOGY.nodes),
         "edges": [tuple(edge) for edge in _RAG_TOPOLOGY.edges],
+    }
+
+
+def describe_understand_turn_graph_topology() -> dict[str, Any]:
+    return {
+        "entry_point": _UNDERSTAND_TOPOLOGY.entry_point,
+        "terminal": _UNDERSTAND_TOPOLOGY.terminal,
+        "nodes": list(_UNDERSTAND_TOPOLOGY.nodes),
+        "edges": [tuple(edge) for edge in _UNDERSTAND_TOPOLOGY.edges],
     }
 
 
@@ -966,6 +1175,13 @@ def describe_recommendation_graph_topology() -> dict[str, Any]:
 def export_rag_graph_mermaid() -> str:
     lines = ["graph TD"]
     for left, right in _RAG_TOPOLOGY.edges:
+        lines.append(f"  {left} --> {right}")
+    return "\n".join(lines)
+
+
+def export_understand_turn_graph_mermaid() -> str:
+    lines = ["graph TD"]
+    for left, right in _UNDERSTAND_TOPOLOGY.edges:
         lines.append(f"  {left} --> {right}")
     return "\n".join(lines)
 

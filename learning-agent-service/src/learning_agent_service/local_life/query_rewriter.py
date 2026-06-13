@@ -7,6 +7,7 @@ from typing import Any
 
 from learning_agent_service.domain.utils import as_mapping as _as_mapping, clean_text as _clean_text, coerce_float as _coerce_float
 
+from .context_recovery import recover_follow_up_context
 from .schemas import LocationNorm, QueryUnderstandingResult, TimeNorm
 
 _CATEGORY_KEYWORDS: tuple[tuple[str, str], ...] = (
@@ -272,6 +273,11 @@ def normalize_query(
     model_price = _as_mapping(model_hint.get("price"))
     text = (raw_query or "").strip()
     compact = re.sub(r"\s+", "", text)
+    recovery = recover_follow_up_context(
+        raw_query,
+        client_context=client_context,
+        session_context=session_context,
+    )
     now = _now_from_context(client_context, session_context)
     city = _extract_city(compact, client_context, session_context)
     category = _extract_category(compact, client_context, session_context)
@@ -283,6 +289,12 @@ def normalize_query(
     min_price, max_price, target_price, price_rewrite = _extract_price(compact)
     preferences, avoid, preference_rewrite = _extract_preferences(compact)
     scene = _extract_scene(compact)
+    if recovery.inherited_constraints.get("city") and not city:
+        city = _clean_text(recovery.inherited_constraints.get("city"))
+    if recovery.inherited_constraints.get("category") and not category:
+        category = _clean_text(recovery.inherited_constraints.get("category"))
+    if recovery.inherited_constraints.get("scene") and not scene:
+        scene = _clean_text(recovery.inherited_constraints.get("scene"))
 
     model_city = _clean_text(model_hint.get("city")) or _clean_text(model_location.get("city"))
     model_category = _clean_text(model_hint.get("category"))
@@ -309,6 +321,12 @@ def normalize_query(
         shop_query = model_shop_query
     if model_scene:
         scene = model_scene
+    if recovery.follow_up_kind in {"intent_ellipsis", "constraint_inheritance"}:
+        shop_query = None
+    elif recovery.follow_up_kind == "comparison_completion":
+        shop_query = recovery.anchor_shop.name if recovery.anchor_shop and recovery.anchor_shop.name else None
+    elif recovery.follow_up_kind == "entity_reference" and not shop_query:
+        shop_query = recovery.anchor_shop.name if recovery.anchor_shop and recovery.anchor_shop.name else None
 
     if model_location:
         location_norm = location_norm.model_copy(
@@ -426,11 +444,18 @@ def normalize_query(
     if time_norm.type:
         rewritten_constraints.append(f"时间:{time_phrase or time_norm.type}")
     if category_phrase:
-        rewritten_constraints.append(f"类别:{category_phrase}")
+        rewritten_constraints.append(f"??:{category_phrase}")
     if shop_query:
-        rewritten_constraints.append(f"店名:{shop_query}")
+        rewritten_constraints.append(f"??:{shop_query}")
+    if recovery.comparison_targets:
+        rewritten_constraints.extend(
+            f"????:{item.name}"
+            for item in recovery.comparison_targets
+            if item.name
+        )
     confidence = min(0.98, 0.35 + 0.1 * len(rewritten_constraints))
     confidence = min(0.98, max(confidence, model_confidence))
+    confidence = min(0.98, max(confidence, recovery.confidence))
     return QueryUnderstandingResult(
         normalized_query=normalized_query,
         semantic_query=semantic_query.strip(),
@@ -459,5 +484,10 @@ def normalize_query(
             "model_hint": dict(model_hint),
             "model_route_reason": model_route_reason,
             "rewrite_source": "model+rule" if model_hint else "rule",
+            "context_recovery": recovery.to_dict(),
+            "follow_up_kind": recovery.follow_up_kind,
+            "comparison_targets": [item.name for item in recovery.comparison_targets if item.name],
+            "inherited_constraints": dict(recovery.inherited_constraints),
+            "promoted_intent": recovery.promoted_intent,
         },
     )

@@ -52,10 +52,15 @@ class ToolErrorClassifierTestCase(unittest.TestCase):
         )
 
         self.assertEqual(timeout.category, "timeout")
+        self.assertTrue(timeout.retryable)
         self.assertEqual(empty_result.category, "empty_result")
+        self.assertFalse(empty_result.retryable)
         self.assertEqual(permission_error.category, "permission_error")
+        self.assertFalse(permission_error.retryable)
         self.assertEqual(invalid_params.category, "invalid_params")
+        self.assertFalse(invalid_params.retryable)
         self.assertEqual(service_unavailable.category, "service_unavailable")
+        self.assertTrue(service_unavailable.retryable)
 
 
 if __name__ == "__main__":
