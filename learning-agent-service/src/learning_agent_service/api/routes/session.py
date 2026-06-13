@@ -19,6 +19,8 @@ def register_session_routes(router: APIRouter, service: LearningAgentService) ->
         except RuntimeError as exc:
             raise_http_error(exc, status_code=503, default_code="LEARN-5600", stage="session_state")
 
+
+def register_session_history_routes(router: APIRouter, service: LearningAgentService) -> None:
     @router.get("/internal/v1/session/{session_id}/state/history")
     async def get_session_state_history(
         session_id: str,

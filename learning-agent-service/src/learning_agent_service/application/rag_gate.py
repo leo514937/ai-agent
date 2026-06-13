@@ -14,85 +14,12 @@ ALLOW: RagVoteValue = "allow"
 DENY: RagVoteValue = "deny"
 UNCERTAIN: RagVoteValue = "uncertain"
 
-_GREETING_PATTERNS = (
-    "你好",
-    "您好",
-    "嗨",
-    "hello",
-    "hi",
-    "hey",
-    "早上好",
-    "下午好",
-    "晚上好",
-)
-_SOCIAL_PATTERNS = (
-    "谢谢",
-    "多谢",
-    "感谢",
-    "辛苦了",
-    "麻烦了",
-)
-_FAREWELL_PATTERNS = (
-    "再见",
-    "拜拜",
-    "回头见",
-    "晚安",
-)
-_NEED_PRESENCE_PATTERNS = (
-    "在吗",
-    "有人吗",
-    "还在吗",
-    "在线吗",
-)
-_QUESTION_PATTERNS = (
-    "怎么",
-    "如何",
-    "为什么",
-    "区别",
-    "原理",
-    "流程",
-    "实现",
-    "分析",
-    "解决",
-    "问题",
-    "报错",
-    "错误",
-    "异常",
-    "代码",
-    "RAG",
-    "rag",
-    "AOP",
-    "Spring",
-    "ThreadPool",
-    "workflow",
-    "路由",
-    "检索",
-    "记忆",
-    "流式",
-    "门禁",
-    "刚才",
-    "之前",
-    "聊过",
-    "说过",
-    "记得",
-    "上下文",
-)
-_PROFILE_PATTERNS = (
-    "你有什么功能",
-    "有什么功能",
-    "你有什么工能",
-    "有什么工能",
-    "能做什么",
-    "可以做什么",
-    "你会什么",
-    "你有什么能力",
-    "你的功能",
-    "介绍一下你",
-    "你是谁",
-    "你是什么",
-    "怎么使用你",
-    "怎么用你",
-)
+_GREETING_PATTERNS = ("你好", "您好", "嗨", "hello", "hi", "hey")
+_SOCIAL_PATTERNS = ("谢谢", "感谢", "辛苦了")
+_FAREWELL_PATTERNS = ("再见", "拜拜")
+_NEED_PRESENCE_PATTERNS = ("在吗", "还在吗")
+_QUESTION_PATTERNS = ("怎么", "如何", "为什么", "区别", "问题", "报错")
+_PROFILE_PATTERNS = ("你有什么功能", "能做什么", "你会什么", "你是谁", "怎么用你")
 _EXPLAIN_INTENTS = {
     IntentType.EXPLAIN,
     IntentType.COMPARE,
@@ -185,28 +112,12 @@ def classify_rag_rule(request: RagGateRequest) -> RagGateVote:
             response_kind="greeting",
         )
 
-    if _contains_any(text, _NEED_PRESENCE_PATTERNS) or _contains_any(lowered, _NEED_PRESENCE_PATTERNS):
-        return RagGateVote(
-            vote=DENY,
-            reason="need_presence",
-            confidence=0.96,
-            response_kind="greeting",
-        )
-
     if _contains_any(text, _SOCIAL_PATTERNS) or _contains_any(lowered, _SOCIAL_PATTERNS):
         return RagGateVote(
             vote=DENY,
             reason="social_chitchat",
             confidence=0.95,
             response_kind="thanks",
-        )
-
-    if _contains_any(text, _FAREWELL_PATTERNS) or _contains_any(lowered, _FAREWELL_PATTERNS):
-        return RagGateVote(
-            vote=DENY,
-            reason="farewell",
-            confidence=0.95,
-            response_kind="farewell",
         )
 
     if _looks_like_profile_query(text, lowered):
@@ -218,8 +129,6 @@ def classify_rag_rule(request: RagGateRequest) -> RagGateVote:
         )
 
     has_question_signal = any(marker in text or marker in lowered for marker in _QUESTION_PATTERNS) or "?" in text or "？" in text
-    has_explain_intent = request.intent in _EXPLAIN_INTENTS and request.intent_confidence >= 0.55
-    has_context_anchor = bool(request.current_topic or request.recent_entities or request.history_summary)
 
     if has_question_signal:
         return RagGateVote(
@@ -228,18 +137,18 @@ def classify_rag_rule(request: RagGateRequest) -> RagGateVote:
             confidence=0.86,
         )
 
-    if has_explain_intent and (_contains_any(text, _QUESTION_PATTERNS) or len(text) >= 8 or has_context_anchor):
-        return RagGateVote(
-            vote=ALLOW,
-            reason="contentful_explain_like_turn",
-            confidence=min(max(request.intent_confidence, 0.72), 0.95),
-        )
-
     if pending_clarification is not None and _matches_pending_clarification(text, pending_clarification):
         return RagGateVote(
             vote=ALLOW,
             reason="pending_clarification",
             confidence=0.9,
+        )
+
+    if any(token in text for token in ("附近", "周边", "推荐", "几家", "哪家", "什么店", "好吃的", "怎么样", "怎么走", "导航")):
+        return RagGateVote(
+            vote=ALLOW,
+            reason="local_life_intent_signal",
+            confidence=0.85,
         )
 
     if len(content_tokens) <= 1 or len(text) <= 6:
@@ -250,18 +159,10 @@ def classify_rag_rule(request: RagGateRequest) -> RagGateVote:
             response_kind="low_info",
         )
 
-    if len(text) >= 12 or has_context_anchor:
-        return RagGateVote(
-            vote=UNCERTAIN,
-            reason="needs_llm_confirmation",
-            confidence=0.45,
-        )
-
     return RagGateVote(
-        vote=DENY,
-        reason="low_information",
-        confidence=0.72,
-        response_kind="low_info",
+        vote=UNCERTAIN,
+        reason="needs_llm_confirmation",
+        confidence=0.45,
     )
 
 

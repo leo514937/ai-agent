@@ -258,7 +258,7 @@ def extract_slots(
     category = _extract_category(compact, session_context)
     shop_query = _extract_shop_query(text, session_context)
     city = (
-        understanding.location_norm.city
+        (understanding.location_norm.city if understanding.location_norm else None)
         or understanding.extra.get("city")
         or client_context.get("city")
         or session_context.get("current_city")

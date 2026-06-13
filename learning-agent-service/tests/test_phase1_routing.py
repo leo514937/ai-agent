@@ -4,11 +4,9 @@ import unittest
 
 import _bootstrap  # noqa: F401
 
-from learning_agent_service.application.router import (
-    build_evidence_quality,
-    build_initial_routing_decision,
-    ensure_retrieval_plan,
-)
+from learning_agent_service.application.router.phase0_quality import build_initial_routing_decision
+from learning_agent_service.application.router.phase2_slots import build_evidence_quality
+from learning_agent_service.application.router.phase5_retrieval import ensure_retrieval_plan
 from learning_agent_service.domain import (
     ChatTurnCommand,
     EvidenceItem,
@@ -44,7 +42,7 @@ class Phase1RoutingTestCase(unittest.TestCase):
 
         constraints = routing.extra["required_facets_source_constraints"]
         self.assertEqual(constraints["scene_fit"], "static_rag")
-        self.assertEqual(constraints["recommendation_reason"], "static_rag")
+        self.assertEqual(constraints["recommendation_reason"], "mixed")
         self.assertEqual(constraints["shop_detail"], "static_rag")
         self.assertEqual(constraints["open_status"], "dynamic_tool")
         self.assertEqual(constraints["coupon"], "dynamic_tool")

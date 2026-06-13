@@ -59,7 +59,7 @@ def normalize_tool_result(
     payload = dict(raw_output or {})
     tool_name = str(tool_name or "").strip()
     facet = _tool_facet(tool_name)
-    normalized_status = str(status or "").strip().lower()
+    normalized_status: Any = str(status or "").strip().lower()
     normalized_error_code = str(error_code or "").strip() or None
     normalized_error_message = str(error_message or "").strip() or None
 

@@ -38,6 +38,14 @@ def _string_list(value: Any) -> tuple[str, ...]:
     return tuple(ordered)
 
 
+def _query_text(value: Any, fallback: str = "") -> str:
+    if isinstance(value, str):
+        return value
+    if value is None:
+        return fallback
+    return _clean_text(value) or fallback
+
+
 @dataclass(frozen=True)
 class GoldenCase:
     case_id: str
@@ -86,10 +94,11 @@ class GoldenCase:
             or raw.get("forbidden_output")
             or expected.get("not_contains")
         )
-        query = _clean_text(raw.get("query") or (turns_tuple[-1] if turns_tuple else ""))
+        raw_query = raw.get("query")
+        query = _query_text(raw_query, fallback=_query_text(turns_tuple[-1] if turns_tuple else ""))
         return cls(
-            case_id=_clean_text(raw.get("case_id") or raw.get("id") or query or "case"),
-            description=_clean_text(raw.get("description")),
+            case_id=_clean_text(raw.get("case_id") or raw.get("id") or query) or "case",
+            description=_clean_text(raw.get("description")) or "",
             turns=turns_tuple,
             query=query,
             session_context=_as_mapping(raw.get("session_context")),
@@ -154,7 +163,7 @@ def evaluate_golden_case(case: GoldenCase, result: Mapping[str, Any] | HarnessRu
         actual_response_mode = result.actual_response_mode
         failures = list(result.failures or [])
     else:
-        actual_answer = _clean_text(result.get("actual_answer") or result.get("answer_text"))
+        actual_answer = _clean_text(result.get("actual_answer") or result.get("answer_text")) or ""
         actual_trace = dict(result.get("actual_trace") or {})
         actual_response_mode = _clean_text(result.get("actual_response_mode") or "unknown") or "unknown"
         failures = list(result.get("failures") or [])
@@ -406,7 +415,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         for mode_id in res.actual_trace.get("detected_failures", []):
             detected_counter[mode_id] += 1
 
-    output = {
+    output: dict[str, Any] = {
         "report": {
             "total_cases": report.total_cases,
             "passed_cases": report.passed_cases,

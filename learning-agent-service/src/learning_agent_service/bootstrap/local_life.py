@@ -11,8 +11,8 @@ from learning_agent_service.application.dependencies_impl import OpenAIEmbedding
 from learning_agent_service.config.settings_impl import Settings, get_settings
 from learning_agent_service.infrastructure.db.openai_client import build_openai_runtime
 from learning_agent_service.infrastructure.db.qdrant import build_qdrant_runtime
-from learning_agent_service.rag.retrieval import validate_qdrant_collection_shape
-from learning_agent_service.rag.seed_parent_child import (
+from learning_agent_service.rag.retrieval.shared import validate_qdrant_collection_shape
+from learning_agent_service.rag.seed.core import (
     _format_seed_summary_lines,
     seed_local_life_hybrid_knowledge_from_settings,
     seed_local_life_parent_child_knowledge_from_settings,

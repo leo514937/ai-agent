@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .retrieval.shared import *# noqa: F401,F403,F405
+from .retrieval.shared import _serialize_final_filters, _sanitize_trace_text, _dedupe_queries
 from .retrieval.dense import *# noqa: F401,F403,F405
 from .retrieval.sparse import *# noqa: F401,F403,F405
 from .retrieval.metadata import *# noqa: F401,F403,F405
@@ -8,6 +9,10 @@ from .retrieval.reranker import *# noqa: F401,F403,F405
 from .rewrite import QueryRewriteService
 from .models import HybridRecallResult, RetrievalTrace, RetrievalTraceItem
 import asyncio
+import logging
+
+_LOGGER = logging.getLogger(__name__)
+from typing import cast
 
 
 
@@ -56,7 +61,17 @@ class HybridRetrieverService:
         started_at = time.perf_counter()
         route_hits, route_stats = self._collect_route_hits(plan)
         rrf_started_at = time.perf_counter()
-        fused_hits = self._limit_fused_hits(self._fusion.fuse(route_hits))
+        query_intent = str(plan.extra.get("intent") or "").strip()
+        query_slots = dict(plan.extra.get("context_slots", {}))
+        if not query_slots:
+            query_slots["query"] = plan.extra.get("raw_query", "")
+        fused_hits = self._limit_fused_hits(
+            self._fusion.fuse(
+                route_hits,
+                query_intent=query_intent or None,
+                query_slots=query_slots,
+            )
+        )
         rrf_latency_ms = (time.perf_counter() - rrf_started_at) * 1000.0
         rerank_started_at = time.perf_counter()
         reranked_hits = self._rerank(plan, fused_hits)
@@ -69,7 +84,13 @@ class HybridRetrieverService:
                 plan = hyde_plan
                 route_hits, route_stats = self._collect_route_hits(plan)
                 rrf_started_at = time.perf_counter()
-                fused_hits = self._limit_fused_hits(self._fusion.fuse(route_hits))
+                fused_hits = self._limit_fused_hits(
+                    self._fusion.fuse(
+                        route_hits,
+                        query_intent=query_intent or None,
+                        query_slots=query_slots,
+                    )
+                )
                 rrf_latency_ms = (time.perf_counter() - rrf_started_at) * 1000.0
                 rerank_started_at = time.perf_counter()
                 reranked_hits = self._rerank(plan, fused_hits)
@@ -82,7 +103,13 @@ class HybridRetrieverService:
                 plan = rewritten_plan
                 route_hits, route_stats = self._collect_route_hits(plan)
                 rrf_started_at = time.perf_counter()
-                fused_hits = self._limit_fused_hits(self._fusion.fuse(route_hits))
+                fused_hits = self._limit_fused_hits(
+                    self._fusion.fuse(
+                        route_hits,
+                        query_intent=query_intent or None,
+                        query_slots=query_slots,
+                    )
+                )
                 rrf_latency_ms = (time.perf_counter() - rrf_started_at) * 1000.0
                 rerank_started_at = time.perf_counter()
                 reranked_hits = self._rerank(plan, fused_hits)
@@ -98,6 +125,32 @@ class HybridRetrieverService:
             if stats.get("fallback_reason")
         }
         total_latency_ms = (time.perf_counter() - started_at) * 1000.0
+
+        all_degraded = bool(degraded_routes)
+        all_empty = not bool(resolved_reranked_hits)
+        working_routes = [name for name, stats in route_stats.items() if stats.get("working")]
+        failed_routes = [name for name, stats in route_stats.items() if stats.get("state") == "failed"]
+
+        if all_empty:
+            retrieval_mode = "empty"
+            confidence = 0.0
+            quality_hint = "no_results"
+        elif all_degraded and not working_routes:
+            retrieval_mode = "heuristic_fallback"
+            confidence = 0.3
+            quality_hint = "all_routes_degraded"
+        elif all_degraded:
+            retrieval_mode = "degraded"
+            confidence = 0.6
+            quality_hint = "partial_degradation"
+        elif working_routes:
+            retrieval_mode = "normal"
+            confidence = 0.9
+            quality_hint = ""
+        else:
+            retrieval_mode = "normal"
+            confidence = 0.8
+            quality_hint = ""
 
         metrics = {
             "dense_hit_count": len(resolved_route_hits.get("dense", ())),
@@ -162,6 +215,10 @@ class HybridRetrieverService:
             fused_hits=resolved_fused_hits,
             reranked_hits=tuple(resolved_reranked_hits),
             degraded_routes=degraded_routes,
+            degraded=all_degraded,
+            retrieval_mode=retrieval_mode,
+            confidence=confidence,
+            quality_hint=quality_hint,
             metrics=metrics,
             query_plan=plan,
             debug_trace=debug_trace,
@@ -184,11 +241,11 @@ class HybridRetrieverService:
         return "local_life_hybrid"
 
     def _collect_route_hits(self, plan: RetrievalPlan) -> tuple[dict[str, Sequence[RecallHit]], dict[str, dict[str, Any]]]:
-        route_specs = (
+        route_specs = cast(Sequence[tuple[str, RetrieverRoute]], (
             ("dense", self._dense_retriever),
             ("sparse", self._sparse_retriever),
             ("metadata", self._metadata_retriever),
-        )
+        ))
         try:
             route_results = asyncio.run(self._collect_route_hits_async(route_specs, plan))
         except RuntimeError:
@@ -214,7 +271,7 @@ class HybridRetrieverService:
         settled = await asyncio.gather(*coroutines, return_exceptions=True)
         route_results: dict[str, tuple[Sequence[RecallHit], dict[str, Any]]] = {}
         for (route_name, _retriever), outcome in zip(route_specs, settled):
-            if isinstance(outcome, Exception):
+            if isinstance(outcome, BaseException):
                 _LOGGER.exception("rag_route_failed", extra={"route": route_name})
                 started_at = time.perf_counter()
                 route_results[route_name] = (

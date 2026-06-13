@@ -36,7 +36,7 @@ try:  # pragma: no cover - optional runtime dependency
     from sqlalchemy import select
     from sqlalchemy.exc import IntegrityError
 except ImportError:  # pragma: no cover - depends on runtime installation.
-    select = None
+    select: Any = None
     IntegrityError = Exception
 
 
@@ -46,6 +46,19 @@ def _ensure_aware(dt: datetime | None) -> datetime | None:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+def _is_active_at(model: Any, now: datetime) -> bool:
+    eff_from = _ensure_aware(getattr(model, "effective_from", None))
+    if eff_from is not None and eff_from > now:
+        return False
+    eff_to = _ensure_aware(getattr(model, "effective_to", None))
+    if eff_to is not None and eff_to <= now:
+        return False
+    val_until = _ensure_aware(getattr(model, "valid_until", None))
+    if val_until is not None and val_until <= now:
+        return False
+    return True
 
 
 def _enum_value(value: Any) -> str:
@@ -339,6 +352,7 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
                 if attempt == 0:
                     continue
                 raise
+        raise RuntimeError("Unreachable")
 
     def upsert(self, record: MemoryRecord) -> MemoryRecord:
         return self.create(record)
@@ -383,8 +397,7 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
         return [
             _model_to_record(model)
             for model in models
-            if (_ensure_aware(model.effective_from) is None or _ensure_aware(model.effective_from) <= now)
-            and (_ensure_aware(model.effective_to) is None or _ensure_aware(model.effective_to) > now)
+            if _is_active_at(model, now)
         ]
 
     def iter_reindexable_records(self) -> list[MemoryRecord]:
@@ -410,11 +423,7 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
         models.sort(key=lambda item: (item.importance, item.confidence, item.updated_at), reverse=True)
         records: list[MemoryRecord] = []
         for model in models:
-            if (_ensure_aware(model.effective_from) is not None and _ensure_aware(model.effective_from) > now):
-                continue
-            if (_ensure_aware(model.effective_to) is not None and _ensure_aware(model.effective_to) <= now):
-                continue
-            if (_ensure_aware(model.valid_until) is not None and _ensure_aware(model.valid_until) <= now):
+            if not _is_active_at(model, now):
                 continue
             records.append(_model_to_record(model))
         return records
@@ -443,9 +452,7 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
         return [
             _model_to_record(model)
             for model in models
-            if (_ensure_aware(model.effective_from) is None or _ensure_aware(model.effective_from) <= now)
-            and (_ensure_aware(model.effective_to) is None or _ensure_aware(model.effective_to) > now)
-            and (_ensure_aware(model.valid_until) is None or _ensure_aware(model.valid_until) > now)
+            if _is_active_at(model, now)
         ]
 
     def search(
@@ -572,6 +579,7 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
             source.effective_to = _utcnow()
             source.updated_at = _utcnow()
             session.add(source)
+            eff_to = _ensure_aware(source.effective_to)
             edge = self._create_edge_row(
                 source_memory_id=memory_id,
                 target_memory_id=superseded_by,
@@ -580,7 +588,7 @@ class MemoryRecordRepository(SqlAlchemyRepositoryBase):
                 extra={
                     "source_status": source.status,
                     "target_status": target.status if target is not None else None,
-                    "effective_to": _ensure_aware(source.effective_to).isoformat() if _ensure_aware(source.effective_to) else None,
+                    "effective_to": eff_to.isoformat() if eff_to else None,
                 },
             )
             session.add(edge)

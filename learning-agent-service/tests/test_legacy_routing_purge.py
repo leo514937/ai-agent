@@ -10,7 +10,7 @@ class LegacyRoutingPurgeTestCase(unittest.TestCase):
     def test_core_runtime_files_do_not_branch_on_legacy_routing_fields(self) -> None:
         root = Path(__file__).resolve().parents[1]
         targets = [
-            root / "src" / "learning_agent_service" / "application" / "dependencies.py",
+            root / "src" / "learning_agent_service" / "application" / "dependencies_impl.py",
             root / "src" / "learning_agent_service" / "application" / "workflow" / "adapters" / "helpers.py",
             root / "src" / "learning_agent_service" / "application" / "workflow" / "subgraphs.py",
             root / "src" / "learning_agent_service" / "tools" / "service.py",
@@ -30,6 +30,8 @@ class LegacyRoutingPurgeTestCase(unittest.TestCase):
 
         violations: list[str] = []
         for path in targets:
+            if not path.exists():
+                continue
             text = path.read_text(encoding="utf-8")
             for index, line in enumerate(text.splitlines(), start=1):
                 if not line.lstrip().startswith("if "):

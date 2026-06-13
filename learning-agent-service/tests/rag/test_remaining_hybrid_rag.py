@@ -5,7 +5,9 @@ from types import SimpleNamespace
 from learning_agent_service.config import Settings
 from learning_agent_service.rag.defaults import DEFAULT_KNOWLEDGE_CHUNKS
 from learning_agent_service.rag.models import KnowledgeChunk, RecallHit, RetrievalPlan
-from learning_agent_service.rag.retrieval import HybridRetrieverService, ParentChildResolver, ReciprocalRankFusion
+from learning_agent_service.rag.retrieval_service import HybridRetrieverService
+from learning_agent_service.rag.retrieval.dense import ParentChildResolver
+from learning_agent_service.rag.retrieval.reranker import ReciprocalRankFusion
 from learning_agent_service.rag.service import HybridRAGOrchestrator
 from learning_agent_service.rag.retrieval import (
     HeuristicDenseRetriever,

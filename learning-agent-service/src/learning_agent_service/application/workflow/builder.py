@@ -29,30 +29,15 @@ try:
 except Exception:
     pass
 
-from .runner import SequentialWorkflowRunner, _update_phase5_trace
+from .runner import BaseWorkflowRunner, _update_phase5_trace
 from .services import WorkflowServices
 from .state import append_runtime_event as _append_state_runtime_event
 from ...domain.errors import TerminalEvent
 from ...domain.state import GraphState, clone_graph_state
 from ...domain import ChatTurnCommand, build_initial_state
-from ...domain.contracts import PersistentSessionContext
-from ...api.contracts import SseEnvelope
+from ...domain.contracts import PersistentSessionContext, SseEnvelope
 from collections.abc import Iterable, Mapping
-from learning_agent_service.local_life.final_answer_safety import apply_final_answer_safety
-from learning_agent_service.local_life.response_builder.bundle import build_response_bundle
-from learning_agent_service.local_life.business_metrics import business_metrics_collector, QueryMetrics
-from learning_agent_service.local_life.realtime_conflict_resolver import resolve_realtime_conflict, REALTIME_FACETS
-from learning_agent_service.local_life.retry_quality_evaluator import evaluate_retry_quality
-from learning_agent_service.application.router.stages.query_safety import check_query_safety
-from learning_agent_service.application.router.stages.top_level_intent_router import route_top_level_intent
 from .topology import MAIN_GRAPH_TOPOLOGY, describe_langgraph_topology as describe_main_graph_topology, export_langgraph_mermaid as export_main_graph_mermaid
-from ..router import (
-    _build_answer_contract,
-    _build_entity_join_result,
-    _build_source_contract,
-    check_hard_guard,
-    route_execution_mode,
-)
 from .subgraphs import (
     run_load_context_node,
     run_rag_subgraph,
@@ -136,7 +121,7 @@ def _thread_id_from_state(state: Any) -> str | None:
     return text or None
 
 
-class LangGraphWorkflowRunner(SequentialWorkflowRunner):
+class LangGraphWorkflowRunner(BaseWorkflowRunner):
     def __init__(
         self,
         services: WorkflowServices,
@@ -156,12 +141,6 @@ class LangGraphWorkflowRunner(SequentialWorkflowRunner):
         return self._graph
 
     def run_state(self, state):
-        execution_mode = str(getattr(state.get("turn"), "execution_mode", "") or "").strip().lower() if isinstance(state, dict) else ""
-        if execution_mode == "plan_execute":
-            fallback_runner = SequentialWorkflowRunner(services=self.services, workflow_version=self.workflow_version)
-            result = fallback_runner.run_state(state)
-            self._record_checkpoint_fallback(result)
-            return self._annotate_runner_context(result)
         state = self._annotate_runner_context(state)
         if self._is_terminal(state):
             result = self._finalize_terminal(state)
@@ -198,10 +177,6 @@ class LangGraphWorkflowRunner(SequentialWorkflowRunner):
         command: ChatTurnCommand,
         persistent_context: PersistentSessionContext | None = None,
     ) -> Iterable[SseEnvelope]:
-        if str(getattr(command, "execution_mode", "") or "").strip().lower() == "plan_execute":
-            fallback_runner = SequentialWorkflowRunner(services=self.services, workflow_version=self.workflow_version)
-            yield from fallback_runner.run_stream(command, persistent_context=persistent_context)
-            return
         state = build_initial_state(
             command=command,
             workflow_version=self.workflow_version,
@@ -234,7 +209,7 @@ class LangGraphWorkflowRunner(SequentialWorkflowRunner):
         turn = state.get("turn") if isinstance(state, dict) else None
         final_answer = str(getattr(turn, "final_answer", "") or "").strip() if turn is not None else ""
         for event in events:
-            yield LangGraphWorkflowRunner._normalize_emitted_event(event, final_answer)
+            yield LangGraphWorkflowRunner._normalize_emitted_event(event, state, final_answer)
 
     def _run_graph_stream(self, state, graph=None):
         emitted_count = 0
@@ -244,7 +219,11 @@ class LangGraphWorkflowRunner(SequentialWorkflowRunner):
             nonlocal emitted_count
             events = list(state["runtime"].emitted_events)
             for event in events[emitted_count:]:
-                yield self._normalize_emitted_event(event, str(state.get("turn").final_answer or "").strip())
+                yield self._normalize_emitted_event(
+                    event,
+                    state,
+                    str(getattr(state.get("turn"), "final_answer", "") or "").strip(),
+                )
             emitted_count = len(events)
 
         stream = graph.stream(state, config=_build_graph_config(state), stream_mode="values")
@@ -255,27 +234,102 @@ class LangGraphWorkflowRunner(SequentialWorkflowRunner):
         yield from drain_emitted_events()
 
     @staticmethod
-    def _normalize_emitted_event(event, final_answer: str):
+    def _build_final_payload(state, payload_dict: dict[str, Any] | None = None) -> dict[str, Any]:
+        turn = state.get("turn") if isinstance(state, dict) else None
+        runtime = state.get("runtime") if isinstance(state, dict) else None
+        persistent = state.get("persistent") if isinstance(state, dict) else None
+        turn_extra = dict(getattr(turn, "extra", {}) or {}) if turn is not None else {}
+        runtime_metrics = dict(getattr(runtime, "metrics", {}) or {}) if runtime is not None else {}
+        payload = dict(payload_dict or {})
+
+        final_answer = str(payload.get("answer_text") or getattr(turn, "final_answer", "") or "").strip()
+        if final_answer:
+            payload["answer_text"] = final_answer
+
+        citations = payload.get("citations")
+        if not isinstance(citations, list):
+            turn_citations = list(getattr(turn, "citations", []) or []) if turn is not None else []
+            payload["citations"] = [
+                citation.model_dump(mode="json") if hasattr(citation, "model_dump") else dict(citation)
+                for citation in turn_citations
+            ]
+
+        used_tools = payload.get("used_tools")
+        if not isinstance(used_tools, list):
+            tools: list[str] = []
+            tool_result = getattr(turn, "tool_result", None) if turn is not None else None
+            tool_name = str(getattr(tool_result, "tool_name", "") or "").strip()
+            if tool_name:
+                tools.append(tool_name)
+            for item in list(turn_extra.get("tool_results") or []):
+                if isinstance(item, dict):
+                    tool_name = str(item.get("tool_name") or "").strip()
+                    if tool_name and tool_name not in tools:
+                        tools.append(tool_name)
+            payload["used_tools"] = tools
+
+        payload.setdefault("source_mode", turn_extra.get("source_mode"))
+        payload.setdefault("degraded_reason", runtime.degrade_to if runtime is not None else None)
+        payload.setdefault("knowledge_freshness", dict(turn_extra.get("knowledge_freshness") or {}))
+        payload.setdefault("resolved_topic", getattr(persistent, "current_topic", None))
+        payload.setdefault("current_topic", getattr(persistent, "current_topic", None))
+        payload.setdefault("mode", str(turn_extra.get("mode") or "recommend"))
+        payload.setdefault("source", "local-life-agent")
+        payload.setdefault("page", getattr(runtime, "page", None))
+        payload.setdefault("selected_shop_id", turn_extra.get("selected_shop_id") or getattr(persistent, "selected_shop_id", None))
+        routing = getattr(turn, "routing_decision", None) if turn is not None else None
+        payload.setdefault("route_decision", getattr(routing, "required_action", None))
+        payload.setdefault("route_reason", getattr(routing, "route_reason", None))
+        payload.setdefault("current_stage", getattr(turn, "current_stage", None))
+        payload.setdefault("stage_status", getattr(turn, "stage_status", None))
+        payload.setdefault("stage_timeline", [dict(item) for item in (getattr(turn, "stage_timeline", None) or [])])
+        payload.setdefault("cards", list(turn_extra.get("cards") or []))
+        payload.setdefault("shops", list(turn_extra.get("shops") or []))
+        payload.setdefault("vouchers", list(turn_extra.get("vouchers") or []))
+        payload.setdefault("suggested_replies", list(turn_extra.get("suggested_replies") or []))
+        payload.setdefault("next_steps", list(turn_extra.get("next_steps") or []))
+        payload.setdefault("task_chain", list(turn_extra.get("task_chain") or []))
+        payload.setdefault("ranked_candidates", list(turn_extra.get("ranked_candidates") or []))
+        payload.setdefault("fallback", bool(turn_extra.get("fallback")))
+        payload.setdefault("retrieval_strategy", turn_extra.get("retrieval_strategy"))
+        payload.setdefault("grounding_status", turn_extra.get("grounding_status") or "not_grounded")
+        payload.setdefault("retrieval_summary", turn_extra.get("retrieval_summary"))
+        payload.setdefault("memory_used_summary", turn_extra.get("memory_used_summary"))
+        payload.setdefault("memory_updates", dict(turn_extra.get("memory_updates") or {}))
+        payload.setdefault("confidence", getattr(turn, "intent_confidence", 0.0) if turn is not None else 0.0)
+        payload.setdefault("approval_required", bool(turn_extra.get("approval_required")))
+        payload.setdefault("approval_request", dict(turn_extra.get("approval_request") or {}))
+        payload.setdefault("transaction_draft", dict(turn_extra.get("transaction_draft") or {}))
+        payload.setdefault("safety_result", dict(turn_extra.get("safety_result") or {}))
+        payload.setdefault("intent", getattr(turn, "intent", None))
+        payload.setdefault("requested_output_style", getattr(turn, "requested_output_style", None))
+        payload["metrics"] = runtime_metrics
+        payload.setdefault("context", dict(turn_extra.get("context") or {}))
+        payload["context"].setdefault("answer_text", final_answer)
+        payload["context"].setdefault("final_answer", final_answer)
+        payload["context"].setdefault("current_shop", turn_extra.get("current_shop") or getattr(persistent, "current_shop", None))
+        payload["context"].setdefault("selected_shop_name", turn_extra.get("selected_shop_name") or getattr(persistent, "selected_shop_name", None))
+        return payload
+
+    @staticmethod
+    def _normalize_emitted_event(event, state, final_answer: str):
         event_type = getattr(event, "event_type", None)
         if event_type != "final":
             return event
         payload = getattr(event, "payload", None)
         payload_dict = None
-        if hasattr(payload, "model_dump"):
+        if payload is not None and hasattr(payload, "model_dump"):
             payload_dict = payload.model_dump(mode="json")
         elif isinstance(payload, dict):
             payload_dict = dict(payload)
         if not isinstance(payload_dict, dict):
-            return event
-        existing_answer_text = str(payload_dict.get("answer_text") or "").strip()
-        if not existing_answer_text and final_answer:
-            payload_dict["answer_text"] = final_answer
-            existing_answer_text = final_answer
+            payload_dict = {}
+        payload_dict = LangGraphWorkflowRunner._build_final_payload(state, payload_dict)
         metrics = payload_dict.get("metrics")
         if isinstance(metrics, dict):
             answer_quality = dict(metrics.get("answer_quality") or {})
-            if not str(answer_quality.get("final_answer") or "").strip() and existing_answer_text:
-                answer_quality["final_answer"] = existing_answer_text
+            if not str(answer_quality.get("final_answer") or "").strip() and final_answer:
+                answer_quality["final_answer"] = final_answer
             metrics["answer_quality"] = answer_quality
             payload_dict["metrics"] = metrics
         if hasattr(event, "model_copy"):
@@ -355,13 +409,9 @@ def _route_branch(state: GraphState) -> str:
 
 
 def _route_execution_mode(state: GraphState) -> str:
-    routing = _routing_decision(state)
-    if routing is None:
-        return "simple"
-    try:
-        return str(route_execution_mode(routing).execution_mode or "").strip().lower() or "simple"
-    except Exception:
-        return "simple"
+    complexity_router = _turn_extra(state).get("complexity_router") or {}
+    execution_mode = str(complexity_router.get("execution_mode") or "").strip().lower()
+    return execution_mode or "simple"
 
 
 def _update_turn_extra(state: GraphState, **updates: Any) -> GraphState:
@@ -402,126 +452,33 @@ def _rewrite_routing_decision(
     return state
 
 
-def _resolve_target_shop_stage(state: GraphState) -> GraphState:
-    command = route_gate(state)
-    updated = getattr(command, "update", None)
-    if isinstance(updated, dict):
-        state = updated
-    turn_extra = _turn_extra(state)
-    detail = {
-        "branch": _route_branch(state) or None,
-        "execution_mode": _route_execution_mode(state),
-        "target_shop_id": turn_extra.get("target_shop_id"),
-        "candidate_shop_ids": list(turn_extra.get("candidate_shop_ids") or []),
-    }
-    state = _update_turn_extra(
-        state,
-        resolve_target_shop=detail,
-    )
-    state = _update_runtime_metrics(state, resolve_target_shop=detail)
-    return state
+def _resolve_target_shop_stage(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.resolve_target_shop(state)
 
 
-def _clarification_or_reject_stage(state: GraphState) -> GraphState:
-    return _update_turn_extra(
-        state,
-        clarification_or_reject={
-            "branch": _route_branch(state) or None,
-            "execution_mode": _route_execution_mode(state),
-        },
-    )
+def _clarification_or_reject_stage(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.clarification_or_reject(state)
 
 
-def _build_answer_contract_stage(state: GraphState) -> GraphState:
-    turn = state["turn"]
-    routing = _routing_decision(state)
-    entity_join_result = _build_entity_join_result(turn)
-    evidence_quality = getattr(turn, "evidence_quality", None)
-    answer_contract = _build_answer_contract(turn, routing, evidence_quality, entity_join_result)
-    turn_extra = _turn_extra(state)
-    turn_extra["answer_contract"] = answer_contract.model_dump(mode="json")
-    turn_extra["build_answer_contract"] = {
-        "answer_style": getattr(answer_contract, "answer_style", None),
-        "scope_kind": getattr(answer_contract, "scope_kind", None),
-        "required_facets": [str(facet.get("name") or "").strip() for facet in answer_contract.required_facets if str(facet.get("name") or "").strip()],
-    }
-    state["turn"] = turn.model_copy(update={"answer_contract": answer_contract, "extra": turn_extra})
-    state = _update_runtime_metrics(state, build_answer_contract=turn_extra["build_answer_contract"])
-    return state
+def _build_answer_contract_stage(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.build_answer_contract(state)
 
 
-def _build_source_contract_stage(state: GraphState) -> GraphState:
-    turn = state["turn"]
-    routing = _routing_decision(state)
-    turn_extra = _turn_extra(state)
-    answer_contract = getattr(turn, "answer_contract", None)
-    if answer_contract is None:
-        entity_join_result = _build_entity_join_result(turn)
-        answer_contract = _build_answer_contract(turn, routing, getattr(turn, "evidence_quality", None), entity_join_result)
-    selected_shop_id = turn_extra.get("selected_shop_id") or turn_extra.get("target_shop_id")
-    try:
-        selected_shop_id = int(selected_shop_id) if selected_shop_id not in (None, "") else None
-    except (TypeError, ValueError):
-        selected_shop_id = None
-    current_shop = str(turn_extra.get("current_shop") or "").strip() or None
-    explicit_query_shop = str(turn_extra.get("explicit_query_shop") or "").strip() or None
-    source_contract = _build_source_contract(
-        turn,
-        routing,
-        answer_contract,
-        selected_shop_id=selected_shop_id,
-        current_shop=current_shop,
-        explicit_query_shop=explicit_query_shop,
-    )
-    turn_extra["source_contract"] = source_contract.model_dump(mode="json")
-    turn_extra["build_source_contract"] = {
-        "scope_kind": getattr(source_contract, "scope_kind", None),
-        "target_shop_id": getattr(source_contract, "target_shop_id", None),
-        "candidate_shop_ids": list(getattr(source_contract, "candidate_shop_ids", []) or []),
-    }
-    state["turn"] = turn.model_copy(update={"source_contract": source_contract, "extra": turn_extra})
-    state = _update_runtime_metrics(state, build_source_contract=turn_extra["build_source_contract"])
-    return state
+def _build_source_contract_stage(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.build_source_contract(state)
 
 
-def _complexity_router_stage(state: GraphState) -> GraphState:
-    routing = _routing_decision(state)
-    complexity = route_execution_mode(routing)
-    return _update_turn_extra(
-        state,
-        complexity_router=complexity.to_dict(),
-    )
+def _complexity_router_stage(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.complexity_router(state)
 
 
-def _hard_guard_stage(state: GraphState) -> GraphState:
-    turn = state["turn"]
-    persistent = state.get("persistent")
-    client_context = dict(getattr(state.get("runtime"), "client_context", {}) or {})
-    result = check_hard_guard(
-        str(getattr(turn, "raw_query", "") or ""),
-        persistent,
-        client_context,
-    )
-    if result.blocked and result.required_action:
-        state = _rewrite_routing_decision(
-            state,
-            required_action=result.required_action,
-            route_candidate=result.route_candidate,
-            route_reason=result.reason,
-        )
-    return _update_turn_extra(
-        state,
-        hard_guard={
-            "blocked": bool(result.blocked),
-            "reason": result.reason,
-            "required_action": result.required_action,
-            "route_candidate": result.route_candidate,
-        },
-    )
+def _hard_guard_stage(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.hard_guard(state)
 
 
 def _complexity_router_route(state: GraphState) -> str:
-    execution_mode = _route_execution_mode(state)
+    complexity_router = _turn_extra(state).get("complexity_router") or {}
+    execution_mode = str(complexity_router.get("execution_mode") or "").strip().lower() or _route_execution_mode(state)
     if execution_mode == "clarify":
         return "clarification_node"
     if execution_mode == "complex":
@@ -531,34 +488,16 @@ def _complexity_router_route(state: GraphState) -> str:
     return "direct_executor"
 
 
-def _direct_executor_stage(state: GraphState) -> GraphState:
-    return _update_turn_extra(
-        state,
-        direct_executor={
-            "branch": _route_branch(state) or None,
-            "execution_mode": _route_execution_mode(state),
-        },
-    )
+def _direct_executor_stage(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.direct_executor(state)
 
 
-def _workflow_executor_stage(state: GraphState) -> GraphState:
-    return _update_turn_extra(
-        state,
-        workflow_executor={
-            "branch": _route_branch(state) or None,
-            "execution_mode": _route_execution_mode(state),
-        },
-    )
+def _workflow_executor_stage(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.workflow_executor(state)
 
 
-def _clarification_node_stage(state: GraphState) -> GraphState:
-    return _update_turn_extra(
-        state,
-        clarification_node={
-            "branch": _route_branch(state) or None,
-            "execution_mode": _route_execution_mode(state),
-        },
-    )
+def _clarification_node_stage(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.clarification_node(state)
 
 
 def _preset_response(
@@ -635,101 +574,20 @@ def _query_merge_route(state: GraphState) -> str:
 
 
 def _top_level_intent_route(state: GraphState) -> str:
-    logger = logging.getLogger(__name__)
-    
     routing = _routing_decision(state)
     if routing is not None and (bool(getattr(routing, "blocked", False)) or str(getattr(routing, "required_action", "") or "").strip().lower() == "reject"):
         return "safety_reject_response"
-    
-    turn_extra = _turn_extra(state)
-    existing_intent_info = turn_extra.get("top_level_intent")
-    
-    if existing_intent_info and isinstance(existing_intent_info, dict):
-        intent = existing_intent_info.get("intent")
-        requires_current_shop = existing_intent_info.get("requires_current_shop", False)
-        requires_candidate_context = existing_intent_info.get("requires_candidate_context", False)
-        source = existing_intent_info.get("source", "existing")
-        confidence = existing_intent_info.get("confidence", 0.0)
-        reason = existing_intent_info.get("reason", "")
-        matched_signals = existing_intent_info.get("matched_signals", [])
-    else:
-        raw_query = _turn_raw_query(state)
-        persistent = state.get("persistent")
-        client_context = dict(getattr(state.get("runtime"), "client_context", {}) or {})
-        
-        result = route_top_level_intent(raw_query, persistent=persistent, client_context=client_context)
-        
-        turn_extra["top_level_intent"] = {
-            "intent": result.intent,
-            "confidence": result.confidence,
-            "reason": result.reason,
-            "domain": result.domain,
-            "required_action": result.required_action,
-            "route_candidate": result.route_candidate,
-            "matched_signals": result.matched_signals,
-            "requires_current_shop": result.requires_current_shop,
-            "requires_candidate_context": result.requires_candidate_context,
-            "source": "top_level_intent_router",
-        }
-        state["turn"] = state["turn"].model_copy(update={"extra": turn_extra})
-        
-        intent = result.intent
-        requires_current_shop = result.requires_current_shop
-        requires_candidate_context = result.requires_candidate_context
-        source = "top_level_intent_router"
-        confidence = result.confidence
-        reason = result.reason
-        matched_signals = result.matched_signals or []
-    
-    route = "unknown"
-    if intent in {"identity", "capability", "help"}:
-        if intent == "identity":
-            route = "identity_answer"
-        elif intent == "capability":
-            route = "capability_answer"
-        elif intent == "help":
-            route = "capability_answer"
-    elif intent in {"direct_chat"}:
-        route = "direct_chat_answer"
-    elif intent in {"unsafe", "math_or_code", "document_or_knowledge", "planning"}:
-        route = "out_of_scope_response"
-    elif intent in {"local_life", "recommendation", "comparison"}:
-        if requires_candidate_context:
-            persistent = state.get("persistent")
-            last_candidates = list(getattr(persistent, "last_candidates", None) or [])
-            if not last_candidates:
-                route = "clarification_node"
-            else:
-                route = "resolve_target_shop"
-        elif requires_current_shop:
-            has_current_shop = bool(turn_extra.get("current_shop") or turn_extra.get("selected_shop_id"))
-            if not has_current_shop:
-                route = "clarification_node"
-            else:
-                route = "resolve_target_shop"
-        else:
-            route = "resolve_target_shop"
-    else:
-        route = "clarification_node"
-    
-    raw_query = _turn_raw_query(state)
-    normalized_query = raw_query.replace(" ", "")
-    
-    logger.info(
-        "top_level_intent_route raw_query=%s normalized_query=%s intent=%s route=%s confidence=%.2f source=%s matched_signals=%s reason=%s requires_current_shop=%s requires_candidate_context=%s",
-        raw_query,
-        normalized_query,
-        intent,
-        route,
-        confidence,
-        source,
-        matched_signals,
-        reason,
-        requires_current_shop,
-        requires_candidate_context,
-    )
-    
-    return route
+    top_level_intent_router = _turn_extra(state).get("top_level_intent_router") or {}
+    route = str(top_level_intent_router.get("route") or "").strip()
+    if not route:
+        turn = state["turn"]
+        intent = str(getattr(turn, "intent", "") or "").strip().lower()
+        decision = str(getattr(turn, "decision", "") or "").strip().lower()
+        if intent == "out_of_scope":
+            return "out_of_scope_response"
+        if decision == "direct_answer":
+            return "final_answer"
+    return route or "clarification_node"
 
 
 def _merged_query_safety_route(state: GraphState) -> str:
@@ -841,6 +699,8 @@ def _route_after_all_steps_done(state: GraphState) -> str:
     step_results = list(getattr(turn, "step_results", []) or [])
     completed_steps = len([item for item in step_results if getattr(item, "status", None) == "success"])
     total_steps = len(plan)
+    if bool(getattr(turn, "need_human_approval", False)):
+        return "complex_review"
     is_done = bool(total_steps) and completed_steps >= total_steps and not bool(getattr(turn, "need_human_approval", False))
     return "complex_review" if is_done else "execute_plan_step"
 
@@ -864,451 +724,80 @@ def _route_after_final_with_limitations(state: GraphState) -> str:
     return "final_answer"
 
 
-def _request_legality_node(state: GraphState) -> GraphState:
-    routing = _routing_decision(state)
-    state = _update_turn_extra(
-        state,
-        request_legality={
-            "checked": True,
-            "blocked": bool(getattr(routing, "blocked", False)) if routing is not None else False,
-            "required_action": _routing_action(state) or None,
-            "route_reason": str(getattr(routing, "route_reason", "") or "").strip() if routing is not None else None,
-        },
-    )
-    return state
+def _request_legality_node(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.request_legality(state)
 
 
-def _query_safety_node(state: GraphState) -> GraphState:
-    routing = _routing_decision(state)
-    return _update_turn_extra(
-        state,
-        query_safety={
-            "checked": True,
-            "blocked": bool(getattr(routing, "blocked", False)) if routing is not None else False,
-            "required_action": _routing_action(state) or None,
-        },
-    )
+def _query_safety_node(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.query_safety(state)
 
 
-def _query_merge_node(state: GraphState) -> GraphState:
-    return _update_turn_extra(
-        state,
-        query_merge_for_local_life={
-            "checked": True,
-            "needs_merge": _requires_query_merge(state),
-        },
-    )
+def _query_merge_node(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.query_merge_for_local_life(state)
 
 
-def _merged_query_safety_node(state: GraphState) -> GraphState:
-    routing = _routing_decision(state)
-    client_context = dict(getattr(state.get("runtime"), "client_context", {}) or {})
-    result = check_query_safety(_turn_raw_query(state), client_context=client_context)
-    if routing is not None and bool(getattr(routing, "blocked", False)):
-        result = result.model_copy(
-            update={
-                "blocked": True,
-                "allowed": False,
-                "required_action": "reject",
-                "reason": str(getattr(routing, "blocked_reason", "") or getattr(routing, "route_reason", "") or result.reason),
-            }
-        )
-    return _update_turn_extra(
-        state,
-        merged_query_safety={
-            "checked": True,
-            "query": _turn_raw_query(state),
-            "blocked": bool(result.blocked),
-            "allowed": bool(result.allowed),
-            "required_action": str(getattr(result, "required_action", "") or "").strip() or None,
-            "reason": str(getattr(result, "reason", "") or "").strip() or None,
-        },
-    )
+def _merged_query_safety_node(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.merged_query_safety(state)
 
 
-def _top_level_intent_router_node(state: GraphState) -> GraphState:
-    route = _top_level_intent_route(state)
-    return _update_turn_extra(
-        state,
-        top_level_intent_router={
-            "route": route,
-            "query": _turn_raw_query(state),
-        },
-    )
+def _top_level_intent_router_node(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.top_level_intent_router(state)
 
 
-def _identity_answer_node(state: GraphState) -> GraphState:
-    return _preset_response(
-        state,
-        response_node="identity_answer",
-        answer_text="我是本地生活助手，可以帮你查店铺信息、优惠券、营业状态和推荐。",
-        route_candidate="profile",
-        route_reason="top_level_identity",
-    )
+def _identity_answer_node(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.identity_answer(state)
 
 
-def _capability_answer_node(state: GraphState) -> GraphState:
-    return _preset_response(
-        state,
-        response_node="capability_answer",
-        answer_text="我可以帮你查店铺详情、优惠券、营业时间、距离和推荐。",
-        route_candidate="low_info",
-        route_reason="top_level_capability",
-    )
+def _capability_answer_node(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.capability_answer(state)
 
 
-def _direct_chat_answer_node(state: GraphState) -> GraphState:
-    return _preset_response(
-        state,
-        response_node="direct_chat_answer",
-        answer_text="可以，我在。你也可以继续问我本地生活相关问题。",
-        route_candidate="greeting",
-        route_reason="top_level_direct_chat",
-    )
+def _direct_chat_answer_node(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.direct_chat_answer(state)
 
 
-def _out_of_scope_response_node(state: GraphState) -> GraphState:
-    return _preset_response(
-        state,
-        response_node="out_of_scope_response",
-        answer_text="这个问题超出了本地生活查询范围，我先帮你处理店铺相关的问题。",
-        route_candidate="empty",
-        route_reason="top_level_out_of_scope",
-    )
+def _out_of_scope_response_node(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.out_of_scope_response(state)
 
 
-def _illegal_request_response_node(state: GraphState) -> GraphState:
-    return _preset_response(
-        state,
-        response_node="illegal_request_response",
-        answer_text="抱歉，这个请求目前无法处理。",
-        route_candidate="low_info",
-        route_reason="request_legality_failed",
-    )
+def _illegal_request_response_node(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.illegal_request_response(state)
 
 
-def _safety_reject_response_node(state: GraphState) -> GraphState:
-    return _preset_response(
-        state,
-        response_node="safety_reject_response",
-        answer_text="抱歉，这个问题涉及安全限制，我不能继续处理。",
-        route_candidate="low_info",
-        route_reason="query_safety_rejected",
-    )
+def _safety_reject_response_node(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.safety_reject_response(state)
 
 
 def _final_answer_node(state: GraphState, services: WorkflowServices) -> GraphState:
-    turn = state["turn"]
+    result = services.main_graph.final_answer(state)
+    turn = result["turn"]
     if not str(getattr(turn, "final_answer", "") or "").strip():
-        state = services.compose_answer(state)
-        turn = state["turn"]
-
-    if str(getattr(turn, "execution_mode", "") or "").strip().lower() == "plan_execute":
-        summary = getattr(turn, "final_task_summary", None)
-        if summary is not None:
-            summary_text = str(getattr(summary, "final_decision", "") or "").strip()
-            summary_status = str(getattr(summary, "status", "") or "").strip()
-            planned_answer = f"Plan execution {summary_status}: {summary_text}".strip()
-            if summary_text:
-                turn_extra = _turn_extra(state)
-                turn_extra["plan_execution_answer"] = planned_answer
-                turn = turn.model_copy(update={"final_answer": planned_answer, "extra": turn_extra})
-                state["turn"] = turn
-
-    turn_extra = _turn_extra(state)
-    turn_extra["final_answer_ready"] = True
-    state["turn"] = turn.model_copy(update={"extra": turn_extra})
-    runtime = state["runtime"]
-    runtime_metrics = dict(getattr(runtime, "metrics", {}) or {})
-    runtime_metrics["final_answer"] = True
-    state["runtime"] = runtime.model_copy(update={"metrics": runtime_metrics})
-    return state
+        result = services.compose_answer(result)
+    return result
 
 
 def _collect_query_metrics(state: GraphState, bundle: Any = None) -> None:
-    """Collect business metrics for the current query."""
-    turn = state["turn"]
-    turn_extra = _turn_extra(state)
-    persistent = state.get("persistent")
-
-    raw_query = str(getattr(turn, "raw_query", "") or "")
-    answer_contract = turn_extra.get("answer_contract") or getattr(turn, "answer_contract", None)
-    intent = str(getattr(answer_contract, "intent", "") or turn_extra.get("intent", "") or "")
-    route = str(_routing_action(state) or "")
-    answer_style = str(getattr(answer_contract, "answer_style", "") or "")
-
-    target_shop_id = turn_extra.get("selected_shop_id") or getattr(persistent, "selected_shop_id", None)
-    answer_shop_ids = list(turn_extra.get("answer_shop_ids") or [])
-
-    forbidden_facets = list(getattr(answer_contract, "forbidden_facets", []) or [])
-    realtime_facets = list(getattr(answer_contract, "realtime_facets", []) or [])
-
-    evidence_claims = list(turn_extra.get("evidence_claims") or [])
-    tool_results = list(turn_extra.get("tool_results") or [])
-
-    degraded = bool(turn_extra.get("degraded") or getattr(state["runtime"], "degrade_to", ""))
-    degraded_reason = str(getattr(state["runtime"], "degrade_to", "") or turn_extra.get("degraded_reason", "") or "")
-    fallback = bool(turn_extra.get("fallback"))
-
-    clarification_asked = bool(turn_extra.get("clarification_asked"))
-    clarification_needed = bool(turn_extra.get("clarification_needed"))
-
-    answer_text = str(getattr(turn, "final_answer", "") or "")
-    retry_quality = dict(turn_extra.get("retry_quality") or {})
-    review_report = turn_extra.get("review_report")
-
-    metrics = QueryMetrics(
-        query=raw_query,
-        intent=intent,
-        route=route,
-        answer_style=answer_style,
-        single_shop_mode=answer_style == "single_shop_review",
-        recommendation_mode=answer_style == "multi_shop_recommendation",
-        tool_called=bool(tool_results),
-        tools_called=[str(r.get("tool_name", "")) for r in tool_results if isinstance(r, dict)],
-        evidence_count=len(evidence_claims),
-        target_shop_id=target_shop_id,
-        answer_shop_ids=answer_shop_ids,
-        forbidden_facets=forbidden_facets,
-        realtime_facets=realtime_facets,
-        degraded=degraded,
-        degraded_reason=degraded_reason or None,
-        fallback=fallback,
-        clarification_asked=clarification_asked,
-        clarification_needed=clarification_needed,
-        answer_text=answer_text,
-        retry_count=int(getattr(review_report, "retry_count", 0) or 0),
-        retry_improved=(
-            True
-            if retry_quality and float(retry_quality.get("improvement", 0.0) or 0.0) > 0
-            else False
-            if retry_quality
-            else None
-        ),
-    )
-
-    business_metrics_collector.record_query(metrics)
+    return None
 
 
 def _resolve_facet_conflicts(state: GraphState) -> None:
-    """Resolve conflicts between RAG and tool results for realtime facets."""
-    turn_extra = _turn_extra(state)
-    answer_contract = turn_extra.get("answer_contract") or getattr(state["turn"], "answer_contract", None)
-
-    if answer_contract is None:
-        return
-
-    realtime_facets = list(getattr(answer_contract, "realtime_facets", []) or [])
-    if not realtime_facets:
-        return
-
-    tool_results = list(turn_extra.get("tool_results") or [])
-    tool_result_map: dict[str, Any] = {}
-    for tr in tool_results:
-        if isinstance(tr, dict):
-            facet = tr.get("facet") or tr.get("tool_name", "")
-            tool_result_map[facet] = tr
-
-    evidence_claims = list(turn_extra.get("evidence_claims") or [])
-
-    for facet in realtime_facets:
-        if facet in REALTIME_FACETS:
-            tool_result = tool_result_map.get(facet)
-            rag_result = None
-            for claim in evidence_claims:
-                claim_facet = str(getattr(claim, "facet", "") or (claim.get("facet", "") if isinstance(claim, dict) else ""))
-                if claim_facet == facet:
-                    rag_result = claim
-                    break
-
-            if tool_result or rag_result:
-                resolution = resolve_realtime_conflict(
-                    facet=facet,
-                    tool_result=tool_result,
-                    rag_result=rag_result,
-                )
-                if resolution:
-                    turn_extra[f"conflict_resolution_{facet}"] = {
-                        "chosen_source": resolution.chosen_source,
-                        "resolution_reason": resolution.resolution_reason,
-                    }
+    return None
 
 
 def _response_builder_node(state: GraphState, services: WorkflowServices) -> GraphState:
-    turn = state["turn"]
-    turn_extra = _turn_extra(state)
-    
-    # Update dialog state
-    from learning_agent_service.local_life.dialog_state_machine import dialog_state_machine, DialogState
-    
-    persistent = state.get("persistent")
-    if persistent:
-        from learning_agent_service.local_life.dialog_state_machine import DialogContext
-        
-        dialog_ctx = DialogContext(
-            current_state=DialogState(str(getattr(persistent, "dialog_state", "") or DialogState.IDLE.value)),
-            transition_count=int(getattr(persistent, "dialog_transition_count", 0) or 0),
-            current_task=getattr(persistent, "dialog_task", None),
-            active_intent=getattr(persistent, "dialog_intent", None),
-            comparison_targets=list(getattr(persistent, "dialog_comparison_targets", []) or []),
-            pending_slots=list(getattr(persistent, "dialog_pending_slots", []) or []),
-        )
-        
-        # Determine trigger based on current situation
-        has_clarification = bool(turn_extra.get("clarification_needed"))
-        has_results = bool(turn_extra.get("evidence_claims"))
-        answer_contract = turn_extra.get("answer_contract") or getattr(turn, "answer_contract", None)
-        is_comparison = str(getattr(answer_contract, "answer_style", "") or "") == "comparison"
-        has_error = bool(turn_extra.get("error") or getattr(state.get("runtime"), "error", None))
-        is_degraded = bool(turn_extra.get("degraded") or getattr(state.get("runtime"), "degrade_to", None))
-
-        trigger = dialog_state_machine.determine_trigger(
-            dialog_ctx,
-            has_clarification=has_clarification,
-            has_results=has_results,
-            is_comparison=is_comparison,
-            has_error=has_error,
-            is_degraded=is_degraded,
-        )
-        
-        if trigger:
-            new_ctx = dialog_state_machine.transition(dialog_ctx, trigger)
-            persistent.dialog_state = new_ctx.current_state.value
-            persistent.dialog_transition_count = new_ctx.transition_count
-            persistent.dialog_task = new_ctx.current_task
-            persistent.dialog_intent = new_ctx.active_intent
-            persistent.dialog_comparison_targets = new_ctx.comparison_targets
-            persistent.dialog_pending_slots = new_ctx.pending_slots
-    
-    bundle = None
-    try:
-        bundle = build_response_bundle(
-            raw_query=str(getattr(turn, "raw_query", "") or ""),
-            slots=getattr(turn, "slots", None),
-            answer_contract=turn_extra.get("answer_contract") or getattr(turn, "answer_contract", None),
-            ranked_candidates=list(turn_extra.get("ranked_candidates") or []),
-            evidence_claims=list(turn_extra.get("evidence_claims") or []),
-            answer_plan=turn_extra.get("task_plan") or getattr(turn, "task_plan", None),
-            verification_result=turn_extra.get("answer_verifier_result"),
-            evidence_pack=getattr(turn, "evidence_pack", None),
-            page=str((state.get("runtime_context", {}) or {}).get("page") or (state["runtime"].client_context or {}).get("page") or ""),
-            current_topic=str(getattr(state["persistent"], "current_topic", "") or ""),
-            selected_shop_id=turn_extra.get("selected_shop_id"),
-            current_shop=str(turn_extra.get("current_shop") or getattr(state["persistent"], "current_shop", "") or ""),
-            client_context=dict(getattr(state["runtime"], "client_context", {}) or {}),
-            approval_required=bool(getattr(turn, "need_human_approval", False)),
-            approval_request=turn_extra.get("approval_request"),
-            transaction_draft=turn_extra.get("transaction_draft"),
-            safety_result=turn_extra.get("final_answer_safety"),
-            route_decision=_routing_action(state) or None,
-            route_reason=str(getattr(_routing_decision(state), "route_reason", "") or ""),
-            current_stage=getattr(turn, "current_stage", None),
-            stage_status=getattr(turn, "stage_status", None),
-            stage_timeline=list((state["runtime"].metrics or {}).get("stage_timeline", []) or []),
-            model_hint=turn_extra,
-            source_mode=str(turn_extra.get("source_mode") or ""),
-            degraded_reason=str(getattr(state["runtime"], "degrade_to", "") or ""),
-            knowledge_freshness=turn_extra.get("knowledge_freshness"),
-            user_need=turn_extra.get("user_need"),
-            facet_result_bundle=turn_extra.get("facet_result_bundle"),
-            graph_trace=turn_extra.get("phase5_trace") or turn_extra.get("phase4_trace"),
-        )
-        turn_extra["response_bundle"] = bundle.model_dump(mode="json") if hasattr(bundle, "model_dump") else dict(bundle)
-    except Exception:
-        pass
-
-    # Collect business metrics after response is built
-    try:
-        _collect_query_metrics(state, bundle)
-    except Exception:
-        pass
-
-    state["turn"] = turn.model_copy(update={"extra": turn_extra})
-    runtime = state["runtime"]
-    runtime_metrics = dict(getattr(runtime, "metrics", {}) or {})
-    runtime_metrics["response_builder"] = True
-    state["runtime"] = runtime.model_copy(update={"metrics": runtime_metrics})
-    return state
+    return services.main_graph.response_builder(state)
 
 
-def _merge_or_rank_node(state: GraphState) -> GraphState:
-    turn = state["turn"]
-    turn_extra = _turn_extra(state)
-
-    # Resolve realtime facet conflicts before recording metrics
-    try:
-        _resolve_facet_conflicts(state)
-    except Exception:
-        pass
-
-    ranked_candidates = list(turn_extra.get("ranked_candidates") or [])
-    evidence_claims = list(turn_extra.get("evidence_claims") or [])
-    turn_extra["merge_or_rank"] = {
-        "ranked_candidate_count": len(ranked_candidates),
-        "evidence_claim_count": len(evidence_claims),
-        "route_branch": _route_branch(state) or None,
-    }
-    state["turn"] = turn.model_copy(update={"extra": turn_extra})
-    return state
+def _merge_or_rank_node(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.merge_or_rank(state)
 
 
-def _contract_review_node(state: GraphState) -> GraphState:
-    turn = state["turn"]
-    turn_extra = _turn_extra(state)
-    turn_extra["contract_review"] = {
-        "reviewed": True,
-        "branch": _route_branch(state) or None,
-        "route_candidate": getattr(_routing_decision(state), "route_candidate", None),
-    }
-    state["turn"] = turn.model_copy(update={"extra": turn_extra})
-    return state
+def _contract_review_node(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.contract_review(state)
 
 
-def _prepare_retry_node(state: GraphState) -> GraphState:
-    turn = state["turn"]
-    turn_extra = _turn_extra(state)
-    review_report = turn_extra.get("review_report")
-    if review_report:
-        from learning_agent_service.domain.contracts import RewriteDecision
-        
-        retry_count = int(getattr(review_report, "retry_count", 0)) + 1
-        setattr(review_report, "retry_count", retry_count)
-        
-        repair_hint = getattr(review_report, "repair_hint", "")
-        
-        rewrite = RewriteDecision(
-            original_query=str(getattr(turn, "raw_query", "")),
-            rewritten_query=str(getattr(turn, "raw_query", "")) + f" {repair_hint}",
-            preserved_constraints=[str(item) for item in getattr(review_report, "failed_facets", []) if str(item).strip()],
-            confidence=0.6,
-            should_retrieve=True,
-            reason="retry_repair_answer",
-        )
-
-        if "retry_snapshot" not in turn_extra:
-            turn_extra["retry_snapshot"] = {
-                "answer_text": str(
-                    getattr(turn, "final_answer", "")
-                    or turn_extra.get("plan_execution_answer")
-                    or turn_extra.get("preset_response_text")
-                    or ""
-                ).strip(),
-                "evidence_count": len(list(turn_extra.get("evidence_claims") or [])),
-                "tool_result_count": len(list(turn_extra.get("tool_results") or [])),
-                "retry_count": retry_count,
-            }
-        
-        turn_extra["rewrite_decision"] = rewrite
-        routing = getattr(turn, "routing_decision", None)
-        if routing is not None:
-            turn = turn.model_copy(update={"routing_decision": routing.model_copy(update={"rewrite_decision": rewrite})})
-
-        if "rag_result" in turn_extra:
-            del turn_extra["rag_result"]
-        turn_extra["review_report"] = review_report
-        
-    state["turn"] = turn.model_copy(update={"extra": turn_extra})
-    return state
+def _prepare_retry_node(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.prepare_retry(state)
 
 
 def _route_after_contract_review(state: GraphState) -> str:
@@ -1336,158 +825,23 @@ def _apply_retry_quality_evaluation(
     evidence_claims: list[Any],
     tool_results: list[Any],
 ) -> tuple[Any, dict[str, Any]]:
-    retry_snapshot = dict(turn_extra.get("retry_snapshot") or {})
-    if not retry_snapshot:
-        return turn, turn_extra
-
-    pre_retry_answer = str(retry_snapshot.get("answer_text") or "").strip()
-    pre_retry_evidence_count = int(retry_snapshot.get("evidence_count") or 0)
-    quality = evaluate_retry_quality(
-        pre_retry_answer=pre_retry_answer,
-        post_retry_answer=str(answer_text or "").strip(),
-        pre_retry_evidence_count=pre_retry_evidence_count,
-        post_retry_evidence_count=len(evidence_claims),
-        has_tool_result=bool(tool_results),
-    )
-
-    reverted_to_pre_retry = False
-    if not quality.should_keep_retry and pre_retry_answer:
-        turn = turn.model_copy(update={"final_answer": pre_retry_answer})
-        answer_text = pre_retry_answer
-        reverted_to_pre_retry = True
-
-    retry_quality = {
-        "pre_retry_score": quality.pre_retry_score,
-        "post_retry_score": quality.post_retry_score,
-        "improvement": quality.improvement,
-        "should_keep_retry": quality.should_keep_retry,
-        "reason": quality.reason,
-        "reverted_to_pre_retry": reverted_to_pre_retry,
-    }
-    turn_extra["retry_quality"] = retry_quality
-
-    review_report = turn_extra.get("review_report")
-    if review_report is not None:
-        extra = dict(getattr(review_report, "extra", {}) or {})
-        extra["retry_quality"] = retry_quality
-        setattr(review_report, "extra", extra)
-        turn_extra["review_report"] = review_report
-
     return turn, turn_extra
 
 
-def _final_answer_safety_node(state: GraphState) -> GraphState:
-    turn = state["turn"]
-    turn_extra = _turn_extra(state)
-    plan_execution_answer = str(turn_extra.get("plan_execution_answer") or "").strip()
-    raw_answer = str(
-        plan_execution_answer
-        or getattr(turn, "final_answer", "")
-        or turn_extra.get("preset_response_text")
-        or ""
-    ).strip()
-    ranked_candidates = list(turn_extra.get("ranked_candidates") or [])
-    evidence_claims = list(turn_extra.get("evidence_claims") or [])
-    shop_lookup: dict[int, str] = {}
-    for candidate in ranked_candidates:
-        if not isinstance(candidate, Mapping):
-            continue
-        shop_id = candidate.get("shop_id")
-        shop_name = candidate.get("name") or candidate.get("shop_name")
-        if shop_id not in (None, "") and shop_name:
-            try:
-                shop_lookup[int(shop_id)] = str(shop_name)
-            except Exception:
-                pass
-    safety_result = apply_final_answer_safety(
-        answer_text=raw_answer,
-        answer_contract=turn_extra.get("answer_contract") or getattr(turn, "answer_contract", None),
-        ranked_candidates=ranked_candidates,
-        evidence_claims=evidence_claims,
-        evidence_pack=getattr(turn, "evidence_pack", None),
-        facet_result_bundle=turn_extra.get("facet_result_bundle"),
-        user_need=turn_extra.get("user_need"),
-        route_gate=turn_extra.get("route_gate"),
-        source_contract=turn_extra.get("source_contract"),
-        review_report=turn_extra.get("review_report"),
-        tool_results=list(turn_extra.get("tool_results") or []),
-        shop_lookup=shop_lookup or None,
-    )
-    if getattr(safety_result, "answer_text", None):
-        final_text = str(safety_result.answer_text or "").strip()
-        if plan_execution_answer:
-            final_text = plan_execution_answer
-        turn = turn.model_copy(update={"final_answer": final_text})
-    turn, turn_extra = _apply_retry_quality_evaluation(
-        turn,
-        turn_extra,
-        answer_text=str(getattr(turn, "final_answer", "") or raw_answer),
-        evidence_claims=evidence_claims,
-        tool_results=list(turn_extra.get("tool_results") or []),
-    )
-    turn_extra["final_answer_safety"] = safety_result.to_dict() if hasattr(safety_result, "to_dict") else dict(safety_result)
-    state["turn"] = turn.model_copy(update={"extra": turn_extra})
-    runtime = state["runtime"]
-    runtime_metrics = dict(getattr(runtime, "metrics", {}) or {})
-    runtime_metrics["final_answer_safety"] = turn_extra["final_answer_safety"]
-    state["runtime"] = runtime.model_copy(update={"metrics": runtime_metrics})
-    return state
+def _final_answer_safety_node(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.final_answer_safety(state)
 
 
-def _final_safety_fallback_node(state: GraphState) -> GraphState:
-    turn = state["turn"]
-    turn_extra = _turn_extra(state)
-    safety_result = dict(turn_extra.get("final_answer_safety") or {})
-    plan_execution_answer = str(turn_extra.get("plan_execution_answer") or "").strip()
-    if safety_result.get("blocked") and not str(getattr(turn, "final_answer", "") or "").strip():
-        fallback_text = str(safety_result.get("answer_text") or "抱歉，这条回复暂时无法安全输出。").strip()
-        turn = turn.model_copy(update={"final_answer": plan_execution_answer or fallback_text})
-    turn_extra["final_safety_fallback"] = {
-        "applied": bool(safety_result.get("blocked")),
-        "blocked": bool(safety_result.get("blocked")),
-    }
-    state["turn"] = turn.model_copy(update={"extra": turn_extra})
-    return state
+def _final_safety_fallback_node(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.final_safety_fallback(state)
 
 
-def _repair_answer_node(state: GraphState) -> GraphState:
-    turn = state["turn"]
-    turn_extra = _turn_extra(state)
-    safety_result = dict(turn_extra.get("final_answer_safety") or {})
-    plan_execution_answer = str(turn_extra.get("plan_execution_answer") or "").strip()
-    repaired_text = str(
-        plan_execution_answer
-        or safety_result.get("answer_text")
-        or turn_extra.get("preset_response_text")
-        or getattr(turn, "final_answer", "")
-        or ""
-    ).strip()
-    if repaired_text:
-        turn = turn.model_copy(update={"final_answer": repaired_text})
-    turn_extra["repair_answer"] = {
-        "repaired": bool(safety_result.get("repaired_text")),
-        "severity": safety_result.get("severity"),
-    }
-    state["turn"] = turn.model_copy(update={"extra": turn_extra})
-    return state
+def _repair_answer_node(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.repair_answer(state)
 
 
-def _final_with_limitations_node(state: GraphState) -> GraphState:
-    turn = state["turn"]
-    turn_extra = _turn_extra(state)
-    safety_result = dict(turn_extra.get("final_answer_safety") or {})
-    plan_execution_answer = str(turn_extra.get("plan_execution_answer") or "").strip()
-    issues = list(safety_result.get("issues") or [])
-    current_answer = str(plan_execution_answer or getattr(turn, "final_answer", "") or "").strip()
-    if issues and current_answer and not current_answer.endswith("。"):
-        turn = turn.model_copy(update={"final_answer": f"{current_answer}（以上为当前可确认信息）"})
-    turn_extra["final_with_limitations"] = {
-        "issues": issues,
-        "severity": safety_result.get("severity"),
-        "passed": safety_result.get("passed"),
-    }
-    state["turn"] = turn.model_copy(update={"extra": turn_extra})
-    return state
+def _final_with_limitations_node(state: GraphState, services: WorkflowServices) -> GraphState:
+    return services.main_graph.final_with_limitations(state)
 
 
 _LANGGRAPH_TOPOLOGY = describe_main_graph_topology()
@@ -1759,9 +1113,11 @@ def _render_full_graph_png(_mermaid_text: str) -> bytes | None:
     for group in groups:
         nodes = group["nodes"]
         group_height = header_h + group_pad + len(nodes) * (node_h + node_gap) + group_pad - node_gap
-        x0 = group["x"]
-        y0 = group["y"]
-        x1 = x0 + group["width"]
+        from typing import cast
+        x0 = cast(int, group["x"])
+        y0 = cast(int, group["y"])
+        width = cast(int, group["width"])
+        x1 = x0 + width
         y1 = y0 + group_height
         draw.rounded_rectangle((x0, y0, x1, y1), radius=18, fill=group["fill"], outline=group["outline"], width=3)
         draw.text((x0 + 18, y0 + 10), group["title"], fill=(30, 30, 30), font=title_font)
@@ -1998,7 +1354,7 @@ def _write_graph_artifacts(
                 written[f"{stem}.png"] = str(png_path)
                 return written
             png_bytes = _draw_compiled_graph_png(graph)
-        if png_bytes:
+        if png_bytes and isinstance(png_bytes, bytes):
             png_path = target_dir / f"{stem}.png"
             png_path.write_bytes(png_bytes)
             written[f"{stem}.png"] = str(png_path)
@@ -2147,25 +1503,10 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None
         return state
 
     def _rule_review_stage(state: GraphState) -> GraphState:
-        turn_extra = _turn_extra(state)
-        turn_extra["rule_review"] = {
-            "reviewed": True,
-            "required_action": _routing_action(state) or None,
-            "route_branch": _route_branch(state) or None,
-        }
-        state["turn"] = state["turn"].model_copy(update={"extra": turn_extra})
-        return state
+        return services.main_graph.rule_review(state)
 
     def _select_required_sources_stage(state: GraphState) -> GraphState:
-        turn_extra = _turn_extra(state)
-        route = _route_after_select_required_sources(state)
-        turn_extra["select_required_sources"] = {
-            "selected_route": route,
-            "execution_mode": str(getattr(state["turn"], "execution_mode", "") or "").strip().lower() or None,
-            "branch": _route_branch(state) or None,
-        }
-        state["turn"] = state["turn"].model_copy(update={"extra": turn_extra})
-        return state
+        return services.main_graph.select_required_sources(state)
 
     def _plan_executor_stage(state: GraphState) -> GraphState:
         turn_extra = _turn_extra(state)
@@ -2278,35 +1619,35 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None
         return state
 
     graph.add_node("load_context", lambda state: services.load_context(state))
-    graph.add_node("request_legality", _request_legality_node, retry_policy=workflow_retry_policy)
-    graph.add_node("illegal_request_response", _illegal_request_response_node, retry_policy=workflow_retry_policy)
-    graph.add_node("hard_guard", _hard_guard_stage, retry_policy=workflow_retry_policy)
-    graph.add_node("clarification_or_reject", _clarification_or_reject_stage, retry_policy=workflow_retry_policy)
-    graph.add_node("query_safety", _query_safety_node, retry_policy=workflow_retry_policy)
-    graph.add_node("safety_reject_response", _safety_reject_response_node, retry_policy=workflow_retry_policy)
-    graph.add_node("query_merge_for_local_life", _query_merge_node, retry_policy=workflow_retry_policy)
-    graph.add_node("merged_query_safety", _merged_query_safety_node, retry_policy=workflow_retry_policy)
-    graph.add_node("top_level_intent_router", _top_level_intent_router_node, retry_policy=workflow_retry_policy)
-    graph.add_node("identity_answer", _identity_answer_node, retry_policy=workflow_retry_policy)
-    graph.add_node("capability_answer", _capability_answer_node, retry_policy=workflow_retry_policy)
-    graph.add_node("direct_chat_answer", _direct_chat_answer_node, retry_policy=workflow_retry_policy)
-    graph.add_node("out_of_scope_response", _out_of_scope_response_node, retry_policy=workflow_retry_policy)
+    graph.add_node("request_legality", lambda state: _request_legality_node(state, services), retry_policy=workflow_retry_policy)
+    graph.add_node("illegal_request_response", lambda state: _illegal_request_response_node(state, services), retry_policy=workflow_retry_policy)
+    graph.add_node("hard_guard", lambda state: _hard_guard_stage(state, services), retry_policy=workflow_retry_policy)
+    graph.add_node("clarification_or_reject", lambda state: _clarification_or_reject_stage(state, services), retry_policy=workflow_retry_policy)
+    graph.add_node("query_safety", lambda state: _query_safety_node(state, services), retry_policy=workflow_retry_policy)
+    graph.add_node("safety_reject_response", lambda state: _safety_reject_response_node(state, services), retry_policy=workflow_retry_policy)
+    graph.add_node("query_merge_for_local_life", lambda state: _query_merge_node(state, services), retry_policy=workflow_retry_policy)
+    graph.add_node("merged_query_safety", lambda state: _merged_query_safety_node(state, services), retry_policy=workflow_retry_policy)
+    graph.add_node("top_level_intent_router", lambda state: _top_level_intent_router_node(state, services), retry_policy=workflow_retry_policy)
+    graph.add_node("identity_answer", lambda state: _identity_answer_node(state, services), retry_policy=workflow_retry_policy)
+    graph.add_node("capability_answer", lambda state: _capability_answer_node(state, services), retry_policy=workflow_retry_policy)
+    graph.add_node("direct_chat_answer", lambda state: _direct_chat_answer_node(state, services), retry_policy=workflow_retry_policy)
+    graph.add_node("out_of_scope_response", lambda state: _out_of_scope_response_node(state, services), retry_policy=workflow_retry_policy)
     graph.add_node("understand_turn", lambda state: run_understand_turn(state, services.understand_turn), retry_policy=workflow_retry_policy)
-    graph.add_node("resolve_target_shop", _resolve_target_shop_stage, retry_policy=workflow_retry_policy)
-    graph.add_node("build_answer_contract", _build_answer_contract_stage, retry_policy=workflow_retry_policy)
-    graph.add_node("build_source_contract", _build_source_contract_stage, retry_policy=workflow_retry_policy)
-    graph.add_node("complexity_router", _complexity_router_stage, retry_policy=workflow_retry_policy)
-    graph.add_node("clarification_node", _clarification_node_stage, retry_policy=workflow_retry_policy)
-    graph.add_node("direct_executor", _direct_executor_stage, retry_policy=workflow_retry_policy)
+    graph.add_node("resolve_target_shop", lambda state: _resolve_target_shop_stage(state, services), retry_policy=workflow_retry_policy)
+    graph.add_node("build_answer_contract", lambda state: _build_answer_contract_stage(state, services), retry_policy=workflow_retry_policy)
+    graph.add_node("build_source_contract", lambda state: _build_source_contract_stage(state, services), retry_policy=workflow_retry_policy)
+    graph.add_node("complexity_router", lambda state: _complexity_router_stage(state, services), retry_policy=workflow_retry_policy)
+    graph.add_node("clarification_node", lambda state: _clarification_node_stage(state, services), retry_policy=workflow_retry_policy)
+    graph.add_node("direct_executor", lambda state: _direct_executor_stage(state, services), retry_policy=workflow_retry_policy)
     graph.add_node("rule_review", _rule_review_stage, retry_policy=workflow_retry_policy)
-    graph.add_node("workflow_executor", _workflow_executor_stage, retry_policy=workflow_retry_policy)
+    graph.add_node("workflow_executor", lambda state: _workflow_executor_stage(state, services), retry_policy=workflow_retry_policy)
     graph.add_node("select_required_sources", _select_required_sources_stage, retry_policy=workflow_retry_policy)
     graph.add_node("rag_executor", lambda state: run_rag_subgraph(state, services.rag_subgraph), retry_policy=workflow_retry_policy)
     graph.add_node("tool_executor", lambda state: run_tool_subgraph(state, services.tool_subgraph), retry_policy=workflow_retry_policy)
     graph.add_node("recommendation_executor", lambda state: run_recommendation_subgraph(state, services.rag_subgraph), retry_policy=workflow_retry_policy)
-    graph.add_node("merge_or_rank", _merge_or_rank_node, retry_policy=workflow_retry_policy)
-    graph.add_node("contract_review", _contract_review_node, retry_policy=workflow_retry_policy)
-    graph.add_node("prepare_retry", _prepare_retry_node, retry_policy=workflow_retry_policy)
+    graph.add_node("merge_or_rank", lambda state: _merge_or_rank_node(state, services), retry_policy=workflow_retry_policy)
+    graph.add_node("contract_review", lambda state: _contract_review_node(state, services), retry_policy=workflow_retry_policy)
+    graph.add_node("prepare_retry", lambda state: _prepare_retry_node(state, services), retry_policy=workflow_retry_policy)
     graph.add_node("planner_node", _plan_planner_stage, retry_policy=workflow_retry_policy)
     graph.add_node("plan_validator", _plan_validator_stage, retry_policy=workflow_retry_policy)
     graph.add_node("plan_executor", _plan_executor_stage, retry_policy=workflow_retry_policy)
@@ -2321,10 +1662,10 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None
     graph.add_node("all_steps_done?", _all_steps_done_node, retry_policy=workflow_retry_policy)
     graph.add_node("complex_review", _complex_review_stage, retry_policy=workflow_retry_policy)
     graph.add_node("final_answer", lambda state: _final_answer_node(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("final_answer_safety", _final_answer_safety_node, retry_policy=workflow_retry_policy)
-    graph.add_node("final_safety_fallback", _final_safety_fallback_node, retry_policy=workflow_retry_policy)
-    graph.add_node("repair_answer", _repair_answer_node, retry_policy=workflow_retry_policy)
-    graph.add_node("final_with_limitations", _final_with_limitations_node, retry_policy=workflow_retry_policy)
+    graph.add_node("final_answer_safety", lambda state: _final_answer_safety_node(state, services), retry_policy=workflow_retry_policy)
+    graph.add_node("final_safety_fallback", lambda state: _final_safety_fallback_node(state, services), retry_policy=workflow_retry_policy)
+    graph.add_node("repair_answer", lambda state: _repair_answer_node(state, services), retry_policy=workflow_retry_policy)
+    graph.add_node("final_with_limitations", lambda state: _final_with_limitations_node(state, services), retry_policy=workflow_retry_policy)
     graph.add_node("response_builder", lambda state: _response_builder_node(state, services), retry_policy=workflow_retry_policy)
     graph.add_node("persist_session", lambda state: services.persist_session(state), retry_policy=workflow_retry_policy)
     graph.add_node("emit_final", lambda state: services.emit_final(state), retry_policy=workflow_retry_policy)
@@ -2376,6 +1717,7 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None
             "direct_chat_answer": "direct_chat_answer",
             "out_of_scope_response": "out_of_scope_response",
             "safety_reject_response": "safety_reject_response",
+            "final_answer": "final_answer",
             "resolve_target_shop": "resolve_target_shop",
         },
     )

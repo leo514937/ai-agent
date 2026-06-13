@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .models import RetrievalFilters, RetrievalPlan, coerce_tuple
+from .rewrite_guard import QueryRewriteGuard, QueryRewriteGuardConfig
 
 _TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_+#.:-]+|[\u4e00-\u9fff]+")
 _LOGGER = logging.getLogger(__name__)
@@ -66,16 +67,22 @@ class QueryRewriteService:
         *,
         llm_rewriter: Callable[[QueryRewriteContext, RetrievalPlan, str], Mapping[str, Any]] | None = None,
         hyde_rewriter: Callable[[QueryRewriteContext, RetrievalPlan, str], Mapping[str, Any]] | None = None,
+        rewrite_guard: QueryRewriteGuard | None = None,
     ) -> None:
         self._config = config or QueryRewriteConfig()
         self._llm_rewriter = llm_rewriter
         self._hyde_rewriter = hyde_rewriter
+        self._guard = rewrite_guard or QueryRewriteGuard()
 
     def build_plan(self, context: QueryRewriteContext) -> RetrievalPlan:
         semantic_query = self._build_semantic_query(context)
         keyword_query = self._build_keyword_query(context, semantic_query)
         preferred_chunk_types = self._preferred_chunk_types(context)
         filters = self._build_filters(context, preferred_chunk_types)
+        original_query = (context.raw_query or "").strip()
+        supplemental_queries: list[str] = []
+        if original_query and original_query.lower() != semantic_query.lower():
+            supplemental_queries.append(original_query)
         extra = {
             "raw_query": context.raw_query,
             "rewrite_applied": semantic_query != context.raw_query,
@@ -90,7 +97,7 @@ class QueryRewriteService:
             "filter_confidence": 1.0,
             "step_back_query": None,
             "rewritten_queries": [],
-            "supplemental_queries": [],
+            "supplemental_queries": supplemental_queries,
             "metadata_filter_mode": "soft",
         }
         return RetrievalPlan(
@@ -100,7 +107,7 @@ class QueryRewriteService:
             preferred_chunk_types=preferred_chunk_types,
             step_back_query=None,
             rewritten_queries=(),
-            supplemental_queries=(),
+            supplemental_queries=tuple(supplemental_queries),
             metadata_filter_mode="soft",
             extra=extra,
         )
@@ -128,6 +135,44 @@ class QueryRewriteService:
 
         semantic_query = normalized.get("semantic_query") or base_plan.semantic_query
         keyword_query = normalized.get("keyword_query") or base_plan.keyword_query
+
+        guard_result = self._guard.validate_rewrite(
+            context.raw_query,
+            semantic_query,
+            context_slots=dict(context.extra.get("context_slots", {})),
+            intent=context.intent,
+            extra=dict(context.extra),
+        )
+        if not guard_result.accepted:
+            _LOGGER.info(
+                "query_rewrite_guard_rejected source=llm_rewrite reason=%s original=%s rewrite=%s",
+                guard_result.reject_reason,
+                context.raw_query[:80],
+                semantic_query[:80],
+            )
+            extra = dict(base_plan.extra)
+            extra.update({
+                "rewrite_source": "llm_rejected",
+                "rewrite_reject_reason": guard_result.reject_reason,
+                "rewrite_guard_debug": guard_result.debug_metadata,
+            })
+            return RetrievalPlan(
+                semantic_query=base_plan.semantic_query,
+                keyword_query=base_plan.keyword_query,
+                retrieval_filters=base_plan.retrieval_filters,
+                preferred_chunk_types=base_plan.preferred_chunk_types,
+                step_back_query=base_plan.step_back_query,
+                rewritten_queries=base_plan.rewritten_queries,
+                supplemental_queries=base_plan.supplemental_queries,
+                metadata_filter_mode=base_plan.metadata_filter_mode,
+                dense_top_k=base_plan.dense_top_k,
+                sparse_top_k=base_plan.sparse_top_k,
+                metadata_top_k=base_plan.metadata_top_k,
+                rerank_top_k=base_plan.rerank_top_k,
+                max_evidence=base_plan.max_evidence,
+                extra=extra,
+            )
+
         step_back_query = normalized.get("step_back_query")
         rewritten_queries = tuple(
             str(item)
@@ -154,6 +199,13 @@ class QueryRewriteService:
                 "filter_confidence": filter_confidence,
                 "metadata_filter_mode": "hard" if hard_filter else "soft",
                 "llm_payload": normalized,
+                "rewrite_guard": {
+                    "accepted": True,
+                    "weight": guard_result.weight,
+                    "semantic_similarity": guard_result.semantic_similarity,
+                    "slot_loss": list(guard_result.slot_loss),
+                    "new_constraints": list(guard_result.new_constraints),
+                },
             }
         )
         return RetrievalPlan(

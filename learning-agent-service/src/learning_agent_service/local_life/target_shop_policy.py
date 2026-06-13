@@ -31,6 +31,10 @@ _LOW_INFO_QUERY_TOKENS = ("，", "。", "?", "？", "啊", "嗯", "1", "...")
 _EXPLICIT_SUFFIXES = (
     "现在营业吗",
     "现在有券吗",
+    "有团购吗",
+    "团购吗",
+    "有什么优惠",
+    "优惠吗",
     "现在能不能订",
     "现在能不能约",
     "现在开吗",
@@ -44,6 +48,9 @@ _EXPLICIT_SUFFIXES = (
     "有券",
     "有几张券",
     "have_coupon",
+    "有代金券吗",
+    "有折扣吗",
+    "有套餐吗",
     "有可用优惠券吗",
     "适合约会吗",
     "适合吗",
@@ -176,6 +183,8 @@ def _looks_like_generic_query_entity(text: str) -> bool:
     if not compact:
         return False
     if compact in {city.lower() for city in _CITY_NAMES}:
+        return True
+    if any(token in compact for token in ("天气", "气温", "预报", "温度")):
         return True
     if re.search(r'[a-zA-Z0-9]', compact):
         return False
@@ -470,6 +479,11 @@ class TargetShopPolicy:
             has_pronoun=has_pronoun,
             has_resolved_ref=has_resolved_ref,
         )
+        has_current_shop_context = bool(context_candidates) or bool(eff_explicit_name) or bool(shop_ids)
+        if not should_clarify and ClarificationStrategy.requires_current_shop_for_ref(query_lower, has_current_shop_context):
+            should_clarify = True
+            missing_slot = missing_slot or "shop_name"
+            clarify_reason = clarify_reason or "current_shop_required"
 
         if should_clarify:
             return TargetShop(

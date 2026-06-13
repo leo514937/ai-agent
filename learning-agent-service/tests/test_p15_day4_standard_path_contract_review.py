@@ -4,7 +4,7 @@ import unittest
 
 import _bootstrap  # noqa: F401
 
-from learning_agent_service.application.router import build_initial_routing_decision
+from learning_agent_service.application.router.phase0_quality import build_initial_routing_decision
 from learning_agent_service.application.workflow.adapters import WorkflowNodeAdapter
 from learning_agent_service.domain import (
     ChatTurnCommand,

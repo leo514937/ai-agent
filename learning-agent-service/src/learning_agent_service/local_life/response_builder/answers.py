@@ -479,6 +479,8 @@ def _infer_topic_from_query(raw_query: str) -> str | None:
         return None
     if text in {"它", "这家", "这店", "这间", "这商家", "这个商家"}:
         return None
+    if any(token in text for token in ("天气", "气温", "预报", "温度")):
+        return None
     suffixes = (
         "现在营业吗",
         "现在有券吗",

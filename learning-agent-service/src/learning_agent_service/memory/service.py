@@ -4,7 +4,7 @@ import logging
 import queue
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -66,7 +66,7 @@ class MemoryService:
     topic_resolver: CanonicalTopicResolver = field(default_factory=CanonicalTopicResolver)
 
     def __post_init__(self) -> None:
-        if self.semantic_memory_store is None:
+        if getattr(self, "semantic_memory_store", None) is None:
             self.semantic_memory_store = NoOpSemanticMemoryStore()
 
     def persist_session(self, command: PersistSessionCommand) -> PersistSessionResult:
@@ -88,8 +88,8 @@ class MemoryService:
             query=command.raw_query,
             answer_text=command.answer_text,
             resolved_topic=resolved_topic,
-            intent=command.intent.value if command.intent else None,
-            output_style=command.requested_output_style.value if command.requested_output_style else None,
+            intent=getattr(command.intent, "value", command.intent) if command.intent else None,
+            output_style=getattr(command.requested_output_style, "value", command.requested_output_style) if command.requested_output_style else None,
             tool_name=command.tool_name,
             explicit_signals=self._collect_explicit_signals(command, resolved_topic),
             current_session=self._to_memory_context(persistent),
@@ -174,8 +174,8 @@ class MemoryService:
             bool(command.allow_semantic_memory_write),
             bool(getattr(persistent, "pending_clarification", None) is not None),
             bool(dict(getattr(persistent, "clarification_result", {}) or {}).get("consumed")),
-            getattr(updated_context, "current_city", None) if "updated_context" in locals() else getattr(persistent, "current_city", None),
-            getattr(updated_context, "current_shop", None) if "updated_context" in locals() else getattr(persistent, "current_shop", None),
+            getattr(updated_context, "current_city", None),
+            getattr(updated_context, "current_shop", None),
         )
         self._validate_memory_boundary(
             code=WorkflowErrorCode.SESSION_PERSIST_FAILED,
@@ -220,7 +220,7 @@ class MemoryService:
                         },
                     }
                 ],
-                decision_reasons={"memory_promotion_disabled": "skip_long_term_memory_write"},
+                decision_reasons=["memory_promotion_disabled", "skip_long_term_memory_write"],
                 extra={
                     "promotion_reasons": [],
                     "write_plan_targets": ["session_context"],
@@ -549,7 +549,7 @@ class MemoryService:
             return self.session_store.load_any(session_id)
         return self.session_store.load(session_id, "anonymous")
 
-    def _session_runtime_context(self, command: PersistSessionCommand) -> SessionPersistenceContext:
+    def _session_runtime_context(self, command: PersistSessionCommand | MasteryUpdateCommand) -> SessionPersistenceContext:
         return SessionPersistenceContext(
             session_id=command.session_id,
             turn_id=command.turn_id,
@@ -620,7 +620,7 @@ class MemoryService:
         query = command.raw_query or ""
         normalized_query = query.lower()
         return ExplicitUserSignals(
-            preferred_output_style=command.requested_output_style.value if command.requested_output_style else None,
+            preferred_output_style=getattr(command.requested_output_style, "value", command.requested_output_style) if command.requested_output_style else None,
             confirmed_output_style=self._is_confirmed_preference_query(query, normalized_query),
             focus_topics=tuple(entity for entity in (command.persistent.current_shop, *command.persistent.recent_entities) if entity),
         )
@@ -949,7 +949,7 @@ class MemoryService:
         return backend_name.startswith("InMemory") or backend_name.startswith("NoOp")
 
     @staticmethod
-    def _collect_write_reasons(*reason_sources: Sequence[Any]) -> list[str]:
+    def _collect_write_reasons(*reason_sources: Iterable[Any]) -> list[str]:
         reasons: list[str] = []
         for source in reason_sources:
             for reason in source:

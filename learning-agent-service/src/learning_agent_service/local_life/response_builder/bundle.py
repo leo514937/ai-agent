@@ -467,13 +467,16 @@ def build_response_bundle(
     elif answer_contract is not None and answer_contract.answer_style == "clarification":
         pass # Keep original clarify text
 
-    coupon_query = any(token in str(raw_query or "").replace(" ", "") for token in ("券", "优惠", "团购", "代金券"))
-    coupon_answer_markers = ("券", "优惠", "代金券", "团购")
+    query_text = str(raw_query or "").replace(" ", "")
+    coupon_query = any(token in query_text for token in ("券", "优惠", "团购", "代金券"))
+    open_query = any(token in query_text for token in ("营业", "开门", "开着", "营业时间", "现在营业吗", "现在开吗", "营业吗"))
+    distance_query = any(token in query_text for token in ("距离", "有多远", "导航", "路线", "怎么走", "怎么去"))
+    scene_query = any(token in query_text for token in ("环境", "氛围", "场景", "适合", "口味", "服务", "推荐"))
     generic_topic_names = {"这家店", "这家", "这店", "该商家", "商家", "当前店家"}
     has_specific_topic = bool(str(current_topic or "").strip() and str(current_topic or "").strip() not in generic_topic_names)
-    if has_specific_topic and coupon_query and not any(marker in str(answer_text or "") for marker in coupon_answer_markers):
+    if has_specific_topic and coupon_query and not (open_query or distance_query or scene_query):
         coupon_answer = build_coupon_only_answer(
-            current_topic=current_topic,
+            topic_name=current_topic or "这家店",
             ranked_candidates=ranked_candidates,
             evidence_claims=evidence_claims,
             facet_result_bundle=facet_result_bundle,
@@ -888,7 +891,7 @@ def build_response_bundle(
     if answer_plan_model is not None:
         metrics["answer_plan_decision_type"] = answer_plan_model.decision_type
         metrics["answer_plan_degraded_reason"] = answer_plan_model.degraded_reason
-    if mode == "coupon" and "券信息" not in answer_text:
+    if mode == "coupon" and "券信息" not in answer_text and str(getattr(answer_contract, "answer_style", "") or "").strip().lower() != "coupon_only":
         coupon_answer = _build_coupon_environment_answer(
             current_topic=current_topic,
             ranked_candidates=ranked_candidates,

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import logging
+import time
 from collections.abc import Iterable, Sequence
+from dataclasses import dataclass, field
 from typing import Any
 
 from learning_agent_service.config import Settings
@@ -36,6 +39,29 @@ from .retrieval import (
 )
 from .rewrite import QueryRewriteService
 from .search import KnowledgeSearchConfig, KnowledgeSearchFacade
+from .quality_guard import RetrievalQualityGuard
+
+_LOGGER = logging.getLogger(__name__)
+
+
+@dataclass
+class SnapshotState:
+    version: str = "current"
+    status: str = "current"
+    loaded_at: float = 0.0
+    chunk_count: int = 0
+    is_last_good: bool = False
+
+
+@dataclass(frozen=True)
+class ReadinessStatus:
+    app_ready: bool = True
+    rag_ready: bool = True
+    snapshot_version: str = ""
+    snapshot_status: str = "current"
+    using_last_good_snapshot: bool = False
+    last_good_snapshot_age_seconds: float = 0.0
+    chunk_count: int = 0
 
 
 class HybridRAGOrchestrator:
@@ -72,6 +98,16 @@ class HybridRAGOrchestrator:
 
         self._chunks = self._governance.deduplicate_chunks(initial_chunks)
 
+        self._snapshot = SnapshotState(
+            version="current",
+            status="current",
+            loaded_at=time.time(),
+            chunk_count=len(self._chunks),
+            is_last_good=bool(self._chunks),
+        )
+        self._last_good_snapshot_chunks: tuple[KnowledgeChunk, ...] = self._chunks
+        self._last_good_snapshot_state: SnapshotState | None = self._snapshot if self._chunks else None
+
         self._dense_retriever = dense_retriever or HeuristicDenseRetriever(self._chunks, self._parent_child_resolver)
         self._sparse_retriever = sparse_retriever or LocalBM25SparseRetriever(
             self._chunks,
@@ -100,11 +136,13 @@ class HybridRAGOrchestrator:
         )
         self._citation_builder = citation_builder or CitationBuilder()
         self._reference_resolver = reference_resolver or ReferenceResolver()
+        self._quality_guard = RetrievalQualityGuard(self._policy.retrieval_quality_guard) if hasattr(self._policy, "retrieval_quality_guard") else RetrievalQualityGuard()
         self._search = KnowledgeSearchFacade(
             rewrite_service=self._rewrite,
             retriever=self._retriever,
             evidence_service=self._evidence,
             citation_builder=self._citation_builder,
+            quality_guard=self._quality_guard,
             config=KnowledgeSearchConfig(runtime_mode=runtime_mode),
         )
 
@@ -112,13 +150,73 @@ class HybridRAGOrchestrator:
     def knowledge_chunks(self) -> tuple[KnowledgeChunk, ...]:
         return self._chunks
 
-    def replace_knowledge_chunks(self, chunks: Iterable[KnowledgeChunk]) -> int:
-        """Replace the in-memory knowledge snapshot without blocking startup."""
-        refreshed_chunks = self._governance.deduplicate_chunks(tuple(chunks))
-        if not refreshed_chunks:
-            return 0
+    @property
+    def snapshot_state(self) -> SnapshotState:
+        return self._snapshot
 
-        self._chunks = refreshed_chunks
+    @property
+    def readiness(self) -> ReadinessStatus:
+        using_last_good = (
+            self._last_good_snapshot_state is not None
+            and self._snapshot is not self._last_good_snapshot_state
+        )
+        age = 0.0
+        if self._last_good_snapshot_state and self._last_good_snapshot_state.loaded_at > 0:
+            age = time.time() - self._last_good_snapshot_state.loaded_at
+        return ReadinessStatus(
+            app_ready=True,
+            rag_ready=bool(self._chunks),
+            snapshot_version=self._snapshot.version,
+            snapshot_status=self._snapshot.status,
+            using_last_good_snapshot=using_last_good,
+            last_good_snapshot_age_seconds=age,
+            chunk_count=len(self._chunks),
+        )
+
+    def load_snapshot(
+        self,
+        chunks: Iterable[KnowledgeChunk],
+        *,
+        version: str = "current",
+        status: str = "current",
+    ) -> int:
+        new_chunks = self._governance.deduplicate_chunks(tuple(chunks))
+        if not new_chunks:
+            _LOGGER.warning(
+                "snapshot_load_empty version=%s falling_back_to_last_good",
+                version,
+            )
+            if self._last_good_snapshot_chunks:
+                new_chunks = self._last_good_snapshot_chunks
+                _LOGGER.info(
+                    "snapshot_using_last_good chunk_count=%s",
+                    len(new_chunks),
+                )
+            else:
+                _LOGGER.error("snapshot_no_last_good_available")
+                return 0
+
+        prev_snapshot = self._snapshot
+        self._chunks = new_chunks
+        self._snapshot = SnapshotState(
+            version=version,
+            status=status,
+            loaded_at=time.time(),
+            chunk_count=len(new_chunks),
+            is_last_good=True,
+        )
+        self._last_good_snapshot_chunks = new_chunks
+        self._last_good_snapshot_state = self._snapshot
+        self._rebuild_retrieval_infra()
+        _LOGGER.info(
+            "snapshot_loaded version=%s chunk_count=%s prev_version=%s",
+            version,
+            len(new_chunks),
+            prev_snapshot.version,
+        )
+        return len(new_chunks)
+
+    def _rebuild_retrieval_infra(self) -> None:
         self._parent_child_resolver = ParentChildResolver(self._chunks)
         self._dense_retriever = HeuristicDenseRetriever(self._chunks, self._parent_child_resolver)
         self._sparse_retriever = LocalBM25SparseRetriever(
@@ -147,9 +245,13 @@ class HybridRAGOrchestrator:
             retriever=self._retriever,
             evidence_service=self._evidence,
             citation_builder=self._citation_builder,
+            quality_guard=self._quality_guard,
             config=KnowledgeSearchConfig(runtime_mode=self.runtime_mode),
         )
-        return len(self._chunks)
+
+    def replace_knowledge_chunks(self, chunks: Iterable[KnowledgeChunk]) -> int:
+        """Replace the in-memory knowledge snapshot without blocking startup."""
+        return self.load_snapshot(chunks, version="replaced")
 
     def resolve_reference(self, request: ReferenceResolutionRequest) -> ReferenceResolutionResult:
         internal_request = self._adapter.build_reference_request(request)
@@ -247,6 +349,8 @@ class HybridRAGOrchestrator:
 __all__ = [
     "DEFAULT_KNOWLEDGE_CHUNKS",
     "HybridRAGOrchestrator",
+    "ReadinessStatus",
+    "SnapshotState",
 ]
 
 

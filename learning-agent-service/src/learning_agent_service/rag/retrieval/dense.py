@@ -372,11 +372,15 @@ class QdrantOnlineDenseRetriever:
         return tuple(
             replace(
                 hit,
+                degraded=True,
+                retrieval_mode="heuristic_fallback",
                 metadata={
                     **dict(hit.metadata),
                     "degraded": True,
                     "fallback_reason": reason,
-                    "retrieval_mode": "fallback",
+                    "retrieval_mode": "heuristic_fallback",
+                    "confidence": 0.3,
+                    "quality_hint": f"dense_degraded:{reason}",
                 },
             )
             for hit in hits

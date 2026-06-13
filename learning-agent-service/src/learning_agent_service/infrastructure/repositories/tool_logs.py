@@ -1,8 +1,9 @@
-﻿"""SQLAlchemy repository for asynchronously persisted tool invocation logs."""
+"""SQLAlchemy repository for asynchronously persisted tool invocation logs."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import Any
 
 from learning_agent_service.infrastructure.db.models import ToolInvocationLogModel
 
@@ -12,7 +13,7 @@ from .records import ToolInvocationLogEntry
 try:
     from sqlalchemy import select
 except ImportError:  # pragma: no cover - depends on optional runtime installation.
-    select = None
+    select: Any = None
 
 
 class ToolInvocationLogRepository(SqlAlchemyRepositoryBase):

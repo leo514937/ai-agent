@@ -5,36 +5,13 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-from ...config import get_settings
+from ...config.settings_impl import get_settings
 from ...domain.contracts import EvidenceItem, RoutingDecision
 
 
 _PUNCT_ONLY_RE = re.compile(r"^[\s\W_]+$", re.UNICODE)
 _TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_+#.:-]+|[\u4e00-\u9fff]+")
 _NOISE_REPEAT_RE = re.compile(r"^(.)\1{5,}$", re.UNICODE)
-
-_LOW_INFO_TOKENS = {
-    "嗯", "啊", "哦", "唔", "好", "然后", "还有", "那", "这个", "那个",
-    "就是", "对", "行", "可以", "额", "呃", "嗯嗯",
-}
-
-_GREETING_TOKENS = ("你好", "您好", "嗨", "hello", "hi", "hey")
-_THANKS_TOKENS = ("谢谢", "多谢", "感谢", "辛苦了")
-_PROFILE_TOKENS = ("你有什么功能", "有什么功能", "能做什么", "你会什么", "你是谁", "你是什么", "怎么用你")
-
-_REFERENCE_TOKENS = (
-    "这个呢", "那家呢", "第二个呢", "第二家呢", "第一个呢",
-    "它呢", "这家", "那家", "这个店", "那个店", "这个套餐", "那个套餐",
-    "第二个", "第二家", "第一个", "前一个", "后一个",
-)
-
-_INCOMPLETE_RECOMMEND_TOKENS = (
-    "附近有什么推荐", "有什么推荐", "推荐一下", "帮我推荐",
-    "有什么好的", "附近有啥", "附近好吃", "周边推荐",
-)
-
-_MEMORY_UPDATE_TOKENS = ("以后", "一直", "长期", "记住", "习惯", "不吃辣", "少吃辣", "不吃香菜", "不吃牛肉", "偏好")
-_SESSION_ONLY_TOKENS = ("今天", "这次", "暂时", "今晚", "这顿", "这回", "本次")
 
 _RETRIEVAL_ACTIONS = {"rag_retrieval", "rag_plus_tool"}
 _NON_RETRIEVAL_ACTIONS = {"direct_answer", "clarify", "memory_update", "no_op", "reject", "tool_call"}
@@ -48,19 +25,17 @@ _PHASE2_TRACE_KEY = "phase2_trace"
 _PHASE3_TRACE_KEY = "phase3_trace"
 _PHASE4_TRACE_KEY = "phase4_trace"
 
-_LOCAL_LIFE_QUERY_TOKENS = (
-    "附近", "周边", "推荐", "火锅", "烤肉", "火锅店", "餐厅", "饭店", "店",
-    "适合", "约会", "带父母", "带长辈", "现在营业", "营业", "开门",
-    "还能用", "优惠券", "券", "团购", "套餐", "人均", "不踩雷", "不吵",
-)
-
-_UNSERVICEABLE_LOCATION_TOKENS = ("北极", "南极")
-
 _PHASE1_DATA_SOURCE_SLOT = "slot"
 _PHASE1_DATA_SOURCE_STATIC_RAG = "static_rag"
 _PHASE1_DATA_SOURCE_DYNAMIC_TOOL = "dynamic_tool"
 _PHASE1_DATA_SOURCE_CLIENT_CONTEXT = "client_context"
 _PHASE1_DATA_SOURCE_MIXED = "mixed"
+
+_LOCAL_LIFE_QUERY_TOKENS = (
+    "附近", "周边", "推荐", "火锅", "烤肉", "火锅店", "餐厅", "饭店", "店",
+    "适合", "约会", "带父母", "带长辈", "现在营业", "营业", "开门",
+    "还能用", "优惠券", "券", "团购", "套餐", "人均", "不踩雷", "不吵",
+)
 
 
 def _phase1_flags() -> tuple[bool, bool, bool]:
@@ -277,7 +252,19 @@ def _apply_phase1_routing_extra(turn_extra: dict[str, Any], routing: RoutingDeci
         return turn_extra
     merged = dict(turn_extra)
     routing_extra = dict(getattr(routing, "extra", {}) or {})
-    for key in ("route_review_decision", "required_facets", "optional_facets", "required_facets_source_constraints", "user_need"):
+    for key in (
+        "route_review_decision",
+        "required_facets",
+        "optional_facets",
+        "required_facets_source_constraints",
+        "user_need",
+        "current_shop",
+        "explicit_query_shop",
+        "target_shop_id",
+        "selected_shop_id",
+        "selected_shop_name",
+        "target_shop_name",
+    ):
         value = routing_extra.get(key)
         if value is not None:
             merged[key] = value

@@ -24,6 +24,7 @@ from learning_agent_service.rag.retrieval import (
     ReciprocalRankFusion,
 )
 from learning_agent_service.rag.rewrite import QueryRewriteConfig, QueryRewriteContext, QueryRewriteService
+from learning_agent_service.rag.rewrite_guard import QueryRewriteGuard, QueryRewriteGuardConfig
 
 
 class FixedRetriever:
@@ -133,6 +134,7 @@ def test_query_rewrite_llm_fallback_uses_structured_payload() -> None:
     service = QueryRewriteService(
         QueryRewriteConfig(llm_enabled=True, short_query_max_chars=4, low_confidence_threshold=0.5),
         llm_rewriter=fake_llm,
+        rewrite_guard=QueryRewriteGuard(QueryRewriteGuardConfig(min_semantic_similarity=0.0)),
     )
     plan = service.rewrite_with_llm(
         QueryRewriteContext(raw_query="它", intent="explain", intent_confidence=0.12, resolved_topic="RAG"),
@@ -757,7 +759,7 @@ def test_hybrid_retriever_caps_fused_hits_before_rerank() -> None:
         def __init__(self) -> None:
             self._config = SimpleNamespace(k=60, route_weights={"dense": 1.0, "sparse": 1.0, "metadata": 0.6})
 
-        def fuse(self, route_hits):  # noqa: ANN001
+        def fuse(self, route_hits, *, query_intent=None, query_slots=None):  # noqa: ANN001
             return fused_hits
 
     class _Reranker:

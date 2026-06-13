@@ -11,15 +11,18 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, Field, model_validator
 
-try:
+if TYPE_CHECKING:
     from pydantic_settings import BaseSettings, SettingsConfigDict
-except Exception:  # pragma: no cover - optional at authoring time
-    BaseSettings = BaseModel  # type: ignore[misc,assignment]
-    SettingsConfigDict = dict  # type: ignore[misc,assignment]
+else:
+    try:
+        from pydantic_settings import BaseSettings, SettingsConfigDict
+    except Exception:  # pragma: no cover - optional at authoring time
+        BaseSettings = BaseModel
+        SettingsConfigDict = dict
 
 
 SERVICE_ROOT = Path(__file__).resolve().parents[3]
@@ -242,6 +245,36 @@ class ObservabilitySettings(BaseModel):
     outbox_max_attempts: int = 10
 
 
+class HybridRouterSettings(BaseSettings):
+    """混合路由器配置"""
+    model_config = SettingsConfigDict(
+        env_prefix="LEARNING_AGENT_",
+        env_file=ENV_FILE_CANDIDATES,
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+    
+    # LLM配置
+    enable_hybrid_router_llm: bool = True  # 是否启用LLM路由
+    hybrid_router_llm_model: str = "gpt-4o-mini"  # LLM模型
+    hybrid_router_llm_timeout: float = 5.0  # LLM超时（秒）
+    hybrid_router_llm_max_retries: int = 2  # LLM最大重试次数
+    
+    # 缓存配置
+    hybrid_router_cache_ttl: int = 300  # 缓存TTL（秒）
+    hybrid_router_cache_size: int = 1000  # 缓存大小
+    
+    # 降级配置
+    hybrid_router_fallback_confidence_threshold: float = 0.5  # 降级阈值
+    
+    # 监控配置
+    hybrid_router_enable_trace: bool = True  # 启用路由追踪
+    
+    # 流量控制配置（灰度发布）
+    hybrid_router_traffic_percentage: float = 100.0  # LLM路由流量百分比（0-100）
+    hybrid_router_rollout_stage: str = "full"  # 灰度阶段：disabled/testing/canary/progressive/full
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=ENV_FILE_CANDIDATES,
@@ -354,6 +387,7 @@ class Settings(BaseSettings):
     embedding: EmbeddingSettings = Field(default_factory=EmbeddingSettings)
     openai: OpenAISettings = Field(default_factory=OpenAISettings)
     observability: ObservabilitySettings = Field(default_factory=ObservabilitySettings)
+    hybrid_router: HybridRouterSettings = Field(default_factory=HybridRouterSettings)
 
     dense_top_k: int = 10
     sparse_top_k: int = 8
@@ -1306,7 +1340,7 @@ class Settings(BaseSettings):
         from learning_agent_service.memory.retrieval import RetrievalPolicyConfig
         from learning_agent_service.rag.evidence import EvidenceGovernanceConfig
         from learning_agent_service.rag.hybrid import HybridRetrieverConfig
-        from learning_agent_service.rag.retrieval import RRFConfig
+        from learning_agent_service.rag.retrieval.shared import RRFConfig
         from learning_agent_service.rag.rewrite import QueryRewriteConfig
 
         return PolicySettings(

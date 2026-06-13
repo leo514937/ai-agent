@@ -48,7 +48,7 @@ from learning_agent_service.tools.service import (
     build_default_tool_registry,
 )
 from learning_agent_service.application.dependencies_impl import OpenAIAnswerComposeAdapter
-from learning_agent_service.application.router import build_initial_routing_decision
+from learning_agent_service.application.router.phase0_quality import build_initial_routing_decision
 from learning_agent_service.infrastructure.db.openai_client import OpenAIRuntime
 
 

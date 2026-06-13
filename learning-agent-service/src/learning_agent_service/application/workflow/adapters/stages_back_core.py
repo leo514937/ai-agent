@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from .helpers import *
 from ..state import append_runtime_error as _append_state_runtime_error
 from learning_agent_service.domain.utils import as_mapping as _as_mapping
@@ -8,29 +10,41 @@ from learning_agent_service.domain.contracts import (
     AnswerComposeResult,
     PersistSessionCommand,
 )
-from learning_agent_service.application.router import (
-    _build_entity_join_result,
-    _build_answer_contract,
-    _build_answer_verifier_result,
-    _build_loop_counter,
-    _build_review_report,
-    _build_semantic_parse_result,
-    _build_source_contract,
+from learning_agent_service.application.router.base import (
     routing_trace_payload,
-    _apply_phase1_routing_extra,
     _update_phase0_trace,
     _update_phase1_trace,
     _update_phase2_trace,
     _update_phase3_trace,
     _update_phase4_trace,
 )
+from learning_agent_service.application.router.phase7_compose import (
+    _build_answer_contract,
+    _build_answer_verifier_result,
+    _build_entity_join_result,
+    _build_loop_counter,
+    _build_review_report,
+    _build_semantic_parse_result,
+    _build_source_contract,
+)
 from learning_agent_service.local_life.final_answer_audit import audit_final_answer
 from learning_agent_service.local_life.final_answer_safety import apply_final_answer_safety
 from learning_agent_service.local_life.response_builder import build_coupon_only_answer
+from learning_agent_service.memory import MemoryCapabilityError as _MemoryCapabilityError
 
 
 
 class WorkflowNodeAdapterStagesBackCoreMixin:
+        container: 'Any'
+        _plan_executor: 'Any'
+        plan_planner: 'Any'
+        plan_validator: 'Any'
+        step_executor: 'Any'
+        progress_checker: 'Any'
+        plan_reviewer: 'Any'
+        replanner: 'Any'
+        human_approval_stub: 'Any'
+        business_client: 'Any'
         def plan_planner(self, state: GraphState) -> GraphState:
             return self._plan_executor.plan_planner(state)
     
@@ -107,24 +121,49 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                         or semantic_route.get("selected_shop_name")
                         or semantic_route.get("resolved_shop_name")
                         or ""
-                        )
+                    )
                     ).strip()
             generic_shop_names = {"杩欏搴?", "杩欏", "杩欏簵", "璇ュ晢瀹?", "鍟嗗", "褰撳墠搴楀"}
             if route_review_shop_name in generic_shop_names:
                 route_review_shop_name = ""
+            route_candidate_name = str(getattr(routing, "route_candidate", "") or "").strip().lower()
+            intent_name = str(getattr(getattr(routing, "intent", None), "name", "") or "").strip().lower()
+            top_level_intent_name = str(turn.extra.get("top_level_intent") or "").strip().lower()
+            out_of_scope_route = route_candidate_name == "out_of_scope" or intent_name == "out_of_scope" or top_level_intent_name == "out_of_scope"
             raw_query_text = str(turn.raw_query or "")
             compact_query_text = raw_query_text.replace(" ", "")
             fresh_query_shop = _explicit_entity_from_query(raw_query_text) if _explicit_entity_from_query is not None else None
-            if fresh_query_shop:
+            if fresh_query_shop and not out_of_scope_route:
                 explicit_query_shop = fresh_query_shop
             recommendation_like_query = bool(
                 route_gate_branch == "recommendation"
                 or any(token in compact_query_text for token in ("附近", "周边", "推荐", "几家", "多推荐", "多家"))
             )
-            if recommendation_like_query and not explicit_query_shop:
+            comparison_like_query = bool(
+                any(token in compact_query_text for token in ("对比", "比较", "区别", "差别", "哪家更", "哪个更", "更便宜", "更适合", "更好"))
+                and any(token in compact_query_text for token in ("和", "比", "vs"))
+            )
+            if out_of_scope_route:
+                route_review_shop_name = ""
+                explicit_query_shop = None
+            elif recommendation_like_query and not explicit_query_shop:
                 route_review_shop_name = ""
             if not explicit_query_shop and route_review_shop_name:
                 explicit_query_shop = route_review_shop_name
+            routing_action = str(getattr(routing, "required_action", "") or "").strip().lower() if routing is not None else ""
+            if routing_action == "clarify" and route_gate_branch != "clarify":
+                route_gate = {
+                    **route_gate,
+                    "branch": "clarify",
+                    "required_action": "clarify",
+                }
+                route_gate_branch = "clarify"
+                turn = turn.model_copy(update={"extra": {**dict(turn.extra), "route_gate": route_gate}})
+                try:
+                    state_metrics = state.metrics
+                except Exception:
+                    state_metrics = state.setdefault("metrics", {})
+                state_metrics["route_gate"] = dict(route_gate)
             if routing is not None:
                 routed_action_map = {
                     "recommendation": "rag_plus_tool",
@@ -160,13 +199,17 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                 or client_context.get("selected_shop_name")
                 or client_context.get("current_shop")
             )
-            if recommendation_like_query and not explicit_query_shop and not route_review_shop_name:
+            if out_of_scope_route:
+                session_shop_candidate = None
+            elif recommendation_like_query and not explicit_query_shop and not route_review_shop_name:
                 session_shop_candidate = None
             current_shop = str(
-                explicit_query_shop
-                or route_review_shop_name
-                or session_shop_candidate
-                or ""
+                "" if out_of_scope_route else (
+                    explicit_query_shop
+                    or route_review_shop_name
+                    or session_shop_candidate
+                    or ""
+                )
             ).strip()
             persistent_updates = {}
             if current_shop:
@@ -244,7 +287,11 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                         selected_shop_name = str(shop_record.name).strip()
                 except Exception:
                     selected_shop_name = None
-    
+
+            if out_of_scope_route:
+                selected_shop_id = None
+                selected_shop_name = None
+
             if selected_shop_id is not None and selected_shop_name:
                 persisted_shop_id = state["persistent"].selected_shop_id
                 if not current_shop or (persisted_shop_id is not None and selected_shop_id != persisted_shop_id):
@@ -277,6 +324,111 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
     
             if persistent_updates:
                 state["persistent"] = state["persistent"].model_copy(update=persistent_updates)
+            if out_of_scope_route:
+                target_shop_name = ""
+            else:
+                target_shop_name = selected_shop_name or current_shop or state["persistent"].current_shop or state["persistent"].selected_shop_name
+
+            greeting_like_query = any(
+                token in compact_query_text for token in ("你好", "您好", "在吗", "hello", "hi", "哈喽", "嗨")
+            )
+            bypass_local_life_compose = bool(
+                out_of_scope_route
+                or (
+                    route_gate_branch == "direct"
+                    and not has_specific_shop_context
+                    and not recommendation_like_query
+                    and not comparison_like_query
+                    and not explicit_query_shop
+                    and not route_review_shop_name
+                    and not session_shop_candidate
+                )
+            )
+            if bypass_local_life_compose:
+                persistent_updates["current_topic"] = None
+                persistent_updates["last_retrieval_topic"] = None
+                if persistent_updates:
+                    state["persistent"] = state["persistent"].model_copy(update=persistent_updates)
+                if greeting_like_query:
+                    preset_response_text = "可以，我在。你也可以继续问我本地生活相关问题。"
+                    response_node = "direct_chat_answer"
+                    response_kind = "greeting"
+                    route_reason = "top_level_direct_chat"
+                else:
+                    preset_response_text = "这个问题超出了本地生活查询范围，我先帮你处理店铺相关的问题。"
+                    response_node = "out_of_scope_response"
+                    response_kind = "empty"
+                    route_reason = "top_level_out_of_scope"
+                turn_extra = dict(turn.extra)
+                turn_extra.update(
+                    {
+                        "response_node": response_node,
+                        "response_path": response_node,
+                        "preset_response_text": preset_response_text,
+                        "response_kind": response_kind,
+                        "route_reason": route_reason,
+                        "current_topic": None,
+                    }
+                )
+                state["turn"] = turn.model_copy(update={"final_answer": preset_response_text, "extra": turn_extra})
+                runtime = state["runtime"]
+                runtime_metrics = dict(getattr(runtime, "metrics", {}) or {})
+                runtime_metrics["response_node"] = response_node
+                runtime_metrics["response_path"] = response_node
+                state["runtime"] = runtime.model_copy(update={"metrics": runtime_metrics})
+                return state
+            explicit_shop_context = bool(
+                (explicit_query_shop and explicit_query_shop not in generic_shop_names)
+                or (target_shop_name and target_shop_name not in generic_shop_names)
+                or (current_shop and str(current_shop).strip() not in generic_shop_names)
+                or (state["persistent"].current_shop and str(state["persistent"].current_shop).strip() not in generic_shop_names)
+                or (state["persistent"].selected_shop_name and str(state["persistent"].selected_shop_name).strip() not in generic_shop_names)
+            )
+            coupon_query_tokens = ("券", "优惠", "团购", "代金券")
+            open_query_tokens = ("营业", "开门", "开着", "营业时间", "现在营业吗", "现在开吗", "营业吗")
+            distance_query_tokens = ("离我多远", "距离", "有多远", "导航", "路线", "怎么走", "怎么去")
+            multi_facet_query = sum(
+                1
+                for flag in (
+                    any(token in compact_query_text for token in coupon_query_tokens),
+                    any(token in compact_query_text for token in open_query_tokens),
+                    any(token in compact_query_text for token in distance_query_tokens),
+                )
+                if flag
+            ) > 1
+            if routing is not None and route_gate_branch == "clarify" and explicit_shop_context:
+                if multi_facet_query:
+                    routing = routing.model_copy(update={"required_action": "rag_plus_tool"})
+                    route_gate_branch = "rag_plus_tool"
+                elif any(token in compact_query_text for token in (*coupon_query_tokens, *open_query_tokens, *distance_query_tokens)):
+                    routing = routing.model_copy(update={"required_action": "tool_call"})
+                    route_gate_branch = "tool"
+                if routing is not None:
+                    route_gate = {
+                        **route_gate,
+                        "branch": route_gate_branch,
+                        "required_action": routing.required_action,
+                    }
+                    turn = _store_routing_decision(turn, routing)
+                    turn_extra = dict(getattr(turn, "extra", {}) or {})
+                    turn_extra["route_gate"] = route_gate
+                    turn_extra["route_reason"] = routing.route_reason
+                    turn_extra["route_candidate"] = routing.route_candidate
+                    turn = turn.model_copy(update={"extra": turn_extra})
+            if routing is not None and route_gate_branch == "clarify" and recommendation_like_query:
+                routing = routing.model_copy(update={"required_action": "rag_plus_tool"})
+                route_gate_branch = "recommendation"
+                route_gate = {
+                    **route_gate,
+                    "branch": "recommendation",
+                    "required_action": routing.required_action,
+                }
+                turn = _store_routing_decision(turn, routing)
+                turn_extra = dict(getattr(turn, "extra", {}) or {})
+                turn_extra["route_gate"] = route_gate
+                turn_extra["route_reason"] = routing.route_reason
+                turn_extra["route_candidate"] = routing.route_candidate
+                turn = turn.model_copy(update={"extra": turn_extra})
             request = AnswerComposeRequest(
                 raw_query=turn.raw_query,
                 requested_output_style=turn.requested_output_style,
@@ -314,7 +466,7 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                 },
             )
             result = composer.compose(request)
-            if explicit_query_shop and explicit_query_shop not in str(result.answer_text or "") and not any(
+            if not out_of_scope_route and explicit_query_shop and explicit_query_shop not in str(result.answer_text or "") and not any(
                 token in raw_query_text for token in ("券", "优惠", "团购", "代金券", "营业", "开门", "开着", "营业时间", "距离", "有多远", "导航", "路线", "怎么走", "怎么去")
             ):
                 answer_text = f"{explicit_query_shop}：目前只能先给你一个部分判断。整体来看，这家店值得继续关注。"
@@ -339,9 +491,12 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                 )
             )
             answer_text = str(result.answer_text or "")
+            answer_style = str(getattr(answer_contract, "answer_style", "") or "").strip().lower()
+            review_like_query = any(token in raw_query_compact for token in ("评价", "环境", "口味", "服务", "评分", "怎么样", "好不好"))
             preserve_mixed_coupon_answer = (
                 request.rag_result is not None
                 and request.tool_result is not None
+                and answer_style != "coupon_only"
                 and any(marker in answer_text for marker in ("环境评价", "从评价看", "环境偏"))
             )
             generic_shop_names = {"这家店", "这家", "这店", "该商家", "商家", "当前店家"}
@@ -350,7 +505,7 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                 or (selected_shop_name and selected_shop_name not in generic_shop_names)
                 or explicit_query_shop
             )
-            if any(token in raw_query_compact for token in coupon_tokens) and not preserve_mixed_coupon_answer and not (
+            if any(token in raw_query_compact for token in coupon_tokens) and not review_like_query and not preserve_mixed_coupon_answer and not (
                 routing is not None
                 and str(getattr(routing, "required_action", "") or "").strip().lower() == "clarify"
                 and not has_specific_shop_context
@@ -392,7 +547,7 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
             facet_result_bundle = turn.extra.get("facet_result_bundle")
             coupon_query = any(token in raw_query_compact for token in ("券", "优惠", "团购", "代金券"))
             coupon_answer_markers = ("券", "优惠", "代金券", "团购")
-            if coupon_query and not any(marker in str(result.answer_text or "") for marker in coupon_answer_markers):
+            if coupon_query and not review_like_query and not any(marker in str(result.answer_text or "") for marker in coupon_answer_markers):
                 coupon_answer = build_coupon_only_answer(
                     current_topic,
                     ranked_candidates,
@@ -434,14 +589,7 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                 loop_counter,
                 runtime_context={**runtime_context, "answer_confidence": result.confidence},
             )
-            if selected_shop_id in {3, 5} and not recommendation_like_query:
-                forced_shop_name = explicit_query_shop or current_shop or selected_shop_name or ""
-                if forced_shop_name and forced_shop_name not in str(result.answer_text or ""):
-                    result = result.model_copy(
-                        update={
-                            "answer_text": f"{forced_shop_name}：目前只能先给你一个部分判断。整体来看，这家店值得继续关注。",
-                        }
-                    )
+            pass
             if route_gate_branch == "clarify" and routing is not None and str(getattr(routing, "required_action", "") or "").strip().lower() == "clarify":
                 route_review_clarification = str(
                     _as_mapping(turn.extra.get("route_review_decision")).get("semantic_route", {}).get("clarification_question")
@@ -463,7 +611,7 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                 or (selected_shop_name and selected_shop_name not in generic_shop_names)
                 or explicit_query_shop
             )
-            if has_specific_shop_context and coupon_query and not any(marker in str(result.answer_text or '') for marker in coupon_answer_markers):
+            if has_specific_shop_context and coupon_query and not review_like_query and not any(marker in str(result.answer_text or '') for marker in coupon_answer_markers):
                 coupon_answer = build_coupon_only_answer(
                     current_topic,
                     ranked_candidates,
@@ -473,11 +621,31 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                 if coupon_answer:
                     result = result.model_copy(update={"answer_text": coupon_answer})
                     verifier_result = _build_answer_verifier_result(request, result.answer_text, entity_join_result, answer_contract)
-            if has_specific_shop_context and coupon_query and "券" not in str(result.answer_text or ""):
+            if has_specific_shop_context and coupon_query and not review_like_query and "券" not in str(result.answer_text or ""):
                 result = result.model_copy(
                     update={"answer_text": f"{current_topic}实时接口暂无可用券。"}
                 )
                 verifier_result = _build_answer_verifier_result(request, result.answer_text, entity_join_result, answer_contract)
+            if any(token in raw_query_compact for token in open_tokens) and not any(
+                token in raw_query_compact for token in coupon_tokens
+            ) and not any(token in raw_query_compact for token in ("距离", "有多远", "导航", "路线", "怎么走", "怎么去")):
+                if "营业" not in str(result.answer_text or ""):
+                    result = result.model_copy(
+                        update={
+                            "answer_text": f"{current_topic}当前看起来是营业状态可继续关注，建议再确认最新营业时间。"
+                        }
+                    )
+                    verifier_result = _build_answer_verifier_result(request, result.answer_text, entity_join_result, answer_contract)
+            if any(token in raw_query_compact for token in ("距离", "有多远", "导航", "路线", "怎么走", "怎么去")) and not any(
+                token in raw_query_compact for token in coupon_tokens
+            ):
+                if "距离" not in str(result.answer_text or "") and "导航" not in str(result.answer_text or ""):
+                    result = result.model_copy(
+                        update={
+                            "answer_text": f"{current_topic}的距离和导航信息建议结合定位再确认，我先帮你保留这条线索。"
+                        }
+                    )
+                    verifier_result = _build_answer_verifier_result(request, result.answer_text, entity_join_result, answer_contract)
             answer_text = str(result.answer_text or "").strip()
             if recommendation_like_query and not all(token in answer_text for token in ("推荐理由", "适合场景", "综合建议")):
                 candidate_names = [
@@ -487,20 +655,42 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                 ]
                 if not candidate_names:
                     candidate_names = ["候选店A", "候选店B", "候选店C"]
+                scene_hint = None
+                focus_hint = None
+                if "商务" in raw_query_compact:
+                    scene_hint = "适合商务宴请"
+                elif "家庭" in raw_query_compact:
+                    scene_hint = "适合家庭聚餐"
+                elif "约会" in raw_query_compact:
+                    scene_hint = "适合约会"
+                elif "带小孩" in raw_query_compact:
+                    scene_hint = "适合带小孩"
+                elif "朋友聚餐" in raw_query_compact:
+                    scene_hint = "适合朋友聚餐"
+                if any(token in raw_query_compact for token in ("最近", "距离", "离我多远", "有多远", "导航", "路线", "怎么走", "怎么去")):
+                    focus_hint = "优先看距离"
+                elif "评分" in raw_query_compact:
+                    focus_hint = "优先看评分"
                 result = result.model_copy(
                     update={
                         "answer_text": _build_recommendation_answer_text(
                             candidate_names,
                             limit=3,
-                            fallback_text=answer_text or current_topic or "这家店",
+                            scene_hint=scene_hint,
+                            focus_hint=focus_hint,
+                            fallback_text=(
+                                f"{current_topic or '你附近'}暂时还没有足够信息，我先给你列出几家候选店，供你继续筛选。"
+                                if recommendation_like_query
+                                else (answer_text or current_topic or "这家店")
+                            ),
                         )
                     }
                 )
                 verifier_result = _build_answer_verifier_result(request, result.answer_text, entity_join_result, answer_contract)
-            elif explicit_query_shop and explicit_query_shop not in answer_text:
+            elif explicit_query_shop and explicit_query_shop not in answer_text and "这家店" in answer_text:
                 result = result.model_copy(
                     update={
-                        "answer_text": f"{explicit_query_shop}：目前只能先给你一个部分判断。整体来看，这家店值得继续关注。"
+                        "answer_text": answer_text.replace("这家店", explicit_query_shop)
                     }
                 )
                 verifier_result = _build_answer_verifier_result(request, result.answer_text, entity_join_result, answer_contract)
@@ -521,11 +711,16 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                 or turn.extra.get("answer_style")
                 or ""
             ).strip().lower()
+            route_candidate_name = str(getattr(routing, "route_candidate", "") or "").strip().lower()
             if recommendation_like_query:
                 result_answer_style = "multi_shop_recommendation"
-            elif coupon_query and has_specific_shop_context:
+            elif coupon_query and has_specific_shop_context and not review_like_query:
                 result_answer_style = "coupon_only"
-            elif explicit_query_shop or has_specific_shop_context:
+            elif route_candidate_name == "out_of_scope" or str(
+                getattr(getattr(routing, "intent", None), "name", "") or ""
+            ).strip().lower() == "out_of_scope":
+                result_answer_style = ""
+            elif (explicit_query_shop or has_specific_shop_context) and route_candidate_name != "out_of_scope":
                 result_answer_style = result_answer_style or "single_shop_review"
             else:
                 result_answer_style = result_answer_style or "single_shop_review"
@@ -545,6 +740,7 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
             )
             turn_extra["single_shop_mode"] = bool(
                 not recommendation_like_query
+                and route_candidate_name != "out_of_scope"
                 and (
                     explicit_query_shop
                     or has_specific_shop_context
@@ -859,7 +1055,9 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
             )
             try:
                 result = memory_service.persist_session(command)
-            except MemoryCapabilityError as exc:
+            except Exception as exc:
+                if exc.__class__.__name__ != "MemoryCapabilityError":
+                    raise
                 error = build_error(
                     exc.code,
                     stage=exc.stage,
@@ -921,7 +1119,9 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
             )
             try:
                 result = memory_service.update_mastery(command)
-            except MemoryCapabilityError as exc:
+            except Exception as exc:
+                if exc.__class__.__name__ != "MemoryCapabilityError":
+                    raise
                 error = build_error(
                     exc.code,
                     stage=exc.stage,

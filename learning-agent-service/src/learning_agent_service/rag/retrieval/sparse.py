@@ -25,6 +25,7 @@ from .shared import (
 from ..protocols import SparseRetriever
 from ..qdrant_filters import QdrantFilterBuilder
 from .dense import HeuristicDenseRetriever, ParentChildResolver
+from .metadata import HeuristicMetadataRetriever
 
 class HeuristicSparseRetriever(HeuristicDenseRetriever):
     route_name = "sparse"
@@ -326,20 +327,16 @@ class QdrantOnlineSparseRetriever:
         )
 
     def warmup_embedding(self, query: str) -> dict[str, Any]:
-        if not self._enabled or self._embedding_adapter is None:
+        if not self._enabled or self._sparse_query_adapter is None:
             return {"cache_hit": False, "latency_ms": 0.0, "skipped": True}
         started_at = time.perf_counter()
-        cache_hit = False
         try:
-            if hasattr(self._embedding_adapter, "embed_with_stats"):
-                _vector, cache_hit = self._embedding_adapter.embed_with_stats(query)
-            else:
-                _vector = self._embedding_adapter.embed(query)
+            self._adapt_query(query)
         except Exception:  # pragma: no cover - warmup must be best-effort
-            _LOGGER.exception("qdrant_dense_embedding_warmup_failed")
+            _LOGGER.exception("qdrant_sparse_embedding_warmup_failed")
             return {"cache_hit": False, "latency_ms": (time.perf_counter() - started_at) * 1000.0, "failed": True}
         return {
-            "cache_hit": bool(cache_hit),
+            "cache_hit": False,
             "latency_ms": (time.perf_counter() - started_at) * 1000.0,
             "skipped": False,
         }

@@ -1,4 +1,4 @@
-﻿"""SQLAlchemy repository for durable clarification records."""
+"""SQLAlchemy repository for durable clarification records."""
 
 from __future__ import annotations
 
@@ -38,6 +38,7 @@ class ClarificationRecordRepository(SqlAlchemyRepositoryBase):
 
     def list_for_session(self, session_id: str, limit: int = 20) -> list[ClarificationRecordModel]:
         self._require_sqlalchemy()
+        assert select is not None
         with self.session_scope() as session:
             return list(
                 session.execute(

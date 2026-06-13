@@ -323,7 +323,7 @@ def _evaluate_readiness(app: Any) -> dict[str, Any]:
 
 def _build_fastapi_app(service: LearningAgentService | None = None, app_cls: Any = None) -> Any:
     app_factory = app_cls or FastAPI or CompatFastAPI
-    kwargs = {
+    kwargs: dict[str, Any] = {
         "title": "Local Life Agent Service",
         "version": __version__,
         "docs_url": "/docs",
@@ -344,7 +344,7 @@ def _build_fastapi_app(service: LearningAgentService | None = None, app_cls: Any
     app.state.service_metrics = ServiceMetricsRegistry()
     observed_service = InstrumentedLearningAgentService(service, app.state.service_metrics)
     app.state.learning_service = observed_service
-    app.include_router(create_api_router(observed_service))
+    app.include_router(create_api_router(observed_service, include_session_history_routes=True))  # type: ignore[arg-type]
     _register_qdrant_knowledge_warmup(app)
 
     @app.get("/health")

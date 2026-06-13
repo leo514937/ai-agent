@@ -71,23 +71,8 @@ def check_hard_guard(
 
     # 3. Incomplete Recommendation
     if input_quality.kind == "incomplete_recommendation":
-        # Check context anchor
-        has_location_ctx = (
-            _contains_any(normalized, ("附近", "周边", "附近有什么", "附近有啥"))
-            and _context_has_candidate_anchor(persistent)
-        )
-        if has_location_ctx:
-            return HardGuardResult(blocked=True, reason="incomplete_recommendation_ambiguous_with_current_shop", required_action="clarify", route_candidate="clarify")
-        
-        has_any_location = (
-            any(city in normalized for city in ("北京", "上海", "广州", "深圳", "杭州", "成都", "重庆", "南京", "苏州", "武汉", "西安", "天津", "长沙", "厦门", "青岛", "宁波", "郑州") if city)
-            or persistent.current_city
-            or persistent.current_location
-            or (client_context or {}).get("location")
-            or (client_context or {}).get("city")
-            or (client_context or {}).get("current_city")
-        )
-        if not has_any_location:
-            return HardGuardResult(blocked=True, reason="incomplete_recommendation_missing_context", required_action="clarify", route_candidate="clarify")
+        # 推荐类请求即使缺少城市/位置，也应继续进入推荐流，由后续节点决定是部分回答还是补充上下文。
+        # 这里不再提前打成澄清，避免“附近/最近”类查询被硬拦截。
+        pass
 
     return HardGuardResult(blocked=False)

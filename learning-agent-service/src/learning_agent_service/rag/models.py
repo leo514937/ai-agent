@@ -338,6 +338,8 @@ class RecallHit:
     retrieval_kind: str = ""
     collection_name: str = ""
     source_domain: str = ""
+    degraded: bool = False
+    retrieval_mode: str = "normal"
 
 
 @dataclass(frozen=True)
@@ -367,6 +369,8 @@ class RetrievalTraceItem:
     collection_name: str = ""
     source_domain: str = ""
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    degraded: bool = False
+    retrieval_mode: str = "normal"
 
     @classmethod
     def from_chunk(cls, chunk: KnowledgeChunk, **kwargs: Any) -> RetrievalTraceItem:
@@ -386,6 +390,8 @@ class RetrievalTraceItem:
     @classmethod
     def from_hit(cls, hit: RecallHit, **kwargs: Any) -> RetrievalTraceItem:
         rejected_reason = kwargs.pop("rejected_reason", hit.rejected_reason)
+        degraded = kwargs.pop("degraded", hit.degraded)
+        retrieval_mode = kwargs.pop("retrieval_mode", hit.retrieval_mode)
         return cls.from_chunk(
             hit.chunk,
             score=hit.score,
@@ -404,6 +410,8 @@ class RetrievalTraceItem:
             retrieval_kind=hit.retrieval_kind,
             collection_name=hit.collection_name,
             source_domain=hit.source_domain,
+            degraded=degraded,
+            retrieval_mode=retrieval_mode,
             **kwargs,
         )
 
@@ -470,6 +478,10 @@ class HybridRecallResult:
     fused_hits: tuple[RecallHit, ...] = ()
     reranked_hits: tuple[RecallHit, ...] = ()
     degraded_routes: tuple[str, ...] = ()
+    degraded: bool = False
+    retrieval_mode: str = "normal"
+    confidence: float = 1.0
+    quality_hint: str = ""
     metrics: Mapping[str, Any] = field(default_factory=dict)
     query_plan: RetrievalPlan | None = None
     debug_trace: RetrievalTrace | None = None

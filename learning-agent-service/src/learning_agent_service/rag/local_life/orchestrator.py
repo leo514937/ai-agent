@@ -4,9 +4,9 @@ import argparse
 import logging
 import re
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from learning_agent_service.config.settings_impl import get_settings
 from learning_agent_service.infrastructure.db.openai_client import build_openai_runtime
@@ -524,7 +524,7 @@ class LocalLifeParentChildRetriever:
             vector = self._embedding_adapter(query)
         else:
             raise RuntimeError("Embedding adapter does not expose embed capability")
-        return list(vector or [])
+        return list(cast(Iterable[Any], vector or []))
 
     def _recall_hits(
         self,
@@ -1044,13 +1044,13 @@ class LocalLifeParentChildRetriever:
             "scene_tags": (
                 [str(get_payload_value(parent_meta, "scene_tags"))]
                 if isinstance(get_payload_value(parent_meta, "scene_tags"), str)
-                else list(get_payload_value(parent_meta, "scene_tags") or get_payload_value(parent_meta, "tags") or [])
+                else list(cast(Iterable[Any], get_payload_value(parent_meta, "scene_tags") or get_payload_value(parent_meta, "tags") or []))
             ),
             "parking": self._is_true(parent_meta, "parking"),
             "quiet_score": float(get_payload_value(parent_meta, "quiet_score") or 0.0),
             "family_friendly": self._is_true(parent_meta, "family_friendly"),
             "elder_friendly": self._is_true(parent_meta, "elder_friendly"),
-            "tags": list(get_payload_value(parent_meta, "tags") or []),
+            "tags": list(cast(Iterable[Any], get_payload_value(parent_meta, "tags") or [])),
             "version": _first_text(get_payload_value(parent_meta, "version")),
             "is_latest": self._is_true(parent_meta, "is_latest"),
             "is_active": self._is_true(parent_meta, "is_active"),
@@ -1318,14 +1318,14 @@ def _normalize_points(response: Any) -> list[Any]:
         for key in ("points", "result", "records", "items"):
             value = response.get(key)
             if value is not None:
-                return list(value)
+                return list(cast(Iterable[Any], value))
         return []
     points = getattr(response, "points", None)
     if points is not None:
-        return list(points)
+        return list(cast(Iterable[Any], points))
     result = getattr(response, "result", None)
     if result is not None:
-        return list(result)
+        return list(cast(Iterable[Any], result))
     if isinstance(response, Sequence) and not isinstance(response, (str, bytes)):
         return list(response)
     return []
@@ -1336,13 +1336,13 @@ def _normalize_groups_response(response: Any) -> list[Any]:
         return []
     if isinstance(response, Mapping):
         groups = response.get("groups") or response.get("result") or []
-        return list(groups)
+        return list(cast(Iterable[Any], groups))
     groups = getattr(response, "groups", None)
     if groups is not None:
-        return list(groups)
+        return list(cast(Iterable[Any], groups))
     result = getattr(response, "result", None)
     if result is not None:
-        return list(result)
+        return list(cast(Iterable[Any], result))
     if isinstance(response, Sequence) and not isinstance(response, (str, bytes)):
         return list(response)
     return []
@@ -1377,9 +1377,9 @@ def _group_items(group: Any) -> list[Any]:
     for name in ("hits", "points", "records", "result"):
         value = getattr(group, name, None)
         if value is not None:
-            return list(value)
+            return list(cast(Iterable[Any], value))
         if isinstance(group, Mapping) and group.get(name) is not None:
-            return list(group.get(name) or [])
+            return list(cast(Iterable[Any], group.get(name) or []))
     return []
 
 

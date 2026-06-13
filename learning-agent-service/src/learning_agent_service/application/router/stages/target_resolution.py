@@ -89,9 +89,9 @@ def resolve_target_merchant(
     clarification_question = None
     if missing:
         if "coupon" in parser_result.facet_needs or parser_result.intent == "package_or_coupon":
-            clarification_question = "浣犳兂鏌ヨ鍝搴楃殑浼樻儬鍒革紵璇峰憡璇夋垜鍏蜂綋闂ㄥ簵鍚嶇О銆?"
+            clarification_question = "你想查询哪家店的优惠券？请告诉我具体门店名称。"
         else:
-            clarification_question = "浣犻棶鐨勬槸鍝搴楋紵璇峰憡璇夋垜鍏蜂綋搴楀悕鎴栭€夋嫨鍒氭墠鎻愬埌鐨勫晢瀹躲€?"
+            clarification_question = "你问的是哪家店？请告诉我具体店名或选择刚才提到的商家。"
 
     return ResolvedTarget(
         shop_id=shop_id_str,

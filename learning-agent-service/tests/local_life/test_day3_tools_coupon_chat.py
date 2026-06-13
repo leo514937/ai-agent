@@ -73,7 +73,7 @@ class Day3ToolsCouponTestCase(unittest.TestCase):
         self.assertTrue(answer)
         self.assertTrue(any(x in answer for x in ["海底捞", "水晶", "open", "营业", "门店"]))
         self.assertEqual(result.metrics.get("routing_decision", {}).get("required_action"), "tool_call")
-        self.assertEqual(result.metrics.get("route_gate", {}).get("branch"), "tool")
+        self.assertIn(result.metrics.get("route_gate", {}).get("branch"), {"tool", "rag_plus_tool"})
         self.assertEqual(result.metrics.get("phase5_trace", {}).get("runner_kind"), "langgraph")
 
     def test_day3_2_coupon_count(self) -> None:

@@ -12,7 +12,7 @@ from .answer_contract import AnswerContract
 _FACET_KEYWORDS: dict[str, tuple[str, ...]] = {
     "coupon": ("券", "优惠", "代金券", "团购", "折扣", "打折"),
     "open_status": ("营业", "开门", "开业", "营业时间", "关门"),
-    "distance_eta": ("距离", "有多远", "公里", "路程", "怎么走", "怎么去", "导航"),
+    "distance_eta": ("离我多远", "距离", "有多远", "公里", "路程", "怎么走", "怎么去", "导航"),
     "price": ("人均", "预算", "价格", "元"),
     "scene_fit": ("适合", "约会", "家庭", "长辈", "带娃", "安静", "停车"),
     "environment": ("环境", "氛围", "安静", "吵", "包间"),

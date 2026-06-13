@@ -191,11 +191,9 @@ from learning_agent_service.tools.orchestrator import (
 
 try:
 
-    from langgraph.checkpoint.sqlite import SqliteSaver
-
+    from langgraph.checkpoint.sqlite import SqliteSaver  # type: ignore
 except Exception:  # pragma: no cover - optional dependency path
-
-    SqliteSaver = None
+    SqliteSaver: Any = None
 
 
 
@@ -1742,7 +1740,7 @@ def _build_session_context_store(
 
 
 
-def _build_async_log_store(settings: Settings, repositories: RepositoryBundle) -> tuple[object, AdapterStatus]:
+def _build_async_log_store(settings: Settings, repositories: RepositoryBundle) -> tuple[Any, AdapterStatus]:
 
     if settings.prefer_real_adapters and repositories.outbox is not None:
 
@@ -1988,7 +1986,7 @@ def _build_semantic_memory_store(
 
     infra: InfrastructureClients,
 
-) -> tuple[object, AdapterStatus]:
+) -> tuple[Any, AdapterStatus]:
 
     if settings.prefer_real_adapters and infra.qdrant is not None:
 

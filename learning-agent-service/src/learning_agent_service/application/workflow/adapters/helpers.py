@@ -1062,6 +1062,8 @@ def _build_recommendation_answer_text(
     shop_names: list[str],
     limit: int = 3,
     fallback_text: str | None = None,
+    scene_hint: str | None = None,
+    focus_hint: str | None = None,
 ) -> str:
     if not shop_names:
         return fallback_text or "我暂时没找到合适的店。"
@@ -1102,19 +1104,24 @@ def _build_recommendation_answer_text(
     shop_names: list[str],
     limit: int = 3,
     fallback_text: str | None = None,
+    scene_hint: str | None = None,
+    focus_hint: str | None = None,
 ) -> str:
     names = [str(name).strip() for name in shop_names if str(name).strip()]
     if not names:
         return fallback_text or "\u6211\u6682\u65f6\u6ca1\u6709\u627e\u5230\u5408\u9002\u7684\u5e97\u3002"
 
     lines = ["\u6211\u5148\u5e2e\u4f60\u63a8\u8350\u4ee5\u4e0b\u8fd9\u51e0\u5bb6\u5e97\u94fa\uff1a", ""]
+    scene_text = scene_hint or "\u9002\u5408\u7ea6\u4f1a\u3001\u804a\u5929\u6216\u8f7b\u677e\u805a\u9910\u3002"
     for i, name in enumerate(names[:limit], 1):
         lines.append(f"{i}. {name}")
         lines.append("- \u63a8\u8350\u7406\u7531\uff1a\u5f53\u524d\u5019\u9009\u91cc\u5b83\u7684\u7efc\u5408\u4fe1\u606f\u6bd4\u8f83\u9760\u524d\uff0c\u503c\u5f97\u4f18\u5148\u67e5\u770b\u3002")
-        lines.append("- \u9002\u5408\u573a\u666f\uff1a\u9002\u5408\u7ea6\u4f1a\u3001\u804a\u5929\u6216\u8f7b\u677e\u805a\u9910\u3002")
+        lines.append(f"- \u9002\u5408\u573a\u666f\uff1a{scene_text}")
         lines.append("- \u6ce8\u610f\u4e8b\u9879\uff1a\u5efa\u8bae\u5148\u786e\u8ba4\u8425\u4e1a\u72b6\u6001\u3001\u9884\u7b97\u548c\u662f\u5426\u9700\u8981\u6392\u961f\u3002")
         lines.append("")
     lines.append("\u7efc\u5408\u5efa\u8bae")
+    if focus_hint:
+        lines.append(f"- \u7b5b\u9009\u91cd\u70b9\uff1a{focus_hint}")
     lines.append("- \u5982\u679c\u4f60\u66f4\u5728\u610f\u6c14\u56f4\u548c\u7a33\u5b9a\u6027\uff0c\u5efa\u8bae\u5148\u4ece\u524d\u4e24\u5bb6\u5f00\u59cb\u770b\u3002")
     lines.append("- \u53e6\u5916\uff0c\u5982\u679c\u4f60\u60f3\u7ee7\u7eed\u770b\u5b9e\u65f6\u4f18\u60e0\uff0c\u6211\u53ef\u4ee5\u63a5\u7740\u5e2e\u4f60\u67e5\u3002")
     return "\n".join(lines).strip()

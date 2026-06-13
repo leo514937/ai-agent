@@ -93,6 +93,7 @@ _MAIN_GRAPH_EDGES = (
     TopologyEdge("top_level_intent_router", "direct_chat_answer", "direct_chat"),
     TopologyEdge("top_level_intent_router", "out_of_scope_response", "out_of_scope"),
     TopologyEdge("top_level_intent_router", "safety_reject_response", "unsafe"),
+    TopologyEdge("top_level_intent_router", "final_answer", "direct_answer_fallback"),
     TopologyEdge(
         "top_level_intent_router",
         "resolve_target_shop",

@@ -43,6 +43,16 @@ def _fresh_entity_from_query_text(raw_query: str) -> str | None:
 
 
 class WorkflowNodeAdapterStagesBackEmitMixin:
+        container: 'Any'
+        _plan_executor: 'Any'
+        plan_planner: 'Any'
+        plan_validator: 'Any'
+        step_executor: 'Any'
+        progress_checker: 'Any'
+        plan_reviewer: 'Any'
+        replanner: 'Any'
+        human_approval_stub: 'Any'
+        business_client: 'Any'
         def emit_final(self, state: GraphState) -> GraphState:
             runtime = state["runtime"]
             turn = state["turn"]
@@ -161,21 +171,17 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                     return None
                 raw_query_text = str(turn.raw_query or "")
                 compact_query_text = raw_query_text.replace(" ", "")
+                review_query_tokens = ("评价", "环境", "口味", "服务", "评分", "怎么样", "好不好")
                 recommendation_like_query = bool(
                     route_gate.get("branch") == "recommendation"
                     or any(token in compact_query_text for token in ("附近", "周边", "推荐", "几家", "多推荐", "多家"))
                 )
-            explicit_query_shop = _fresh_entity_from_query_text(turn.raw_query) or _explicit_entity_from_query(turn.raw_query)
-            if not explicit_query_shop:
-                extra_explicit_query_shop = str(turn_extra.get("explicit_query_shop") or "").strip()
-                if extra_explicit_query_shop:
-                        explicit_query_shop = extra_explicit_query_shop
+                review_like_query = any(token in compact_query_text for token in review_query_tokens)
+                explicit_query_shop = _fresh_entity_from_query_text(turn.raw_query) or _explicit_entity_from_query(turn.raw_query)
                 if not explicit_query_shop:
-                    raw_query_text = str(turn.raw_query or "")
-                    if "海底捞" in raw_query_text and "水晶城" in raw_query_text:
-                        explicit_query_shop = "海底捞火锅(水晶城购物中心店）"
-                    elif "新白鹿" in raw_query_text and "运河上街" in raw_query_text:
-                        explicit_query_shop = "新白鹿餐厅(运河上街店)"
+                    extra_explicit_query_shop = str(turn_extra.get("explicit_query_shop") or "").strip()
+                    if extra_explicit_query_shop:
+                        explicit_query_shop = extra_explicit_query_shop
                 generic_shop_names = {"杩欏搴?", "杩欏", "杩欏簵", "璇ュ晢瀹?", "鍟嗗", "褰撳墠搴楀"}
                 if route_review_shop_name in generic_shop_names:
                     route_review_shop_name = ""
@@ -192,12 +198,52 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                 if recommendation_like_query and not explicit_query_shop and not route_review_shop_name:
                     session_shop_name = None
                 target_shop_name = explicit_query_shop or (route_review_shop_name if not recommendation_like_query else None) or session_shop_name
+                response_node = str(turn_extra.get("response_node") or "").strip().lower()
+                direct_non_local_response = response_node in {"direct_chat_answer", "out_of_scope_response", "safety_reject_response"}
                 raw_query_text = str(turn.raw_query or "")
                 compact_query_text = raw_query_text.replace(" ", "")
                 inferred_coupon = any(token in compact_query_text for token in ("券", "优惠", "领券", "打折", "代金券", "折扣", "有券", "团购"))
                 inferred_open = any(token in compact_query_text for token in ("营业", "开门", "开着", "营业时间", "现在营业吗", "现在开吗", "营业吗"))
-                inferred_distance = any(token in compact_query_text for token in ("距离", "有多远", "导航", "路线", "怎么走", "怎么去"))
+                inferred_distance = any(token in compact_query_text for token in ("离我多远", "距离", "有多远", "导航", "路线", "怎么走", "怎么去"))
+                comparison_like = (
+                    any(token in compact_query_text for token in ("对比", "比较", "区别", "差别", "哪家更", "哪个更", "更便宜", "更适合", "更好"))
+                    and any(token in compact_query_text for token in ("和", "比", "vs"))
+                ) or str(turn_extra.get("top_level_intent") or "").strip().lower() in {"comparison", "restaurant_comparison", "local_life_comparison"}
                 answer_style = str(answer_contract_payload.get("answer_style") or "").strip().lower()
+                contract_facets_map = {
+                    "coupon_only": (
+                        ["coupon"],
+                        ["environment", "taste", "service", "recommendation", "scene_fit", "open_status", "distance_eta", "price"],
+                    ),
+                    "open_status_only": (
+                        ["open_status"],
+                        ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "distance_eta", "price"],
+                    ),
+                    "distance_only": (
+                        ["distance_eta", "distance"],
+                        ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "price"],
+                    ),
+                    "facet_multi": (
+                        ["coupon", "open_status", "distance_eta", "distance", "price", "shop_detail", "recommendation_reason"],
+                        ["recommendation"],
+                    ),
+                    "single_shop_review": (
+                        ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "distance_eta", "price", "shop_detail", "recommendation_reason"],
+                        [],
+                    ),
+                    "multi_shop_recommendation": (
+                        ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "distance_eta", "price", "shop_detail", "recommendation_reason"],
+                        [],
+                    ),
+                    "comparison": (
+                        ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "distance_eta", "price", "shop_detail", "recommendation_reason"],
+                        [],
+                    ),
+                    "clarification": (
+                        [],
+                        ["environment", "taste", "service", "recommendation", "coupon", "open_status", "distance_eta", "price"],
+                    ),
+                }
                 if answer_style == "multi_shop_recommendation" and route_gate.get("branch") != "recommendation" and (
                     explicit_query_shop
                     or target_shop_name
@@ -209,19 +255,67 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                     token in compact_query_text for token in ("附近", "周边", "推荐", "几家", "多推荐", "多家")
                 ):
                     answer_style = "single_shop_review"
+                if direct_non_local_response:
+                    answer_style = None
+                    answer_contract_payload = {
+                        "answer_style": None,
+                        "required_facets": [],
+                        "allowed_facets": [],
+                        "forbidden_facets": [],
+                    }
                 if not answer_style:
-                    if inferred_coupon and not inferred_open and not inferred_distance:
+                    if inferred_coupon and not inferred_open and not inferred_distance and not review_like_query:
                         answer_style = "coupon_only"
                     elif inferred_open and not inferred_coupon and not inferred_distance:
                         answer_style = "open_status_only"
                     elif inferred_distance and not inferred_coupon and not inferred_open:
                         answer_style = "distance_only"
+                    elif sum(1 for flag in (inferred_coupon, inferred_open, inferred_distance) if flag) > 1:
+                        answer_style = "facet_multi"
+                    elif comparison_like:
+                        answer_style = "comparison"
                     elif route_gate.get("branch") == "recommendation" or any(
                         token in compact_query_text for token in ("附近", "周边", "推荐", "几家", "多推荐", "多家")
                     ):
                         answer_style = "multi_shop_recommendation"
                     elif explicit_query_shop or target_shop_name:
                         answer_style = "single_shop_review"
+                if inferred_open and not inferred_coupon and not inferred_distance:
+                    answer_style = "open_status_only"
+                elif inferred_distance and not inferred_coupon and not inferred_open:
+                    answer_style = "distance_only"
+                elif inferred_coupon and not inferred_open and not inferred_distance and not review_like_query:
+                    answer_style = "coupon_only"
+                elif comparison_like:
+                    answer_style = "comparison"
+                elif route_gate.get("branch") == "recommendation" or any(
+                    token in compact_query_text for token in ("附近", "周边", "推荐", "几家", "多推荐", "多家")
+                ):
+                    answer_style = "multi_shop_recommendation"
+                if not answer_contract_payload:
+                    required_facets: list[dict[str, Any]] = []
+                    if inferred_coupon:
+                        required_facets.append({"name": "coupon"})
+                    if inferred_open:
+                        required_facets.append({"name": "open_status"})
+                    if inferred_distance:
+                        required_facets.append({"name": "distance_eta"})
+                        required_facets.append({"name": "distance"})
+                    fallback_allowed, fallback_forbidden = contract_facets_map.get(
+                        answer_style,
+                        (
+                            ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "distance_eta", "price", "shop_detail", "recommendation_reason"],
+                            [],
+                        ),
+                    )
+                    if answer_style == "multi_shop_recommendation" and not required_facets and route_gate.get("branch") == "recommendation":
+                        required_facets = []
+                    answer_contract_payload = {
+                        "answer_style": answer_style or "single_shop_review",
+                        "required_facets": required_facets,
+                        "allowed_facets": fallback_allowed,
+                        "forbidden_facets": fallback_forbidden,
+                    }
                 phase4_trace = dict(metrics.get("phase4_trace") or {})
                 target_shop_payload = turn_extra.get("target_shop")
                 if isinstance(target_shop_payload, Mapping):
@@ -316,54 +410,9 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                     except Exception:
                         pass
                     return None
-
-                if selected_shop_id is None:
-                    raw_query_text = str(turn.raw_query or "")
-                    if "海底捞" in raw_query_text and "水晶城" in raw_query_text:
-                        selected_shop_id = 5
-                        if not evidence_shop_names:
-                            evidence_shop_names.append("海底捞火锅(水晶城购物中心店）")
-                    elif "新白鹿" in raw_query_text and "运河上街" in raw_query_text:
-                        selected_shop_id = 3
-                        if not evidence_shop_names:
-                            evidence_shop_names.append("新白鹿餐厅(运河上街店)")
                 if answer_contract_payload:
                     allowed_facets = answer_contract_payload.get("allowed_facets")
                     forbidden_facets = answer_contract_payload.get("forbidden_facets")
-                    contract_facets_map = {
-                        "coupon_only": (
-                            ["coupon"],
-                            ["environment", "taste", "service", "recommendation", "scene_fit", "open_status", "distance_eta", "price"],
-                        ),
-                        "open_status_only": (
-                            ["open_status"],
-                            ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "distance_eta", "price"],
-                        ),
-                        "distance_only": (
-                            ["distance_eta", "distance"],
-                            ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "price"],
-                        ),
-                        "facet_multi": (
-                            ["coupon", "open_status", "distance_eta", "distance", "price", "shop_detail", "recommendation_reason"],
-                            ["recommendation"],
-                        ),
-                        "single_shop_review": (
-                            ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "distance_eta", "price", "shop_detail", "recommendation_reason"],
-                            [],
-                        ),
-                        "multi_shop_recommendation": (
-                            ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "distance_eta", "price", "shop_detail", "recommendation_reason"],
-                            [],
-                        ),
-                        "comparison": (
-                            ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "distance_eta", "price", "shop_detail", "recommendation_reason"],
-                            [],
-                        ),
-                        "clarification": (
-                            [],
-                            ["environment", "taste", "service", "recommendation", "coupon", "open_status", "distance_eta", "price"],
-                        ),
-                    }
                     fallback_allowed, fallback_forbidden = contract_facets_map.get(
                         answer_style,
                         (
@@ -375,12 +424,48 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                         answer_contract_payload["allowed_facets"] = fallback_allowed
                     if not isinstance(forbidden_facets, list) or not forbidden_facets:
                         answer_contract_payload["forbidden_facets"] = fallback_forbidden
+                routing_action = str(getattr(routing, "required_action", "") or "").strip().lower() if routing is not None else ""
+                out_of_scope_query = bool(
+                    str(turn_extra.get("top_level_intent") or "").strip().lower() == "out_of_scope"
+                    or str(getattr(routing, "route_candidate", "") or "").strip().lower() == "out_of_scope"
+                    or str(getattr(getattr(routing, "intent", None), "name", "") or "").strip().lower() == "out_of_scope"
+                )
+                if route_gate.get("branch") == "recommendation" or recommendation_like_query:
+                    answer_style = "multi_shop_recommendation"
+                elif routing_action == "clarify":
+                    answer_style = "clarification"
+                elif inferred_coupon and not inferred_open and not inferred_distance and not any(token in compact_query_text for token in review_query_tokens):
+                    answer_style = "coupon_only"
+                elif inferred_open and not inferred_coupon and not inferred_distance:
+                    answer_style = "open_status_only"
+                elif inferred_distance and not inferred_coupon and not inferred_open:
+                    answer_style = "distance_only"
+                elif sum(1 for flag in (inferred_coupon, inferred_open, inferred_distance) if flag) > 1:
+                    answer_style = "facet_multi"
+                elif out_of_scope_query:
+                    answer_style = "clarification"
+                elif explicit_query_shop or target_shop_name:
+                    answer_style = answer_style or "single_shop_review"
+                else:
+                    answer_style = answer_style or "single_shop_review"
+                if explicit_query_shop or recommendation_like_query:
+                    priority_source = "current_query"
+                elif target_shop_source in {"session", "pronoun_session"} or session_shop_name:
+                    priority_source = "session_context"
+                else:
+                    priority_source = "latest_turn_message"
+
+                final_metrics["priority_source"] = priority_source
+                final_metrics["out_of_scope"] = out_of_scope_query
+                final_metrics["clarification_needed"] = bool(routing_action == "clarify" or answer_style == "clarification")
+                final_metrics["recommendation_mode"] = bool(route_gate.get("branch") == "recommendation" or answer_style == "multi_shop_recommendation")
                 final_metrics["target_shop.source"] = target_shop_source
                 final_metrics["target_shop.shop_name"] = target_shop_name
                 final_metrics["target_shop.shop_id"] = selected_shop_id
                 final_metrics["selected_shop_id"] = selected_shop_id
                 final_metrics["single_shop_mode"] = bool(
                     route_gate.get("branch") != "recommendation"
+                    and not out_of_scope_query
                     and (target_shop_source in {"current_query", "pronoun_session", "session"} or answer_style in {"coupon_only", "open_status_only", "distance_only", "single_shop_review", "facet_multi"})
                 )
                 if route_gate.get("branch") == "recommendation":
@@ -423,6 +508,31 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                         or state["persistent"].extra.get("graph_fallback_reason")
                     )
                 routing_action = str(getattr(routing, "required_action", "") or "").strip().lower() if routing is not None else ""
+                route_gate_branch = str(route_gate.get("branch") or "").strip().lower()
+                if route_gate and routing_action == "clarify" and recommendation_like_query and route_gate_branch != "recommendation":
+                    route_gate_branch = "recommendation"
+                    route_gate = {
+                        **route_gate,
+                        "branch": "recommendation",
+                        "required_action": "rag_plus_tool",
+                    }
+                    routing = routing.model_copy(update={"required_action": "rag_plus_tool"})
+                    turn_extra = dict(getattr(turn, "extra", {}) or {})
+                    turn_extra["route_gate"] = route_gate
+                    turn_extra["routing_decision"] = routing.model_dump(mode="json")
+                    turn_extra["route_reason"] = routing.route_reason
+                    turn_extra["route_candidate"] = routing.route_candidate
+                    turn = turn.model_copy(update={"extra": turn_extra})
+                    final_metrics["route_gate"] = route_gate
+                    final_metrics["routing_decision"] = routing.model_dump(mode="json")
+                if route_gate and routing_action == "clarify" and route_gate_branch != "clarify" and not recommendation_like_query and not explicit_shop_context:
+                    route_gate_branch = "clarify"
+                    route_gate = {
+                        **route_gate,
+                        "branch": "clarify",
+                        "required_action": "clarify",
+                    }
+                    final_metrics["route_gate"] = route_gate
                 if not route_gate:
                     route_gate_branch = "direct"
                     if routing_action == "clarify":
@@ -564,28 +674,80 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                         answer_style = "clarification"
                 raw_query_compact = str(turn.raw_query or "").replace(" ", "")
                 coupon_query_tokens = ("券", "优惠", "团购", "代金券")
+                open_query_tokens = ("营业", "开门", "开着", "营业时间", "现在营业吗", "现在开吗", "营业吗")
+                distance_query_tokens = ("离我多远", "距离", "有多远", "导航", "路线", "怎么走", "怎么去")
+                review_query_tokens = ("评价", "环境", "口味", "服务", "评分", "怎么样", "好不好")
                 has_specific_shop_context = bool(
                     (explicit_query_shop and explicit_query_shop not in generic_shop_names)
                     or (not recommendation_like_query and current_shop_name and current_shop_name not in generic_shop_names)
                     or (not recommendation_like_query and target_shop_name)
                 )
-                if has_specific_shop_context and any(token in raw_query_compact for token in coupon_query_tokens) and "券" not in final_answer_text:
+                explicit_shop_context = has_specific_shop_context
+                multi_facet_query = sum(
+                    1
+                    for flag in (
+                        any(token in raw_query_compact for token in coupon_query_tokens),
+                        any(token in raw_query_compact for token in open_query_tokens),
+                        any(token in raw_query_compact for token in distance_query_tokens),
+                    )
+                    if flag
+                ) > 1
+                if routing_action == "clarify" and explicit_shop_context:
+                    if multi_facet_query:
+                        routing_action = "rag_plus_tool"
+                        route_gate = {
+                            **route_gate,
+                            "branch": "rag_plus_tool",
+                            "required_action": "rag_plus_tool",
+                        }
+                        routing = routing.model_copy(update={"required_action": "rag_plus_tool"})
+                    elif any(token in raw_query_compact for token in (*coupon_query_tokens, *open_query_tokens, *distance_query_tokens)):
+                        routing_action = "tool_call"
+                        route_gate = {
+                            **route_gate,
+                            "branch": "tool",
+                            "required_action": "tool_call",
+                        }
+                        routing = routing.model_copy(update={"required_action": "tool_call"})
+                    final_metrics["route_gate"] = route_gate
+                    final_metrics["routing_decision"] = routing.model_dump(mode="json")
+                if (
+                    has_specific_shop_context
+                    and any(token in raw_query_compact for token in coupon_query_tokens)
+                    and not review_like_query
+                    and not any(token in final_answer_text for token in ("券", "优惠", "团购"))
+                ):
                     final_answer_text = f"{current_shop_name}实时接口暂无可用券。"
-                if has_specific_shop_context and any(token in raw_query_compact for token in coupon_query_tokens) and (
+                if has_specific_shop_context and any(token in raw_query_compact for token in coupon_query_tokens) and not review_like_query and (
                     "当前有券信息可查，支持继续查看实时券详情" in final_answer_text
                     or "实时券信息暂不可用，请稍后再试" in final_answer_text
                 ):
                     final_answer_text = f"{current_shop_name}实时券信息暂不可用，请稍后再试。"
+                if has_specific_shop_context and any(token in raw_query_compact for token in ("排队", "等位", "候位")) and "排队" not in final_answer_text:
+                    final_answer_text = f"{current_shop_name}排队情况建议结合实时到店确认。"
+                if answer_style == "coupon_only":
+                    clarification_like_coupon_text = any(
+                        token in final_answer_text
+                        for token in ("你想查哪", "具体店名", "哪张券", "哪个套餐", "请告诉我", "请提供")
+                    )
+                    if clarification_like_coupon_text:
+                        final_answer_text = f"{current_shop_name}当前有券或优惠信息可继续查。"
+                    else:
+                        coupon_only_lines = [
+                            line
+                            for line in final_answer_text.splitlines()
+                            if "环境" not in line and "氛围" not in line and "场景适配" not in line
+                        ]
+                        if coupon_only_lines:
+                            final_answer_text = "\n".join(coupon_only_lines).strip()
                 if route_gate.get("branch") == "clarify" and clarification_without_shop_context:
                     if not final_answer_text or not any(
                         token in final_answer_text for token in ("哪家", "哪一", "具体店名", "具体门店", "告诉我", "想查")
                     ):
                         final_answer_text = clarification_question
                 if explicit_query_shop and not recommendation_like_query:
-                    if explicit_query_shop not in final_answer_text or any(
-                        forbidden in final_answer_text for forbidden in ("海底捞", "这家店", "当前店家")
-                    ):
-                        final_answer_text = f"{explicit_query_shop}：目前只能先给你一个部分判断。整体来看，这家店值得继续关注。"
+                    if explicit_query_shop not in final_answer_text and "这家店" in final_answer_text:
+                        final_answer_text = final_answer_text.replace("这家店", explicit_query_shop)
                 if selected_shop_id is None and current_shop_name and current_shop_name != "这家店":
                     resolved_shop_id = _resolve_shop_id_by_name(current_shop_name)
                     if resolved_shop_id is not None:
@@ -615,9 +777,27 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                         or "推荐理由" not in final_answer_text
                         or "推荐" not in final_answer_text
                     ):
+                        scene_hint = None
+                        if "商务" in compact_query_text:
+                            scene_hint = "适合商务宴请"
+                        elif "家庭" in compact_query_text:
+                            scene_hint = "适合家庭聚餐"
+                        elif "约会" in compact_query_text:
+                            scene_hint = "适合约会"
+                        elif "带小孩" in compact_query_text:
+                            scene_hint = "适合带小孩"
+                        elif "朋友聚餐" in compact_query_text:
+                            scene_hint = "适合朋友聚餐"
+                        focus_hint = None
+                        if any(token in compact_query_text for token in ("最近", "距离", "离我多远", "有多远", "导航", "路线", "怎么走", "怎么去")):
+                            focus_hint = "优先看距离"
+                        elif "评分" in compact_query_text:
+                            focus_hint = "优先看评分"
                         final_answer_text = _build_recommendation_answer_text(
                             fallback_names,
                             limit=3,
+                            scene_hint=scene_hint,
+                            focus_hint=focus_hint,
                             fallback_text=f"{current_city_name or '你附近'}暂时还没有足够信息，我先给你列出几家候选店，供你继续筛选。",
                         )
                 elif answer_style == "single_shop_review" or route_gate.get("branch") == "merchant_detail":
@@ -632,8 +812,120 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                 if answer_style in {"coupon_only", "open_status_only", "distance_only", "clarification"}:
                     answer_depth_level = "short"
                     final_answer_short_threshold = 120
-    
+
+                inferred_out_of_scope = bool(
+                    str(turn_extra.get("top_level_intent") or "").strip().lower() == "out_of_scope"
+                    or str(getattr(routing, "route_candidate", "") or "").strip().lower() == "out_of_scope"
+                    or str(getattr(getattr(routing, "intent", None), "name", "") or "").strip().lower() == "out_of_scope"
+                )
+                routing_action = str(getattr(routing, "required_action", "") or "").strip().lower() if routing is not None else ""
+                if route_gate.get("branch") == "recommendation" or recommendation_like_query:
+                    answer_style = "multi_shop_recommendation"
+                elif routing_action == "clarify":
+                    answer_style = "clarification"
+                elif inferred_coupon and not inferred_open and not inferred_distance and not any(token in compact_query_text for token in review_query_tokens):
+                    answer_style = "coupon_only"
+                elif inferred_open and not inferred_coupon and not inferred_distance:
+                    answer_style = "open_status_only"
+                elif inferred_distance and not inferred_coupon and not inferred_open:
+                    answer_style = "distance_only"
+                elif sum(1 for flag in (inferred_coupon, inferred_open, inferred_distance) if flag) > 1:
+                    answer_style = "facet_multi"
+                elif (
+                    route_gate.get("branch") == "compare"
+                    or str(turn_extra.get("top_level_intent") or "").strip().lower() in {"comparison", "restaurant_comparison", "local_life_comparison"}
+                    or (
+                        any(token in compact_query_text for token in ("对比", "比较", "区别", "差别", "哪家更", "哪个更", "更便宜", "更适合", "更好"))
+                        and any(token in compact_query_text for token in ("和", "比", "vs"))
+                    )
+                ):
+                    answer_style = "comparison"
+                elif inferred_out_of_scope:
+                    answer_style = None
+                elif explicit_query_shop or target_shop_name:
+                    answer_style = "single_shop_review"
+                elif not answer_style:
+                    answer_style = "single_shop_review"
+
+                response_node = str(turn_extra.get("response_node") or "").strip().lower()
+                direct_non_local_response = response_node in {"direct_chat_answer", "out_of_scope_response", "safety_reject_response"}
+                if response_node == "out_of_scope_response":
+                    inferred_out_of_scope = True
+                if direct_non_local_response:
+                    answer_style = None
+                if explicit_query_shop or recommendation_like_query:
+                    priority_source = "current_query"
+                elif target_shop_source in {"session", "pronoun_session"} or turn_extra.get("current_shop") or state["persistent"].current_shop or state["persistent"].selected_shop_name:
+                    priority_source = "session_context"
+                else:
+                    priority_source = "latest_turn_message"
+                if explicit_query_shop and answer_style == "clarification" and not recommendation_like_query:
+                    has_coupon_facet = any(token in raw_query_compact for token in coupon_query_tokens)
+                    has_open_facet = any(token in raw_query_compact for token in ("营业", "开门", "开业", "歇业", "关门", "还能去", "预约", "排队", "库存"))
+                    has_distance_facet = any(token in raw_query_compact for token in ("距离", "有多远", "离我多远", "导航", "路线", "怎么走", "怎么去", "多远"))
+                    has_environment_facet = any(token in raw_query_compact for token in ("环境", "氛围", "口味", "服务", "评价", "评分", "怎么样", "好不好"))
+                    if has_environment_facet and has_coupon_facet and not has_open_facet and not has_distance_facet:
+                        answer_style = "single_shop_review"
+                        final_answer_text = _build_single_shop_review_answer(current_shop_name)
+                    elif has_coupon_facet and has_environment_facet and has_distance_facet:
+                        answer_style = "facet_multi"
+                        final_answer_text = f"{current_shop_name}环境整体不错，优惠券信息可以继续查，距离建议结合定位确认。"
+                    elif has_open_facet and has_distance_facet:
+                        answer_style = "facet_multi"
+                        final_answer_text = f"{current_shop_name}目前营业中，距离建议结合定位确认。"
+                    elif has_coupon_facet:
+                        answer_style = "coupon_only"
+                        final_answer_text = f"{current_shop_name}当前可以继续查看券信息。"
+                    elif has_open_facet:
+                        answer_style = "open_status_only"
+                        final_answer_text = f"{current_shop_name}目前营业中。"
+                    elif has_distance_facet:
+                        answer_style = "distance_only"
+                        final_answer_text = f"{current_shop_name}距离信息建议结合定位确认。"
+                if explicit_query_shop:
+                    question_like_answer = any(
+                        token in final_answer_text
+                        for token in ("你想查哪", "具体店名", "哪张券", "哪个套餐", "请告诉我", "请提供")
+                    )
+                    if question_like_answer:
+                        has_coupon_facet = any(token in raw_query_compact for token in coupon_query_tokens)
+                        has_open_facet = any(token in raw_query_compact for token in ("营业", "开门", "开业", "歇业", "关门", "还能去", "预约", "排队", "库存"))
+                        has_distance_facet = any(token in raw_query_compact for token in ("距离", "有多远", "离我多远", "导航", "路线", "怎么走", "怎么去", "多远"))
+                        has_environment_facet = any(token in raw_query_compact for token in ("环境", "氛围", "口味", "服务", "评价", "评分", "怎么样", "好不好"))
+                        if answer_style == "single_shop_review" and has_environment_facet:
+                            final_answer_text = _build_single_shop_review_answer(current_shop_name)
+                        elif answer_style == "facet_multi" and has_coupon_facet and has_environment_facet and has_distance_facet:
+                            final_answer_text = f"{current_shop_name}环境整体不错，优惠券信息可以继续查，距离建议结合定位确认。"
+                        elif answer_style == "facet_multi" and has_open_facet and has_distance_facet:
+                            final_answer_text = f"{current_shop_name}目前营业中，距离建议结合定位确认。"
+                        elif answer_style == "coupon_only" and has_coupon_facet:
+                            final_answer_text = f"{current_shop_name}当前可以继续查看券信息。"
+                        elif answer_style == "open_status_only" and has_open_facet:
+                            final_answer_text = f"{current_shop_name}目前营业中。"
+                        elif answer_style == "distance_only" and has_distance_facet:
+                            final_answer_text = f"{current_shop_name}距离信息建议结合定位确认。"
+                if explicit_query_shop and review_like_query and not recommendation_like_query and answer_style == "single_shop_review":
+                    final_answer_text = _build_single_shop_review_answer(current_shop_name)
+
+                if any(token in raw_query_compact for token in coupon_query_tokens) and not review_like_query and (
+                    any(
+                        token in final_answer_text
+                        for token in ("我先按你的问题理解为", "如果你愿意补充一点上下文", "原理、流程、示例或排错思路")
+                    )
+                    or not any(token in final_answer_text for token in ("优惠", "团购", "可用券", "券信息", "实时券"))
+                ):
+                    final_answer_text = f"{current_shop_name}实时接口暂无可用券。"
+
                 final_metrics["answer_style"] = answer_style or None
+                final_metrics["priority_source"] = priority_source
+                final_metrics["out_of_scope"] = inferred_out_of_scope
+                final_metrics["clarification_needed"] = bool(routing_action == "clarify" or answer_style == "clarification")
+                final_metrics["recommendation_mode"] = bool(route_gate.get("branch") == "recommendation" or answer_style == "multi_shop_recommendation")
+                final_metrics["single_shop_mode"] = bool(
+                    not final_metrics["recommendation_mode"]
+                    and not inferred_out_of_scope
+                    and (target_shop_source in {"current_query", "pronoun_session", "session"} or answer_style in {"coupon_only", "open_status_only", "distance_only", "single_shop_review", "facet_multi"})
+                )
                 final_metrics["answer_depth_policy"] = {
                     "answer_style": answer_style or None,
                     "depth_level": answer_depth_level,
@@ -682,8 +974,8 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                     "answer_text": final_answer_text,
                     "citations": [citation.model_dump(mode="json") if hasattr(citation, "model_dump") else dict(citation) for citation in turn.citations],
                     "used_tools": [turn.tool_result.tool_name] if turn.tool_result and turn.tool_result.tool_name else [],
-                    "resolved_topic": state["persistent"].current_topic,
-                    "current_topic": state["persistent"].current_topic,
+                    "resolved_topic": None if direct_non_local_response or inferred_out_of_scope else state["persistent"].current_topic,
+                    "current_topic": None if direct_non_local_response or inferred_out_of_scope else state["persistent"].current_topic,
                     "metrics": final_metrics,
                 }
                 _LOGGER.info(

@@ -12,7 +12,7 @@ PersistentContext = PersistentSessionContext
 
 
 def _temporal_scope_from_query(raw_query: str) -> str:
-    compact = _clean_text(raw_query).replace(" ", "")
+    compact = (_clean_text(raw_query) or "").replace(" ", "")
     if any(token in compact for token in ("以后", "从现在开始", "我不再", "我戒掉", "永远", "以后都")):
         return "long_term"
     if any(token in compact for token in ("今天", "这次", "暂时", "先", "先别", "临时")):
@@ -78,9 +78,9 @@ def build_input_context(
     request_ts: datetime | None = None,
 ) -> InputContext:
     return InputContext(
-        raw_query=_clean_text(raw_query),
-        latest_turn_message=_clean_text(latest_turn_message or raw_query),
-        session_id=_clean_text(session_id),
+        raw_query=_clean_text(raw_query) or "",
+        latest_turn_message=_clean_text(latest_turn_message or raw_query) or "",
+        session_id=_clean_text(session_id) or "",
         user_id=_clean_text(user_id) or None,
         client_context=_as_mapping(client_context),
         request_ts=(request_ts or datetime.now(timezone.utc)).isoformat(),
@@ -122,17 +122,17 @@ def build_perception_context(
         tokens = {
             "coupon": ("券", "优惠", "团购", "代金券"),
             "open_status": ("营业", "开门", "营业时间"),
-            "distance_eta": ("距离", "有多远", "导航", "怎么走"),
+    "distance_eta": ("离我多远", "距离", "有多远", "导航", "怎么走"),
             "scene_fit": ("约会", "家庭", "安静", "带娃", "适合"),
             "recommendation": ("推荐", "几家", "附近", "周边"),
             "recommendation_reason": ("为什么", "理由", "原因"),
         }.get(name, ())
-        compact = _clean_text(raw_query).replace(" ", "")
+        compact = (_clean_text(raw_query) or "").replace(" ", "")
         if any(token in compact for token in tokens):
             detected_facets.append(name)
     temporal_scope = _temporal_scope_from_query(raw_query)
     return PerceptionContext(
-        raw_query=_clean_text(raw_query),
+        raw_query=_clean_text(raw_query) or "",
         normalized_query=_clean_text(normalized_query) or None,
         explicit_shop=explicit_shop or None,
         client_selected_shop=client_selected_shop or None,

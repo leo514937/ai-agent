@@ -1,9 +1,10 @@
-﻿"""SQLAlchemy repository for the async outbox used by log and audit side effects."""
+"""SQLAlchemy repository for the async outbox used by log and audit side effects."""
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 from datetime import datetime, timezone
+from typing import Any
 
 from learning_agent_service.infrastructure.db.models import OutboxEventModel
 
@@ -13,7 +14,7 @@ from .records import OutboxEventRecord
 try:
     from sqlalchemy import select
 except ImportError:  # pragma: no cover - depends on optional runtime installation.
-    select = None
+    select: Any = None
 
 
 class OutboxRepository(SqlAlchemyRepositoryBase):

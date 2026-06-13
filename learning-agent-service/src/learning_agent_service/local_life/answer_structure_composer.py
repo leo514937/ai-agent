@@ -260,8 +260,8 @@ def _compose_comparison(topic_name: str, ranked_candidates: list[dict[str, Any]]
 
     shop_a = ranked_candidates[0]
     shop_b = ranked_candidates[1]
-    name_a = _clean_text(shop_a.get("name") or shop_a.get("shop_name") or "店铺A")
-    name_b = _clean_text(shop_b.get("name") or shop_b.get("shop_name") or "店铺B")
+    name_a = _clean_text(shop_a.get("name") or shop_a.get("shop_name")) or "店铺A"
+    name_b = _clean_text(shop_b.get("name") or shop_b.get("shop_name")) or "店铺B"
 
     structured_a = shop_a.get("structured_features") or {}
     structured_b = shop_b.get("structured_features") or {}
@@ -435,7 +435,7 @@ def _compose_multi_shop_recommendation(topic_name: str, ranked_candidates: list[
     for candidate in ranked_candidates:
         shop_id = candidate.get("shop_id")
         try:
-            shop_id_int = int(shop_id)
+            shop_id_int = int(shop_id) if shop_id is not None else None
         except Exception:
             shop_id_int = None
         if shop_id_int is not None and shop_id_int in seen_shop_ids:
@@ -469,7 +469,7 @@ def _compose_multi_shop_recommendation(topic_name: str, ranked_candidates: list[
     for index, candidate in enumerate(unique_candidates[:3], start=1):
         shop_id = candidate.get("shop_id")
         try:
-            shop_id_int = int(shop_id)
+            shop_id_int = int(shop_id) if shop_id is not None else None
         except Exception:
             shop_id_int = None
         claims = _unique_text(grouped_claims.get(shop_id_int, []))

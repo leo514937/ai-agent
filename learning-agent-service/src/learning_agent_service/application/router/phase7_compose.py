@@ -305,6 +305,24 @@ def _build_answer_contract(
         forbidden_facets = list(routing_contract.forbidden_facets)
         facet_source_expectations = dict(getattr(routing_contract, "facet_source_map", {}) or {})
         scope_kind = str(getattr(routing_contract, "scope_kind", "") or "").strip() or None
+        if not answer_style:
+            try:
+                from ...local_life.answer_contract import AnswerContract as LocalLifeAnswerContract
+
+                user_need = routing_extra.get("user_need")
+                target_shop = None
+                target_shop_payload = dict(turn.extra.get("target_shop") or {})
+                if target_shop_payload:
+                    from ...local_life.target_shop_policy import TargetShop
+
+                    target_shop = TargetShop.model_validate(target_shop_payload)
+                if user_need is not None:
+                    ll_contract = LocalLifeAnswerContract.build_contract(user_need, target_shop)
+                    answer_style = str(getattr(ll_contract, "answer_style", "") or "").strip() or None
+                    if not scope_kind:
+                        scope_kind = "single_shop" if answer_style == "single_shop_review" else ("multi_shop" if answer_style == "multi_shop_recommendation" else None)
+            except Exception:
+                pass
     else:
         try:
             from ...local_life.answer_contract import AnswerContract as LocalLifeAnswerContract
@@ -332,27 +350,37 @@ def _build_answer_contract(
         scope_kind = str(routing_extra.get("scope_kind") or "").strip() or None
     if not answer_style:
         answer_style = str(routing_extra.get("answer_style") or "").strip() or None
-    if not answer_style:
-        routing_action = str(getattr(routing, "required_action", "") or "").strip().lower() if routing is not None else ""
-        raw_query_text = str(getattr(turn, "raw_query", "") or "")
-        compact_query_text = raw_query_text.replace(" ", "")
-        inferred_coupon = any(token in compact_query_text for token in ("券", "优惠", "领券", "打折", "代金券", "折扣", "有券", "团购"))
-        inferred_open = any(token in compact_query_text for token in ("营业", "开门", "开着", "营业时间", "现在营业吗", "现在开吗", "营业吗"))
-        inferred_distance = any(token in compact_query_text for token in ("距离", "有多远", "导航", "路线", "怎么走", "怎么去"))
-        if routing_action == "clarify" or missing_slots:
-            answer_style = "clarification"
-        elif inferred_coupon and not inferred_open and not inferred_distance:
-            answer_style = "coupon_only"
-        elif inferred_open and not inferred_coupon and not inferred_distance:
-            answer_style = "open_status_only"
-        elif inferred_distance and not inferred_coupon and not inferred_open:
-            answer_style = "distance_only"
-        elif sum(1 for flag in (inferred_coupon, inferred_open, inferred_distance) if flag) > 1:
-            answer_style = "facet_multi"
-        elif any(token in compact_query_text for token in ("附近", "周边", "推荐", "几家", "多推荐", "多家")):
-            answer_style = "multi_shop_recommendation"
-        else:
-            answer_style = str(routing_extra.get("answer_style") or "").strip() or "single_shop_review"
+    routing_action = str(getattr(routing, "required_action", "") or "").strip().lower() if routing is not None else ""
+    route_candidate = str(getattr(routing, "route_candidate", "") or "").strip().lower() if routing is not None else ""
+    raw_query_text = str(getattr(turn, "raw_query", "") or "")
+    compact_query_text = raw_query_text.replace(" ", "")
+    inferred_coupon = any(token in compact_query_text for token in ("券", "优惠", "领券", "打折", "代金券", "折扣", "有券", "团购"))
+    inferred_open = any(token in compact_query_text for token in ("营业", "开门", "开着", "营业时间", "现在营业吗", "现在开吗", "营业吗"))
+    inferred_distance = any(token in compact_query_text for token in ("距离", "有多远", "导航", "路线", "怎么走", "怎么去"))
+    inferred_comparison = (
+        routing_action == "compare"
+        or route_candidate == "compare_multi_parent"
+        or any(token in compact_query_text for token in ("对比", "比较", "区别", "差别", "哪家更", "哪个更", "更便宜", "更适合", "更好"))
+        and any(token in compact_query_text for token in ("和", "比", "vs"))
+    )
+    if routing_action == "direct_answer" and route_candidate == "out_of_scope":
+        answer_style = None
+    elif inferred_coupon and not inferred_open and not inferred_distance:
+        answer_style = "coupon_only"
+    elif inferred_open and not inferred_coupon and not inferred_distance:
+        answer_style = "open_status_only"
+    elif inferred_distance and not inferred_coupon and not inferred_open:
+        answer_style = "distance_only"
+    elif sum(1 for flag in (inferred_coupon, inferred_open, inferred_distance) if flag) > 1:
+        answer_style = "facet_multi"
+    elif inferred_comparison or str(routing_extra.get("top_level_intent") or "").strip().lower() in {"comparison", "restaurant_comparison", "local_life_comparison"}:
+        answer_style = "comparison"
+    elif any(token in compact_query_text for token in ("附近", "周边", "推荐", "几家", "多推荐", "多家")):
+        answer_style = "multi_shop_recommendation"
+    elif routing_action == "clarify" or (missing_slots and route_candidate != "out_of_scope"):
+        answer_style = "clarification"
+    elif not answer_style:
+        answer_style = str(routing_extra.get("answer_style") or "").strip() or "single_shop_review"
 
     return AnswerContract(
 

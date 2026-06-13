@@ -13,7 +13,7 @@ from .records import MemoryOutboxRecord
 try:
     from sqlalchemy import select
 except ImportError:  # pragma: no cover - depends on optional runtime installation.
-    select = None
+    select: Any = None
 
 
 class MemoryOutboxRepository(SqlAlchemyRepositoryBase):

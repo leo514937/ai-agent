@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from ...config import get_settings
+from ...config.settings_impl import get_settings
 from ...domain.utils import compact_text as _compact_text
 from ...domain.contracts import (
     PersistentSessionContext,
@@ -110,23 +110,6 @@ class SemanticRoutingDraft:
     candidate_names: list[str] = field(default_factory=list)
     route_candidate: str | None = None
     safeguards_triggered: list[str] = field(default_factory=list)
-
-
-@dataclass(frozen=True)
-class LLMIntentRouterOutput:
-    domain: str
-    intent: str
-    confidence: float
-    required_action: str
-    slots: dict[str, Any] = field(default_factory=dict)
-    missing_slots: list[str] = field(default_factory=list)
-    should_retrieve: bool = False
-    should_call_tool: bool = False
-    should_rewrite_query: bool = False
-    preferred_chunk_roles: list[str] = field(default_factory=list)
-    tool_candidates: list[str] = field(default_factory=list)
-    route_reason: str = ""
-    clarification_question: str | None = None
 
 
 def _default_specs() -> tuple[DomainSignalSpec, ...]:
@@ -562,7 +545,7 @@ def route_semantic_query(
     top = candidates[0]
     runner_up = candidates[1] if len(candidates) > 1 else None
     if runner_up is not None and _is_coupon_environment_pair(top.spec_name, runner_up.spec_name):
-        has_shop_context = _has_shop_context(persistent, client_context or {}, normalized)
+        has_shop_context = bool(explicit_shop) or _has_shop_context(persistent, client_context or {}, normalized)
         merged_tools = list(dict.fromkeys(list(top.tool_candidates) + list(runner_up.tool_candidates) + ["get_coupon_list"]))
         merged_roles = list(
             dict.fromkeys(
@@ -705,8 +688,9 @@ def _fallback_semantic_route(
 ) -> SemanticRoutingDraft:
     compact = _compact_text(normalized)
     lowered = normalized.lower()
+    explicit_shop = str(_explicit_entity_from_query(normalized) or "").strip() or None
     context_has_location = _has_location_context(persistent, client_context or {}, normalized)
-    context_has_shop = _has_shop_context(persistent, client_context or {}, normalized)
+    context_has_shop = bool(explicit_shop) or _has_shop_context(persistent, client_context or {}, normalized)
     previous_topic = str(
         persistent.current_topic
         or persistent.clarification_result.get("original_query")

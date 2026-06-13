@@ -10,6 +10,7 @@ from learning_agent_service.domain.utils import as_mapping as _as_mapping
 from learning_agent_service.infrastructure.db.openai_client import OpenAIRuntime
 
 from .answer_planner import build_answer_planner_request, parse_answer_plan_payload
+from .hybrid_router import HybridRouter, LLMRouteDecision
 
 
 def _as_list(value: Any) -> list[Any]:
@@ -80,10 +81,35 @@ class LocalLifeModelAssistant:
     runtime: OpenAIRuntime | None = None
     model: str = ""
     temperature: float = 0.0
+    router: HybridRouter | None = None
+
+    def __post_init__(self):
+        if self.router is None:
+            self.router = HybridRouter(runtime=self.runtime)
 
     @property
     def enabled(self) -> bool:
         return self.runtime is not None
+
+    def route_query(
+        self,
+        query: str,
+        *,
+        session_context: dict[str, Any] | None = None,
+        client_context: dict[str, Any] | None = None,
+        use_llm: bool = True,
+    ) -> tuple[LLMRouteDecision, dict[str, Any]]:
+        """使用HybridRouter进行路由决策"""
+        if self.router is None:
+            self.router = HybridRouter(runtime=self.runtime)
+
+        decision, trace = self.router.route(
+            query=query,
+            session_context=session_context,
+            client_context=client_context,
+            use_llm=use_llm,
+        )
+        return decision, trace.to_log_dict()
 
     def suggest_understanding(
         self,

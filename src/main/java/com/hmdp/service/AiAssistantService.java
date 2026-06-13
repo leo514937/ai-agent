@@ -13,6 +13,7 @@ import com.hmdp.dto.ai.AiChatResponse;
 import com.hmdp.dto.ai.AiChatSuggestion;
 import com.hmdp.dto.ai.AiShopCard;
 import com.hmdp.dto.ai.AiVoucherCard;
+import com.hmdp.utils.StringUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -49,7 +50,7 @@ public class AiAssistantService {
         String message = normalize(request == null ? null : request.getMessage());
         Map<String, Object> context = normalizeContext(request == null ? null : request.getContext());
         Map<String, Object> enrichedContext = aiInternalBusinessService.enrichRealtimeContext(context);
-        String page = firstNonBlank(request == null ? null : request.getPage(), asString(context, "page"), "assistant");
+        String page = StringUtils.firstNonBlank(request == null ? null : request.getPage(), asString(context, "page"), "assistant");
 
         AiQueryContext queryContext = aiBusinessQueryFacade.resolveContext(enrichedContext, user);
         AiRouteType route = aiBusinessQueryFacade.resolveRoute(message, queryContext);
@@ -102,12 +103,12 @@ public class AiAssistantService {
 
         AiRemoteChatRequest remoteRequest = new AiRemoteChatRequest();
         remoteRequest.setUserId(user == null || user.getId() == null ? "guest" : String.valueOf(user.getId()));
-        remoteRequest.setSessionId(firstNonBlank(request == null ? null : request.getSessionId(), String.valueOf(System.currentTimeMillis())));
-        remoteRequest.setTraceId(firstNonBlank(request == null ? null : request.getTraceId(), "trace-" + System.currentTimeMillis()));
+        remoteRequest.setSessionId(StringUtils.firstNonBlank(request == null ? null : request.getSessionId(), String.valueOf(System.currentTimeMillis())));
+        remoteRequest.setTraceId(StringUtils.firstNonBlank(request == null ? null : request.getTraceId(), "trace-" + System.currentTimeMillis()));
         remoteRequest.setPage(page);
         remoteRequest.setMessage(normalize(request == null ? null : request.getMessage()));
         remoteRequest.setResponseMode("default");
-        remoteRequest.setTopicHint(firstNonBlank(queryContext.getShopName(), queryContext.getTypeName(), queryContext.getBlogTitle(), page));
+        remoteRequest.setTopicHint(StringUtils.firstNonBlank(queryContext.getShopName(), queryContext.getTypeName(), queryContext.getBlogTitle(), page));
         remoteRequest.setHistorySummary(asString(queryContext.getRawContext(), "historySummary"));
         remoteRequest.setClientContext(new LinkedHashMap<>(queryContext.getRawContext()));
 
@@ -116,7 +117,7 @@ public class AiAssistantService {
             throw new AiAssistantUnavailableException(buildAssistantUnavailableMessage(route, page, "远端返回空结果"));
         }
         if (!remoteResult.isSuccess() || StrUtil.isBlank(remoteResult.getAnswer())) {
-            String remoteReason = firstNonBlank(
+            String remoteReason = StringUtils.firstNonBlank(
                     remoteResult.getErrorMessage(),
                     asString(remoteResult.getMetadata(), "errorMessage"),
                     asString(remoteResult.getMetadata(), "message"),
@@ -127,10 +128,10 @@ public class AiAssistantService {
 
         AiChatResponse response = new AiChatResponse();
         response.setAnswer(remoteResult.getAnswer());
-        response.setMode(firstNonBlank(remoteResult.getMode(), "remote"));
-        response.setSource(firstNonBlank(remoteResult.getSource(), "learning-agent-service"));
+        response.setMode(StringUtils.firstNonBlank(remoteResult.getMode(), "remote"));
+        response.setSource(StringUtils.firstNonBlank(remoteResult.getSource(), "learning-agent-service"));
         response.setFallback(false);
-        response.setPage(firstNonBlank(remoteResult.getPage(), page));
+        response.setPage(StringUtils.firstNonBlank(remoteResult.getPage(), page));
         response.setCurrentTopic(remoteResult.getCurrentTopic());
         response.setSuggestions(extractSuggestions(remoteResult.getMetadata()));
         response.setShops(extractShopCards(remoteResult.getMetadata()));
@@ -145,8 +146,8 @@ public class AiAssistantService {
     private List<AiChatSuggestion> extractSuggestions(Map<String, Object> metadata) {
         List<AiChatSuggestion> suggestions = new ArrayList<>();
         for (Map<String, Object> item : asMapList(firstMetadataValue(metadata, "suggested_replies", "suggestedReplies", "suggestions"))) {
-            String label = firstNonBlank(asString(item, "label"), asString(item, "prompt"), asString(item, "value"));
-            String prompt = firstNonBlank(asString(item, "prompt"), asString(item, "value"), label);
+            String label = StringUtils.firstNonBlank(asString(item, "label"), asString(item, "prompt"), asString(item, "value"));
+            String prompt = StringUtils.firstNonBlank(asString(item, "prompt"), asString(item, "value"), label);
             if (StrUtil.isBlank(label) || StrUtil.isBlank(prompt)) {
                 continue;
             }
@@ -285,16 +286,16 @@ public class AiAssistantService {
     private AiShopCard toShopCard(Map<String, Object> item) {
         AiShopCard card = new AiShopCard();
         card.setId(toLong(item.get("id"), item.get("shop_id"), item.get("shopId")));
-        card.setName(firstNonBlank(asString(item, "name"), asString(item, "title")));
-        card.setArea(firstNonBlank(asString(item, "area")));
-        card.setAddress(firstNonBlank(asString(item, "address")));
+        card.setName(StringUtils.firstNonBlank(asString(item, "name"), asString(item, "title")));
+        card.setArea(StringUtils.firstNonBlank(asString(item, "area")));
+        card.setAddress(StringUtils.firstNonBlank(asString(item, "address")));
         card.setAvgPrice(toLong(item.get("avgPrice"), item.get("avg_price"), item.get("avg_price_yuan")));
         card.setScore(toDouble(item.get("score")));
         card.setComments(toInteger(item.get("comments")));
-        card.setOpenHours(firstNonBlank(asString(item, "openHours"), asString(item, "open_hours")));
-        card.setImage(firstNonBlank(asString(item, "image"), asString(item, "cover")));
+        card.setOpenHours(StringUtils.firstNonBlank(asString(item, "openHours"), asString(item, "open_hours")));
+        card.setImage(StringUtils.firstNonBlank(asString(item, "image"), asString(item, "cover")));
         card.setDistance(toDouble(item.get("distance"), item.get("distance_km")));
-        card.setReason(firstNonBlank(asString(item, "reason"), asString(item, "explanation")));
+        card.setReason(StringUtils.firstNonBlank(asString(item, "reason"), asString(item, "explanation")));
         return card;
     }
 
@@ -302,15 +303,15 @@ public class AiAssistantService {
         AiVoucherCard card = new AiVoucherCard();
         card.setId(toLong(item.get("id")));
         card.setShopId(toLong(item.get("shopId"), item.get("shop_id")));
-        card.setShopName(firstNonBlank(asString(item, "shopName"), asString(item, "shop_name")));
-        card.setTitle(firstNonBlank(asString(item, "title")));
-        card.setSubTitle(firstNonBlank(asString(item, "subTitle"), asString(item, "sub_title")));
+        card.setShopName(StringUtils.firstNonBlank(asString(item, "shopName"), asString(item, "shop_name")));
+        card.setTitle(StringUtils.firstNonBlank(asString(item, "title")));
+        card.setSubTitle(StringUtils.firstNonBlank(asString(item, "subTitle"), asString(item, "sub_title")));
         card.setPayValue(toLong(item.get("payValue"), item.get("pay_value")));
         card.setActualValue(toLong(item.get("actualValue"), item.get("actual_value")));
         card.setStock(toInteger(item.get("stock")));
-        card.setBeginTime(firstNonBlank(asString(item, "beginTime"), asString(item, "begin_time")));
-        card.setEndTime(firstNonBlank(asString(item, "endTime"), asString(item, "end_time")));
-        card.setRules(firstNonBlank(asString(item, "rules")));
+        card.setBeginTime(StringUtils.firstNonBlank(asString(item, "beginTime"), asString(item, "begin_time")));
+        card.setEndTime(StringUtils.firstNonBlank(asString(item, "endTime"), asString(item, "end_time")));
+        card.setRules(StringUtils.firstNonBlank(asString(item, "rules")));
         return card;
     }
 
@@ -392,35 +393,5 @@ public class AiAssistantService {
         }
         Object value = context.get(key);
         return value == null ? null : String.valueOf(value);
-    }
-
-    private String firstNonBlank(String... values) {
-        if (values == null) {
-            return null;
-        }
-        for (String value : values) {
-            if (StrUtil.isNotBlank(value)) {
-                return value;
-            }
-        }
-        return null;
-    }
-
-    private String defaultNumber(Integer value) {
-        return value == null ? "0" : String.valueOf(value);
-    }
-
-    private String formatScore(Integer score) {
-        if (score == null) {
-            return "0.0";
-        }
-        return SCORE_FORMAT.format(score / 10.0);
-    }
-
-    private String formatPrice(Long price) {
-        if (price == null) {
-            return "未知";
-        }
-        return String.valueOf(price);
     }
 }

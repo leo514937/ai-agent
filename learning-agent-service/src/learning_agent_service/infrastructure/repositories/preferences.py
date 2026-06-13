@@ -1,7 +1,8 @@
-﻿"""SQLAlchemy repository for durable user answer-style preferences."""
+"""SQLAlchemy repository for durable user answer-style preferences."""
 
 from __future__ import annotations
 
+from typing import Any
 
 from learning_agent_service.domain.utils import utcnow as _utcnow
 from learning_agent_service.infrastructure.db.models import (
@@ -16,7 +17,7 @@ try:
     from sqlalchemy import select
     from sqlalchemy.exc import IntegrityError
 except ImportError:  # pragma: no cover - depends on optional runtime installation.
-    select = None
+    select: Any = None
     IntegrityError = Exception
 
 

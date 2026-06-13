@@ -1,8 +1,9 @@
+from typing import Any
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
 
 from learning_agent_service.application.router.base import routing_trace_payload, _update_phase0_trace, _update_phase1_trace, _update_phase2_trace
-from learning_agent_service.application.router.phase0_quality import build_initial_routing_decision
+from learning_agent_service.local_life.hybrid_router import build_routing_decision_from_hybrid_router as build_initial_routing_decision
 from learning_agent_service.application.router.phase1_intent import build_rewrite_decision
 from learning_agent_service.application.router.phase2_slots import build_evidence_quality
 from learning_agent_service.application.router.phase5_retrieval import can_enter_retrieval
@@ -13,6 +14,16 @@ from .helpers import Any, ClarificationCard, GraphState, Mapping, _append_stage_
 
 
 class WorkflowNodeAdapterStagesFrontBMixin:
+        container: 'Any'
+        _plan_executor: 'Any'
+        plan_planner: 'Any'
+        plan_validator: 'Any'
+        step_executor: 'Any'
+        progress_checker: 'Any'
+        plan_reviewer: 'Any'
+        replanner: 'Any'
+        human_approval_stub: 'Any'
+        business_client: 'Any'
         def _build_pending_clarification_state(self, *, runtime, turn, routing, question: str) -> tuple[dict[str, Any], ClarificationCard]:
             missing_slots = list(getattr(routing, "missing_slots", None) or [])
             question_text = str(question or "").strip() or str(getattr(routing, "clarification_question", "") or "").strip() or "你可以补充一点上下文吗？"

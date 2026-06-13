@@ -9,118 +9,42 @@ from learning_agent_service.domain import (
 )
 from learning_agent_service.domain.enums import IntentType, OutputStyle, TurnDecision
 
-_CN_COMPARE = "\u533a\u522b"
-_CN_BRIEF = "\u7b80\u5355"
-_CN_SUMMARY = "\u603b\u7ed3"
-_CN_EXPLAIN = "\u7406\u89e3"
-_CN_HOW = "\u600e\u4e48"
-_CN_THIS = "\u8fd9\u4e2a"
-_CN_THAT = "\u90a3\u4e2a"
-_CN_PREVIOUS = "\u4e0a\u4e00\u4e2a"
-_CN_IT = "\u5b83"
-_CN_RECOMMEND = "\u63a8\u8350"
-_CN_DETAIL = "\u8be6\u60c5"
-_CN_SCORE = "\u8bc4\u5206"
-_CN_REPUTATION = "\u53e3\u7891"
-_CN_VALUE = "\u503c\u4e0d\u503c"
-_CN_COUPON = "\u4f18\u60e0\u5238"
-_CN_VOUCHER = "\u5238"
-_CN_GROUP_BUY = "\u56e2\u8d2d"
-_CN_COMPARE_ALT = "\u5bf9\u6bd4"
-_CN_NAVIGATION = "\u5bfc\u822a"
-_CN_ROUTE_ALT = "\u8def\u7ebf"
-_CN_DISTANCE = "\u8ddd\u79bb"
-_CN_NEAR = "\u9644\u8fd1"
-_CN_HOW_GO = "\u600e\u4e48\u53bb"
-_CN_BOOKING = "\u8ba2\u5ea7"
-_CN_RESERVE = "\u9884\u7ea6"
-_CN_BOOK = "\u9884\u8ba2"
-_CN_SEAT = "\u4f4d"
-_CN_POSITION = "\u4f4d\u7f6e"
-_CN_ORDER = "\u4e0b\u5355"
-_CN_PAY = "\u652f\u4ed8"
-_CN_CANCEL = "\u53d6\u6d88"
-_CN_REFUND = "\u9000\u6b3e"
-_CN_ORDER_STATUS = "\u8ba2\u5355"
+from .domain_rules import (
+    DomainRulesConfig,
+    _BUILTIN_DOMAIN_RULES,
+    load_domain_rules_config,
+    get_all_domain_tokens,
+)
 
-_LOCAL_LIFE_PAGE_HINTS = {
-    "assistant",
-    "ai",
-    "home",
-    "shop",
-    "shops",
-    "blog",
-    "detail",
-    "meituan_search_box",
-}
-_LOCAL_LIFE_CONTEXT_KEYS = {
-    "shopId",
-    "shopName",
-    "blogId",
-    "blogTitle",
-    "typeId",
-    "typeName",
-    "location",
-    "city",
-    "entry",
-}
-_LOCAL_LIFE_DOMAIN_TOKENS = (
-    "\u9910\u5385",
-    "\u5403\u996d",
-    "\u996d\u5e97",
-    "\u706b\u9505",
-    "\u70e7\u70e4",
-    "\u5496\u5561",
-    "\u5976\u8336",
-    "\u5546\u5bb6",
-    "\u5546\u94fa",
-    "\u5e97",
-    _CN_COUPON,
-    _CN_GROUP_BUY,
-    _CN_BOOKING,
-    _CN_RESERVE,
-    _CN_ORDER_STATUS,
-    "\u63a2\u5e97",
-)
-_LOCAL_LIFE_TOOL_ACTIONS = {
-    "booking",
-    "business_status",
-    "cancel_order",
-    "coupon",
-    "create_order",
-    "order_status",
-    "package_status",
-    "refund_order",
-}
-_LOCAL_LIFE_RAG_ACTIONS = {"compare", "detail", "recommend"}
-_LOCAL_LIFE_MIXED_ACTIONS = {"navigation", "coupon_and_detail"}
-_PROFILE_PATTERNS = (
-    "你有什么功能",
-    "有什么功能",
-    "你有什么工能",
-    "有什么工能",
-    "能做什么",
-    "可以做什么",
-    "你会什么",
-    "你有什么能力",
-    "你的功能",
-    "介绍一下你",
-    "你是谁",
-    "你是什么",
-    "怎么使用你",
-    "怎么用你",
-)
-_CONVERSATION_RECAP_PATTERNS = (
-    "你记得我们说过什么吗",
-    "刚才说到哪了",
-    "上一个问题是什么",
-    "我们刚才说什么",
-    "继续刚才的话题",
-    "前面我们聊到哪了",
-    "回顾一下我们刚才聊了什么",
-)
-_APPROVE_TOKENS = ("确认", "继续执行", "同意", "可以执行", "确认继续", "继续吧")
-_REJECT_TOKENS = ("先不执行", "拒绝", "取消执行", "不用执行", "先别", "不执行")
+_domain_rules: DomainRulesConfig | None = None
+
+
+def _get_domain_rules() -> DomainRulesConfig:
+    global _domain_rules
+    if _domain_rules is None:
+        try:
+            _domain_rules = load_domain_rules_config()
+        except Exception:
+            _domain_rules = _BUILTIN_DOMAIN_RULES
+    return _domain_rules
+
+
+def _rule_tokens(attr: str) -> tuple[str, ...]:
+    rules = _get_domain_rules()
+    return getattr(rules, attr, ())
+
+
+
+_LOCAL_LIFE_PAGE_HINTS: frozenset[str] = frozenset(_rule_tokens("page_hints"))
+_LOCAL_LIFE_CONTEXT_KEYS: frozenset[str] = frozenset(_rule_tokens("context_keys"))
+_LOCAL_LIFE_DOMAIN_TOKENS: tuple[str, ...] = get_all_domain_tokens()
+_LOCAL_LIFE_TOOL_ACTIONS: frozenset[str] = frozenset(_rule_tokens("tool_actions"))
+_LOCAL_LIFE_RAG_ACTIONS: frozenset[str] = frozenset(_rule_tokens("rag_actions"))
+_LOCAL_LIFE_MIXED_ACTIONS: frozenset[str] = frozenset(_rule_tokens("mixed_actions"))
+_PROFILE_PATTERNS: tuple[str, ...] = _rule_tokens("profile_patterns")
+_CONVERSATION_RECAP_PATTERNS: tuple[str, ...] = _rule_tokens("conversation_recap_patterns")
+_APPROVE_TOKENS: tuple[str, ...] = _rule_tokens("approve_tokens")
+_REJECT_TOKENS: tuple[str, ...] = _rule_tokens("reject_tokens")
 
 
 @dataclass(frozen=True)
@@ -150,143 +74,9 @@ class HeuristicIntentGate:
         if approval_resume is not None:
             return _turn_result_to_fast_decision(approval_resume)
 
-        profile_query = _looks_like_profile_query(message, lowered)
-        if profile_query:
-            return FastDecision(
-                intent=IntentType.EXPLAIN,
-                needs_rag=False,
-                needs_tool=False,
-                needs_clarify=False,
-                needs_query_rewrite=False,
-                confidence=0.98,
-                key_slots={
-                    "topic_hint": command.topic_hint,
-                    "question_type": "profile",
-                    "requested_style": style.value if style else None,
-                },
-                extra={
-                    "route_candidate": "profile",
-                    "route_candidates": _route_candidates_metadata(
-                        chosen="profile",
-                        profile_matched=True,
-                        local_life_matched=False,
-                        chosen_reason="assistant_capability_question",
-                        chosen_decision=TurnDecision.DIRECT_ANSWER,
-                        chosen_intent=IntentType.EXPLAIN,
-                        direct_response_kind="profile",
-                    ),
-                    "direct_response_kind": "profile",
-                },
-            )
-
-        greeting = _looks_like_greeting(message, lowered)
-        if greeting:
-            return FastDecision(
-                intent=IntentType.EXPLAIN,
-                needs_rag=False,
-                needs_tool=False,
-                needs_clarify=False,
-                needs_query_rewrite=False,
-                confidence=0.97,
-                key_slots={"direct_response_kind": "greeting"},
-                extra={"route_candidate": "greeting", "direct_response_kind": "greeting"},
-            )
-
-        thanks = _looks_like_thanks(message, lowered)
-        if thanks:
-            return FastDecision(
-                intent=IntentType.EXPLAIN,
-                needs_rag=False,
-                needs_tool=False,
-                needs_clarify=False,
-                needs_query_rewrite=False,
-                confidence=0.97,
-                key_slots={"direct_response_kind": "thanks"},
-                extra={"route_candidate": "thanks", "direct_response_kind": "thanks"},
-            )
-
         local_life = _classify_local_life_turn(command, message, lowered, style or OutputStyle.DETAILED, persistent)
         if local_life is not None:
             return _turn_result_to_fast_decision(local_life)
-
-        conversation_recap = _looks_like_conversation_recap(message, lowered)
-        if conversation_recap:
-            return FastDecision(
-                intent=IntentType.SUMMARY,
-                needs_rag=False,
-                needs_tool=False,
-                needs_clarify=False,
-                needs_query_rewrite=False,
-                confidence=0.9,
-                key_slots={
-                    "topic_hint": command.topic_hint,
-                    "question_type": "conversation_recap",
-                    "requested_style": style.value if style else None,
-                },
-                extra={
-                    "route_candidate": "conversation_recap",
-                    "route_candidates": _route_candidates_metadata(
-                        chosen="conversation_recap",
-                        profile_matched=False,
-                        local_life_matched=False,
-                        chosen_reason="history_recap_request",
-                        chosen_decision=TurnDecision.DIRECT_ANSWER,
-                        chosen_intent=IntentType.SUMMARY,
-                    ),
-                },
-            )
-
-        compare = _looks_like_compare_query(message, lowered)
-        if compare:
-            return FastDecision(
-                intent=IntentType.COMPARE,
-                needs_rag=True,
-                needs_tool=False,
-                needs_clarify=False,
-                needs_query_rewrite=True,
-                confidence=0.93,
-                key_slots={"question_type": "compare", "needs_query_rewrite": True},
-                extra={"route_candidate": "knowledge"},
-            )
-
-        nearby = _looks_like_nearby_recommendation(message, lowered)
-        if nearby:
-            return FastDecision(
-                intent=IntentType.RECOMMEND,
-                needs_rag=True,
-                needs_tool=False,
-                needs_clarify=False,
-                needs_query_rewrite=False,
-                confidence=0.92,
-                key_slots={"question_type": "recommend", "scene": "nearby"},
-                extra={"route_candidate": "knowledge"},
-            )
-
-        merchant_detail = _looks_like_merchant_detail_query(message, lowered)
-        if merchant_detail:
-            return FastDecision(
-                intent=IntentType.FOLLOW_UP,
-                needs_rag=True,
-                needs_tool=False,
-                needs_clarify=False,
-                needs_query_rewrite=False,
-                confidence=0.9,
-                key_slots={"question_type": "detail"},
-                extra={"route_candidate": "knowledge"},
-            )
-
-        route_plan = _looks_like_route_plan_query(message, lowered)
-        if route_plan:
-            return FastDecision(
-                intent=IntentType.RECOMMEND,
-                needs_rag=True,
-                needs_tool=True,
-                needs_clarify=False,
-                needs_query_rewrite=True,
-                confidence=0.9,
-                key_slots={"question_type": "route_plan"},
-                extra={"route_candidate": "tool_then_rag"},
-            )
 
         return None
 
@@ -297,9 +87,9 @@ class HeuristicIntentGate:
         lowered = message.lower()
         style = _response_mode_to_style(command.response_mode)
         if style is None:
-            if any(token in lowered for token in ("compare", "difference", "vs")) or _CN_COMPARE in message:
+            if any(token in lowered for token in ("compare", "difference", "vs")) or _contains_any(message, _rule_tokens("compare_tokens")):
                 style = OutputStyle.COMPARISON
-            elif any(token in lowered for token in ("brief", "simple")) or _CN_BRIEF in message:
+            elif any(token in lowered for token in ("brief", "simple")) or _contains_any(message, ("简单", "简短")):
                 style = OutputStyle.BRIEF
             else:
                 style = OutputStyle.DETAILED
@@ -351,10 +141,10 @@ class HeuristicIntentGate:
 
         intent = IntentType.EXPLAIN
         confidence = 0.72
-        if any(token in lowered for token in ("difference", "compare", "vs")) or _CN_COMPARE in message:
+        if any(token in lowered for token in ("difference", "compare", "vs")) or _contains_any(message, _rule_tokens("compare_tokens")):
             intent = IntentType.COMPARE
             confidence = 0.88
-        elif any(token in lowered for token in ("summary", "recap")) or _CN_SUMMARY in message:
+        elif any(token in lowered for token in ("summary", "recap")) or _contains_any(message, _rule_tokens("conversation_recap_patterns")):
             intent = IntentType.SUMMARY
             confidence = 0.82
         elif chinese_follow_up:
@@ -410,7 +200,7 @@ class HeuristicModelGateway:
 
 def _contains_reference_token(message: str, lowered: str) -> bool:
     return any(token in lowered for token in ("this", "that", "previous", "it")) or any(
-        token in message for token in (_CN_THIS, _CN_THAT, _CN_PREVIOUS, _CN_IT)
+        token in message for token in ("这家", "那家", "这个", "上一个")
     )
 
 
@@ -419,7 +209,7 @@ def _looks_like_follow_up_query(message: str, lowered: str, persistent) -> bool:
         return True
     if not (persistent.current_topic or persistent.recent_entities or persistent.last_retrieval_topic):
         return False
-    short_follow_up = len(message) <= 14 and any(token in message for token in (_CN_EXPLAIN, _CN_HOW, _CN_COMPARE))
+    short_follow_up = len(message) <= 14 and any(token in message for token in _rule_tokens("compare_tokens"))
     return short_follow_up
 
 
@@ -449,7 +239,7 @@ def _contains_any(text: str, tokens: tuple[str, ...]) -> bool:
 
 def _looks_like_greeting(message: str, lowered: str) -> bool:
     compact = message.replace(" ", "")
-    tokens = ("你好", "您好", "哈喽", "在吗", "hi", "hello", "hey")
+    tokens = _rule_tokens("greeting_tokens")
     if _contains_any(compact, tokens) or _contains_any(lowered, tuple(token.lower() for token in tokens)):
         return True
     return len(compact) <= 8 and any(token in compact for token in ("你好", "您好", "在吗"))
@@ -457,13 +247,13 @@ def _looks_like_greeting(message: str, lowered: str) -> bool:
 
 def _looks_like_thanks(message: str, lowered: str) -> bool:
     compact = message.replace(" ", "")
-    tokens = ("谢谢", "多谢", "感谢", "thx", "thanks")
+    tokens = _rule_tokens("thanks_tokens")
     return _contains_any(compact, tokens) or _contains_any(lowered, tuple(token.lower() for token in tokens))
 
 
 def _looks_like_nearby_recommendation(message: str, lowered: str) -> bool:
     compact = message.replace(" ", "")
-    tokens = ("附近推荐", "推荐附近", "附近有", "附近的", "周边推荐", "附近好吃", "附近好评", "附近店")
+    tokens = _rule_tokens("nearby_tokens")
     if _contains_any(compact, tokens) or _contains_any(lowered, tuple(token.lower() for token in tokens)):
         return True
     return any(token in compact for token in ("附近", "周边")) and any(token in compact for token in ("推荐", "找", "看看", "有什么"))
@@ -471,7 +261,7 @@ def _looks_like_nearby_recommendation(message: str, lowered: str) -> bool:
 
 def _looks_like_merchant_detail_query(message: str, lowered: str) -> bool:
     compact = message.replace(" ", "")
-    tokens = ("详情", "详细", "这家店", "这个店", "商家", "店铺", "评分", "人均", "营业时间", "口碑", "优惠券")
+    tokens = _rule_tokens("detail_tokens")
     if _contains_any(compact, tokens) or _contains_any(lowered, tuple(token.lower() for token in tokens)):
         return True
     return any(token in compact for token in ("这家", "这个", "那家")) and any(token in compact for token in ("店", "商家", "饭店"))
@@ -479,13 +269,13 @@ def _looks_like_merchant_detail_query(message: str, lowered: str) -> bool:
 
 def _looks_like_compare_query(message: str, lowered: str) -> bool:
     compact = message.replace(" ", "")
-    tokens = ("对比", "比较", "区别", "差别", "vs", "比一下")
+    tokens = _rule_tokens("compare_tokens")
     return _contains_any(compact, tokens) or _contains_any(lowered, tuple(token.lower() for token in tokens))
 
 
 def _looks_like_route_plan_query(message: str, lowered: str) -> bool:
     compact = message.replace(" ", "")
-    tokens = ("路线", "怎么去", "导航", "规划", "行程", "计划", "路线规划", "安排", "路程")
+    tokens = _rule_tokens("route_tokens")
     if _contains_any(compact, tokens) or _contains_any(lowered, tuple(token.lower() for token in tokens)):
         return True
     return any(token in compact for token in ("去", "到")) and any(token in compact for token in ("怎么", "路线", "导航", "规划", "计划"))
@@ -571,48 +361,12 @@ def _looks_like_local_life_domain(command, message: str, lowered: str, persisten
 
 
 def _detect_local_life_intent(message: str, lowered: str, has_topic: bool) -> str | None:
-    compact = message.replace(" ", "")
-    if any(token in lowered for token in ("refund",)) or _CN_REFUND in message:
-        return "refund_order"
-    if any(token in lowered for token in ("cancel",)) or _CN_CANCEL in message:
-        return "cancel_order"
-    if any(token in lowered for token in ("pay", "order now", "buy")) or _CN_ORDER in message or _CN_PAY in message:
-        return "create_order"
-    if _looks_like_coupon_and_environment_query(message, lowered):
-        return "coupon_and_detail"
-    if any(token in lowered for token in ("营业", "开门", "开业", "歇业", "关门")) or _contains_any(message, ("营业", "开门", "开业", "歇业", "关门")):
-        return "business_status"
-    if (
-        any(token in lowered for token in ("套餐", "优惠券", "团购", "voucher", "coupon"))
-        or _contains_any(message, (_CN_COUPON, _CN_VOUCHER, _CN_GROUP_BUY))
-    ) and any(token in lowered for token in ("还能用", "可用", "有效", "过期", "使用", "能用", "现在", "今天")):
-        return "package_status"
-    if any(token in lowered for token in ("booking", "reserve", "book a table")) or _contains_any(message, (_CN_BOOKING, _CN_RESERVE, _CN_BOOK)):
-        return "booking"
-    if "\u8ba2" in message and _contains_any(message, (_CN_SEAT, _CN_POSITION)):
-        return "booking"
     if _looks_like_nearby_recommendation(message, lowered):
         return "recommend"
-    if any(token in lowered for token in ("navigation", "route", "distance", "eta", "how far", "how to go")) or _contains_any(
-        message, (_CN_NAVIGATION, _CN_ROUTE_ALT, _CN_DISTANCE, _CN_HOW_GO, _CN_NEAR)
-    ):
-        return "navigation"
-    if any(token in lowered for token in ("coupon", "voucher", "discount", "deal")) or _contains_any(message, (_CN_COUPON, _CN_VOUCHER, _CN_GROUP_BUY)):
-        return "coupon"
-    if any(token in lowered for token in ("compare", "vs", "difference")) or _contains_any(message, (_CN_COMPARE, _CN_COMPARE_ALT)):
+    if _looks_like_coupon_and_environment_query(message, lowered):
+        return "coupon_and_detail"
+    if any(token in lowered for token in ("compare", "vs", "difference")) or _contains_any(message, _rule_tokens("compare_tokens")):
         return "compare"
-    if any(token in lowered for token in ("order status", "my order")) or _CN_ORDER_STATUS in message:
-        return "order_status"
-    if "怎么样" in compact or "哪家" in compact:
-        return "detail"
-    if any(token in lowered for token in ("detail", "rating", "review", "worth")) or _contains_any(
-        message, (_CN_DETAIL, _CN_SCORE, _CN_REPUTATION, _CN_VALUE)
-    ):
-        return "detail"
-    if any(token in compact for token in ("吃饭", "聚餐", "晚饭", "午饭", "宵夜")):
-        return "recommend"
-    if any(token in lowered for token in ("recommend", "nearby", "restaurant")) or _contains_any(message, (_CN_RECOMMEND, _CN_NEAR)):
-        return "recommend"
     if has_topic:
         return "detail"
     return None
@@ -620,12 +374,12 @@ def _detect_local_life_intent(message: str, lowered: str, has_topic: bool) -> st
 
 def _looks_like_coupon_and_environment_query(message: str, lowered: str) -> bool:
     has_coupon = any(token in lowered for token in ("coupon", "voucher", "discount", "deal")) or _contains_any(
-        message, (_CN_COUPON, _CN_VOUCHER, _CN_GROUP_BUY)
+        message, _rule_tokens("coupon_tokens")
     )
     has_environment = any(
         token in lowered
         for token in ("environment", "review", "rating", "reputation", "scene", "quiet", "atmosphere", "worth", "fit")
-    ) or _contains_any(message, (_CN_DETAIL, _CN_SCORE, _CN_REPUTATION, _CN_VALUE, "环境", "安静", "氛围", "适合", "家庭聚餐", "带父母", "带长辈", "约会"))
+    ) or _contains_any(message, ("怎么样", "评价", "评分", "口碑", "环境", "安静", "氛围", "适合", "家庭聚餐", "带父母", "带长辈", "约会"))
     return has_coupon and has_environment
 
 
@@ -699,7 +453,9 @@ def _build_local_life_slots(command, message: str, action: str, style: OutputSty
     if inferred_scene and "scene" not in slots:
         slots["scene"] = inferred_scene
     if inferred_preferences:
-        merged_preferences = list(dict.fromkeys([*(slots.get("preferences") or []), *inferred_preferences]))
+        raw_prefs = slots.get("preferences")
+        base_prefs = list(raw_prefs) if isinstance(raw_prefs, (list, tuple, set)) else []
+        merged_preferences = list(dict.fromkeys([*base_prefs, *inferred_preferences]))
         if merged_preferences:
             slots["preferences"] = merged_preferences
     if persistent is not None:
@@ -811,22 +567,10 @@ def _pick_follow_up_candidate(message: str, candidates) -> dict[str, object] | N
 
 
 def _infer_local_life_scene_preferences(message: str, slots: dict[str, object]) -> tuple[str | None, list[str]]:
-    compact = str(message or "").replace(" ", "")
     scene = slots.get("scene") if isinstance(slots.get("scene"), str) else None
-    preferences = list(slots.get("preferences") or [])
-    inferred: list[str] = []
-
-    if any(token in compact for token in ("爸妈", "父母", "长辈", "老人")):
-        inferred.append("elder_friendly")
-        inferred.append("family_friendly")
-        scene = scene or "family_dinner"
-    if any(token in compact for token in ("别太吵", "安静", "清静")):
-        inferred.append("quiet")
-    if any(token in compact for token in ("停车", "车位")):
-        inferred.append("parking_available")
-
-    merged = list(dict.fromkeys([*preferences, *inferred]))
-    return scene, merged
+    raw_preferences = slots.get("preferences")
+    preferences = list(raw_preferences) if isinstance(raw_preferences, (list, tuple, set)) else []
+    return scene, preferences
 
 
 def _looks_like_local_life_follow_up(message: str, lowered: str) -> bool:
@@ -839,28 +583,7 @@ def _looks_like_local_life_follow_up(message: str, lowered: str) -> bool:
 
 
 def _looks_like_local_life_status_query(message: str, lowered: str) -> bool:
-    compact = message.replace(" ", "")
-    tokens = (
-        "营业",
-        "开门",
-        "开业",
-        "歇业",
-        "关门",
-        "营业时间",
-        "还能用",
-        "可用",
-        "有效",
-        "过期",
-        "使用",
-        "能用",
-        "套餐",
-        "优惠券",
-        "团购",
-        "券",
-    )
-    if _contains_any(compact, tokens) or _contains_any(lowered, tuple(token.lower() for token in tokens)):
-        return True
-    return "现在" in compact and any(token in compact for token in ("营业", "还能用", "可用", "有效", "过期"))
+    return False
 
 
 def _has_local_life_session_anchor(persistent) -> bool:

@@ -74,13 +74,13 @@ class LocalLifeRagEvalCase:
             raw_turns = [raw_turns]
         elif not isinstance(raw_turns, Sequence) or isinstance(raw_turns, (bytes, bytearray)):
             raw_turns = [raw_turns]
-        turns = tuple(_clean_text(item) for item in raw_turns if _clean_text(item))
-        query = _clean_text(raw.get("query") or (turns[-1] if turns else ""))
+        turns = tuple(str(text) for item in raw_turns if (text := _clean_text(item)))
+        query = _clean_text(raw.get("query") or (turns[-1] if turns else "")) or ""
         return cls(
-            case_id=_clean_text(raw.get("case_id") or raw.get("id") or query or "case"),
+            case_id=_clean_text(raw.get("case_id") or raw.get("id") or query or "case") or "case",
             query=query,
-            expected_route=_clean_text(raw.get("expected_route") or "rag"),
-            expected_rag_mode=_clean_text(raw.get("expected_rag_mode") or "single_shop_rag"),
+            expected_route=_clean_text(raw.get("expected_route") or "rag") or "rag",
+            expected_rag_mode=_clean_text(raw.get("expected_rag_mode") or "single_shop_rag") or "single_shop_rag",
             expected_shop_id=_to_int(raw.get("expected_shop_id")),
             expected_facets=_string_list(raw.get("expected_facets")),
             forbidden_shop_ids=_int_list(raw.get("forbidden_shop_ids")),
@@ -104,9 +104,9 @@ class LocalLifeRagEvalObservation:
         if isinstance(evidence_pack, Mapping):
             evidence_pack = LocalLifeEvidencePack.model_validate(evidence_pack)
         return cls(
-            case_id=_clean_text(raw.get("case_id") or raw.get("id")),
-            query=_clean_text(raw.get("query")),
-            answer=_clean_text(raw.get("answer") or raw.get("final_answer")),
+            case_id=_clean_text(raw.get("case_id") or raw.get("id")) or "case",
+            query=_clean_text(raw.get("query")) or "",
+            answer=_clean_text(raw.get("answer") or raw.get("final_answer")) or "",
             metrics=dict(raw.get("metrics") or {}),
             evidence_pack=evidence_pack if isinstance(evidence_pack, LocalLifeEvidencePack) else None,
         )
@@ -348,7 +348,9 @@ def _observed_facets(
                 facets.add(source_type)
     metrics = dict(observation.metrics or {})
     for facet in metrics.get("rag_guardrail", {}).get("final_allowed_facets", []) or []:
-        facets.add(_clean_text(facet))
+        cleaned = _clean_text(facet)
+        if cleaned:
+            facets.add(cleaned)
     return {facet for facet in facets if facet}
 
 

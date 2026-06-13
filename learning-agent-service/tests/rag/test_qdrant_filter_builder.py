@@ -253,7 +253,7 @@ def test_heuristic_metadata_retriever_uses_configured_threshold() -> None:
 
     base_plan = _plan(tenant_id="tenant-a", permission_tags=("reader",))
     base_filters = dict(base_plan.retrieval_filters.extra)
-    base_filters["owner_id"] = "owner-1"
+    base_filters["tenant_owner_id"] = "owner-1"
     plan = RetrievalPlan(
         semantic_query=base_plan.semantic_query,
         keyword_query=base_plan.keyword_query,
@@ -266,7 +266,7 @@ def test_heuristic_metadata_retriever_uses_configured_threshold() -> None:
             **dict(base_plan.extra),
             "filter_confidence": 0.7,
             "metadata_filter_confidence_threshold": 0.9,
-            "owner_id": "owner-1",
+            "tenant_owner_id": "owner-1",
         },
     )
     relaxed_hits = retriever.retrieve(plan)

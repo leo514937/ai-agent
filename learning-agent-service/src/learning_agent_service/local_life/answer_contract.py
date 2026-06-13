@@ -73,7 +73,14 @@ class AnswerContract(BaseModel):
         intent_name = str(getattr(user_need, "intent", "") or "").strip()
         inferred_coupon = any(token in compact_query for token in ("券", "优惠", "领券", "打折", "代金券", "折扣", "有券", "团购"))
         inferred_open = any(token in compact_query for token in ("营业", "开门", "开着", "营业时间", "现在营业吗", "现在开吗", "营业吗"))
-        inferred_distance = any(token in compact_query for token in ("距离", "有多远", "导航", "路线", "怎么走", "怎么去"))
+        inferred_distance = any(token in compact_query for token in ("离我多远", "距离", "有多远", "导航", "路线", "怎么走", "怎么去"))
+        inferred_comparison = (
+            intent_name in ("restaurant_comparison", "comparison", "local_life_comparison")
+            or (
+                any(token in compact_query for token in ("对比", "比较", "区别", "差别", "哪家更", "哪个更", "更便宜", "更适合", "更好"))
+                and any(token in compact_query for token in ("和", "比", "vs"))
+            )
+        )
         
         # Determine base allowed and forbidden facets
         # Default facets to consider: "coupon", "open_status", "distance_eta", "price", "scene_fit", "environment", "taste", "service", "recommendation", "recommendation_reason", "shop_detail"
@@ -110,6 +117,10 @@ class AnswerContract(BaseModel):
                 allowed_facets = ["environment", "taste", "service", "coupon", "open_status", "distance_eta", "distance", "price", "shop_detail", "recommendation_reason"]
                 forbidden_facets = []
                 answer_style = "multi_shop_recommendation"
+        elif inferred_comparison:
+            allowed_facets = ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "distance_eta", "distance", "price", "shop_detail", "recommendation_reason"]
+            forbidden_facets = []
+            answer_style = "comparison"
         elif getattr(user_need, "intent", None) == "clarify":
             allowed_facets = []
             forbidden_facets = ["environment", "taste", "service", "recommendation", "coupon", "open_status", "distance_eta", "price"]

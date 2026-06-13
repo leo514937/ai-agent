@@ -51,6 +51,41 @@ class PlanExecuteSubgraphServices:
 
 
 @dataclass
+class MainGraphServices:
+    resolve_target_shop: StateHandler = passthrough_handler
+    clarification_or_reject: StateHandler = passthrough_handler
+    build_answer_contract: StateHandler = passthrough_handler
+    build_source_contract: StateHandler = passthrough_handler
+    complexity_router: StateHandler = passthrough_handler
+    hard_guard: StateHandler = passthrough_handler
+    request_legality: StateHandler = passthrough_handler
+    query_safety: StateHandler = passthrough_handler
+    query_merge_for_local_life: StateHandler = passthrough_handler
+    merged_query_safety: StateHandler = passthrough_handler
+    top_level_intent_router: StateHandler = passthrough_handler
+    identity_answer: StateHandler = passthrough_handler
+    capability_answer: StateHandler = passthrough_handler
+    direct_chat_answer: StateHandler = passthrough_handler
+    out_of_scope_response: StateHandler = passthrough_handler
+    illegal_request_response: StateHandler = passthrough_handler
+    safety_reject_response: StateHandler = passthrough_handler
+    direct_executor: StateHandler = passthrough_handler
+    workflow_executor: StateHandler = passthrough_handler
+    clarification_node: StateHandler = passthrough_handler
+    rule_review: StateHandler = passthrough_handler
+    select_required_sources: StateHandler = passthrough_handler
+    final_answer: StateHandler = passthrough_handler
+    merge_or_rank: StateHandler = passthrough_handler
+    contract_review: StateHandler = passthrough_handler
+    prepare_retry: StateHandler = passthrough_handler
+    final_answer_safety: StateHandler = passthrough_handler
+    final_safety_fallback: StateHandler = passthrough_handler
+    repair_answer: StateHandler = passthrough_handler
+    final_with_limitations: StateHandler = passthrough_handler
+    response_builder: StateHandler = passthrough_handler
+
+
+@dataclass
 class WorkflowServices:
     load_context: StateHandler = passthrough_handler
     consume_pending_clarification: StateHandler = passthrough_handler
@@ -59,6 +94,7 @@ class WorkflowServices:
     rag_subgraph: RagSubgraphServices = field(default_factory=RagSubgraphServices)
     tool_subgraph: ToolSubgraphServices = field(default_factory=ToolSubgraphServices)
     plan_execute: PlanExecuteSubgraphServices = field(default_factory=PlanExecuteSubgraphServices)
+    main_graph: MainGraphServices = field(default_factory=MainGraphServices)
     compose_answer: StateHandler = passthrough_handler
     persist_session: StateHandler = passthrough_handler
     emit_final: StateHandler = passthrough_handler

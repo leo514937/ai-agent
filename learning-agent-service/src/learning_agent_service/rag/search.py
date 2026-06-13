@@ -12,6 +12,8 @@ from .models import (
 )
 from .protocols import HybridRetriever
 from .rewrite import QueryRewriteContext, QueryRewriteService
+from .quality_guard import RetrievalQualityGuard
+from dataclasses import replace
 
 
 @dataclass(frozen=True)
@@ -27,12 +29,14 @@ class KnowledgeSearchFacade:
         retriever: HybridRetriever,
         evidence_service: EvidenceGovernanceService,
         citation_builder: CitationBuilder,
+        quality_guard: RetrievalQualityGuard | None = None,
         config: KnowledgeSearchConfig | None = None,
     ) -> None:
         self._rewrite = rewrite_service
         self._retriever = retriever
         self._evidence = evidence_service
         self._citation_builder = citation_builder
+        self._quality_guard = quality_guard
         self._config = config or KnowledgeSearchConfig()
 
     def search(self, request: KnowledgeSearchRequest) -> KnowledgeSearchResult:
@@ -46,6 +50,29 @@ class KnowledgeSearchFacade:
         )
         recall = self._retriever.retrieve(plan)
         evidence = self._evidence.evaluate(plan, recall.hits, trace=recall.debug_trace)
+        
+        if self._quality_guard:
+            query_context = dict(request.query_context) if request.query_context else {}
+            has_tool_evidence = bool(query_context.get("has_tool_evidence") or query_context.get("tool_evidence"))
+            context_slots = query_context.get("slots") or query_context
+            
+            quality_result = self._quality_guard.check(
+                evidence_pack=evidence,
+                plan=plan,
+                has_tool_evidence=has_tool_evidence,
+                context_slots=context_slots,
+            )
+            evidence = replace(
+                evidence,
+                metrics={
+                    **dict(evidence.metrics),
+                    "quality_verdict": quality_result.verdict.value,
+                    "quality_confidence": quality_result.confidence,
+                    "quality_reason": quality_result.reason,
+                    "quality_is_realtime_risk": quality_result.is_realtime_risk,
+                }
+            )
+
         citations = self._citation_builder.build(evidence)
         citation_map = {citation.chunk_id: citation for citation in citations}
         matches = tuple(

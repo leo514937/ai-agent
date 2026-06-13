@@ -392,15 +392,15 @@ def _build_required_facets(
 
         )
 
-        has_coupon_hint = any(token in compact for token in ("券", "优惠券", "团购", "套餐", "还能用", "可用"))
+        has_coupon_hint = any(token in compact for token in ("券", "优惠", "优惠券", "团购", "套餐", "还能用", "可用"))
 
         has_open_status_hint = any(token in compact for token in ("营业", "开门", "开业", "还能去", "排队", "库存"))
 
-        has_scene_hint = any(token in compact for token in ("适合", "带父母", "带长辈", "约会", "家庭聚餐", "安静", "不吵", "老人", "孩子"))
+        has_scene_hint = any(token in compact for token in ("适合", "带父母", "带长辈", "带小孩", "朋友聚餐", "深夜", "商务宴请", "约会", "家庭聚餐", "安静", "不吵", "老人", "孩子"))
 
-        has_distance_hint = bool(has_location_context and any(token in compact for token in ("附近", "周边", "离我", "离我近")))
+        has_distance_hint = any(token in compact for token in ("附近", "周边", "离我", "离我近", "多远", "距离", "有多远", "导航", "路线", "怎么走", "怎么去"))
 
-        needs_recommendation = has_scene_hint or any(token in compact for token in ("附近", "周边", "推荐", "适合", "约会", "家庭聚餐", "安静", "不吵", "老人", "孩子"))
+        needs_recommendation = has_scene_hint or any(token in compact for token in ("附近", "周边", "推荐", "适合", "约会", "家庭聚餐", "带小孩", "朋友聚餐", "深夜", "商务宴请", "安静", "不吵", "老人", "孩子"))
 
         needs_detail = any(token in compact for token in ("怎么样", "评价", "评分", "口碑", "环境", "详情", "介绍", "值不值", "好不好", "避坑", "踩雷", "翻车", "停车"))
 
@@ -420,7 +420,7 @@ def _build_required_facets(
 
                     entity_keys=["city", "location"],
 
-                    missing_policy="ask_clarification",
+                    missing_policy="partial_grounded",
 
                     detail="user_position_or_city",
 
@@ -462,7 +462,7 @@ def _build_required_facets(
 
                         freshness="static_ok",
 
-                        entity_keys=["shop_id", "shop_name"],
+                        entity_keys=["shop_name"],
 
                         missing_policy="partial_grounded",
 
@@ -486,7 +486,7 @@ def _build_required_facets(
 
                         freshness="static_ok",
 
-                        entity_keys=["shop_id", "shop_name"],
+                        entity_keys=["shop_name"],
 
                         missing_policy="partial_grounded",
 
@@ -510,7 +510,7 @@ def _build_required_facets(
 
                         freshness="static_ok",
 
-                        entity_keys=["shop_id", "shop_name"],
+                        entity_keys=["shop_name"],
 
                         missing_policy="partial_grounded",
 
@@ -538,7 +538,7 @@ def _build_required_facets(
 
                             entity_keys=["shop_id", "location"],
 
-                            missing_policy="ask_clarification",
+                            missing_policy="partial_grounded",
 
                             tool_names=["get_distance_eta"],
 
@@ -576,7 +576,7 @@ def _build_required_facets(
 
             if has_coupon_hint:
 
-                if has_shop_hint and has_location_context:
+                if has_shop_hint:
 
                     required_facets.append(
 
@@ -588,9 +588,9 @@ def _build_required_facets(
 
                             freshness="near_realtime_required",
 
-                            entity_keys=["shop_id", "shop_name", "voucher_id"],
+                            entity_keys=["shop_name"],
 
-                            missing_policy="ask_clarification",
+                            missing_policy="partial_grounded",
 
                             tool_names=["get_coupon_list"],
 
@@ -614,7 +614,7 @@ def _build_required_facets(
 
                             freshness="near_realtime_required",
 
-                            entity_keys=["shop_id", "shop_name", "voucher_id"],
+                            entity_keys=["shop_name"],
 
                             missing_policy="partial_grounded",
 
@@ -640,9 +640,9 @@ def _build_required_facets(
 
                             freshness="near_realtime_required",
 
-                            entity_keys=["shop_id", "shop_name"],
+                            entity_keys=["shop_name"],
 
-                            missing_policy="ask_clarification",
+                            missing_policy="partial_grounded",
 
                             tool_names=["check_open_status", "getShopDetail", "getBusinessStatus"],
 
@@ -666,7 +666,7 @@ def _build_required_facets(
 
                             freshness="near_realtime_required",
 
-                            entity_keys=["shop_id", "shop_name"],
+                            entity_keys=["shop_name"],
 
                             missing_policy="partial_grounded",
 
@@ -692,7 +692,7 @@ def _build_required_facets(
 
                         freshness="static_ok",
 
-                        entity_keys=["shop_id", "shop_name"],
+                        entity_keys=["shop_name"],
 
                         missing_policy="partial_grounded",
 
@@ -716,7 +716,7 @@ def _build_required_facets(
 
                         freshness="static_ok",
 
-                        entity_keys=["shop_id", "shop_name"],
+                        entity_keys=["shop_name"],
 
                         missing_policy="partial_grounded",
 
@@ -742,9 +742,9 @@ def _build_required_facets(
 
                             freshness="near_realtime_required",
 
-                            entity_keys=["shop_id", "shop_name"],
+                            entity_keys=["shop_name"],
 
-                            missing_policy="ask_clarification",
+                            missing_policy="partial_grounded",
 
                             tool_names=["check_open_status", "getShopDetail", "getBusinessStatus"],
 
@@ -766,13 +766,37 @@ def _build_required_facets(
 
                             freshness="near_realtime_required",
 
-                            entity_keys=["shop_id", "shop_name", "voucher_id"],
+                            entity_keys=["shop_name"],
 
-                            missing_policy="ask_clarification",
+                            missing_policy="partial_grounded",
 
                             tool_names=["get_coupon_list"],
 
                             detail="current_coupon_status",
+
+                        )
+
+                    )
+
+                if has_distance_hint:
+
+                    required_facets.append(
+
+                        _facet_dict(
+
+                            "distance_eta",
+
+                            data_source=_PHASE1_DATA_SOURCE_DYNAMIC_TOOL,
+
+                            freshness="near_realtime_required",
+
+                            entity_keys=["shop_name"],
+
+                            missing_policy="partial_grounded",
+
+                            tool_names=["get_distance_eta"],
+
+                            detail="nearby_travel_eta",
 
                         )
 
@@ -790,9 +814,9 @@ def _build_required_facets(
 
                         freshness="near_realtime_required",
 
-                        entity_keys=["city", "location"],
+                    entity_keys=["city", "location"],
 
-                        missing_policy="ask_clarification",
+                    missing_policy="partial_grounded",
 
                         detail="user_position_or_city",
 
@@ -816,9 +840,9 @@ def _build_required_facets(
 
                             freshness="near_realtime_required",
 
-                            entity_keys=["shop_id", "shop_name"],
+                            entity_keys=["shop_name"],
 
-                            missing_policy="ask_clarification",
+                            missing_policy="partial_grounded",
 
                             tool_names=["check_open_status", "getShopDetail", "getBusinessStatus"],
 
@@ -840,9 +864,9 @@ def _build_required_facets(
 
                             freshness="near_realtime_required",
 
-                            entity_keys=["shop_id", "shop_name", "voucher_id"],
+                            entity_keys=["shop_name"],
 
-                            missing_policy="ask_clarification",
+                            missing_policy="partial_grounded",
 
                             tool_names=["get_coupon_list"],
 
@@ -866,7 +890,7 @@ def _build_required_facets(
 
                         entity_keys=["city", "location"],
 
-                        missing_policy="ask_clarification",
+                        missing_policy="partial_grounded",
 
                         detail="user_position_or_city",
 

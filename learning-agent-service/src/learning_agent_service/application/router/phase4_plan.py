@@ -482,7 +482,7 @@ def ensure_task_plan(state: Any) -> Any:
             summary=str(getattr(turn, "raw_query", "") or "").strip(),
             route_candidate=getattr(routing, "route_candidate", None),
             task_complexity="complex",
-            execution_mode=str(getattr(turn, "execution_mode", "plan_execute") or "plan_execute"),
+            execution_mode=str(getattr(turn, "execution_mode", "plan_execute") or "plan_execute"),  # type: ignore[arg-type]
             can_fallback_to_legacy=True,
             required_facets=list(getattr(routing, "extra", {}).get("required_facets") or []),
             optional_facets=list(getattr(routing, "extra", {}).get("optional_facets") or []),

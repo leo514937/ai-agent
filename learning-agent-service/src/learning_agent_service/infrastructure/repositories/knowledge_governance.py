@@ -1,8 +1,9 @@
-﻿"""SQLAlchemy repository for knowledge document governance metadata."""
+"""SQLAlchemy repository for knowledge document governance metadata."""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Any
 
 from learning_agent_service.infrastructure.db.models import (
     KnowledgeDocumentModel,
@@ -15,7 +16,7 @@ from .records import KnowledgeDocumentRecord, KnowledgeDocumentVersionRecord
 try:
     from sqlalchemy import select
 except ImportError:  # pragma: no cover - depends on optional runtime installation.
-    select = None
+    select: Any = None
 
 
 class KnowledgeGovernanceRepository(SqlAlchemyRepositoryBase):

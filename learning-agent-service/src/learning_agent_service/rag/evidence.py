@@ -4,6 +4,7 @@ import re
 from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
+from typing import Any
 
 from .models import (
     EvidenceItem,
@@ -17,6 +18,21 @@ from .models import (
 
 _TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_+#.:-]+|[\u4e00-\u9fff]+")
 
+_QUERY_COMPLEXITY_SIGNALS: dict[str, tuple[str, ...]] = {
+    "simple": ("什么", "是", "吗", "what", "is", "do"),
+    "complex": ("为什么", "怎么", "如何", "区别", "比较", "推荐", "why", "how", "compare", "recommend"),
+    "factoid": ("多少", "几点", "哪里", "谁", "how much", "where", "who", "when"),
+    "comparison": ("对比", "比较", "区别", "差别", "vs", "compare", "difference"),
+    "recommendation": ("推荐", "建议", "哪个好", "recommend", "suggest", "best"),
+    "multi_hop": ("然后", "接着", "之后", "同时", "and then", "also", "besides"),
+    "procedural": ("步骤", "流程", "怎么操作", "怎么做", "step", "procedure", "how to"),
+}
+
+_REALTIME_RISK_SIGNALS: tuple[str, ...] = (
+    "营业", "开门", "关门", "现在", "今天", "价格", "库存", "优惠券",
+    "还能用", "可用", "过期", "实时", "open", "price", "available", "stock",
+)
+
 
 @dataclass(frozen=True)
 class EvidenceGovernanceConfig:
@@ -26,11 +42,104 @@ class EvidenceGovernanceConfig:
     topic_consistency_threshold: float = 0.35
     min_items: int = 4
     max_items: int = 6
+    max_token_budget: int = 2000
+    simple_query_max_items: int = 3
+    simple_query_max_tokens: int = 800
+    complex_query_max_items: int = 8
+    complex_query_max_tokens: int = 3000
+    enable_diversity_control: bool = True
+    enable_dedup: bool = True
+    diversity_penalty_factor: float = 0.1
+
+
+@dataclass(frozen=True)
+class QueryComplexityProfile:
+    level: str = "medium"
+    answer_type: str = "explanation"
+    max_items: int = 6
+    max_tokens: int = 2000
+    needs_diversity: bool = True
+    needs_strong_dedup: bool = False
+    is_realtime_risk: bool = False
+
+
+class QueryComplexityProfiler:
+    """Lightweight query complexity profiler for evidence budget decisions."""
+
+    def __init__(self, config: EvidenceGovernanceConfig | None = None) -> None:
+        self._config = config or EvidenceGovernanceConfig()
+
+    def profile(self, plan: RetrievalPlan) -> QueryComplexityProfile:
+        raw_query = str(plan.extra.get("raw_query") or plan.semantic_query or "").lower()
+        intent = str(plan.extra.get("intent") or "").lower()
+
+        is_realtime = any(sig in raw_query for sig in _REALTIME_RISK_SIGNALS)
+
+        complexity_level = "medium"
+        answer_type = "explanation"
+        max_items = self._config.max_items
+        max_tokens = self._config.max_token_budget
+
+        if any(sig in raw_query for sig in _QUERY_COMPLEXITY_SIGNALS.get("comparison", ())):
+            complexity_level = "complex"
+            answer_type = "comparison"
+            max_items = self._config.complex_query_max_items
+            max_tokens = self._config.complex_query_max_tokens
+        elif any(sig in raw_query for sig in _QUERY_COMPLEXITY_SIGNALS.get("recommendation", ())):
+            answer_type = "recommendation"
+            complexity_level = "complex"
+            max_items = self._config.complex_query_max_items
+            max_tokens = self._config.complex_query_max_tokens
+        elif any(sig in raw_query for sig in _QUERY_COMPLEXITY_SIGNALS.get("multi_hop", ())):
+            answer_type = "multi_hop"
+            complexity_level = "complex"
+            max_items = self._config.complex_query_max_items
+            max_tokens = self._config.complex_query_max_tokens
+        elif any(sig in raw_query for sig in _QUERY_COMPLEXITY_SIGNALS.get("procedural", ())):
+            answer_type = "procedural"
+            complexity_level = "complex"
+            max_items = self._config.complex_query_max_items
+            max_tokens = self._config.complex_query_max_tokens
+        elif any(sig in raw_query for sig in _QUERY_COMPLEXITY_SIGNALS.get("complex", ())):
+            complexity_level = "complex"
+            max_items = self._config.complex_query_max_items
+            max_tokens = self._config.complex_query_max_tokens
+        elif any(sig in raw_query for sig in _QUERY_COMPLEXITY_SIGNALS.get("simple", ())):
+            if len(raw_query) < 15:
+                complexity_level = "simple"
+                max_items = self._config.simple_query_max_items
+                max_tokens = self._config.simple_query_max_tokens
+                answer_type = "factoid"
+        elif any(sig in raw_query for sig in _QUERY_COMPLEXITY_SIGNALS.get("factoid", ())):
+            answer_type = "factoid"
+
+        if intent in ("compare", "recommend"):
+            complexity_level = "complex"
+            max_items = self._config.complex_query_max_items
+            max_tokens = self._config.complex_query_max_tokens
+            if intent == "compare":
+                answer_type = "comparison"
+            elif intent == "recommend":
+                answer_type = "recommendation"
+
+        needs_diversity = self._config.enable_diversity_control and complexity_level == "complex"
+        needs_strong_dedup = complexity_level == "simple"
+
+        return QueryComplexityProfile(
+            level=complexity_level,
+            answer_type=answer_type,
+            max_items=max_items,
+            max_tokens=max_tokens,
+            needs_diversity=needs_diversity,
+            needs_strong_dedup=needs_strong_dedup,
+            is_realtime_risk=is_realtime,
+        )
 
 
 class EvidenceGovernanceService:
-    def __init__(self, config: EvidenceGovernanceConfig = None) -> None:
+    def __init__(self, config: EvidenceGovernanceConfig | None = None) -> None:
         self._config = config or EvidenceGovernanceConfig()
+        self._profiler = QueryComplexityProfiler(self._config)
 
     def evaluate(
         self,
@@ -42,10 +151,13 @@ class EvidenceGovernanceService:
         kept: list[RecallHit] = list(hits)
         rejected: list[RetrievalTraceItem] = []
 
+        complexity = self._profiler.profile(plan)
+
         kept, low_score_rejected = self._low_score_filter(kept)
         rejected.extend(low_score_rejected)
-        kept, dedup_rejected = self._deduplicate(kept)
-        rejected.extend(dedup_rejected)
+        if self._config.enable_dedup:
+            kept, dedup_rejected = self._deduplicate(kept, complexity)
+            rejected.extend(dedup_rejected)
         kept, topic_rejected = self._topic_consistency_filter(plan, kept)
         rejected.extend(topic_rejected)
         kept, version_rejected = self._version_filter(plan, kept)
@@ -53,7 +165,11 @@ class EvidenceGovernanceService:
         kept, answer_view_rejected = self._answer_view_filter(plan, kept)
         rejected.extend(answer_view_rejected)
 
-        limit = min(plan.max_evidence or self._config.max_items, self._config.max_items)
+        limit = min(
+            plan.max_evidence or complexity.max_items,
+            complexity.max_items,
+            self._config.max_items,
+        )
         final_hits = tuple(kept[:limit])
         limit_rejected = tuple(self._to_trace_item(hit, rejected_reason="chunk_type_mismatch") for hit in kept[limit:])
         rejected.extend(limit_rejected)
@@ -110,7 +226,7 @@ class EvidenceGovernanceService:
         else:
             status = "degraded"
 
-        metrics = {
+        metrics: dict[str, Any] = {
             "evidence_used_count": len(evidence_items),
             "evidence_filtered_out": max(original_count - len(evidence_items), 0),
             "evidence_rejected_count": len(rejected),
@@ -120,6 +236,12 @@ class EvidenceGovernanceService:
             "evidence_quality": "strong" if strong_items else "weak" if evidence_items else "empty",
             "evidence_strong_threshold": self._config.strong_score_threshold,
             "policy_snapshot": self._policy_snapshot(),
+            "complexity_level": complexity.level,
+            "complexity_answer_type": complexity.answer_type,
+            "complexity_max_items": complexity.max_items,
+            "complexity_max_tokens": complexity.max_tokens,
+            "complexity_needs_diversity": complexity.needs_diversity,
+            "complexity_is_realtime_risk": complexity.is_realtime_risk,
         }
         rejection_counts = Counter(item.rejected_reason or "unknown" for item in rejected)
         if rejection_counts:
@@ -235,11 +357,18 @@ class EvidenceGovernanceService:
                 rejected.append(self._to_trace_item(hit, rejected_reason="low_score"))
         return kept, rejected
 
-    def _deduplicate(self, hits: Sequence[RecallHit]) -> tuple[list[RecallHit], list[RetrievalTraceItem]]:
+    def _deduplicate(
+        self,
+        hits: Sequence[RecallHit],
+        complexity: QueryComplexityProfile | None = None,
+    ) -> tuple[list[RecallHit], list[RetrievalTraceItem]]:
+        threshold = self._config.dedup_similarity_threshold
+        if complexity and complexity.needs_strong_dedup:
+            threshold = max(0.6, threshold - 0.15)
         kept: list[RecallHit] = []
         rejected: list[RetrievalTraceItem] = []
         for hit in hits:
-            if any(self._text_similarity(hit.chunk.text, other.chunk.text) >= self._config.dedup_similarity_threshold for other in kept):
+            if any(self._text_similarity(hit.chunk.text, other.chunk.text) >= threshold for other in kept):
                 rejected.append(self._to_trace_item(hit, rejected_reason="duplicate"))
                 continue
             kept.append(hit)

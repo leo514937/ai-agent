@@ -326,17 +326,6 @@ class ReactStepExecutor:
                     "risk_level": str(request.get("risk_level") or turn.risk_level),
                 },
             )
-            
-        is_langgraph = False
-        runtime = state.get("runtime")
-        if runtime is not None:
-            trace = dict(runtime.metrics.get("phase5_trace", {}) or {})
-            if trace.get("runner_backend") == "langgraph" or trace.get("graph_runtime") == "langgraph":
-                is_langgraph = True
-        if is_langgraph:
-            from langgraph.errors import NodeInterrupt
-            raise NodeInterrupt(request)
-            
         return state
 
     def replanner(self, state: GraphState) -> GraphState:

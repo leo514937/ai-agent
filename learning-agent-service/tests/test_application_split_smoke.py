@@ -1,12 +1,8 @@
 from __future__ import annotations
 
 from learning_agent_service.application.dependencies_impl import AppDependencies, build_dependencies
-from learning_agent_service.application.router import (
-    _looks_like_unserviceable_location,
-    build_initial_routing_decision,
-    build_input_quality,
-    normalize_query,
-)
+from learning_agent_service.application.router.phase0_quality import build_initial_routing_decision
+from learning_agent_service.application.routing_primitives import _looks_like_unserviceable_location, build_input_quality, normalize_query
 from learning_agent_service.domain.contracts import PersistentSessionContext
 
 

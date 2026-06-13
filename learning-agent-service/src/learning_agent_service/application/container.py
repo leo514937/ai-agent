@@ -114,11 +114,11 @@ from learning_agent_service.application.rag_gate import RagGateRequest, RagGateV
 
 try:
 
-    from langgraph.checkpoint.sqlite import SqliteSaver
+    from langgraph.checkpoint.sqlite import SqliteSaver  # type: ignore
 
 except Exception:  # pragma: no cover - optional dependency path
 
-    SqliteSaver = None
+    SqliteSaver: Any = None
 
 
 
@@ -788,10 +788,6 @@ class OpenAIAnswerComposeAdapter:
 
         answer_parts: list[str] = []
 
-        thinking_parts: list[str] = ["<details><summary>思考</summary>\n"]
-
-        details_closed = False
-
         with responses.stream(
 
             model=self.model or self.runtime.default_model,
@@ -856,37 +852,13 @@ class OpenAIAnswerComposeAdapter:
 
                     continue
 
-
-
                 delta = str(getattr(event, "delta", "") or "")
 
                 if not delta:
 
                     continue
 
-
-
                 if event_type == "response.reasoning_text.delta":
-
-                    thinking_parts.append(delta)
-
-                    
-
-                    # 组合实时内容：当前思考块（已打开 details） + 已经产生的回答（若有）
-
-                    current_thinking = "".join(thinking_parts)
-
-                    current_answer = current_thinking
-
-                    if answer_parts and not details_closed:
-
-                        current_answer += "\n</details>\n\n"
-
-                    if answer_parts:
-
-                        current_answer += "".join(answer_parts)
-
-                    
 
                     self._emit_stream_delta(
 
@@ -896,29 +868,15 @@ class OpenAIAnswerComposeAdapter:
 
                         delta=delta,
 
-                        answer_text=current_answer,
+                        answer_text="".join(answer_parts),
 
                     )
 
                 else:  # event_type == "response.output_text.delta"
 
-                    if not details_closed:
-
-                        # 思考结束，彻底且永久闭合前置 details 标签
-
-                        details_closed = True
-
-                        thinking_parts.append("\n</details>\n\n")
-
-                    
-
                     answer_parts.append(delta)
 
-                    
-
-                    # 组合最终实时内容：完全闭合的思考文本 + 回答正文
-
-                    current_answer = "".join(thinking_parts) + "".join(answer_parts)
+                    current_answer = "".join(answer_parts)
 
                     self._emit_stream_delta(
 
@@ -946,33 +904,11 @@ class OpenAIAnswerComposeAdapter:
 
 
 
-        # 如果 stream 结束，且 details_closed 仍为 False，要彻底闭合它
-
-        if not details_closed:
-
-            details_closed = True
-
-            thinking_parts.append("\n</details>\n\n")
-
-
-
-        # 确保如果有思考内容，要把思考内容和正文内容合并作为最终返回文本
-
-        combined_final = "".join(thinking_parts) + "".join(answer_parts)
+        combined_final = "".join(answer_parts)
 
         if not final_text:
 
             final_text = combined_final.strip()
-
-        else:
-
-            # 如果大模型正常返回了 final_text，它是 output_text，我们需要在前面拼上已经彻底闭合的思考流
-
-            thinking_prefix = "".join(thinking_parts).strip()
-
-            if thinking_prefix:
-
-                final_text = thinking_prefix + "\n\n" + final_text
 
 
 
@@ -1106,21 +1042,21 @@ class MemoryDeps:
 
     session_context_store: SessionContextPort
 
-    async_log_store: object
+    async_log_store: Any
 
     memory_service: MemoryServicePort
 
     memory_orchestrator: MemoryOrchestrator
 
-    long_term_store: object | None = None
+    long_term_store: Any | None = None
 
-    trace_repository: object | None = None
+    trace_repository: Any | None = None
 
-    preference_store: object | None = None
+    preference_store: Any | None = None
 
-    profile_projection_store: object | None = None
+    profile_projection_store: Any | None = None
 
-    semantic_memory_store: object | None = None
+    semantic_memory_store: Any | None = None
 
     statuses: tuple[AdapterStatus, ...] = ()
 
@@ -1186,7 +1122,9 @@ class ApplicationRuntime:
 
     local_life_assistant: Any | None = None
 
+    local_life_retriever: Any | None = None
 
+    local_life_query_router: Any | None = None
 
     @property
 

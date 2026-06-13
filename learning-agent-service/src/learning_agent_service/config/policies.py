@@ -11,7 +11,7 @@ from learning_agent_service.memory.promotion import PromotionConfig
 from learning_agent_service.memory.retrieval import RetrievalPolicyConfig
 from learning_agent_service.rag.evidence import EvidenceGovernanceConfig
 from learning_agent_service.rag.hybrid import HybridRetrieverConfig
-from learning_agent_service.rag.retrieval import RRFConfig
+from learning_agent_service.rag.retrieval.shared import RRFConfig
 from learning_agent_service.rag.rewrite import QueryRewriteConfig
 
 

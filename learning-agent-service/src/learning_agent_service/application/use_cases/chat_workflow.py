@@ -10,6 +10,7 @@ from learning_agent_service.domain import ChatTurnCommand, PersistentSessionCont
 from ..workflow.adapters import WorkflowNodeAdapter
 from ..workflow.builder import create_workflow_runner
 from ..workflow.services import (
+    MainGraphServices,
     RagSubgraphServices,
     PlanExecuteSubgraphServices,
     ToolSubgraphServices,
@@ -45,29 +46,11 @@ class ChatWorkflowService:
         else:
             persistent = PersistentSessionContext()
 
-        use_langgraph = bool(getattr(settings, "local_life_use_langgraph", True))
-        fallback_legacy = bool(getattr(settings, "local_life_langgraph_fallback_legacy", True))
+        from typing import cast
 
-        def _stream():
-            if not use_langgraph:
-                yield from self._workflow.run_stream(command=command, persistent_context=persistent)
-                return
-
-            yielded_any = False
-            try:
-                for event in self._workflow_runner.run_stream(command=command, persistent_context=persistent):
-                    yielded_any = True
-                    yield event
-            except Exception as exc:
-                if fallback_legacy and not yielded_any:
-                    _LOGGER.exception("local_life_langgraph_failed_fallback_to_legacy: %s", exc)
-                    fallback_extra = dict(getattr(persistent, "extra", {}) or {})
-                    fallback_extra["graph_fallback"] = "legacy"
-                    fallback_extra["graph_fallback_reason"] = str(exc)
-                    fallback_persistent = persistent.model_copy(update={"extra": fallback_extra})
-                    yield from self._workflow.run_stream(command=command, persistent_context=fallback_persistent)
-                    return
-                raise
+        def _stream() -> Iterable[SseEnvelope]:
+            for event in self._workflow_runner.run_stream(command=command, persistent_context=persistent):
+                yield cast(SseEnvelope, event)
 
         return _stream()
 
@@ -102,6 +85,39 @@ class ChatWorkflowService:
                 plan_reviewer=adapter.plan_reviewer,
                 human_approval_stub=adapter.human_approval_stub,
                 replanner=adapter.replanner,
+            ),
+            main_graph=MainGraphServices(
+                resolve_target_shop=adapter.resolve_target_shop,
+                clarification_or_reject=adapter.clarification_or_reject,
+                build_answer_contract=adapter.build_answer_contract,
+                build_source_contract=adapter.build_source_contract,
+                complexity_router=adapter.complexity_router,
+                hard_guard=adapter.hard_guard,
+                request_legality=adapter.request_legality,
+                query_safety=adapter.query_safety,
+                query_merge_for_local_life=adapter.query_merge_for_local_life,
+                merged_query_safety=adapter.merged_query_safety,
+                top_level_intent_router=adapter.top_level_intent_router,
+                identity_answer=adapter.identity_answer,
+                capability_answer=adapter.capability_answer,
+                direct_chat_answer=adapter.direct_chat_answer,
+                out_of_scope_response=adapter.out_of_scope_response,
+                illegal_request_response=adapter.illegal_request_response,
+                safety_reject_response=adapter.safety_reject_response,
+                direct_executor=adapter.direct_executor,
+                workflow_executor=adapter.workflow_executor,
+                clarification_node=adapter.clarification_node,
+                rule_review=adapter.rule_review,
+                select_required_sources=adapter.select_required_sources,
+                final_answer=adapter.final_answer,
+                merge_or_rank=adapter.merge_or_rank,
+                contract_review=adapter.contract_review,
+                prepare_retry=adapter.prepare_retry,
+                final_answer_safety=adapter.final_answer_safety,
+                final_safety_fallback=adapter.final_safety_fallback,
+                repair_answer=adapter.repair_answer,
+                final_with_limitations=adapter.final_with_limitations,
+                response_builder=adapter.response_builder,
             ),
             compose_answer=adapter.compose_answer,
             persist_session=adapter.persist_session,

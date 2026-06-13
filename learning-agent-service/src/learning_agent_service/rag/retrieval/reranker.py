@@ -198,7 +198,7 @@ class RemoteReranker:
                 else item.get("rerank_score")
                 if item.get("rerank_score") is not None
                 else item.get("value")
-            )
+            ) or 0.0
             breakdown = item.get("score_breakdown")
             if not isinstance(breakdown, Mapping):
                 breakdown = {}
@@ -209,10 +209,10 @@ class RemoteReranker:
                 base_hit = RecallHit(
                     chunk=chunk,
                     score=score,
-                    route=self.route_name,
+                    route="hybrid",
                     rank=index,
-                    route_scores={self.route_name: score},
-                    matched_routes=(self.route_name,),
+                    route_scores={"hybrid": score},
+                    matched_routes=("hybrid",),
                     source_chunk_id=chunk.chunk_id,
                     citation_chunk_id=chunk.chunk_id,
                     retrieval_kind="hybrid_rerank",
@@ -246,7 +246,19 @@ class ReciprocalRankFusion:
     def __init__(self, config: RRFConfig | None = None) -> None:
         self._config = config or RRFConfig()
 
-    def fuse(self, route_hits: Mapping[str, Sequence[RecallHit]]) -> tuple[RecallHit, ...]:
+    def fuse(
+        self,
+        route_hits: Mapping[str, Sequence[RecallHit]],
+        *,
+        query_intent: str | None = None,
+        query_slots: dict[str, Any] | None = None,
+    ) -> tuple[RecallHit, ...]:
+        effective_weights = self._compute_dynamic_weights(
+            dict(route_hits),
+            query_intent=query_intent,
+            query_slots=query_slots or {},
+        )
+
         fused_scores = defaultdict(float)
         base_hits: dict[str, RecallHit] = {}
         route_scores: dict[str, dict[str, float]] = defaultdict(dict)
@@ -255,7 +267,7 @@ class ReciprocalRankFusion:
         for route_name, hits in route_hits.items():
             for rank, hit in enumerate(hits, start=1):
                 chunk_id = hit.chunk.chunk_id
-                route_weight = float(dict(self._config.route_weights).get(route_name, 1.0) or 1.0)
+                route_weight = float(effective_weights.get(route_name, 1.0) or 1.0)
                 fused_scores[chunk_id] += route_weight / float(self._config.k + rank)
                 base_hits.setdefault(chunk_id, hit)
                 route_scores[chunk_id][route_name] = hit.score
@@ -283,9 +295,58 @@ class ReciprocalRankFusion:
                     fused_score=fused_score,
                     rrf_score=fused_score,
                     score_breakdown={"rrf": fused_score},
-                    metadata={**dict(base_hit.metadata), "source_routes": tuple(sorted(matched_routes[chunk_id]))},
+                    metadata={
+                        **dict(base_hit.metadata),
+                        "source_routes": tuple(sorted(matched_routes[chunk_id])),
+                        "fusion_weights": dict(effective_weights),
+                    },
                 )
             )
         return tuple(merged)
+
+    def _compute_dynamic_weights(
+        self,
+        route_hits: dict[str, Sequence[RecallHit]],
+        *,
+        query_intent: str | None = None,
+        query_slots: dict[str, Any] | None = None,
+    ) -> dict[str, float]:
+        base_weights = dict(self._config.route_weights)
+        weights = dict(base_weights)
+
+        intent = (query_intent or "").lower()
+        slots = query_slots or {}
+
+        if intent in ("compare", "recommend"):
+            weights["dense"] = weights.get("dense", 1.0) * 1.2
+            weights["metadata"] = weights.get("metadata", 0.6) * 0.8
+        elif intent in ("follow_up", "detail"):
+            has_shop = bool(slots.get("shop_name") or slots.get("shop_id"))
+            if has_shop:
+                weights["metadata"] = weights.get("metadata", 0.6) * 1.5
+                weights["sparse"] = weights.get("sparse", 1.0) * 1.2
+                weights["dense"] = weights.get("dense", 1.0) * 0.8
+        elif intent == "explain":
+            weights["dense"] = weights.get("dense", 1.0) * 1.1
+        elif intent in ("booking", "coupon", "navigation"):
+            weights["metadata"] = weights.get("metadata", 0.6) * 1.3
+            weights["sparse"] = weights.get("sparse", 1.0) * 1.1
+
+        if any(kw in str(slots.get("query", "")).lower() for kw in ("附近", "推荐", "好吃")):
+            weights["dense"] = weights.get("dense", 1.0) * 1.15
+            weights["metadata"] = weights.get("metadata", 0.6) * 1.1
+
+        for route_name in list(weights.keys()):
+            if route_name not in route_hits:
+                continue
+            hits = route_hits[route_name]
+            if not hits:
+                continue
+            has_degraded = any(bool(h.degraded) for h in hits)
+            if has_degraded:
+                weights[route_name] = weights.get(route_name, 1.0) * 0.5
+
+        total = sum(weights.values()) or 1.0
+        return {k: v / total for k, v in weights.items()}
 
 __all__ = [name for name in globals() if not name.startswith("__")]

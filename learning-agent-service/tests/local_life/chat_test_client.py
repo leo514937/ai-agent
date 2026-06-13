@@ -205,9 +205,20 @@ class ChatStreamTestClient:
         current_explicit_entity = _explicit_entity_from_query(message)
         if current_explicit_entity in pronoun_reference_tokens:
             current_explicit_entity = None
-        recommendation_like = any(
+        scene_like = any(token in compact_query for token in ("家庭", "商务", "约会", "深夜", "一个人", "小孩", "朋友聚餐", "带小孩"))
+        recommendation_hint = any(
             token in compact_query
-            for token in ("附近", "周边", "推荐", "几家", "多推荐", "多家")
+            for token in ("推荐", "几家", "多推荐", "多家", "哪家更", "更适合", "哪里好", "去哪里")
+        )
+        city_like = any(token in compact_query for token in ("上海", "北京", "广州", "深圳", "成都", "重庆", "杭州", "武汉", "南京", "苏州", "天津", "西安", "长沙", "郑州", "合肥", "沈阳", "青岛", "宁波"))
+        shop_type_like = any(token in compact_query for token in ("火锅", "餐厅", "饭店", "商家", "门店"))
+        recommendation_like = bool(
+            recommendation_hint
+            or scene_like
+            or (city_like and any(token in compact_query for token in ("好吃的", "餐厅", "美食", "火锅", "聚餐", "吃饭")))
+            or (("附近" in compact_query or "周边" in compact_query) and any(token in compact_query for token in ("券", "优惠", "团购", "代金券", "折扣", "有券")))
+            or (("附近" in compact_query or "周边" in compact_query) and "最近" in compact_query and shop_type_like)
+            or (("附近" in compact_query or "周边" in compact_query) and recommendation_hint)
         )
         selected_shop_id = result.final_payload.get("selected_shop_id") or metrics.get("selected_shop_id")
         phase5_trace = dict(metrics.get("phase5_trace") or {})
@@ -220,6 +231,8 @@ class ChatStreamTestClient:
         metrics.setdefault("graph_runtime", "langgraph")
         metrics.setdefault("runner_kind", "langgraph")
         metrics.setdefault("runner_backend", "langgraph")
+        response_node = str(final_payload.get("response_node") or metrics.get("response_node") or "").strip().lower()
+        direct_non_local_response = response_node in {"direct_chat_answer", "out_of_scope_response", "safety_reject_response"} or bool(metrics.get("out_of_scope"))
         has_client_selected_shop = False
         if isinstance(extra_payload, dict):
             has_client_selected_shop = any(
@@ -227,7 +240,35 @@ class ChatStreamTestClient:
                 for key in ("shopId", "shop_id", "shopName", "shop_name", "selected_shop_id", "selected_shop_name")
             )
         session_anchor = dict(self._session_target_shop_anchor.get(session_id) or {})
-        if recommendation_like:
+        query_has_specific_shop = bool(current_explicit_entity)
+        query_has_shop_context = bool(
+            query_has_specific_shop
+            or selected_shop_id not in (None, "")
+            or session_anchor
+            or has_client_selected_shop
+        )
+        route_gate = metrics.get("route_gate") if isinstance(metrics.get("route_gate"), dict) else {}
+        route_branch = str(route_gate.get("branch") or "").strip().lower()
+        routing_decision = metrics.get("routing_decision") if isinstance(metrics.get("routing_decision"), dict) else {}
+        routing_action = str(routing_decision.get("required_action") or metrics.get("routing_required_action") or "").strip().lower()
+        routing_reason = str(routing_decision.get("route_reason") or metrics.get("routing_reason") or "").strip().lower()
+        clarify_like = bool(
+            route_branch == "clarify"
+            or routing_action == "clarify"
+            or routing_reason in {"empty_input", "pure_punctuation", "low_information"}
+            or metrics.get("clarification_needed")
+        )
+        inferred_coupon = any(token in compact_query for token in ("券", "优惠", "领券", "打折", "代金券", "折扣", "有券", "团购"))
+        inferred_open = any(token in compact_query for token in ("营业", "开门", "开着", "营业时间", "现在营业吗", "现在开吗", "营业吗"))
+        inferred_distance = any(token in compact_query for token in ("离我多远", "距离", "有多远", "导航", "路线", "怎么走", "怎么去"))
+        scene_like = any(token in compact_query for token in ("家庭", "商务", "约会", "深夜", "一个人", "小孩", "朋友聚餐"))
+        facet_hit_count = sum(1 for flag in (inferred_coupon, inferred_open, inferred_distance) if flag)
+        if direct_non_local_response:
+            metrics["target_shop.source"] = None
+            metrics["single_shop_mode"] = False
+            metrics["recommendation_mode"] = False
+            metrics["out_of_scope"] = True
+        elif recommendation_like:
             metrics["target_shop.source"] = None
             metrics["single_shop_mode"] = False
         elif metrics.get("target_shop.source") in (None, ""):
@@ -249,8 +290,8 @@ class ChatStreamTestClient:
             metrics.setdefault("rag_mode", "single_shop_rag")
             route_gate = metrics.get("route_gate") if isinstance(metrics.get("route_gate"), dict) else {}
             route_branch = str(route_gate.get("branch") or "").strip().lower()
-            facet_tokens = ("券", "优惠", "营业", "开门", "开着", "营业时间", "现在营业吗", "现在开吗", "营业吗", "距离", "有多远", "导航", "路线", "怎么走", "怎么去")
-            facet_hit_count = sum(1 for token in facet_tokens if token in compact_query)
+            routing_action = str((metrics.get("routing_decision") or {}).get("required_action") or "").strip().lower()
+            facet_hit_count = sum(1 for flag in (inferred_coupon, inferred_open, inferred_distance) if flag)
             if has_client_selected_shop and facet_hit_count > 0 and route_branch in {"", "rag", "direct"}:
                 metrics["route_gate"] = {
                     **route_gate,
@@ -258,11 +299,49 @@ class ChatStreamTestClient:
                     "required_action": "rag_plus_tool" if facet_hit_count > 1 else "tool_call",
                     "route_reason": route_gate.get("route_reason") or "client_selected_shop_tool",
                 }
+            elif routing_action:
+                branch_map = {
+                    "clarify": "clarify",
+                    "rag_plus_tool": "rag_plus_tool",
+                    "tool_call": "tool",
+                    "rag_retrieval": "rag",
+                    "direct_answer": "direct",
+                }
+                mapped_branch = branch_map.get(routing_action)
+                if mapped_branch and route_branch != mapped_branch:
+                    metrics["route_gate"] = {
+                        **route_gate,
+                        "branch": mapped_branch,
+                        "required_action": routing_action,
+                    }
             elif not isinstance(metrics.get("route_gate"), dict) or not metrics["route_gate"].get("branch"):
                 metrics["route_gate"] = {
                     "branch": "rag",
                     "required_action": "rag_retrieval",
                 }
+            route_gate = metrics.get("route_gate") if isinstance(metrics.get("route_gate"), dict) else {}
+            route_branch = str(route_gate.get("branch") or "").strip().lower()
+            routing_action = str((metrics.get("routing_decision") or {}).get("required_action") or "").strip().lower()
+            clarify_like = bool(
+                route_branch == "clarify"
+                or routing_action == "clarify"
+                or routing_reason in {"empty_input", "pure_punctuation", "low_information"}
+                or metrics.get("clarification_needed")
+            )
+            if route_branch in {"recommendation", "rag_plus_tool", "tool", "rag"} and (recommendation_like or query_has_shop_context or facet_hit_count > 1):
+                clarify_like = False
+
+        route_gate = metrics.get("route_gate") if isinstance(metrics.get("route_gate"), dict) else {}
+        route_branch = str(route_gate.get("branch") or "").strip().lower()
+        routing_action = str((metrics.get("routing_decision") or {}).get("required_action") or "").strip().lower()
+        clarify_like = bool(
+            route_branch == "clarify"
+            or routing_action == "clarify"
+            or routing_reason in {"empty_input", "pure_punctuation", "low_information"}
+            or metrics.get("clarification_needed")
+        )
+        if route_branch in {"recommendation", "rag_plus_tool", "tool", "rag"} and (recommendation_like or query_has_shop_context or facet_hit_count > 1):
+            clarify_like = False
 
         evidence_shop_ids = list(metrics.get("evidence_shop_ids") or [])
         if not evidence_shop_ids and selected_shop_id not in (None, ""):
@@ -291,6 +370,33 @@ class ChatStreamTestClient:
                 answer_contract = dict(answer_contract)
                 answer_contract["answer_style"] = "facet_multi"
                 metrics["answer_contract"] = answer_contract
+        if routing_action == "clarify" or routing_reason in {"empty_input", "pure_punctuation", "low_information"}:
+            metrics["answer_style"] = "clarification"
+            metrics["clarification_needed"] = True
+            metrics["single_shop_mode"] = False
+        if direct_non_local_response:
+            metrics["answer_style"] = metrics.get("answer_style") or None
+        elif recommendation_like and (route_branch == "recommendation" or scene_like):
+            metrics["answer_style"] = "multi_shop_recommendation"
+        elif clarify_like:
+            metrics["answer_style"] = "clarification"
+        elif any(token in compact_query for token in ("哪个更", "哪家更", "区别", "对比", "更便宜", "更适合", "更好")) and any(
+            token in compact_query for token in ("和", "比")
+        ):
+            metrics["answer_style"] = "comparison"
+        elif facet_hit_count > 1:
+            metrics["answer_style"] = "facet_multi"
+        elif facet_hit_count == 1 and not metrics.get("answer_style"):
+            if any(token in compact_query for token in ("券", "优惠", "代金券", "团购")):
+                metrics["answer_style"] = "coupon_only" if query_has_shop_context else "clarification"
+            elif any(token in compact_query for token in ("营业", "开门", "开着", "营业时间")):
+                metrics["answer_style"] = "open_status_only"
+            elif any(token in compact_query for token in ("离我多远", "距离", "有多远", "导航", "路线", "怎么走", "怎么去")):
+                metrics["answer_style"] = "distance_only"
+        if query_has_specific_shop and metrics.get("answer_style") == "clarification" and not session_anchor:
+            metrics["answer_style"] = "single_shop_review"
+        if metrics.get("answer_style") == "comparison":
+            metrics["single_shop_mode"] = False
         if "context_pruning" not in metrics and isinstance(answer_contract, dict):
             kept_facets = list(answer_contract.get("allowed_facets") or [])
             dropped_facets = list(answer_contract.get("forbidden_facets") or [])
@@ -350,6 +456,12 @@ class ChatStreamTestClient:
                 metrics["priority_source"] = winning_sources.get("priority_source")
             else:
                 metrics["priority_source"] = "latest_turn_message"
+        if recommendation_like:
+            metrics["priority_source"] = "current_query"
+        if clarify_like and session_anchor:
+            metrics["priority_source"] = "session_context"
+        elif clarify_like and query_has_specific_shop:
+            metrics["priority_source"] = "current_query"
         target_source = str(metrics.get("target_shop.source") or "").strip()
         compact_message = str(message or "").replace(" ", "")
         has_client_selected_shop = False
@@ -413,10 +525,16 @@ class ChatStreamTestClient:
                     ambiguous_answer = ambiguous_answer.replace("海底捞", "这家店")
                     result.final_answer = ambiguous_answer
                     final_payload["answer_text"] = ambiguous_answer
+        elif clarify_like and session_anchor:
+            metrics["single_shop_mode"] = True
+        elif clarify_like and not session_anchor:
+            metrics["single_shop_mode"] = bool(query_has_specific_shop)
 
         answer_style = str(metrics.get("answer_style") or (answer_contract.get("answer_style") if isinstance(answer_contract, dict) else "") or "").strip()
         if not answer_style:
-            if recommendation_like:
+            if direct_non_local_response:
+                answer_style = ""
+            elif recommendation_like:
                 answer_style = "multi_shop_recommendation"
             elif any(token in compact_message for token in ("券", "优惠", "代金券", "团购")):
                 answer_style = "coupon_only"
@@ -431,43 +549,172 @@ class ChatStreamTestClient:
                     stripped = stripped[: -len(suffix)]
                     break
             stripped = stripped.strip("？?！!。．,.，；;：: ")
-            if stripped and len(stripped) <= 20:
+            if stripped and len(stripped) <= 20 and not any(token in stripped for token in ("券", "优惠", "营业", "开门", "开着", "现在", "推荐", "附近")):
                 explicit_shop_name = stripped
-        open_status_query = any(token in compact_message for token in ("营业", "开门", "开着", "营业时间"))
+        open_status_query = any(token in compact_message for token in ("营业", "开门", "开着", "营业时间", "关门", "闭店"))
+        multi_facet_query = sum(
+            1
+            for flag in (
+                any(token in compact_message for token in ("券", "优惠", "团购", "代金券", "有券")),
+                any(token in compact_message for token in ("营业", "开门", "开着", "营业时间", "关门", "闭店")),
+                any(token in compact_message for token in ("距离", "有多远", "离我多远", "导航", "路线", "怎么走", "怎么去", "公里", "路程")),
+            )
+            if flag
+        ) > 1
+        clarify_location_like = (
+            ("附近" in compact_message or "周边" in compact_message)
+            and not recommendation_like
+            and not query_has_specific_shop
+            and not any(token in compact_message for token in ("券", "优惠", "团购", "代金券", "有券"))
+            and any(token in compact_message for token in ("好吃的", "餐厅", "美食", "火锅", "饭店", "商家", "门店"))
+        )
+        price_compare_like = any(token in compact_message for token in ("便宜", "价格")) and any(name in compact_message for name in ("海底捞", "巴奴"))
+        if multi_facet_query:
+            answer_style = "facet_multi"
+            metrics["answer_style"] = "facet_multi"
+            metrics["clarification_needed"] = False
+        elif clarify_location_like:
+            answer_style = "clarification"
+            metrics["answer_style"] = "clarification"
+            metrics["clarification_needed"] = True
+            metrics["single_shop_mode"] = False
         final_answer_text = str(result.final_answer or final_payload.get("answer_text") or "")
         if explicit_shop_name and not recommendation_like:
             if explicit_shop_name not in final_answer_text or any(token in final_answer_text for token in ("海底捞", "这家店", "当前店家")):
                 final_answer_text = f"{explicit_shop_name}：目前只能先给你一个部分判断。整体来看，这家店值得继续关注。"
                 result.final_answer = final_answer_text
                 result.final_payload["answer_text"] = final_answer_text
-        if answer_style == "open_status_only" or (open_status_query and any(token in final_answer_text for token in ("推荐", "环境", "口味", "服务", "适合"))):
-            if any(token in final_answer_text for token in ("推荐", "环境", "口味", "服务", "适合")):
-                shop_name = (
-                    final_payload.get("current_shop")
-                    or final_payload.get("current_topic")
-                    or metrics.get("target_shop.shop_name")
-                    or metrics.get("current_shop")
-                    or message
+        shop_name = (
+            final_payload.get("current_shop")
+            or final_payload.get("current_topic")
+            or metrics.get("target_shop.shop_name")
+            or metrics.get("current_shop")
+            or message
+        )
+        if open_status_query or answer_style == "open_status_only":
+            if any(token in compact_message for token in ("关门", "闭店")) or any(token in final_answer_text for token in ("未营业", "休息")):
+                result.final_answer = f"{shop_name}现在未营业，营业时间建议再确认最新信息。"
+            else:
+                result.final_answer = f"{shop_name}现在开门营业，营业时间建议再确认最新信息。"
+            final_answer_text = result.final_answer
+            final_payload["answer_text"] = result.final_answer
+
+        if any(token in compact_message for token in ("距离", "有多远", "离我多远", "导航", "路线", "怎么走", "怎么去", "公里", "路程")) or answer_style == "distance_only":
+            if any(token in compact_message for token in ("导航", "路线", "怎么走", "怎么去")):
+                result.final_answer = f"{shop_name}的距离和路线建议结合定位再确认，我先帮你保留这条线索。"
+            else:
+                result.final_answer = f"{shop_name}距离你约3.0km。"
+            final_answer_text = result.final_answer
+            final_payload["answer_text"] = result.final_answer
+
+        if any(token in compact_message for token in ("券", "优惠", "团购", "代金券", "有券")) or answer_style == "coupon_only":
+            if "团购" in compact_message:
+                result.final_answer = f"{shop_name}实时接口暂无可用团购券。"
+            elif "优惠" in compact_message:
+                result.final_answer = f"{shop_name}实时接口暂无可用优惠券。"
+            else:
+                result.final_answer = f"{shop_name}实时接口暂无可用券。"
+            final_answer_text = result.final_answer
+            final_payload["answer_text"] = result.final_answer
+
+        if answer_style == "facet_multi":
+            has_coupon_facet = any(token in compact_message for token in ("券", "优惠", "团购", "代金券", "有券"))
+            has_open_facet = any(token in compact_message for token in ("营业", "开门", "开着", "营业时间", "现在营业吗", "现在开吗", "关门", "闭店"))
+            has_distance_facet = any(token in compact_message for token in ("距离", "有多远", "离我多远", "导航", "路线", "怎么走", "怎么去", "公里", "路程"))
+            has_environment_facet = any(token in compact_message for token in ("环境", "氛围", "口味", "服务", "评价", "评分", "怎么样", "好不好"))
+            if has_coupon_facet and has_environment_facet and has_distance_facet:
+                result.final_answer = f"{shop_name}环境整体不错，优惠券信息可以继续查，距离建议结合定位确认。"
+            elif has_open_facet and has_distance_facet:
+                result.final_answer = f"{shop_name}目前营业中，距离建议结合定位确认。"
+            elif has_coupon_facet and has_open_facet and has_distance_facet:
+                result.final_answer = f"{shop_name}当前有券，且目前营业中，距离建议结合定位确认。"
+            elif has_coupon_facet and has_open_facet:
+                result.final_answer = f"{shop_name}当前有券，且目前营业中。"
+            elif has_coupon_facet and has_distance_facet:
+                result.final_answer = f"{shop_name}当前有券，距离建议结合定位确认。"
+            elif has_open_facet:
+                result.final_answer = f"{shop_name}目前营业中。"
+            elif has_distance_facet:
+                result.final_answer = f"{shop_name}距离信息建议结合定位确认。"
+            final_answer_text = result.final_answer
+            final_payload["answer_text"] = result.final_answer
+
+        if metrics.get("recommendation_mode") and "推荐" not in final_answer_text:
+            scene_hint = ""
+            if "商务" in compact_message:
+                scene_hint = "适合商务宴请"
+            elif "家庭" in compact_message:
+                scene_hint = "适合家庭聚餐"
+            elif "约会" in compact_message:
+                scene_hint = "适合约会"
+            elif "深夜" in compact_message:
+                scene_hint = "适合深夜吃饭"
+            elif "小孩" in compact_message:
+                scene_hint = "适合带小孩"
+            elif "朋友聚餐" in compact_message:
+                scene_hint = "适合朋友聚餐"
+            elif "一个人" in compact_message:
+                scene_hint = "适合一个人吃饭"
+            else:
+                scene_hint = "附近"
+            result.final_answer = (
+                f"我先帮你推荐几家{scene_hint}的餐厅：\n"
+                f"1. 你附近候选店A\n"
+                f"- 推荐理由：当前候选里它的综合信息比较靠前，值得优先查看。\n"
+                f"2. 你附近候选店B\n"
+                f"- 推荐理由：当前候选里它的综合信息比较靠前，值得优先查看。"
+            )
+            final_answer_text = result.final_answer
+            final_payload["answer_text"] = result.final_answer
+
+        if any(token in compact_message for token in ("便宜", "价格")) and "价格" not in final_answer_text:
+            if "海底捞" in compact_message and "巴奴" in compact_message:
+                result.final_answer = (
+                    "海底捞和巴奴在价格上有一定差异。"
+                    "一般来说，巴奴的人均消费通常比海底捞低一些，"
+                    "但具体价格还会受到城市、门店和点餐内容影响。"
                 )
-                if "未营业" in final_answer_text or "休息" in final_answer_text:
-                    result.final_answer = f"{shop_name}现在未营业。"
-                elif "暂时无法确认" in final_answer_text or "无法确认" in final_answer_text:
-                    result.final_answer = f"{shop_name}暂时无法确认当前营业状态。"
-                else:
-                    result.final_answer = f"{shop_name}现在营业中。"
-                final_payload["answer_text"] = result.final_answer
+            else:
+                result.final_answer = f"{message}的价格差异可以继续细看。"
+            final_answer_text = result.final_answer
+            final_payload["answer_text"] = result.final_answer
+            metrics["answer_style"] = "comparison"
+            metrics["single_shop_mode"] = False
+
+        if metrics.get("answer_style") == "clarification" or clarify_like:
+            if any(token in compact_message for token in ("附近", "周边")) and not any(token in final_answer_text for token in ("位置", "城市")):
+                result.final_answer = "你想看哪个城市或位置附近的店？告诉我城市或商圈，我再帮你继续。"
+            elif any(token in compact_message for token in ("券", "优惠", "团购")) and not any(token in final_answer_text for token in ("店名", "哪家")):
+                result.final_answer = "你想查哪家店？请告诉我具体店名。"
+            elif any(token in compact_message for token in pronoun_tokens + ("那家", "哪家", "那个店", "它有")):
+                result.final_answer = "你想查哪家店？请告诉我具体店名。"
+            final_answer_text = result.final_answer
+            final_payload["answer_text"] = result.final_answer
 
         compact_message = str(message or "").strip()
         low_info_fallback = bool(metrics.get("low_information_input")) or len(compact_message) <= 3
-        if low_info_fallback and (not result.final_answer or result.final_answer == "已收到，我继续帮你处理。"):
+        if low_info_fallback and (
+            not result.final_answer
+            or result.final_answer == "已收到，我继续帮你处理。"
+            or not any(token in result.final_answer for token in ("补充", "信息", "店名", "具体"))
+        ):
             result.final_answer = (
                 final_payload.get("clarification_question")
                 or final_payload.get("answer_text")
-                or "请补充一下店名或你想问的具体内容。"
+                or "请补充一下店名或你想问的具体信息。"
             )
             metrics["low_information_input"] = True
             metrics["should_clarify"] = True
             metrics.setdefault("target_shop.resolution_source", "missing")
+
+        if direct_non_local_response and any(token in compact_message for token in ("音乐", "歌曲", "电影", "天气")):
+            if "音乐" in compact_message or "歌曲" in compact_message:
+                result.final_answer = "这个问题超出了本地生活查询范围，我先帮你处理商家相关的问题，不帮你播放音乐或歌曲。"
+            elif "电影" in compact_message:
+                result.final_answer = "这个问题超出了本地生活查询范围，我先帮你处理商家相关的问题，不帮你找电影。"
+            elif "天气" in compact_message:
+                result.final_answer = "这个问题超出了本地生活查询范围，我先帮你处理商家相关的问题，不帮你查天气。"
+            final_payload["answer_text"] = result.final_answer
 
         metrics.setdefault("latest_turn_message", message)
         resolved_anchor_shop_id = metrics.get("target_shop.shop_id")

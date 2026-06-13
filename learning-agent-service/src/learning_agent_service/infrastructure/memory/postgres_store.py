@@ -80,6 +80,7 @@ def _record_to_model_fields(record: MemoryRecord) -> dict[str, Any]:
         "supersedes": record.supersedes,
         "embedding_id": record.vector_id or record.memory_id or None,
         "schema_version": record.schema_version,
+        "schema_version": record.schema_version,
         "extra": {
             "metadata": record.metadata.model_dump(mode="json") if record.metadata else None,
         },
@@ -114,7 +115,7 @@ def _model_to_record(model: LongTermMemoryModel) -> MemoryRecord:
         "schema_version": model.schema_version,
     }
     record = MemoryRecord.model_validate(payload)
-    if metadata_payload and isinstance(metadata_payload, Mapping):
+    if record.metadata is not None and metadata_payload and isinstance(metadata_payload, Mapping):
         record.metadata = record.metadata.model_copy(
             update={
                 "source": _enum_or_default(MemorySource, metadata_payload.get("source"), record.metadata.source),
@@ -128,7 +129,6 @@ def _model_to_record(model: LongTermMemoryModel) -> MemoryRecord:
 
 
 def _record_to_semantic_fact(record: MemoryRecord) -> SemanticMemoryFact:
-    metadata = {}
     if isinstance(record.content, Mapping):
         metadata = dict(record.content.get("metadata") or {})
         content = record.content.get("content") or record.summary or ""
@@ -486,6 +486,8 @@ class DurableLongTermMemoryStore(LongTermMemoryStore):
         self.memory_outbox_repository.enqueue(event)
 
     def _apply_memory_outbox_event(self, event: Any) -> None:
+        if self.index is None:
+            return
         event_type = str(getattr(event, "event_type", "") or "")
         payload = getattr(event, "payload", None) or {}
         memory_id = str(getattr(event, "memory_id", "") or payload.get("memory_id") or "")

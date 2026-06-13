@@ -87,10 +87,11 @@ class LocalLifeToolPlanner:
 
         for candidate in ranked_candidates:
             try:
-                candidate_id = int(getattr(candidate, "shop_id", None))
+                raw_id = getattr(candidate, "shop_id", None)
+                candidate_id = int(raw_id) if raw_id is not None else None
             except Exception:
                 continue
-            if candidate_id not in candidate_shop_ids:
+            if candidate_id is not None and candidate_id not in candidate_shop_ids:
                 candidate_shop_ids.append(candidate_id)
 
         for facet in realtime_facets:
@@ -104,7 +105,8 @@ class LocalLifeToolPlanner:
             if is_recommendation_scope:
                 for candidate in ranked_candidates:
                     try:
-                        shop_id = int(getattr(candidate, "shop_id", None))
+                        raw_id = getattr(candidate, "shop_id", None)
+                        shop_id = int(raw_id) if raw_id is not None else None
                     except Exception:
                         continue
                     shop_name = _clean_text(getattr(candidate, "name", None))
@@ -130,7 +132,8 @@ class LocalLifeToolPlanner:
             elif ranked_candidates:
                 candidate = ranked_candidates[0]
                 try:
-                    shop_id = int(getattr(candidate, "shop_id", None))
+                    raw_id = getattr(candidate, "shop_id", None)
+                    shop_id = int(raw_id) if raw_id is not None else None
                 except Exception:
                     shop_id = None
                 runs.append(

@@ -9,12 +9,16 @@ from learning_agent_service.domain.utils import as_mapping as _as_mapping, clean
 from .catalog import get_default_catalog
 from .facet_execution_plan import FacetExecutionItem, FacetExecutionPlan
 from .schemas import LocalLifeSlots
-from .target_shop_policy import TargetShopPolicy
+from .target_shop_policy import TargetShopPolicy, _normalize_alias
 
 _PRONOUNS = ("这家", "这店", "这间", "它", "他", "她", "刚才那家", "刚才那个", "这商家", "这个商家", "这几家", "第一家", "第二家")
 _EXPLICIT_SUFFIXES = (
     "现在营业吗",
     "现在有券吗",
+    "有团购吗",
+    "团购吗",
+    "有什么优惠",
+    "优惠吗",
     "现在能不能订",
     "现在能不能约",
     "现在开吗",
@@ -27,6 +31,9 @@ _EXPLICIT_SUFFIXES = (
     "有券吗",
     "有券",
     "有几张券",
+    "有代金券吗",
+    "有折扣吗",
+    "有套餐吗",
     "有可用优惠券吗",
     "适合约会吗",
     "适合吗",
@@ -90,7 +97,7 @@ def _explicit_entity_from_query(raw_query: str) -> str | None:
     text = (raw_query or "").strip()
     if not text:
         return None
-    compact = _clean_text(text).replace(" ", "")
+    compact = (_clean_text(text) or "").replace(" ", "")
     compact = compact.rstrip("。！？!?")
 
     direct_suffixes = (
@@ -417,7 +424,7 @@ class EntityResolver:
 
         return FacetExecutionPlan(
             raw_query=raw_query,
-            resolved_query=explicit_entity or _clean_text(slots.shop_query) or raw_query.strip(),
+            resolved_query=explicit_entity or _clean_text(slots.shop_query) or (raw_query or "").strip(),
             intent=str(getattr(user_need, "intent", None) or user_need_map.get("intent") or ""),
             resolved_shop_id=resolved_shop_id,
             resolved_shop_name=resolved_shop_name,
@@ -448,7 +455,7 @@ class EntityResolver:
 
 
 def _explicit_entity_from_query_v2(raw_query: str) -> str | None:
-    text = _clean_text(raw_query).strip()
+    text = (_clean_text(raw_query) or "").strip()
     if not text:
         return None
     text = text.rstrip("\u3002\uff01\uff1f?!")
@@ -461,6 +468,8 @@ def _explicit_entity_from_query_v2(raw_query: str) -> str | None:
         if any(cleaned.startswith(pronoun) for pronoun in _PRONOUNS):
             return None
         compact = cleaned.replace(" ", "")
+        if any(token in compact for token in ("天气", "气温", "预报", "温度")):
+            return None
         generic_query_tokens = ("附近", "推荐", "餐厅", "饭店", "美食", "店铺", "店家", "一家", "几家")
         has_entity_shape = any(token in compact for token in ("(", "（", ")", "店", "馆", "楼")) or bool(re.search(r"[A-Za-z0-9]", cleaned))
         if not has_entity_shape and any(token in compact for token in generic_query_tokens):
@@ -495,6 +504,50 @@ def _explicit_entity_from_query_v2(raw_query: str) -> str | None:
         if not match:
             continue
         candidate = _finalize(match.group("name"))
+        if candidate:
+            return candidate
+
+    clause_markers = (
+        "的评价里",
+        "的评价中",
+        "的评价",
+        "的环境",
+        "的口碑",
+        "的口味",
+        "的服务",
+        "的价格",
+        "的优惠",
+        "的团购",
+        "的券",
+        "的活动",
+        "的介绍",
+        "的情况",
+    )
+    lead_in_prefixes = (
+        "帮我看看",
+        "帮我查查",
+        "帮我查",
+        "帮我找找",
+        "帮我找",
+        "帮我",
+        "请帮我看看",
+        "请帮我查查",
+        "请帮我查",
+        "看看",
+        "查查",
+        "麻烦帮我看看",
+        "麻烦帮我查查",
+    )
+    for marker in clause_markers:
+        idx = text.find(marker)
+        if idx <= 0:
+            continue
+        prefix = text[:idx]
+        for lead_in in lead_in_prefixes:
+            if prefix.startswith(lead_in):
+                prefix = prefix[len(lead_in):]
+                break
+        candidate = _finalize(prefix)
         if candidate:
             return candidate
     return None

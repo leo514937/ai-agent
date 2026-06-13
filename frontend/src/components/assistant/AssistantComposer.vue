@@ -8,6 +8,7 @@
         :placeholder="placeholder"
         :disabled="loading"
         rows="1"
+        autofocus
         @keydown="handleKeyDown"
       />
       <div class="assistant-composer__actions">
@@ -87,6 +88,17 @@ const emit = defineEmits(['update:modelValue', 'submit', 'pick', 'stop']);
 
 const draft = ref(props.modelValue);
 const textareaRef = ref(null);
+
+watch(
+  () => props.loading,
+  (isLoading) => {
+    if (!isLoading && textareaRef.value) {
+      nextTick(() => {
+        textareaRef.value.focus();
+      });
+    }
+  }
+);
 
 watch(
   () => props.modelValue,

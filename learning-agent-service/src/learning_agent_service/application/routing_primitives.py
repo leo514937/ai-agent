@@ -31,6 +31,8 @@ from ..domain.contracts import (
 
 from ..local_life.query_rewriter import _CITY_NAMES as _LOCAL_LIFE_CITY_NAMES
 
+from ..rag.domain_rules import _BUILTIN_DOMAIN_RULES
+
 from .routing_signals import (
 
     DomainSignalRegistry,
@@ -87,73 +89,7 @@ _LOW_INFO_TOKENS = {
 
 }
 
-_GREETING_TOKENS = ("你好", "您好", "嗨", "hello", "hi", "hey")
-
-_THANKS_TOKENS = ("谢谢", "多谢", "感谢", "辛苦了")
-
-_PROFILE_TOKENS = ("你有什么功能", "有什么功能", "能做什么", "你会什么", "你是谁", "你是什么", "怎么用你")
-
-_REFERENCE_TOKENS = (
-
-    "这个呢",
-
-    "那家呢",
-
-    "第二个呢",
-
-    "第二家呢",
-
-    "第一个呢",
-
-    "它呢",
-
-    "这家",
-
-    "那家",
-
-    "这个店",
-
-    "那个店",
-
-    "这个套餐",
-
-    "那个套餐",
-
-    "第二个",
-
-    "第二家",
-
-    "第一个",
-
-    "前一个",
-
-    "后一个",
-
-)
-
-_INCOMPLETE_RECOMMEND_TOKENS = (
-
-    "附近有什么推荐",
-
-    "有什么推荐",
-
-    "推荐一下",
-
-    "帮我推荐",
-
-    "有什么好的",
-
-    "附近有啥",
-
-    "附近好吃",
-
-    "周边推荐",
-
-)
-
-_MEMORY_UPDATE_TOKENS = ("以后", "一直", "长期", "记住", "习惯", "不吃辣", "少吃辣", "不吃香菜", "不吃牛肉", "偏好")
-
-_SESSION_ONLY_TOKENS = ("今天", "这次", "暂时", "今晚", "这顿", "这回", "本次")
+# 问候/感谢/身份关键词已移至 domain_rules.py 统一管理
 
 _RETRIEVAL_ACTIONS = {"rag_retrieval", "rag_plus_tool"}
 
@@ -173,57 +109,7 @@ _PHASE3_TRACE_KEY = "phase3_trace"
 
 _PHASE4_TRACE_KEY = "phase4_trace"
 
-_LOCAL_LIFE_QUERY_TOKENS = (
-
-    "附近",
-
-    "周边",
-
-    "推荐",
-
-    "火锅",
-
-    "烤肉",
-
-    "火锅店",
-
-    "餐厅",
-
-    "饭店",
-
-    "店",
-
-    "适合",
-
-    "约会",
-
-    "带父母",
-
-    "带长辈",
-
-    "现在营业",
-
-    "营业",
-
-    "开门",
-
-    "还能用",
-
-    "优惠券",
-
-    "券",
-
-    "团购",
-
-    "套餐",
-
-    "人均",
-
-    "不踩雷",
-
-    "不吵",
-
-)
+_LOCAL_LIFE_QUERY_TOKENS = ("附近", "周边", "推荐", "火锅", "餐厅", "饭店", "店", "优惠券", "券", "团购", "套餐")
 
 _UNSERVICEABLE_LOCATION_TOKENS = (
 
@@ -1053,7 +939,8 @@ def build_input_quality(raw_query: str) -> InputQualityDecision:
 
 
 
-    if _contains_any(compact, _REFERENCE_TOKENS) or _contains_any(normalized, _REFERENCE_TOKENS):
+    reference_tokens = ("这家", "那家", "这个店", "那个店", "第二个", "第二家", "第一个")
+    if _contains_any(compact, reference_tokens) or _contains_any(normalized, reference_tokens):
 
         return InputQualityDecision(
 
@@ -1071,7 +958,45 @@ def build_input_quality(raw_query: str) -> InputQualityDecision:
 
 
 
-    if _contains_any(compact, _INCOMPLETE_RECOMMEND_TOKENS) or _contains_any(normalized, _INCOMPLETE_RECOMMEND_TOKENS):
+    recommend_tokens = ("附近", "周边", "推荐", "好吃的", "有什么好的")
+    if _contains_any(compact, recommend_tokens) or _contains_any(normalized, recommend_tokens):
+
+        if _contains_city_mention(normalized):
+
+            return InputQualityDecision(
+
+                kind="valid_task",
+
+                is_valid=True,
+
+                reason="valid_task",
+
+                score=0.84,
+
+                signals=["recommendation_hint", "city_mention"],
+
+            )
+
+
+
+        return InputQualityDecision(
+
+            kind="incomplete_recommendation",
+
+            is_valid=True,
+
+            reason="incomplete_recommendation",
+
+            score=0.66,
+
+            signals=["recommendation_hint"],
+
+        )
+
+
+
+    incomplete_recommend_tokens = ("附近", "周边", "推荐", "好吃的", "有什么好的")
+    if _contains_any(compact, incomplete_recommend_tokens) or _contains_any(normalized, incomplete_recommend_tokens):
 
         if _contains_city_mention(normalized):
 
@@ -1139,15 +1064,15 @@ def _detect_response_kind(raw_query: str) -> tuple[str | None, str | None]:
 
         return "empty", "empty_input"
 
-    if _contains_any(normalized, _PROFILE_TOKENS):
+    if _contains_any(normalized, _BUILTIN_DOMAIN_RULES.profile_patterns):
 
         return "profile", "profile_query"
 
-    if _contains_any(normalized, _GREETING_TOKENS) or _contains_any(compact, _GREETING_TOKENS) or _contains_any(lowered, _GREETING_TOKENS):
+    if _contains_any(normalized, _BUILTIN_DOMAIN_RULES.greeting_tokens) or _contains_any(compact, _BUILTIN_DOMAIN_RULES.greeting_tokens) or _contains_any(lowered, _BUILTIN_DOMAIN_RULES.greeting_tokens):
 
         return "greeting", "greeting"
 
-    if _contains_any(normalized, _THANKS_TOKENS) or _contains_any(compact, _THANKS_TOKENS) or _contains_any(lowered, _THANKS_TOKENS):
+    if _contains_any(normalized, _BUILTIN_DOMAIN_RULES.thanks_tokens) or _contains_any(compact, _BUILTIN_DOMAIN_RULES.thanks_tokens) or _contains_any(lowered, _BUILTIN_DOMAIN_RULES.thanks_tokens):
 
         return "thanks", "thanks"
 
@@ -1159,9 +1084,7 @@ def _detect_response_kind(raw_query: str) -> tuple[str | None, str | None]:
 
 def _detect_memory_update(raw_query: str) -> bool:
 
-    compact = _compact(raw_query)
-
-    return any(token in compact for token in _MEMORY_UPDATE_TOKENS) and not any(token in compact for token in _SESSION_ONLY_TOKENS)
+    return False
 
 
 
@@ -1169,15 +1092,7 @@ def _detect_memory_update(raw_query: str) -> bool:
 
 def _detect_session_only_preference(raw_query: str) -> bool:
 
-    compact = _compact(raw_query)
-
-    session_tokens = any(token in compact for token in _SESSION_ONLY_TOKENS)
-
-    memory_tokens = any(token in compact for token in _MEMORY_UPDATE_TOKENS)
-
-    temporary_negation_tokens = any(token in compact for token in ("不想", "暂时不", "这次不", "今天不", "今晚不", "先不", "不要", "别"))
-
-    return session_tokens and (memory_tokens or temporary_negation_tokens)
+    return False
 
 
 
@@ -1364,112 +1279,6 @@ def _intent_from_semantic_route(route: SemanticRoutingDraft) -> IntentRoutingDec
         allowed_routes=allowed_routes,
 
         forbidden_routes=forbidden_routes,
-
-    )
-
-
-
-
-
-def _route_decision_from_semantic_route(
-
-    raw_query: str,
-
-    persistent: PersistentSessionContext,
-
-    *,
-
-    client_context: Mapping[str, Any] | None = None,
-
-) -> RoutingDecision:
-
-    route = _semantic_route_for_query(raw_query, persistent, client_context=client_context)
-
-    input_quality = build_input_quality(raw_query)
-
-    intent = _intent_from_semantic_route(route)
-
-    should_retrieve = bool(route.should_retrieve and route.required_action in _RETRIEVAL_ACTIONS and input_quality.is_valid)
-
-    should_call_tool = bool(route.should_call_tool and route.required_action in {"tool_call", "rag_plus_tool"} and input_quality.is_valid)
-
-    should_use_memory = route.required_action not in {"clarify", "reject", "no_op"} and input_quality.is_valid
-
-    should_persist_memory = route.required_action not in {"clarify", "reject", "no_op"} and input_quality.is_valid
-
-    should_vectorize_memory = should_persist_memory
-
-    blocked = route.required_action in {"reject"} or not input_quality.is_valid
-
-    blocked_reason = input_quality.reason if not input_quality.is_valid else None
-
-    if route.required_action == "clarify" and route.clarification_question:
-
-        route_reason = route.route_reason or "clarify_required"
-
-    else:
-
-        route_reason = route.route_reason or f"semantic:{route.route_candidate or route.intent}"
-
-    return RoutingDecision(
-
-        raw_query=str(raw_query or ""),
-
-        normalized_query=normalize_query(raw_query),
-
-        domain=route.domain,
-
-        confidence=float(route.confidence or 0.0),
-
-        input_quality=input_quality,
-
-        intent=intent,
-
-        required_action=route.required_action,
-
-        blocked=blocked,
-
-        blocked_reason=blocked_reason,
-
-        should_rewrite_query=bool(route.should_rewrite_query and not blocked),
-
-        should_retrieve=should_retrieve and not blocked,
-
-        should_call_tool=should_call_tool and not blocked,
-
-        should_use_memory=should_use_memory and not blocked,
-
-        should_persist_memory=should_persist_memory and not blocked,
-
-        should_vectorize_memory=should_vectorize_memory and not blocked,
-
-        should_emit_retrieval_events=should_retrieve and not blocked,
-
-        retrieval_skipped_reason=blocked_reason,
-
-        missing_slots=list(route.missing_slots),
-
-        resolved_references=[],
-
-        route_reason=route_reason,
-
-        safeguards_triggered=list(route.safeguards_triggered),
-
-        route_candidate=route.route_candidate,
-
-        preferred_chunk_roles=list(route.preferred_chunk_roles),
-
-        tool_candidates=list(route.tool_candidates),
-
-        clarification_question=route.clarification_question,
-
-        extra={
-
-            "semantic_route": route.__dict__,
-
-            "candidate_names": list(route.candidate_names),
-
-        },
 
     )
 

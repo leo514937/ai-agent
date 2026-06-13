@@ -12,9 +12,10 @@ from ...domain.contracts import (
 )
 from ...domain.enums import RagStatus, ToolExecutionStatus
 from ...domain.state import GraphState
-from ..router import can_enter_retrieval, can_enter_tool
-from ..router import route_execution_mode
-from ..router import should_run_tool as routing_should_run_tool
+from ..router.base import should_run_tool as routing_should_run_tool
+from ..router.phase5_retrieval import can_enter_retrieval
+from ..router.phase6_tool import can_enter_tool
+from ..router.stages import route_execution_mode
 from .state import append_runtime_error as _append_state_runtime_error
 from .state import append_stage_timeline_entry as _append_stage_timeline_entry
 from .services import (
@@ -23,22 +24,7 @@ from .services import (
     UnderstandTurnServices,
 )
 
-try:
-    from langgraph.types import Command
-except Exception:  # pragma: no cover - optional dependency path
-    @dataclass
-    class Command:
-        update: Any
-        goto: str
 
-if not hasattr(Command, "__getitem__"):
-    def _command_getitem(self, key: str):
-        update = getattr(self, "update", None)
-        if isinstance(update, dict):
-            return update[key]
-        raise TypeError(f"{type(self).__name__!s} does not support item access")
-
-    Command.__getitem__ = _command_getitem  # type: ignore[attr-defined]
 
 _RETRIEVAL_ACTIONS = {"rag_retrieval", "rag_plus_tool"}
 _TOOL_ACTIONS = {"tool_call", "rag_plus_tool"}
@@ -71,18 +57,19 @@ def route_after_load_context(state: GraphState) -> str:
     return "understand_turn"
 
 
-def run_load_context_node(state: GraphState, load_context_fn) -> Command:
+def run_load_context_node(state: GraphState, load_context_fn) -> GraphState:
     state = load_context_fn(state)
-    target = route_after_load_context(state)
-    return Command(update=state, goto=target)
+    return state
 
 
-def route_gate(state: GraphState) -> Command:
+def route_gate(state: GraphState) -> GraphState:
     turn = state["turn"]
     runtime = state["runtime"]
     routing = getattr(turn, "routing_decision", None)
     execution_mode = route_execution_mode(routing).execution_mode if routing is not None else "simple"
     branch = route_decider(state)
+    if routing is not None and str(getattr(routing, "required_action", "") or "").strip().lower() == "clarify":
+        branch = "clarify"
     effective_action_map = {
         "recommendation": "rag_plus_tool",
         "tool": "tool_call",
@@ -136,9 +123,12 @@ def route_gate(state: GraphState) -> Command:
         target_shop_id = turn_extra.get("selected_shop_id") or turn_extra.get("target_shop_id")
     if target_shop_id is None and isinstance(routing_extra.get("route_review_decision"), Mapping):
         route_review = routing_extra.get("route_review_decision")
-        target_shop_id = route_review.get("resolved_shop_id")
-        if target_shop_id is None and isinstance(route_review.get("execution_requirements"), Mapping):
-            target_shop_id = route_review.get("execution_requirements").get("resolved_shop_id")
+        if isinstance(route_review, Mapping):
+            target_shop_id = route_review.get("resolved_shop_id")
+            if target_shop_id is None and isinstance(route_review.get("execution_requirements"), Mapping):
+                exec_reqs = route_review.get("execution_requirements")
+                if isinstance(exec_reqs, Mapping):
+                    target_shop_id = exec_reqs.get("resolved_shop_id")
     if target_shop_id is not None:
         try:
             target_shop_id = int(target_shop_id)
@@ -255,8 +245,7 @@ def route_gate(state: GraphState) -> Command:
         "recommendation": "recommendation_subgraph",
         "direct": "compose_answer",
     }
-    target = target_map.get(branch, "compose_answer")
-    return Command(update=state, goto=target)
+    return state
 
 
 def _stage_entry(stage: str, status: str, *, route_decision: str | None = None, route_reason: str | None = None, detail=None):
@@ -393,7 +382,7 @@ def _tool_stage_detail(turn) -> dict[str, object]:
     return detail
 
 
-def run_understand_turn(state: GraphState, services: UnderstandTurnServices) -> Command:
+def run_understand_turn(state: GraphState, services: UnderstandTurnServices) -> GraphState:
     state = services.parse_intent_slots(state)
     state = services.resolve_reference(state)
     state = services.ambiguity_check(state)
@@ -409,12 +398,10 @@ def run_understand_turn(state: GraphState, services: UnderstandTurnServices) -> 
             route_reason=str(routing.blocked_reason or rag_gate.get("reason") or "routing_blocked"),
             detail=rag_gate or {"blocked_reason": routing.blocked_reason},
         )
-        target = route_after_understand(state)
-        return Command(update=state, goto=target)
+        return state
     if rag_gate and not bool(rag_gate.get("allowed", True)):
         state = _mark_stage(state, "understand", "blocked", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(rag_gate.get("reason") or "rag_gate_blocked"), detail=rag_gate)
-        target = route_after_understand(state)
-        return Command(update=state, goto=target)
+        return state
     state = _mark_stage(
         state,
         "understand",
@@ -431,15 +418,13 @@ def run_understand_turn(state: GraphState, services: UnderstandTurnServices) -> 
     )
     routing = state["turn"].routing_decision
     if routing is not None and str(routing.required_action).strip().lower() in {"clarify", "reject", "direct_answer", "memory_update", "no_op"}:
-        target = route_after_understand(state)
-        return Command(update=state, goto=target)
+        return state
     if routing is not None and str(routing.required_action).strip().lower() in _RETRIEVAL_ACTIONS and state["turn"].retrieval_plan is None and can_enter_retrieval(state).allowed:
         state = services.rewrite_query(state)
-    target = route_after_understand(state)
-    return Command(update=state, goto=target)
+    return state
 
 
-def run_rag_subgraph(state: GraphState, services: RagSubgraphServices) -> Command:
+def run_rag_subgraph(state: GraphState, services: RagSubgraphServices) -> GraphState:
     try:
         from .graphs import build_rag_graph
         compiled_graph = build_rag_graph(services)
@@ -449,15 +434,13 @@ def run_rag_subgraph(state: GraphState, services: RagSubgraphServices) -> Comman
         from ...domain.state import clone_graph_state
 
         compiled_state = compiled_graph.invoke(clone_graph_state(state))
-        target = route_after_rag(compiled_state)
-        return Command(update=compiled_state, goto=target)
+        return compiled_state
 
     contract = state["turn"].routing_contract
     rag_allowed = contract.rag_allowed if contract is not None else can_enter_retrieval(state).allowed
     if not rag_allowed:
         state = _ensure_rag_result(state)
-        target = route_after_rag(state)
-        return Command(update=state, goto=target)
+        return state
 
     state = _mark_stage(state, "rag", "running", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])))
     try:
@@ -512,8 +495,7 @@ def run_rag_subgraph(state: GraphState, services: RagSubgraphServices) -> Comman
         state = _mark_stage(state, "rag", "failed", route_decision=_route_decision_for_turn(state["turn"]), route_reason=f"retrieval_degraded: {exc}")
 
     state = _ensure_rag_result(state)
-    target = route_after_rag(state)
-    return Command(update=state, goto=target)
+    return state
 
 
 def run_recommendation_subgraph(state: GraphState, services: RagSubgraphServices) -> GraphState:
@@ -525,16 +507,6 @@ def run_recommendation_subgraph(state: GraphState, services: RagSubgraphServices
     if compiled_graph is not None:
         from ...domain.state import clone_graph_state
         result = compiled_graph.invoke(clone_graph_state(state))
-        if not list(result["turn"].stage_timeline or []):
-            if not tool_allowed:
-                result = _mark_stage(
-                    result,
-                    "tool",
-                    "completed",
-                    route_decision=_route_decision_for_turn(result["turn"]),
-                    route_reason=str(result["turn"].extra.get("route_reason") or _route_decision_for_turn(result["turn"])),
-                    detail={"decision": _route_decision_for_turn(result["turn"]), "intent": result["turn"].intent.value if result["turn"].intent else None, "tool_allowed": False},
-                )
         return result
 
     from .graphs import _execute_recommendation_pipeline, _finalize_recommendation, _prepare_recommendation
@@ -612,7 +584,7 @@ def run_tool_subgraph(state: GraphState, services: ToolSubgraphServices) -> Grap
         from learning_agent_service.domain.errors import WorkflowErrorCode, build_error
         
         err = build_error(
-            WorkflowErrorCode.INFRASTRUCTURE_ERROR,
+            WorkflowErrorCode.INTERNAL_ERROR,
             stage="tool",
             message=f"Tool execution degraded due to exception: {exc}",
             retryable=False,
@@ -636,7 +608,7 @@ def run_tool_subgraph(state: GraphState, services: ToolSubgraphServices) -> Grap
                 status=ToolExecutionStatus.FAILED,
                 tool_name=tool_name,
                 degraded_to=None,
-                error=WorkflowErrorCode.INFRASTRUCTURE_ERROR,
+                error=WorkflowErrorCode.INTERNAL_ERROR,
                 approval_status=None,
                 output_payload={"error": str(exc)}
             ),
@@ -644,7 +616,8 @@ def run_tool_subgraph(state: GraphState, services: ToolSubgraphServices) -> Grap
                 status=ToolExecutionStatus.DEGRADED,
                 tool_name=tool_name,
                 normalized_output={"status": "degraded", "error": str(exc), "message": "实时券信息暂不可用"},
-                used_tools=[tool_name]
+                used_tools=[tool_name] if tool_name else [],
+                approval_status=None
             )
         })
 
@@ -694,14 +667,74 @@ def route_after_understand(state: GraphState) -> str:
 def route_decider(state: GraphState) -> str:
     turn = state["turn"]
     routing = getattr(turn, "routing_decision", None)
+    turn_extra = dict(getattr(turn, "extra", {}) or {})
+    routing_extra = dict(getattr(routing, "extra", {}) or {}) if routing is not None else {}
+    raw_query_text = str(getattr(turn, "raw_query", "") or "")
+    compact_query_text = raw_query_text.replace(" ", "")
+    recommendation_like_query = any(
+        token in compact_query_text
+        for token in ("附近", "周边", "推荐", "几家", "多推荐", "多家")
+    )
+    coupon_like_query = any(token in compact_query_text for token in ("券", "优惠", "代金券", "团购"))
+    open_like_query = any(token in compact_query_text for token in ("营业", "开门", "开着", "营业时间", "现在营业吗", "现在开吗", "营业吗"))
+    distance_like_query = any(token in compact_query_text for token in ("距离", "有多远", "导航", "路线", "怎么走", "怎么去"))
+    explicit_target_shop = any(
+        str(source or "").strip()
+        for source in (
+            turn_extra.get("explicit_query_shop"),
+            turn_extra.get("target_shop_name"),
+            turn_extra.get("current_shop"),
+            turn_extra.get("selected_shop_name"),
+            routing_extra.get("explicit_query_shop"),
+            routing_extra.get("target_shop_name"),
+            routing_extra.get("current_shop"),
+            routing_extra.get("selected_shop_name"),
+        )
+    ) or turn_extra.get("selected_shop_id") is not None or turn_extra.get("target_shop_id") is not None
     if routing is None:
+        if recommendation_like_query:
+            return "recommendation"
+        if coupon_like_query and open_like_query:
+            return "rag_plus_tool" if explicit_target_shop else "clarify"
+        if coupon_like_query or open_like_query or distance_like_query:
+            if explicit_target_shop:
+                return "rag_plus_tool" if (coupon_like_query and (open_like_query or distance_like_query)) else "tool"
+            return "clarify"
+        routing_payload = turn_extra.get("routing_decision")
+        if not isinstance(routing_payload, dict):
+            routing_payload = turn_extra.get("routing_contract")
+        if isinstance(routing_payload, dict):
+            required_action = str(
+                routing_payload.get("required_action")
+                or routing_payload.get("decision")
+                or routing_payload.get("route_decision")
+                or ""
+            ).strip().lower()
+            if required_action == "clarify":
+                return "clarify"
+            if required_action == "tool_call":
+                return "tool"
+            if required_action == "rag_plus_tool":
+                return "rag_plus_tool"
+            if required_action == "rag_retrieval":
+                return "rag"
+            if required_action in {"direct_answer", "memory_update", "no_op", "reject"}:
+                return "direct"
+            route_candidate = str(routing_payload.get("route_candidate") or "").strip().lower()
+            if route_candidate in {"recommendation", "local_life.nearby_recommend", "nearby_recommend", "local_life_recommend"}:
+                return "recommendation"
         return "direct"
 
     execution_mode = str(getattr(routing, "execution_mode", "") or "").strip().lower()
+    action = str(routing.required_action or "").strip().lower()
+    if action == "tool_call" and explicit_target_shop:
+        if coupon_like_query and (open_like_query or distance_like_query):
+            return "rag_plus_tool"
+        if coupon_like_query or open_like_query or distance_like_query:
+            return "tool"
     if execution_mode == "complex":
         return "direct"
 
-    action = str(routing.required_action or "").strip().lower()
     if action == "clarify":
         return "clarify"
     route_candidate = str(getattr(routing, "route_candidate", "") or "").strip().lower()

@@ -13,12 +13,18 @@ from .routes import (
 
 def create_api_router(
     service: LearningAgentService | None = None,
+    *,
+    include_session_history_routes: bool = False,
 ) -> APIRouter:
     router = APIRouter()
     bound_service = service or UnavailableLearningAgentService()
     register_approval_routes(router, bound_service)
     register_chat_routes(router, bound_service)
     register_session_routes(router, bound_service)
+    if include_session_history_routes:
+        from .routes.session import register_session_history_routes
+
+        register_session_history_routes(router, bound_service)
     register_feedback_routes(router, bound_service)
     register_memory_routes(router, bound_service)
     return router

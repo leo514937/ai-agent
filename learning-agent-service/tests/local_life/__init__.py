@@ -1,0 +1,1 @@
+"""Local life tests package."""

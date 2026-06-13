@@ -4,6 +4,8 @@ import dataclasses
 from collections.abc import Mapping
 from typing import Any
 
+from .query_rewriter import _CITY_NAMES as _LOCAL_LIFE_CITY_NAMES
+from .scene_policy import ScenePolicy
 from .query_router import LocalLifeRouteDecision
 from .schemas import ClarificationDecision, RouteExecutionRequirement, RouteReviewResult, UserNeed
 
@@ -59,7 +61,7 @@ class RouteReview:
             inferred_facet_names: list[str] = []
             coupon_tokens = ("券", "优惠", "领券", "打折", "代金券", "折扣", "有券", "团购")
             open_tokens = ("营业", "开门", "开着", "营业时间", "现在营业吗", "现在开吗", "营业吗")
-            distance_tokens = ("距离", "有多远", "导航", "路线", "怎么走", "怎么去")
+            distance_tokens = ("离我多远", "距离", "有多远", "导航", "路线", "怎么走", "怎么去")
 
             if any(token in query_text for token in coupon_tokens):
                 inferred_facet_names.append("coupon")
@@ -163,6 +165,13 @@ class RouteReview:
         required_facet_names = [f.name for f in user_need.required_facets]
         has_dynamic_facet = any(name in required_facet_names for name in ("coupon", "open_status", "distance_eta"))
         has_static_facet = any(name in required_facet_names for name in ("scene_fit", "shop_detail", "price"))
+        has_explicit_shop_context = bool(
+            resolved_shop_id
+            or (target_shop and (target_shop.shop_id or target_shop.shop_name))
+            or explicit_entity
+            or user_need.slots.shop_name
+            or user_need.slots.shop_ids
+        )
 
         # Determine if pronouns are used in query
         has_pronoun = any(p in normalized_query for p in ("他", "她", "它", "这家", "这店", "这间", "刚才那家", "这个店", "刚才那个", "这几家", "第一家", "第二家"))
@@ -229,6 +238,113 @@ class RouteReview:
             and not has_coordinates
         )
         if clarification.need_clarification or missing_location_for_vague_query:
+            if has_explicit_shop_context and (has_dynamic_facet or has_static_facet):
+                new_clarification = ClarificationDecision(need_clarification=False)
+                if has_dynamic_facet and has_static_facet:
+                    reviewed_route = LocalLifeRouteDecision(
+                        route="structured_first",
+                        retrieval_strategy="business_candidates->parent_child_rag->shop_rerank",
+                        route_reason="multi_facet_query_alignment",
+                        candidate_shop_ids=initial_route.candidate_shop_ids,
+                        parent_top_k=5,
+                        child_top_k=30,
+                        sibling_limit_per_parent=6,
+                        preferred_roles=("merchant_profile", "merchant_review_summary", "merchant_scene_fit"),
+                        use_business_candidates=True,
+                        use_qdrant=True,
+                        extra=initial_route.extra,
+                    )
+                    tools_to_run = []
+                    if "coupon" in required_facet_names:
+                        tools_to_run.append("get_coupon_list")
+                    if "open_status" in required_facet_names:
+                        tools_to_run.append("check_open_status")
+                    if "distance_eta" in required_facet_names:
+                        tools_to_run.append("get_distance_eta")
+                    exec_reqs = RouteExecutionRequirement(
+                        required_facets=required_facet_names,
+                        execute_tools=tools_to_run,
+                        execute_rag=True,
+                        reference_needed=has_pronoun,
+                    )
+                    is_intercepted = (
+                        initial_route.use_qdrant is not True
+                        or initial_route.use_business_candidates is not True
+                        or initial_route.route != "structured_first"
+                    )
+                    return RouteReviewResult(
+                        reviewed_route=reviewed_route,
+                        execution_requirements=exec_reqs,
+                        review_reason="Explicit shop context with mixed facets. Kept aligned routing and suppressed clarification.",
+                        intercepted=is_intercepted,
+                        clarification=new_clarification,
+                        reviewed_clarification=new_clarification,
+                    )
+                if has_dynamic_facet:
+                    tools_to_run = []
+                    if "coupon" in required_facet_names:
+                        tools_to_run.append("get_coupon_list")
+                    if "open_status" in required_facet_names:
+                        tools_to_run.append("check_open_status")
+                    if "distance_eta" in required_facet_names:
+                        tools_to_run.append("get_distance_eta")
+                    reviewed_route = LocalLifeRouteDecision(
+                        route="realtime_tool",
+                        retrieval_strategy="java_business_tool_only",
+                        route_reason="dynamic_single_facet_query",
+                        candidate_shop_ids=initial_route.candidate_shop_ids,
+                        parent_top_k=0 if resolved_shop_id is None else 5,
+                        child_top_k=0 if resolved_shop_id is None else 30,
+                        sibling_limit_per_parent=0 if resolved_shop_id is None else 6,
+                        preferred_roles=() if resolved_shop_id is None else ("merchant_profile", "merchant_review_summary", "merchant_scene_fit"),
+                        use_business_candidates=True,
+                        use_qdrant=bool(resolved_shop_id),
+                        extra=initial_route.extra,
+                    )
+                    exec_reqs = RouteExecutionRequirement(
+                        required_facets=required_facet_names,
+                        execute_tools=tools_to_run,
+                        execute_rag=bool(resolved_shop_id),
+                        reference_needed=has_pronoun,
+                    )
+                    is_intercepted = initial_route.use_qdrant is not False or initial_route.route != "realtime_tool"
+                    return RouteReviewResult(
+                        reviewed_route=reviewed_route,
+                        execution_requirements=exec_reqs,
+                        review_reason="Explicit shop context with dynamic facets. Suppressed clarification and kept tool flow.",
+                        intercepted=is_intercepted,
+                        clarification=new_clarification,
+                        reviewed_clarification=new_clarification,
+                    )
+                if has_static_facet:
+                    reviewed_route = LocalLifeRouteDecision(
+                        route="merchant_reasoning" if initial_route.route not in ("structured_first", "merchant_reasoning") else initial_route.route,
+                        retrieval_strategy="parent_child_rag->shop_rerank" if initial_route.route not in ("structured_first", "merchant_reasoning") else initial_route.retrieval_strategy,
+                        route_reason="static_experience_query",
+                        candidate_shop_ids=initial_route.candidate_shop_ids,
+                        parent_top_k=initial_route.parent_top_k or 5,
+                        child_top_k=initial_route.child_top_k or 30,
+                        sibling_limit_per_parent=initial_route.sibling_limit_per_parent or 6,
+                        preferred_roles=initial_route.preferred_roles or ("merchant_profile", "merchant_review_summary", "merchant_scene_fit"),
+                        use_business_candidates=initial_route.use_business_candidates,
+                        use_qdrant=True,
+                        extra=initial_route.extra,
+                    )
+                    exec_reqs = RouteExecutionRequirement(
+                        required_facets=required_facet_names,
+                        execute_tools=[],
+                        execute_rag=True,
+                        reference_needed=has_pronoun,
+                    )
+                    is_intercepted = initial_route.use_qdrant is not True
+                    return RouteReviewResult(
+                        reviewed_route=reviewed_route,
+                        execution_requirements=exec_reqs,
+                        review_reason="Explicit shop context with static facets. Suppressed clarification and kept detail flow.",
+                        intercepted=is_intercepted,
+                        clarification=new_clarification,
+                        reviewed_clarification=new_clarification,
+                    )
             # Case 4: Strong query + client location -> Override clarification and force search
             if has_location_ctx and any(k in normalized_query for k in ("附近", "推荐", "不踩雷", "适合带娃", "适合约会", "有券")):
                 new_clarification = ClarificationDecision(need_clarification=False)
@@ -266,43 +382,34 @@ class RouteReview:
                     reviewed_clarification=new_clarification,
                 )
             
-            # Case 5: Retain slot clarification for vague nearby queries without location
+            # Case 5: Nearby recommendation without location should continue recommendation flow.
             elif not has_location_ctx:
-                from .schemas import SuggestedReply
-                question = clarification.question or "你现在在哪个城市或位置附近？"
-                if "位置" not in question:
-                    question = "你现在在哪个城市或位置附近？"
-                new_clarification = ClarificationDecision(
-                    need_clarification=True,
-                    question=question,
-                    ambiguity_type="slot_clarify",
-                    options=clarification.options or [
-                        SuggestedReply(label="发位置", prompt="我在北京朝阳"),
-                        SuggestedReply(label="给城市", prompt="北京"),
-                    ],
-                )
-                reviewed_route = LocalLifeRouteDecision(
-                    route="clarify",
-                    retrieval_strategy="clarification_only",
-                    route_reason="default_nearby_recommendation",
-                    candidate_shop_ids=(),
-                    use_business_candidates=False,
-                    use_qdrant=False,
-                )
-                exec_reqs = RouteExecutionRequirement(
-                    required_facets=[],
-                    execute_tools=[],
-                    execute_rag=False,
-                    reference_needed=False,
-                )
-                return RouteReviewResult(
-                    reviewed_route=reviewed_route,
-                    execution_requirements=exec_reqs,
-                    review_reason="Vague nearby recommendation query without location context triggers slot clarification.",
-                    intercepted=True,
-                    clarification=new_clarification,
-                    reviewed_clarification=new_clarification,
-                )
+                scene_detected = ScenePolicy.detect_scene(user_need.raw_query)
+                has_city_mention = any(city in normalized_query for city in _LOCAL_LIFE_CITY_NAMES if city)
+                nearby_scene_recommendation = any(
+                    k in normalized_query
+                    for k in ("推荐", "找个餐厅", "推荐个", "最近", "评分最高", "适合", "约会", "家庭聚餐", "商务宴请", "带小孩", "朋友聚餐", "深夜", "一个人")
+                ) or bool(scene_detected) or has_city_mention
+                if nearby_scene_recommendation and not any(k in normalized_query for k in ("附近", "周边")):
+                    new_clarification = ClarificationDecision(need_clarification=False)
+                    return RouteReviewResult(
+                        reviewed_route=initial_route,
+                        execution_requirements=result.execution_requirements,
+                        review_reason="Scene or city recommendation without location context kept on recommendation flow.",
+                        intercepted=False,
+                        clarification=new_clarification,
+                        reviewed_clarification=new_clarification,
+                    )
+                if any(k in normalized_query for k in ("附近", "周边")) and nearby_scene_recommendation:
+                    new_clarification = ClarificationDecision(need_clarification=False)
+                    return RouteReviewResult(
+                        reviewed_route=initial_route,
+                        execution_requirements=result.execution_requirements,
+                        review_reason="Nearby recommendation query without location context kept on recommendation flow.",
+                        intercepted=False,
+                        clarification=new_clarification,
+                        reviewed_clarification=new_clarification,
+                    )
 
         # 3. Rule: Dynamic Single-Facet Query (Case 2)
         # If query has dynamic facets (coupon, open_status) but NO static experience facets (scene_fit, shop_detail)

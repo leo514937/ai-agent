@@ -40,6 +40,7 @@ from .models import (
 )
 from .models import (
     EvidencePack as InternalEvidencePack,
+    EvidenceStatus,
 )
 from .models import (
     HybridRecallResult,
@@ -150,7 +151,7 @@ class DomainRagAdapter:
         rerank_top_k: int,
         max_evidence: int,
     ) -> InternalRetrievalPlan:
-        plan = request.plan if hasattr(request, "plan") else request
+        plan = request.plan if isinstance(request, (HybridRetrieveRequest, EvidenceEvaluationRequest)) else request
         return InternalRetrievalPlan(
             semantic_query=plan.semantic_query,
             keyword_query=plan.keyword_query,
@@ -337,7 +338,7 @@ class DomainRagAdapter:
         )
 
     def to_internal_evidence_pack(self, request: CitationBuildRequest | EvidencePack) -> InternalEvidencePack:
-        evidence = request.evidence_pack if hasattr(request, "evidence_pack") else request
+        evidence = request.evidence_pack if isinstance(request, CitationBuildRequest) else request
         rejected_items = tuple(
             self._rejected_item_to_trace_item(item)
             for item in evidence.extra.get("rejected_items", [])
@@ -404,7 +405,7 @@ class DomainRagAdapter:
         return InternalEvidencePack(
             items=items,
             status=str(evidence.discard_summary.get("status", "empty")),
-            evidence_status=str(getattr(evidence, "evidence_status", "EMPTY") or evidence.discard_summary.get("status", "EMPTY")),
+            evidence_status=getattr(EvidenceStatus, str(getattr(evidence, "evidence_status", "EMPTY") or evidence.discard_summary.get("status", "EMPTY")).upper(), EvidenceStatus.EMPTY),
             strong_items=strong_items,
             weak_items=weak_items,
             filtered_out=int(evidence.discard_summary.get("filtered_out", 0)),

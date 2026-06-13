@@ -13,7 +13,7 @@ from .base import SqlAlchemyRepositoryBase
 try:  # pragma: no cover - optional runtime dependency
     from sqlalchemy import select
 except ImportError:  # pragma: no cover - depends on runtime installation.
-    select = None
+    select: Any = None
 
 
 def _trace_to_model_fields(trace: MemoryTrace) -> dict[str, Any]:

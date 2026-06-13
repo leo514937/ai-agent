@@ -1,10 +1,8 @@
 """Backward-compatible alias for the local-life Qdrant seeding helpers."""
 
-from .seed_parent_child import (  # noqa: F401
+from .seed.core import (  # noqa: F401
     JavaBusinessClient,
     OpenAIEmbeddingAdapter,
-    _build_blog_note_chunks,
-    _dedupe_chunks,
     _format_seed_summary_lines,
     build_arg_parser,
     build_openai_runtime,

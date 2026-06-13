@@ -99,13 +99,13 @@ class RagasEvalCase:
             raw_turns = [raw_turns]
         elif not isinstance(raw_turns, Sequence) or isinstance(raw_turns, (bytes, bytearray)):
             raw_turns = [raw_turns]
-        turns = tuple(_clean_text(item) for item in raw_turns if _clean_text(item))
-        query = _clean_text(raw.get("query") or (turns[-1] if turns else ""))
+        turns = tuple(str(text) for item in raw_turns if (text := _clean_text(item)))
+        query = _clean_text(raw.get("query") or (turns[-1] if turns else "")) or ""
         metadata = dict(raw)
         return cls(
-            case_id=_clean_text(raw.get("case_id") or raw.get("id") or query or "case"),
+            case_id=_clean_text(raw.get("case_id") or raw.get("id") or query or "case") or "case",
             query=query,
-            reference=_clean_text(raw.get("reference")),
+            reference=_clean_text(raw.get("reference")) or "",
             reference_contexts=_string_list(raw.get("reference_contexts")),
             reference_context_ids=_string_list(raw.get("reference_context_ids")),
             turns=turns,
@@ -127,9 +127,9 @@ class RagasEvalObservation:
         if isinstance(evidence_pack, Mapping):
             evidence_pack = LocalLifeEvidencePack.model_validate(evidence_pack)
         return cls(
-            case_id=_clean_text(raw.get("case_id") or raw.get("id")),
-            query=_clean_text(raw.get("query")),
-            response=_clean_text(raw.get("response") or raw.get("answer") or raw.get("final_answer")),
+            case_id=_clean_text(raw.get("case_id") or raw.get("id")) or "case",
+            query=_clean_text(raw.get("query")) or "",
+            response=_clean_text(raw.get("response") or raw.get("answer") or raw.get("final_answer")) or "",
             metrics=dict(raw.get("metrics") or {}),
             evidence_pack=evidence_pack if isinstance(evidence_pack, LocalLifeEvidencePack) else None,
         )
@@ -343,7 +343,7 @@ def summarize_ragas_observation(
     return RagasEvalObservation(
         case_id=case.case_id,
         query=case.query,
-        response=_clean_text(response),
+        response=_clean_text(response) or "",
         metrics=dict(metrics or {}),
         evidence_pack=pack if isinstance(pack, LocalLifeEvidencePack) else None,
     )
@@ -514,7 +514,7 @@ def evaluate_ragas_rows(
         raise RuntimeError(
             "没有可执行的 RAGAS 指标。可能原因：未安装 ragas、缺少 LLM/Embeddings 凭证，或当前样本缺少必要字段。"
         )
-    dataset = EvaluationDataset.from_list(list(rows))
+    dataset = EvaluationDataset.from_list([dict(row) for row in rows])
     result = evaluate(
         dataset=dataset,
         metrics=metrics,
@@ -645,7 +645,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 def _normalize_metric_name(name: str) -> str:
-    normalized = _clean_text(name).lower().replace("-", "_").replace(" ", "_")
+    normalized = (_clean_text(name) or "").lower().replace("-", "_").replace(" ", "_")
     return _METRIC_ALIASES.get(normalized, normalized)
 
 

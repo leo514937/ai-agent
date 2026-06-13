@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Sequence
@@ -15,7 +15,7 @@ class GovernanceConfig:
 
 
 class KnowledgeGovernanceService:
-    def __init__(self, config: GovernanceConfig = None) -> None:
+    def __init__(self, config: GovernanceConfig | None = None) -> None:
         self._config = config or GovernanceConfig()
 
     def plan_duplicate_cleanup(self, document_id: str, chunks: Sequence[KnowledgeChunk]) -> KnowledgeGovernanceDecision:

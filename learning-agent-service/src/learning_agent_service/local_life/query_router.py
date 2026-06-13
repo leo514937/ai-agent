@@ -16,20 +16,42 @@ _REALTIME_KEYWORDS = (
     "取消",
     "订座",
     "预约",
-    "库存",
-    "发票",
-    "售后",
-    "订单状态",
-    "支付状态",
-    "实时库存",
-    "现在能不能退",
-    "现在能不能订",
-    "现在是否开门",
-    "现在营业吗",
-    "当前营业状态",
-    "已下单",
-    "待支付",
-    "待发货",
+    "营业",
+    "开门",
+    "关门",
+)
+_MEMORY_KEYWORDS = (
+    "记得",
+    "刚才",
+    "之前",
+    "上次",
+    "继续刚才",
+)
+_STRUCTUREURED_KEYWORDS = (
+    "附近",
+    "推荐",
+    "人均",
+    "评分",
+    "品类",
+    "价格",
+    "约会",
+    "聚餐",
+    "套餐",
+    "优惠",
+    "券",
+)
+_GUIDE_RULE_KEYWORDS = (
+    "攻略",
+    "规则",
+    "避坑",
+    "流程",
+)
+_COMPARE_KEYWORDS = (
+    "对比",
+    "比较",
+    "区别",
+    "哪个",
+    "更适合",
 )
 _MEMORY_KEYWORDS = (
     "记得",
@@ -291,6 +313,9 @@ class LocalLifeQueryRouter:
         if self._contains_any(compact_query, _GUIDE_RULE_KEYWORDS):
             return "guide_rule_rag", "guide_or_rule_query"
 
+        if any(token in compact_query for token in ("带小孩", "朋友聚餐", "深夜", "商务宴请", "家庭聚餐", "约会", "一个人")):
+            return "structured_first", "scene_recommendation"
+
         if self._contains_any(compact_query, _STRUCTURED_KEYWORDS) or self._looks_structured(slots):
             return "structured_first", "structured_filters"
 
@@ -307,9 +332,10 @@ class LocalLifeQueryRouter:
         scene_detected: str | None = None,
         scene_preferred_facets: Sequence[str] | None = None,
     ) -> dict[str, Any]:
+        intent_val = self._normalize_intent(intent)
         extra: dict[str, Any] = {
             "route": route,
-            "intent": self._normalize_intent(intent).value if self._normalize_intent(intent) else str(intent or ""),
+            "intent": intent_val.value if intent_val else str(intent or ""),
             "query_tags": self._query_tags(query),
             "has_city": bool(slots.city),
             "has_location": bool(slots.location.lat is not None or slots.location.lng is not None),

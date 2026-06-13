@@ -7,11 +7,14 @@ from typing import Any
 from pydantic import AliasChoices, BaseModel, Field
 
 from learning_agent_service.domain.contracts import (
+    Citation,
     ClarificationCard,
     ErrorPayload,
     FinalPayload,
+    MemoryUsedSummary,
     PlanExecutionSummary,
     PlanStep,
+    RetrievalSummary,
     StepResult,
 )
 
@@ -67,6 +70,7 @@ class EventType(str, Enum):
     APPROVAL_REQUIRED = "approval_required"
     PLAN_REPLANNED = "plan_replanned"
     PLAN_EXECUTION_SUMMARY = "plan_execution_summary"
+    WORKFLOW_STAGE_EVENT = "workflow_stage_event"
     FINAL = "final"
     ERROR = "error"
 
@@ -319,7 +323,7 @@ class ChatStreamRequest(BaseModel):
     user_id: str = Field(min_length=1)
     session_id: str = Field(min_length=1)
     trace_id: str = Field(min_length=1)
-    message: str = Field(min_length=1)
+    message: str
     turn_id: str | None = None
     page: str | None = None
     response_mode: str | None = None
@@ -618,6 +622,7 @@ EVENT_PAYLOAD_MODELS: dict[EventType, type[BaseModel]] = {
     EventType.APPROVAL_REQUIRED: ApprovalRequiredPayload,
     EventType.PLAN_REPLANNED: PlanReplannedPayload,
     EventType.PLAN_EXECUTION_SUMMARY: PlanExecutionSummaryPayload,
+    EventType.WORKFLOW_STAGE_EVENT: StageStatusPayload,
     EventType.FINAL: FinalPayload,
     EventType.ERROR: ErrorPayload,
 }
@@ -650,6 +655,8 @@ class ForkRequest(BaseModel):
 
 def validate_event_payload(event_type: EventType | str, payload: dict[str, Any]) -> dict[str, Any]:
     normalized_event = event_type if isinstance(event_type, EventType) else EventType(event_type)
+    if normalized_event == EventType.WORKFLOW_STAGE_EVENT:
+        normalized_event = EventType.HEARTBEAT
     model = EVENT_PAYLOAD_MODELS[normalized_event]
     normalized_payload = dict(payload or {})
     if normalized_event == EventType.FINAL and "answer_text" not in normalized_payload:

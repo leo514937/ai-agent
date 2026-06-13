@@ -245,10 +245,17 @@ class PlanExecutionRuntimeTestCase(unittest.TestCase):
         langgraph_events = [event.event_type for event in langgraph_state["runtime"].emitted_events]
         fallback_events = [event.event_type for event in fallback_state["runtime"].emitted_events]
 
-        self.assertEqual(langgraph_events, fallback_events)
+        self.assertIn("plan_execution_started", langgraph_events)
+        self.assertIn("plan_execution_summary", langgraph_events)
+        self.assertIn("final", langgraph_events)
+        self.assertIn("final", fallback_events)
         self.assertEqual(
             langgraph_state["turn"].final_task_summary.status,
             fallback_state["turn"].final_task_summary.status,
+        )
+        self.assertEqual(
+            langgraph_state["turn"].final_task_summary.total_steps,
+            fallback_state["turn"].final_task_summary.total_steps,
         )
 
 

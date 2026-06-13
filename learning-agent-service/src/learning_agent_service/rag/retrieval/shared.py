@@ -12,7 +12,7 @@ except Exception:  # pragma: no cover - httpx may be unavailable in some runtime
     httpx = None  # type: ignore[assignment]
 
 try:  # pragma: no cover - optional dependency path
-    from rank_bm25 import BM25Okapi
+    from rank_bm25 import BM25Okapi  # type: ignore
 except Exception:  # pragma: no cover - rank-bm25 may be unavailable in some runtime slices
     BM25Okapi = None  # type: ignore[assignment]
 

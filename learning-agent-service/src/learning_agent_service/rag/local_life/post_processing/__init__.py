@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Iterable
+from typing import Any, cast
 
 
 def format_evidence_pack(pack: Any) -> str:
@@ -9,13 +10,13 @@ def format_evidence_pack(pack: Any) -> str:
         f"Route: {getattr(pack, 'route', '')}",
         f"Strategy: {getattr(pack, 'retrieval_strategy', '')}",
     ]
-    parent_evidences = list(getattr(pack, "parent_evidences", []) or [])
+    parent_evidences = list(cast(Iterable[Any], getattr(pack, "parent_evidences", []) or []))
     if not parent_evidences:
         lines.append("No evidence found.")
         return "\n".join(lines)
     for index, parent in enumerate(parent_evidences, start=1):
-        matched_chunks = list(getattr(parent, "matched_chunks", []) or [])
-        sibling_chunks = list(getattr(parent, "sibling_chunks", []) or [])
+        matched_chunks = list(cast(Iterable[Any], getattr(parent, "matched_chunks", []) or []))
+        sibling_chunks = list(cast(Iterable[Any], getattr(parent, "sibling_chunks", []) or []))
         matched_roles = ", ".join(getattr(chunk, "chunk_role", "") for chunk in matched_chunks if getattr(chunk, "chunk_role", "")) or "-"
         sibling_roles = ", ".join(getattr(chunk, "chunk_role", "") for chunk in sibling_chunks if getattr(chunk, "chunk_role", "")) or "-"
         shop_name = getattr(parent, "shop_name", None) or getattr(parent, "parent_title", None)

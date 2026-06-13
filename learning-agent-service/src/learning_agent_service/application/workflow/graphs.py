@@ -484,7 +484,7 @@ def _execute_tool_pipeline(state: GraphState, services: ToolSubgraphServices) ->
         from learning_agent_service.domain.errors import WorkflowErrorCode, build_error
 
         err = build_error(
-            WorkflowErrorCode.INFRASTRUCTURE_ERROR,
+            WorkflowErrorCode.INTERNAL_ERROR,
             stage="tool",
             message=f"Tool execution degraded due to exception: {exc}",
             retryable=False,
@@ -507,7 +507,7 @@ def _execute_tool_pipeline(state: GraphState, services: ToolSubgraphServices) ->
                     status=ToolExecutionStatus.FAILED,
                     tool_name=tool_name,
                     degraded_to=None,
-                    error=WorkflowErrorCode.INFRASTRUCTURE_ERROR,
+                    error=WorkflowErrorCode.INTERNAL_ERROR,
                     approval_status=None,
                     output_payload={"error": str(exc)},
                 ),
@@ -515,7 +515,8 @@ def _execute_tool_pipeline(state: GraphState, services: ToolSubgraphServices) ->
                     status=ToolExecutionStatus.DEGRADED,
                     tool_name=tool_name,
                     normalized_output={"status": "degraded", "error": str(exc), "message": get_boundary_prompt("service_unavailable")},
-                    used_tools=[tool_name],
+                    used_tools=[tool_name] if tool_name else [],
+                    approval_status=None,
                 ),
             }
         )
@@ -624,7 +625,7 @@ def _prepare_recommendation_branch_state(state: GraphState, shop_id: Any) -> Gra
             }
         }
     )
-    branch_state["shop_id"] = shop_id
+    branch_state["shop_id"] = shop_id  # type: ignore[typeddict-item]
     return branch_state
 
 
@@ -639,13 +640,13 @@ def _store_recommendation_branch_state(state: GraphState, shop_id: Any) -> str:
 
 
 def _analyze_one_shop(state: GraphState, services: RagSubgraphServices) -> GraphState:
-    branch_id = state.get("branch_id")
+    branch_id = state.get("branch_id")  # type: ignore[typeddict-item]
     if branch_id is not None:
         cached_state = _RECOMMENDATION_BRANCH_CACHE.pop(str(branch_id), None)
         if cached_state is not None:
             state = cached_state
     turn = state.get("turn")
-    shop_id = state.get("shop_id")
+    shop_id = state.get("shop_id")  # type: ignore[typeddict-item]
     if shop_id is None and turn is not None:
         shop_id = getattr(getattr(turn, "routing_contract", None), "target_shop_id", None)
     if turn is None:
@@ -755,10 +756,7 @@ def _execute_recommendation_pipeline(state: GraphState, services: RagSubgraphSer
 def _finalize_recommendation(state: GraphState) -> GraphState:
     state = _reduce_shop_results(state)
     state = _mark_stage(state, "recommendation", "completed", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])), detail={"branch": "recommendation"})
-    return {
-        "runtime": state["runtime"],
-        "turn": state["turn"],
-    }
+    return state
 
 
 def _score_key(item: Any) -> float:
@@ -925,12 +923,7 @@ def describe_langgraph_topology() -> dict[str, Any]:
         "entry_point": _MAIN_TOPOLOGY.entry_point,
         "terminal": _MAIN_TOPOLOGY.terminal,
         "nodes": list(_MAIN_TOPOLOGY.nodes),
-        "edges": [
-            (edge.source, edge.target)
-            if getattr(edge, "label", None) is None
-            else (edge.source, edge.target, edge.label)
-            for edge in _MAIN_TOPOLOGY.edges
-        ],
+        "edges": [(edge.source, edge.target) for edge in _MAIN_TOPOLOGY.edges],
     }
 
 

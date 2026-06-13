@@ -4,7 +4,8 @@ import unittest
 
 import _bootstrap  # noqa: F401
 
-from learning_agent_service.application.router import build_initial_routing_decision, routing_trace_payload
+from learning_agent_service.application.router.base import routing_trace_payload
+from learning_agent_service.application.router.phase0_quality import build_initial_routing_decision
 from learning_agent_service.application.workflow.subgraphs import route_gate
 from learning_agent_service.domain import ChatTurnCommand, PersistentSessionContext, RoutingDecision, IntentRoutingDecision, build_initial_state
 

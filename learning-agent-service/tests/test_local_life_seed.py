@@ -480,7 +480,7 @@ class LocalLifeSeedTestCase(unittest.TestCase):
     def test_parent_child_resolver_expands_sibling_hits_for_same_shop(self) -> None:
         from learning_agent_service.rag.local_life_seed import build_local_life_knowledge_chunks
         from learning_agent_service.rag.models import RecallHit
-        from learning_agent_service.rag.retrieval import ParentChildResolver
+        from learning_agent_service.rag.retrieval.dense import ParentChildResolver
 
         chunks = build_local_life_knowledge_chunks(_FakeJavaBusinessClient())
         resolver = ParentChildResolver(chunks)

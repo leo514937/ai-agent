@@ -96,11 +96,11 @@ class AnswerQualityGate:
 
         draft_text = _clean_text(draft_answer)
         deduped = self._repetition_guard.dedupe(
-            text=draft_text,
+            text=draft_text or "",
             answer_contract=answer_contract,
             ranked_candidates=ranked_candidates,
         )
-        candidate_text = deduped.text or draft_text
+        candidate_text = deduped.text or draft_text or ""
         expanded_by_quality_gate = False
         preserve_recommendation_draft = (
             style == "multi_shop_recommendation"
@@ -133,8 +133,8 @@ class AnswerQualityGate:
             candidate_text = structure.answer_text
             expanded_by_quality_gate = True
 
-        final_answer = candidate_text.strip() or draft_text
-        answer_char_count = len(draft_text)
+        final_answer = candidate_text.strip() or draft_text or ""
+        answer_char_count = len(draft_text or "")
         final_answer_char_count = len(final_answer)
         section_count = _count_sections(final_answer)
         bullet_count = _count_bullets(final_answer)
