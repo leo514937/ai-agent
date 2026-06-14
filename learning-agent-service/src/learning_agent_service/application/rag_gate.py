@@ -168,64 +168,7 @@ def classify_rag_rule(request: RagGateRequest) -> RagGateVote:
 
 def compose_direct_response_text(raw_query: str, response_kind: str | None, reason: str | None = None) -> str:
     kind = (response_kind or "").strip().lower()
-    if kind == "greeting":
-        return "你好，我在。你可以直接告诉我想查什么、想解释什么，或者把问题贴出来。"
-    if kind == "thanks":
-        return "不客气，有需要继续问我。"
-    if kind == "farewell":
-        return "好的，之后想继续查知识、门店或工具信息，随时来找我。"
-    if kind == "profile":
-        return "我可以帮你做通用问答、代码解释和调试、文本润色与翻译，也能结合本地生活信息帮你筛店、看券、做对比和推荐。"
-    if kind == "memory_update":
-        return "我记住了，这个偏好我会尽量沿用到后续对话里。"
-    if kind == "conversation_recap":
-        return "我记得我们刚才主要在聊上一轮的上下文。你可以继续问我刚才那家店、那张券，或者让我接着往下说。"
-    if kind == "location_unavailable":
-        return "这个位置不太适合本地生活推荐。你可以换成具体城市、商圈或地标，我再继续帮你找。"
-    if kind == "empty":
-        text = normalize_rag_gate_request(RagGateRequest(raw_query=raw_query))
-        if text:
-            return f"我先按你的问题理解为：{text}。如果你愿意补充一点上下文，我可以继续从原理、流程、示例或排错思路展开，给你更具体的说明。"
-        return "我现在还缺少上下文。你可以补充一个具体问题、对象或范围。"
-    if kind == "low_info":
-        text = normalize_rag_gate_request(RagGateRequest(raw_query=raw_query))
-        if text:
-            return f"这个问题还不够具体。你可以补充对象、范围或目标；如果你是想问「{text}」相关内容，我可以继续展开，给你更具体的答复。"
-        return "这个问题还不够具体。你可以补充对象、范围或目标，我给你更具体的回复。"
-
-    text = (raw_query or "").strip()
-    if text:
-        if any(marker.lower() in text.lower() for marker in ("spring", "aop", "rag", "stream", "tool", "sse", "检索", "原理", "报错", "异常", "实现")):
-            return f"我先按你的问题来理解：{text}。如果你愿意，我可以继续从原理、流程、示例或排错思路展开，给你更具体的答复。"
-        return f"我先按你的问题来理解：{text}。如果你愿意补充一点上下文，我可以继续给你更具体的说明。"
-    if reason:
-        return "我需要更具体的信息才能继续。你可以补充对象、范围或目标。"
-    return "我需要更具体的信息才能继续。你可以补充对象、范围或目标。"
-
-
-def compose_direct_response_text(raw_query: str, response_kind: str | None, reason: str | None = None) -> str:
-    kind = (response_kind or "").strip().lower()
     compact = (raw_query or "").replace(" ", "")
-
-    def _recommendation_fallback() -> str:
-        return (
-            "我先帮你推荐以下这几家店铺：\n\n"
-            "1. 候选店A\n"
-            "- 推荐理由：当前候选里它的综合信息比较靠前，值得优先查看。\n"
-            "- 适合场景：适合约会、聊天或轻松聚餐。\n"
-            "- 注意事项：建议先确认营业状态、预算和是否需要排队。\n\n"
-            "2. 候选店B\n"
-            "- 推荐理由：当前候选里它的综合信息比较靠前，值得优先查看。\n"
-            "- 适合场景：适合约会、聊天或轻松聚餐。\n"
-            "- 注意事项：建议先确认营业状态、预算和是否需要排队。\n\n"
-            "3. 候选店C\n"
-            "- 推荐理由：当前候选里它的综合信息比较靠前，值得优先查看。\n"
-            "- 适合场景：适合约会、聊天或轻松聚餐。\n"
-            "- 注意事项：建议先确认营业状态、预算和是否需要排队。\n\n"
-            "综合建议\n"
-            "- 如果你更在意气氛和稳定性，建议先从前两家开始看。\n"
-            "- 另外，如果你想继续看实时优惠，我可以接着帮你查。"
-        )
 
     if kind == "greeting":
         return "你好，我在。你可以直接告诉我想查什么、想解释什么，或者把问题贴出来。"
@@ -242,8 +185,6 @@ def compose_direct_response_text(raw_query: str, response_kind: str | None, reas
     if kind == "location_unavailable":
         return "这个位置不太适合本地生活推荐。你可以换成具体城市、商圈或地标，我再继续帮你找。"
     if kind in {"empty", "low_info"}:
-        if any(token in compact for token in ("附近", "周边", "推荐", "几家", "多家")):
-            return _recommendation_fallback()
         text = normalize_rag_gate_request(RagGateRequest(raw_query=raw_query))
         if text:
             return f"我先按你的问题理解为：{text}。如果你愿意补充一点上下文，我可以继续从原理、流程、示例或排错思路展开，给你更具体的说明。"
@@ -253,8 +194,6 @@ def compose_direct_response_text(raw_query: str, response_kind: str | None, reas
     if text:
         if any(marker.lower() in text.lower() for marker in ("spring", "aop", "rag", "stream", "tool", "sse", "检索", "原理", "报错", "异常", "实现")):
             return f"我先按你的问题来理解：{text}。如果你愿意，我可以继续从原理、流程、示例或排错思路展开，给你更具体的回答。"
-        if any(token in compact for token in ("附近", "周边", "推荐", "几家", "多家")):
-            return _recommendation_fallback()
         return f"我先按你的问题来理解：{text}。如果你愿意补充一点上下文，我可以继续给你更具体的说明。"
     if reason:
         return "我还需要更具体的信息才能继续。你可以补充对象、范围或目标。"
