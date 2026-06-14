@@ -8,6 +8,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 logger = logging.getLogger(__name__)
 
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
@@ -30,13 +32,17 @@ class PromptEngine:
         self._load_configs()
     
     def _load_configs(self):
-        """启动时加载所有 JSON 配置文件"""
+        """启动时加载所有 YAML/JSON 配置文件（YAML优先）"""
         if not _PROMPTS_DIR.exists():
             return
-        for json_file in _PROMPTS_DIR.glob("*.json"):
+        
+        loaded_scenes: set[str] = set()
+        
+        # 优先加载YAML文件
+        for yaml_file in _PROMPTS_DIR.glob("*.yaml"):
             try:
-                data = json.loads(json_file.read_text(encoding="utf-8"))
-                scene = data.get("scene", json_file.stem)
+                data = yaml.safe_load(yaml_file.read_text(encoding="utf-8"))
+                scene = data.get("scene", yaml_file.stem)
                 config = PromptSceneConfig(
                     scene=scene,
                     description=data.get("description", ""),
@@ -44,7 +50,27 @@ class PromptEngine:
                     few_shots=data.get("few_shots", []),
                 )
                 self._configs[scene] = config
-                logger.info("loaded_prompt_config scene=%s", scene)
+                loaded_scenes.add(scene)
+                logger.info("loaded_prompt_config scene=%s format=yaml", scene)
+            except Exception as e:
+                logger.warning("failed_to_load_prompt_config file=%s error=%s", yaml_file.name, e)
+        
+        # 加载JSON文件（仅当同名YAML不存在时）
+        for json_file in _PROMPTS_DIR.glob("*.json"):
+            try:
+                data = json.loads(json_file.read_text(encoding="utf-8"))
+                scene = data.get("scene", json_file.stem)
+                if scene in loaded_scenes:
+                    logger.debug("skipping_json_config scene=%s already_loaded_from_yaml", scene)
+                    continue
+                config = PromptSceneConfig(
+                    scene=scene,
+                    description=data.get("description", ""),
+                    system=data.get("system", ""),
+                    few_shots=data.get("few_shots", []),
+                )
+                self._configs[scene] = config
+                logger.info("loaded_prompt_config scene=%s format=json", scene)
             except Exception as e:
                 logger.warning("failed_to_load_prompt_config file=%s error=%s", json_file.name, e)
     
