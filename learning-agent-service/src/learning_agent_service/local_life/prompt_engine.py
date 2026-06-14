@@ -1,5 +1,7 @@
 """LLM-based answer generation using few-shot prompting."""
 
+from __future__ import annotations
+
 import json
 import logging
 import time

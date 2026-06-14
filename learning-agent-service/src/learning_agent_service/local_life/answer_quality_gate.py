@@ -24,6 +24,27 @@ def _sentence_count(text: str) -> int:
     return len([segment for segment in re.split(r"[。！？!?；;\n]+", text) if segment.strip()])
 
 
+def _has_structured_markers(text: str) -> bool:
+    compact = text.replace(" ", "")
+    return any(
+        token in compact
+        for token in (
+            "推荐理由：",
+            "推荐结果：",
+            "适合场景：",
+            "到店建议：",
+            "总体结论：",
+            "优点：",
+            "注意：",
+            "对比：",
+            "建议：",
+            "营业状态：",
+            "券信息：",
+            "距离信息：",
+        )
+    ) or _count_sections(text) >= 2 or _count_bullets(text) >= 2
+
+
 class AnswerQualityResult(BaseModel):
     final_answer: str
     answer_style: str
@@ -102,22 +123,13 @@ class AnswerQualityGate:
         )
         candidate_text = deduped.text or draft_text or ""
         expanded_by_quality_gate = False
-        preserve_recommendation_draft = (
-            style == "multi_shop_recommendation"
-            and ("推荐理由" in candidate_text or "推荐结果" in candidate_text or "推荐" in candidate_text)
-        )
-        preserve_structured_draft = any(
-            token in candidate_text
-            for token in ("券信息：", "环境评价：", "营业状态：", "距离信息：", "推荐结果：")
-        )
+        has_structured_draft = _has_structured_markers(candidate_text)
         if (
             policy.depth_level != "short"
-            and not preserve_recommendation_draft
-            and not preserve_structured_draft
+            and not has_structured_draft
             and (
-                len(candidate_text) < policy.min_chars
-                or _count_sections(candidate_text) < policy.min_sections
-                or deduped.duplicate_sentence_count > 0
+                len(candidate_text) < max(18, policy.min_chars // 3 or 1)
+                or (deduped.duplicate_sentence_count > 0 and len(candidate_text) < max(policy.min_chars, 30))
             )
         ):
             candidate_text = structure.answer_text

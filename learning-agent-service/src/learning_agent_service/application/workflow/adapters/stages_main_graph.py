@@ -217,6 +217,10 @@ def _collect_query_metrics(state: GraphState, bundle: Any = None) -> None:
     answer_text = str(getattr(turn, "final_answer", "") or "")
     retry_quality = dict(turn_extra.get("retry_quality") or {})
     review_report = turn_extra.get("review_report")
+    response_bundle = _as_mapping(bundle)
+    bundle_metrics = _as_mapping(response_bundle.get("metrics")) if response_bundle else {}
+    safety_result = _as_mapping(turn_extra.get("final_answer_safety"))
+    answer_quality = _as_mapping(bundle_metrics.get("answer_quality"))
 
     metrics = QueryMetrics(
         query=raw_query,
@@ -246,6 +250,10 @@ def _collect_query_metrics(state: GraphState, bundle: Any = None) -> None:
             if retry_quality
             else None
         ),
+        llm_primary_output=bool(bundle_metrics.get("llm_primary_output")),
+        quality_gate_rewrite=bool(bundle_metrics.get("quality_gate_rewrite") or answer_quality.get("expanded_by_quality_gate")),
+        contract_block_fallback=bool(safety_result.get("blocked")),
+        template_fallback_used=bool(bundle_metrics.get("template_fallback_used")),
     )
     business_metrics_collector.record_query(metrics)
 

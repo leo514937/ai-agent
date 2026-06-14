@@ -235,6 +235,78 @@ class DomainModelDefaultsTestCase(unittest.TestCase):
         self.assertEqual(envelope.payload["message"], "boom")
         self.assertNotIn("answer_text", envelope.payload)
 
+    def test_emit_final_preserves_existing_llm_answer(self) -> None:
+        command = ChatTurnCommand(
+            trace_id="trace-4",
+            session_id="session-4",
+            turn_id="turn-4",
+            user_id="user-4",
+            message="海底捞水晶城店怎么样？",
+            page="assistant",
+        )
+        state = build_initial_state(command, persistent=PersistentSessionContext(current_shop="海底捞水晶城店"))
+        state["runtime"] = state["runtime"].model_copy(update={"terminal_event": TerminalEvent.FINAL})
+        state["turn"] = state["turn"].model_copy(
+            update={
+                "final_answer": "LLM 原始回答",
+                "current_stage": "emit_final",
+                "stage_status": "completed",
+                "decision": TurnDecision.DIRECT_ANSWER,
+                "extra": {
+                    "answer_style": "single_shop_review",
+                    "route_gate": {"branch": "rag"},
+                    "current_shop": "海底捞水晶城店",
+                    "target_shop_name": "海底捞水晶城店",
+                    "latest_turn_message": "海底捞水晶城店怎么样？",
+                },
+            }
+        )
+
+        updated = WorkflowNodeAdapter(SimpleNamespace()).emit_final(state)
+        envelope = updated["runtime"].emitted_events[-1]
+
+        self.assertEqual(updated["turn"].final_answer, "LLM 原始回答")
+        self.assertEqual(envelope.payload["answer_text"], "LLM 原始回答")
+        self.assertEqual(envelope.payload["metrics"].get("answer_quality", {}).get("final_answer"), "LLM 原始回答")
+
+    def test_emit_final_propagates_bundle_llm_metrics(self) -> None:
+        command = ChatTurnCommand(
+            trace_id="trace-5",
+            session_id="session-5",
+            turn_id="turn-5",
+            user_id="user-5",
+            message="附近有没有推荐的餐厅？",
+            page="assistant",
+        )
+        state = build_initial_state(command, persistent=PersistentSessionContext())
+        state["runtime"] = state["runtime"].model_copy(update={"terminal_event": TerminalEvent.FINAL})
+        state["turn"] = state["turn"].model_copy(
+            update={
+                "final_answer": "LLM 推荐回答",
+                "current_stage": "emit_final",
+                "stage_status": "completed",
+                "decision": TurnDecision.DIRECT_ANSWER,
+                "extra": {
+                    "answer_style": "multi_shop_recommendation",
+                    "route_gate": {"branch": "recommendation"},
+                    "response_bundle": {
+                        "metrics": {
+                            "llm_primary_output": True,
+                            "template_fallback_used": False,
+                            "quality_gate_rewrite": False,
+                            "contract_block_fallback": False,
+                        }
+                    },
+                },
+            }
+        )
+
+        updated = WorkflowNodeAdapter(SimpleNamespace()).emit_final(state)
+        envelope = updated["runtime"].emitted_events[-1]
+
+        self.assertTrue(envelope.payload["metrics"].get("llm_primary_output"))
+        self.assertFalse(envelope.payload["metrics"].get("template_fallback_used"))
+
 
 class HeuristicModelGatewayTestCase(unittest.TestCase):
     def setUp(self) -> None:

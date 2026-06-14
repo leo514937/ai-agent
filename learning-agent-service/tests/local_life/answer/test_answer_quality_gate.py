@@ -121,6 +121,43 @@ class AnswerQualityGateTestCase(unittest.TestCase):
         self.assertIn("店B", result.final_answer)
         self.assertIn("店C", result.final_answer)
 
+    def test_preserves_structured_single_shop_draft_without_rewriting(self) -> None:
+        contract = self._contract("single_shop_review")
+        policy = derive_answer_depth_policy(contract, clean_evidence_count=2, strong_evidence_count=1)
+        gate = AnswerQualityGate()
+
+        structured_draft = (
+            "**海底捞(望京店)** 人均120元，评分4.8，离你1.2km\n\n"
+            "**优点：** 服务到位，适合家庭聚餐。\n"
+            "**注意：** 饭点可能需要排队。"
+        )
+
+        result = gate.finalize(
+            draft_answer=structured_draft,
+            answer_contract=contract,
+            answer_depth_policy=policy,
+            clean_evidence_count=2,
+            strong_evidence_count=1,
+            medium_evidence_count=0,
+            topic_name="海底捞水晶城店",
+            ranked_candidates=[
+                {
+                    "shop_id": 5,
+                    "name": "海底捞水晶城店",
+                    "structured_features": {"score": 4.8, "avg_price": 120, "distance_km": 1.2},
+                    "explainable_reasons": ["服务稳", "适合约会"],
+                }
+            ],
+            evidence_claims=[
+                {"shop_id": 5, "claim": "服务稳定", "support_text": "服务稳定", "source_type": "review", "confidence": 0.8},
+            ],
+        )
+
+        self.assertFalse(result.expanded_by_quality_gate)
+        self.assertIn("优点", result.final_answer)
+        self.assertIn("注意", result.final_answer)
+        self.assertNotIn("总体结论", result.final_answer)
+
 
 if __name__ == "__main__":
     unittest.main()

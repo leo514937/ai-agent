@@ -252,7 +252,7 @@ def validate_answer_against_contract(
         cleaned_lines = [line for line in lint_result.repaired_text.split("\n") if line.strip()]
     validated_text = "\n".join(cleaned_lines).strip()
 
-    if lint_result.issues or not validated_text:
+    if lint_result.severity == "block" or not validated_text:
         if answer_contract.answer_style == "coupon_only":
             return build_coupon_only_answer(topic_name, ranked_candidates, evidence_claims, facet_result_bundle=facet_result_bundle)
         elif answer_contract.answer_style == "open_status_only":

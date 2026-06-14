@@ -30,6 +30,10 @@ class QueryMetrics:
     degraded: bool = False
     degraded_reason: str | None = None
     fallback: bool = False
+    llm_primary_output: bool = False
+    quality_gate_rewrite: bool = False
+    contract_block_fallback: bool = False
+    template_fallback_used: bool = False
     clarification_asked: bool = False
     clarification_needed: bool = False
     answer_text: str = ""
@@ -56,6 +60,12 @@ class MetricsSummary:
 
     # 兜底率
     fallback_count: int = 0
+
+    # LLM 主导率 / 模板接管率
+    llm_primary_output_count: int = 0
+    quality_gate_rewrite_count: int = 0
+    contract_block_fallback_count: int = 0
+    template_fallback_used_count: int = 0
 
     # 工具调用命中率
     tool_call_count: int = 0
@@ -105,6 +115,10 @@ class MetricsSummary:
             "wrong_shop_rate": self.wrong_shop_count / max(1, self.total_queries),
             "over_clarification_rate": self.over_clarification_count / max(1, self.total_queries),
             "fallback_rate": self.fallback_count / max(1, self.total_queries),
+            "llm_primary_output_rate": self.llm_primary_output_count / max(1, self.total_queries),
+            "quality_gate_rewrite_rate": self.quality_gate_rewrite_count / max(1, self.total_queries),
+            "contract_block_fallback_rate": self.contract_block_fallback_count / max(1, self.total_queries),
+            "template_fallback_used_rate": self.template_fallback_used_count / max(1, self.total_queries),
             "tool_hit_rate": self.tool_hit_count / max(1, max(1, self.tool_call_count)),
             "empty_recall_rate": self.empty_recall_count / max(1, self.total_queries),
             "realtime_error_rate": self.realtime_error_count / max(1, self.total_queries),
@@ -153,6 +167,15 @@ class BusinessMetricsCollector:
             self._summary.fallback_count += 1
             self._summary.intent_fallback[metrics.intent] += 1
             self._summary.style_fallback[metrics.answer_style] += 1
+
+        if metrics.llm_primary_output:
+            self._summary.llm_primary_output_count += 1
+        if metrics.quality_gate_rewrite:
+            self._summary.quality_gate_rewrite_count += 1
+        if metrics.contract_block_fallback:
+            self._summary.contract_block_fallback_count += 1
+        if metrics.template_fallback_used:
+            self._summary.template_fallback_used_count += 1
 
         # 工具调用统计
         if metrics.tools_called or metrics.tool_called:

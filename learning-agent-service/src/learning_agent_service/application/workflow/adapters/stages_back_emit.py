@@ -726,21 +726,25 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                     and not review_like_query
                     and not any(token in final_answer_text for token in ("券", "优惠", "团购"))
                 ):
-                    final_answer_text = f"{current_shop_name}实时接口暂无可用券。"
+                    if not final_answer_text.strip():
+                        final_answer_text = f"{current_shop_name}实时接口暂无可用券。"
                 if not direct_non_local_response and has_specific_shop_context and any(token in raw_query_compact for token in coupon_query_tokens) and not review_like_query and (
                     "当前有券信息可查，支持继续查看实时券详情" in final_answer_text
                     or "实时券信息暂不可用，请稍后再试" in final_answer_text
                 ):
-                    final_answer_text = f"{current_shop_name}实时券信息暂不可用，请稍后再试。"
+                    if not final_answer_text.strip():
+                        final_answer_text = f"{current_shop_name}实时券信息暂不可用，请稍后再试。"
                 if not direct_non_local_response and has_specific_shop_context and any(token in raw_query_compact for token in ("排队", "等位", "候位")) and "排队" not in final_answer_text:
-                    final_answer_text = f"{current_shop_name}排队情况建议结合实时到店确认。"
+                    if not final_answer_text.strip():
+                        final_answer_text = f"{current_shop_name}排队情况建议结合实时到店确认。"
                 if answer_style == "coupon_only":
                     clarification_like_coupon_text = any(
                         token in final_answer_text
                         for token in ("你想查哪", "具体店名", "哪张券", "哪个套餐", "请告诉我", "请提供")
                     )
                     if clarification_like_coupon_text:
-                        final_answer_text = f"{current_shop_name}当前有券或优惠信息可继续查。"
+                        if not final_answer_text.strip():
+                            final_answer_text = f"{current_shop_name}当前有券或优惠信息可继续查。"
                     else:
                         coupon_only_lines = [
                             line
@@ -753,7 +757,8 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                     if not final_answer_text or not any(
                         token in final_answer_text for token in ("哪家", "哪一", "具体店名", "具体门店", "告诉我", "想查")
                     ):
-                        final_answer_text = clarification_question
+                        if not final_answer_text.strip():
+                            final_answer_text = clarification_question
                 if explicit_query_shop and not recommendation_like_query:
                     if explicit_query_shop not in final_answer_text and "这家店" in final_answer_text:
                         final_answer_text = final_answer_text.replace("这家店", explicit_query_shop)
@@ -774,47 +779,45 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                         name
                         for name in [
                             *([str(item).strip() for item in turn_extra.get("recommendation_shop_names") or [] if str(item).strip()] if isinstance(turn_extra.get("recommendation_shop_names"), list) else []),
-                            *([current_shop_name] if current_shop_name and current_shop_name != "这家店" else []),
+                            *([current_shop_name] if current_shop_name and current_shop_name != "???" else []),
                         ]
                         if name
                     ]
                     if not fallback_names:
-                        prefix = current_city_name or "你附近"
-                        fallback_names = [f"{prefix}候选店A", f"{prefix}候选店B", f"{prefix}候选店C"]
-                    if (
-                        len(final_answer_text) < 100
-                        or "推荐理由" not in final_answer_text
-                        or "推荐" not in final_answer_text
-                    ):
+                        prefix = current_city_name or "???"
+                        fallback_names = [f"{prefix}???A", f"{prefix}???B", f"{prefix}???C"]
+                    if len(final_answer_text) < 100 or "????" not in final_answer_text or "??" not in final_answer_text:
                         scene_hint = None
-                        if "商务" in compact_query_text:
-                            scene_hint = "适合商务宴请"
-                        elif "家庭" in compact_query_text:
-                            scene_hint = "适合家庭聚餐"
-                        elif "约会" in compact_query_text:
-                            scene_hint = "适合约会"
-                        elif "带小孩" in compact_query_text:
-                            scene_hint = "适合带小孩"
-                        elif "朋友聚餐" in compact_query_text:
-                            scene_hint = "适合朋友聚餐"
+                        if "??" in compact_query_text:
+                            scene_hint = "??????"
+                        elif "??" in compact_query_text:
+                            scene_hint = "??????"
+                        elif "??" in compact_query_text:
+                            scene_hint = "????"
+                        elif "???" in compact_query_text:
+                            scene_hint = "?????"
+                        elif "????" in compact_query_text:
+                            scene_hint = "??????"
                         focus_hint = None
-                        if any(token in compact_query_text for token in ("最近", "距离", "离我多远", "有多远", "导航", "路线", "怎么走", "怎么去")):
-                            focus_hint = "优先看距离"
-                        elif "评分" in compact_query_text:
-                            focus_hint = "优先看评分"
-                        final_answer_text = _build_recommendation_answer_text(
-                            fallback_names,
-                            limit=(1 if any(token in compact_query_text for token in ("一家", "一間", "1家", "1個")) else 3),
-                            scene_hint=scene_hint,
-                            focus_hint=focus_hint,
-                            fallback_text=f"{current_city_name or '你附近'}暂时还没有足够信息，我先给你列出几家候选店，供你继续筛选。",
-                        )
+                        if any(token in compact_query_text for token in ("??", "??", "????", "???", "??", "??", "???", "???")):
+                            focus_hint = "?????"
+                        elif "??" in compact_query_text:
+                            focus_hint = "?????"
+                        if not final_answer_text.strip():
+                            final_answer_text = _build_recommendation_answer_text(
+                                fallback_names,
+                                limit=(1 if any(token in compact_query_text for token in ("??", "??", "1?", "1?")) else 3),
+                                scene_hint=scene_hint,
+                                focus_hint=focus_hint,
+                                fallback_text=f"{current_city_name or '???'}?????????????????????????????",
+                            )
                 elif (answer_style == "single_shop_review" or route_gate.get("branch") == "merchant_detail") and not direct_non_local_response:
                     if len(final_answer_text) < 120 or not all(
-                        phrase in final_answer_text for phrase in ("总体结论", "核心优点", "可能不足", "适合场景", "到店建议")
+                        phrase in final_answer_text for phrase in ("????", "????", "????", "????", "????")
                     ):
-                        final_answer_text = _build_single_shop_review_answer(current_shop_name)
-    
+                        if not final_answer_text.strip():
+                            final_answer_text = _build_single_shop_review_answer(current_shop_name)
+
                 final_answer_char_count = len(final_answer_text)
                 final_answer_short_threshold = 220 if answer_style == "multi_shop_recommendation" else 120
                 answer_depth_level = "detailed" if final_answer_char_count >= 220 else "normal"
@@ -870,60 +873,67 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                     priority_source = "latest_turn_message"
                 if explicit_query_shop and answer_style == "clarification" and not recommendation_like_query:
                     has_coupon_facet = any(token in raw_query_compact for token in coupon_query_tokens)
-                    has_open_facet = any(token in raw_query_compact for token in ("营业", "开门", "开业", "歇业", "关门", "还能去", "预约", "排队", "库存"))
-                    has_distance_facet = any(token in raw_query_compact for token in ("距离", "有多远", "离我多远", "导航", "路线", "怎么走", "怎么去", "多远"))
-                    has_environment_facet = any(token in raw_query_compact for token in ("环境", "氛围", "口味", "服务", "评价", "评分", "怎么样", "好不好"))
+                    has_open_facet = any(token in raw_query_compact for token in ("???", "????", "????", "???", "???", "?????", "???", "???", "???"))
+                    has_distance_facet = any(token in raw_query_compact for token in ("???", "?????", "??????", "???", "???", "?????", "?????", "???"))
+                    has_environment_facet = any(token in raw_query_compact for token in ("???", "???", "???", "???", "???", "???", "?????", "?????"))
                     if has_environment_facet and has_coupon_facet and not has_open_facet and not has_distance_facet:
                         answer_style = "single_shop_review"
-                        final_answer_text = _build_single_shop_review_answer(current_shop_name)
+                        if not final_answer_text.strip():
+                            final_answer_text = _build_single_shop_review_answer(current_shop_name)
                     elif has_coupon_facet and has_environment_facet and has_distance_facet:
                         answer_style = "facet_multi"
-                        final_answer_text = f"{current_shop_name}环境整体不错，优惠券信息可以继续查，距离建议结合定位确认。"
+                        if not final_answer_text.strip():
+                            final_answer_text = f"{current_shop_name}?????????????????????????????"
                     elif has_open_facet and has_distance_facet:
                         answer_style = "facet_multi"
-                        final_answer_text = f"{current_shop_name}目前营业中，距离建议结合定位确认。"
+                        if not final_answer_text.strip():
+                            final_answer_text = f"{current_shop_name}?????????????????"
                     elif has_coupon_facet:
                         answer_style = "coupon_only"
-                        final_answer_text = f"{current_shop_name}当前可以继续查看券信息。"
+                        if not final_answer_text.strip():
+                            final_answer_text = f"{current_shop_name}????????????"
                     elif has_open_facet:
                         answer_style = "open_status_only"
-                        final_answer_text = f"{current_shop_name}目前营业中。"
+                        if not final_answer_text.strip():
+                            final_answer_text = f"{current_shop_name}??????"
                     elif has_distance_facet:
                         answer_style = "distance_only"
-                        final_answer_text = f"{current_shop_name}距离信息建议结合定位确认。"
+                        if not final_answer_text.strip():
+                            final_answer_text = f"{current_shop_name}?????????????"
                 if explicit_query_shop:
                     question_like_answer = any(
                         token in final_answer_text
-                        for token in ("你想查哪", "具体店名", "哪张券", "哪个套餐", "请告诉我", "请提供")
+                        for token in ("????", "????", "???", "????", "????", "???")
                     )
                     if question_like_answer:
                         has_coupon_facet = any(token in raw_query_compact for token in coupon_query_tokens)
-                        has_open_facet = any(token in raw_query_compact for token in ("营业", "开门", "开业", "歇业", "关门", "还能去", "预约", "排队", "库存"))
-                        has_distance_facet = any(token in raw_query_compact for token in ("距离", "有多远", "离我多远", "导航", "路线", "怎么走", "怎么去", "多远"))
-                        has_environment_facet = any(token in raw_query_compact for token in ("环境", "氛围", "口味", "服务", "评价", "评分", "怎么样", "好不好"))
-                        if answer_style == "single_shop_review" and has_environment_facet:
+                        has_open_facet = any(token in raw_query_compact for token in ("???", "????", "????", "???", "???", "?????", "???", "???", "???"))
+                        has_distance_facet = any(token in raw_query_compact for token in ("???", "?????", "??????", "???", "???", "?????", "?????", "???"))
+                        has_environment_facet = any(token in raw_query_compact for token in ("???", "???", "???", "???", "???", "???", "?????", "?????"))
+                        if answer_style == "single_shop_review" and has_environment_facet and not final_answer_text.strip():
                             final_answer_text = _build_single_shop_review_answer(current_shop_name)
-                        elif answer_style == "facet_multi" and has_coupon_facet and has_environment_facet and has_distance_facet:
-                            final_answer_text = f"{current_shop_name}环境整体不错，优惠券信息可以继续查，距离建议结合定位确认。"
-                        elif answer_style == "facet_multi" and has_open_facet and has_distance_facet:
-                            final_answer_text = f"{current_shop_name}目前营业中，距离建议结合定位确认。"
-                        elif answer_style == "coupon_only" and has_coupon_facet:
-                            final_answer_text = f"{current_shop_name}当前可以继续查看券信息。"
-                        elif answer_style == "open_status_only" and has_open_facet:
-                            final_answer_text = f"{current_shop_name}目前营业中。"
-                        elif answer_style == "distance_only" and has_distance_facet:
-                            final_answer_text = f"{current_shop_name}距离信息建议结合定位确认。"
-                if explicit_query_shop and review_like_query and not recommendation_like_query and answer_style == "single_shop_review":
+                        elif answer_style == "facet_multi" and has_coupon_facet and has_environment_facet and has_distance_facet and not final_answer_text.strip():
+                            final_answer_text = f"{current_shop_name}?????????????????????????????"
+                        elif answer_style == "facet_multi" and has_open_facet and has_distance_facet and not final_answer_text.strip():
+                            final_answer_text = f"{current_shop_name}?????????????????"
+                        elif answer_style == "coupon_only" and has_coupon_facet and not final_answer_text.strip():
+                            final_answer_text = f"{current_shop_name}????????????"
+                        elif answer_style == "open_status_only" and has_open_facet and not final_answer_text.strip():
+                            final_answer_text = f"{current_shop_name}??????"
+                        elif answer_style == "distance_only" and has_distance_facet and not final_answer_text.strip():
+                            final_answer_text = f"{current_shop_name}?????????????"
+                if explicit_query_shop and review_like_query and not recommendation_like_query and answer_style == "single_shop_review" and not final_answer_text.strip():
                     final_answer_text = _build_single_shop_review_answer(current_shop_name)
 
                 if not direct_non_local_response and any(token in raw_query_compact for token in coupon_query_tokens) and not review_like_query and (
                     any(
                         token in final_answer_text
-                        for token in ("我先按你的问题理解为", "如果你愿意补充一点上下文", "原理、流程、示例或排错思路")
+                        for token in ("??????????", "????????????", "?????????????")
                     )
-                    or not any(token in final_answer_text for token in ("优惠", "团购", "可用券", "券信息", "实时券"))
+                    or not any(token in final_answer_text for token in ("??", "??", "???", "???", "???"))
                 ):
-                    final_answer_text = f"{current_shop_name}实时接口暂无可用券。"
+                    if not final_answer_text.strip():
+                        final_answer_text = f"{current_shop_name}??????????"
 
                 final_metrics["answer_style"] = answer_style or None
                 final_metrics["priority_source"] = priority_source
@@ -979,6 +989,17 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                     "forbidden_facet_leak": False,
                     "unsupported_realtime_claim": False,
                 }
+                response_bundle = _as_mapping(turn_extra.get("response_bundle"))
+                bundle_metrics = _as_mapping(response_bundle.get("metrics")) if response_bundle else {}
+                if bundle_metrics:
+                    final_metrics["response_bundle_metrics"] = {
+                        key: bundle_metrics.get(key)
+                        for key in ("llm_primary_output", "template_fallback_used", "quality_gate_rewrite", "contract_block_fallback")
+                        if key in bundle_metrics
+                    }
+                    for key in ("llm_primary_output", "template_fallback_used", "quality_gate_rewrite", "contract_block_fallback"):
+                        if key in bundle_metrics:
+                            final_metrics[key] = bundle_metrics.get(key)
                 payload = {
                     "answer_text": final_answer_text,
                     "citations": [citation.model_dump(mode="json") if hasattr(citation, "model_dump") else dict(citation) for citation in turn.citations],

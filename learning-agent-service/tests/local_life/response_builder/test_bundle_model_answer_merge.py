@@ -119,6 +119,9 @@ class BundleModelAnswerMergeTestCase(unittest.TestCase):
 
         self.assertEqual(result.answer_text.count("模型原文"), 1)
         self.assertTrue(result.answer_text.startswith("模型原文"))
+        self.assertTrue(result.metrics.get("llm_primary_output"))
+        self.assertFalse(result.metrics.get("template_fallback_used"))
+        self.assertFalse(result.metrics.get("contract_block_fallback"))
         self.assertIn("质量门修正后的回答", result.answer_text)
 
     def test_build_response_bundle_prefers_model_answer_over_template_fallback(self) -> None:
@@ -172,6 +175,74 @@ class BundleModelAnswerMergeTestCase(unittest.TestCase):
             )
 
         self.assertEqual(result.answer_text, "LLM 增强回答")
+        self.assertTrue(result.metrics.get("llm_primary_output"))
+        self.assertFalse(result.metrics.get("template_fallback_used"))
+        self.assertFalse(result.metrics.get("contract_block_fallback"))
+
+    def test_build_response_bundle_marks_template_fallback_when_no_model_answer(self) -> None:
+        quality_result = _FakeQualityResult(
+            final_answer="模板兜底回答",
+            answer_style="single_shop_review",
+            answer_depth_level="normal",
+            answer_min_sections=1,
+            answer_min_chars=10,
+            clean_evidence_count=0,
+            strong_evidence_count=0,
+            medium_evidence_count=0,
+            answer_char_count=6,
+            section_count=1,
+            bullet_count=0,
+            duplicate_sentence_count=0,
+            duplicate_ratio=0.0,
+            answer_too_short=False,
+            answer_too_repetitive=False,
+            depth_limited_by_evidence=False,
+            expanded_by_quality_gate=False,
+            deduped_by_repetition_guard=False,
+            recommendation_duplicate_shop_count=0,
+            final_answer_char_count=6,
+            delta_count=0,
+            evidence_coverage=0.0,
+            forbidden_facet_leak=False,
+            unsupported_realtime_claim=False,
+        )
+
+        def _final_answer_safety(**kwargs):
+            return _FakeSafetyResult(
+                answer_text=kwargs["answer_text"],
+                final_answer_audit={"passed": True},
+                answer_lint={"passed": True, "issues": []},
+            )
+
+        with patch("learning_agent_service.local_life.response_builder.bundle.AnswerQualityGate.finalize", return_value=quality_result), patch(
+            "learning_agent_service.local_life.response_builder.bundle.apply_final_answer_safety",
+            side_effect=_final_answer_safety,
+        ):
+            result = build_response_bundle(
+                raw_query="这家店怎么样",
+                slots=LocalLifeSlots(),
+                ranked_candidates=[
+                    _FakeCandidate(
+                        shop_id=3,
+                        name="示例门店",
+                        shop_name="示例门店",
+                        structured_features={"score": 4.5, "avg_price": 88, "distance_km": 1.1},
+                        evidence_features={},
+                        vouchers=[],
+                        explainable_reasons=["口味稳定"],
+                        matched_requirements=[],
+                    )
+                ],
+                evidence_claims=[],
+                page="assistant",
+                current_topic="示例门店",
+                selected_shop_id=3,
+                model_hint={},
+            )
+
+        self.assertFalse(result.metrics.get("llm_primary_output"))
+        self.assertTrue(result.metrics.get("template_fallback_used"))
+        self.assertFalse(result.metrics.get("contract_block_fallback"))
 
     def test_response_builder_exports_still_call_public_helpers(self) -> None:
         candidate = _FakeCandidate(

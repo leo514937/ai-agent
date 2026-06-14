@@ -220,6 +220,7 @@ def build_response_bundle(
         if not current_shop or current_shop in {"本地生活推荐", slots.category, slots.scene}:
             current_shop = inferred_topic
     model_answer = _clean_text(model_hint.get("answer_text"))
+    template_fallback_used = False
     req_facet_names = [f.name for f in getattr(user_need, "required_facets", []) or []] if user_need is not None else []
     compact_query = (raw_query or "").replace(" ", "")
     recommendation_like_query = any(
@@ -343,6 +344,10 @@ def build_response_bundle(
                 "next_steps_count": 0,
                 "task_chain_count": 0,
                 "answer_contract": answer_contract.model_dump(mode="json") if answer_contract is not None else None,
+                "quality_gate_rewrite": False,
+                "template_fallback_used": not bool(model_answer),
+                "contract_block_fallback": False,
+                "llm_primary_output": bool(model_answer),
             },
             context={
                 "raw_query": raw_query,
@@ -424,6 +429,7 @@ def build_response_bundle(
             "确认后我再继续执行，避免直接误操作。"
         )
     elif str(route_decision or "").strip().lower() == "rag_plus_tool" and not model_answer:
+        template_fallback_used = True
         answer_text = _build_facet_driven_answer(
             current_topic=current_topic,
             ranked_candidates=ranked_candidates,
@@ -432,6 +438,7 @@ def build_response_bundle(
             facet_result_bundle=facet_result_bundle,
         )
     elif recommendation_like_query and not model_answer:
+        template_fallback_used = True
         answer_text = build_multi_shop_recommendation_answer(
             current_topic,
             ranked_candidates,
@@ -448,6 +455,7 @@ def build_response_bundle(
             facet_result_bundle=facet_result_bundle,
         )
     elif ranked_candidates and not model_answer:
+        template_fallback_used = True
         summary = model_answer or "我按“{summary}”筛了一下，优先推荐这几家：".format(
             summary="、".join(
                 item
@@ -481,6 +489,8 @@ def build_response_bundle(
         answer_text = "\n".join(lines)
     else:
         if current_shop or selected_shop_id:
+            if not model_answer:
+                template_fallback_used = True
             shop_name = current_shop or f"商户{selected_shop_id}"
             import re as _re
             if _re.match(r"^shop:\d+$", str(shop_name)):
@@ -492,6 +502,8 @@ def build_response_bundle(
             else:
                 answer_text = model_answer or f"抱歉，系统里暂时没有查到{shop_name}的相关信息。"
         else:
+            if not model_answer:
+                template_fallback_used = True
             if answer_contract is not None and answer_contract.answer_style == "multi_shop_recommendation" and answer_contract.realtime_required:
                 answer_text = "我暂时没有找到同时满足这些实时条件的商家，建议以店铺页面实时信息为准。"
             else:
@@ -499,6 +511,7 @@ def build_response_bundle(
 
     dynamic_facet_names = {"coupon", "open_status", "distance_eta"}
     if user_need is not None and len([name for name in req_facet_names if name in dynamic_facet_names]) > 1 and not model_answer:
+        template_fallback_used = True
         answer_text = _build_facet_driven_answer(
             current_topic=current_topic,
             ranked_candidates=ranked_candidates,
@@ -517,16 +530,22 @@ def build_response_bundle(
             current_topic=current_topic,
         )
         if guardrail_degraded_answer:
+            template_fallback_used = True
             answer_text = guardrail_degraded_answer
         elif answer_contract.answer_style == "coupon_only":
+            template_fallback_used = True
             answer_text = build_coupon_only_answer(current_topic, ranked_candidates, evidence_claims, facet_result_bundle=facet_result_bundle)
         elif answer_contract.answer_style == "open_status_only":
+            template_fallback_used = True
             answer_text = build_open_status_only_answer(current_topic, ranked_candidates, evidence_claims, facet_result_bundle=facet_result_bundle)
         elif answer_contract.answer_style == "distance_only":
+            template_fallback_used = True
             answer_text = build_distance_only_answer(current_topic, ranked_candidates, evidence_claims, facet_result_bundle=facet_result_bundle)
         elif answer_contract.answer_style == "single_shop_review":
+            template_fallback_used = True
             answer_text = build_single_shop_review_answer(current_topic, ranked_candidates, evidence_claims)
         elif answer_contract.answer_style == "facet_multi":
+            template_fallback_used = True
             answer_text = _build_facet_driven_answer(
                 current_topic=current_topic,
                 ranked_candidates=ranked_candidates,
@@ -535,6 +554,7 @@ def build_response_bundle(
                 facet_result_bundle=facet_result_bundle,
             )
         elif answer_contract.answer_style == "multi_shop_recommendation":
+            template_fallback_used = True
             answer_text = build_multi_shop_recommendation_answer(
                 current_topic,
                 ranked_candidates,
@@ -574,6 +594,7 @@ def build_response_bundle(
     generic_topic_names = {"这家店", "这家", "这店", "该商家", "商家", "当前店家"}
     has_specific_topic = bool(str(current_topic or "").strip() and str(current_topic or "").strip() not in generic_topic_names)
     if has_specific_topic and coupon_query and not (open_query or distance_query or scene_query) and not model_answer:
+        template_fallback_used = True
         coupon_answer = build_coupon_only_answer(
             topic_name=current_topic or "这家店",
             ranked_candidates=ranked_candidates,
@@ -606,6 +627,7 @@ def build_response_bundle(
         facet_result_bundle=facet_result_bundle,
     )
     answer_text = quality_result.final_answer
+    quality_gate_rewrite = bool(getattr(quality_result, "expanded_by_quality_gate", False))
 
     if answer_plan_model is not None and verification_model is not None and verification_model.passed and not model_answer:
         if approval_required:
@@ -980,6 +1002,8 @@ def build_response_bundle(
     if answer_plan_model is not None:
         metrics["answer_plan_decision_type"] = answer_plan_model.decision_type
         metrics["answer_plan_degraded_reason"] = answer_plan_model.degraded_reason
+    metrics["quality_gate_rewrite"] = quality_gate_rewrite
+    metrics["template_fallback_used"] = template_fallback_used
     if mode == "coupon" and "券信息" not in answer_text and str(getattr(answer_contract, "answer_style", "") or "").strip().lower() != "coupon_only":
         coupon_answer = _build_coupon_environment_answer(
             current_topic=current_topic,
@@ -1008,6 +1032,8 @@ def build_response_bundle(
     metrics["final_answer_safety"] = safety_result
     metrics["final_answer_audit"] = final_answer_safety.final_answer_audit
     metrics["answer_lint"] = final_answer_safety.answer_lint
+    metrics["contract_block_fallback"] = bool(safety_result.get("blocked"))
+    metrics["llm_primary_output"] = bool(model_answer) and not template_fallback_used and not bool(safety_result.get("blocked"))
     bundle = LocalLifeResponseBundle(
         answer_text=answer_text,
         mode=mode,
