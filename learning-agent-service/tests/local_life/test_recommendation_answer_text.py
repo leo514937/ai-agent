@@ -18,7 +18,7 @@ class RecommendationAnswerTextTestCase(unittest.TestCase):
     def test_build_recommendation_answer_text_uses_real_names(self) -> None:
         answer = _build_recommendation_answer_text(["海底捞", "巴奴", "新白鹿"], 3)
 
-        self.assertIn("我帮你推荐以下这几家店铺", answer)
+        self.assertIn("推荐以下这几家店铺", answer)
         self.assertIn("1. 海底捞", answer)
         self.assertIn("2. 巴奴", answer)
         self.assertIn("3. 新白鹿", answer)

@@ -1065,48 +1065,6 @@ def _build_recommendation_answer_text(
     scene_hint: str | None = None,
     focus_hint: str | None = None,
 ) -> str:
-    if not shop_names:
-        return fallback_text or "我暂时没找到合适的店。"
-    lines = ["我帮你推荐以下这几家店铺：", ""]
-    for i, name in enumerate(shop_names[:limit], 1):
-        lines.append(f"{i}. {name}")
-        lines.append("- 推荐理由：当前候选里它的综合信息比较靠前，值得优先查看。")
-        lines.append("- 适合场景：适合约会、聊天或轻松聚餐。")
-        lines.append("- 注意事项：建议先确认营业状态、预算和是否需要排队。")
-        lines.append("")
-    lines.append("综合建议")
-    lines.append("- 如果你更在意气围和稳定性，建议先从前两家开始看。")
-    lines.append("- 另外，如果你想继续看实时优惠，我可以接着帮你查。")
-    return "\n".join(lines).strip()
-
-
-def _build_single_shop_review_answer(shop_name: str | None) -> str:
-    name = str(shop_name or "这家店").strip() or "这家店"
-    return "\n".join(
-        [
-            "总体结论",
-            f"- {name}整体上可以先作为候选，当前信息支持继续观察。",
-            "核心优点",
-            "- 当前证据和排序都说明它有一定优势，适合继续筛选。",
-            "- 如果你更看重环境和体验，可以优先看这家。",
-            "可能不足",
-            "- 仍建议结合营业时间和排队情况再确认一次。",
-            "适合场景",
-            "- 适合想先快速判断，再决定是否到店的场景。",
-            "到店建议",
-            "- 先看营业时间和实时信息，再决定是否现在去。",
-        ]
-    )
-
-
-
-def _build_recommendation_answer_text(
-    shop_names: list[str],
-    limit: int = 3,
-    fallback_text: str | None = None,
-    scene_hint: str | None = None,
-    focus_hint: str | None = None,
-) -> str:
     names = [str(name).strip() for name in shop_names if str(name).strip()]
     if not names:
         return fallback_text or "\u6211\u6682\u65f6\u6ca1\u6709\u627e\u5230\u5408\u9002\u7684\u5e97\u3002"
