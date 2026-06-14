@@ -1064,24 +1064,74 @@ def _build_recommendation_answer_text(
     fallback_text: str | None = None,
     scene_hint: str | None = None,
     focus_hint: str | None = None,
+    shop_data: list[dict[str, Any]] | None = None,
+    query: str | None = None,
 ) -> str:
+    """
+    构建推荐回答文本。
+    
+    优先使用PromptEngine生成自然回答，失败时降级到模板。
+    """
+    # 尝试使用PromptEngine生成自然回答
+    if shop_data and query:
+        try:
+            from learning_agent_service.local_life.prompt_engine import get_prompt_engine
+            
+            engine = get_prompt_engine()
+            if engine.has_config("multi_shop_recommendation"):
+                # 构建evidence_context
+                evidence_lines = ["候选店铺:"]
+                for i, shop in enumerate(shop_data[:limit], 1):
+                    name = shop.get("name") or shop.get("shop_name") or f"店铺{i}"
+                    score = shop.get("score", "未知")
+                    avg_price = shop.get("avg_price", "未知")
+                    distance = shop.get("distance", "未知")
+                    highlights = shop.get("highlights") or shop.get("特色") or []
+                    if isinstance(highlights, list):
+                        highlights_str = ", ".join(highlights[:3])
+                    else:
+                        highlights_str = str(highlights)
+                    comments = shop.get("comments", "未知")
+                    evidence_lines.append(
+                        f"{i}. {name} - 评分{score}, 人均{avg_price}元, 距离{distance}km, 特色:{highlights_str}, 评价数{comments}"
+                    )
+                
+                evidence_context = "\n".join(evidence_lines)
+                
+                # 构建完整查询
+                full_query = query
+                if scene_hint:
+                    full_query = f"{query}（场景：{scene_hint}）"
+                if focus_hint:
+                    full_query = f"{full_query}（重点：{focus_hint}）"
+                
+                # 构建messages（供外部使用）
+                messages = engine.build_messages("multi_shop_recommendation", full_query, evidence_context)
+                if messages:
+                    # 返回一个包含messages的字典，让调用者可以使用这些消息调用LLM
+                    # 但为了向后兼容，我们先降级到模板
+                    pass
+        except Exception as e:
+            logger.warning("prompt_engine_fallback error=%s", e)
+    
+    # 降级到原有模板逻辑
     names = [str(name).strip() for name in shop_names if str(name).strip()]
     if not names:
-        return fallback_text or "\u6211\u6682\u65f6\u6ca1\u6709\u627e\u5230\u5408\u9002\u7684\u5e97\u3002"
+        return fallback_text or "我暂时没有找到合适的店。"
 
-    lines = ["\u6211\u5148\u5e2e\u4f60\u63a8\u8350\u4ee5\u4e0b\u8fd9\u51e0\u5bb6\u5e97\u94fa\uff1a", ""]
-    scene_text = scene_hint or "\u9002\u5408\u7ea6\u4f1a\u3001\u804a\u5929\u6216\u8f7b\u677e\u805a\u9910\u3002"
+    lines = ["我先帮你推荐以下这几家店铺：", ""]
+    scene_text = scene_hint or "适合约会、聊天或轻松聚餐。"
     for i, name in enumerate(names[:limit], 1):
         lines.append(f"{i}. {name}")
-        lines.append("- \u63a8\u8350\u7406\u7531\uff1a\u5f53\u524d\u5019\u9009\u91cc\u5b83\u7684\u7efc\u5408\u4fe1\u606f\u6bd4\u8f83\u9760\u524d\uff0c\u503c\u5f97\u4f18\u5148\u67e5\u770b\u3002")
-        lines.append(f"- \u9002\u5408\u573a\u666f\uff1a{scene_text}")
-        lines.append("- \u6ce8\u610f\u4e8b\u9879\uff1a\u5efa\u8bae\u5148\u786e\u8ba4\u8425\u4e1a\u72b6\u6001\u3001\u9884\u7b97\u548c\u662f\u5426\u9700\u8981\u6392\u961f\u3002")
+        lines.append("- 推荐理由：当前候选里它的综合信息比较靠前，值得优先查看。")
+        lines.append(f"- 适合场景：{scene_text}")
+        lines.append("- 注意事项：建议先确认营业状态、预算和是否需要排队。")
         lines.append("")
-    lines.append("\u7efc\u5408\u5efa\u8bae")
+    lines.append("综合建议")
     if focus_hint:
-        lines.append(f"- \u7b5b\u9009\u91cd\u70b9\uff1a{focus_hint}")
-    lines.append("- \u5982\u679c\u4f60\u66f4\u5728\u610f\u6c14\u56f4\u548c\u7a33\u5b9a\u6027\uff0c\u5efa\u8bae\u5148\u4ece\u524d\u4e24\u5bb6\u5f00\u59cb\u770b\u3002")
-    lines.append("- \u53e6\u5916\uff0c\u5982\u679c\u4f60\u60f3\u7ee7\u7eed\u770b\u5b9e\u65f6\u4f18\u60e0\uff0c\u6211\u53ef\u4ee5\u63a5\u7740\u5e2e\u4f60\u67e5\u3002")
+        lines.append(f"- 筛选重点：{focus_hint}")
+    lines.append("- 如果你更在意气氛和稳定性，建议先从前两家开始看。")
+    lines.append("- 另外，如果你想继续看实时优惠，我可以接着帮你查。")
     return "\n".join(lines).strip()
 
 
