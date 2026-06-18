@@ -1,4 +1,3 @@
-import pytest
 from learning_agent_service.application.scenario_planner import ScenarioPlanner
 
 def test_scenario_planner_basic():
