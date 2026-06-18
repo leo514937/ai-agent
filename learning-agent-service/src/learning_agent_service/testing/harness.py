@@ -6,10 +6,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from learning_agent_service.domain.utils import as_mapping as _as_mapping
-from learning_agent_service.application.router.trace import (
+from learning_agent_service.application.workflow.adapters.helpers import (
     build_routing_trace_from_state,
     routing_trace_to_dict,
 )
+from learning_agent_service.local_life.claim_grounding import summarize_claim_bindings
+from learning_agent_service.local_life.grounding_policy import HIGH_RISK_FACETS
 
 
 def _nested_mapping(*sources: Mapping[str, Any], key: str) -> dict[str, Any]:
@@ -212,6 +214,7 @@ class TraceHarnessRecorder:
             "graph_fallback": runtime_metrics.get("graph_fallback") or persistent.get("extra", {}).get("graph_fallback") or "none",
             "final_answer_audit": turn_extra.get("final_answer_audit") or runtime_metrics.get("final_answer_audit") or phase4_trace.get("final_answer_audit"),
             "final_answer_safety": turn_extra.get("final_answer_safety") or runtime_metrics.get("final_answer_safety") or phase4_trace.get("final_answer_safety"),
+            "claim_bindings": turn_extra.get("claim_bindings") or runtime_metrics.get("claim_bindings") or phase4_trace.get("claim_bindings"),
             "phase3_trace": phase3_trace,
             "phase5_trace": phase5_trace,
             "phase4_trace": phase4_trace,
@@ -340,6 +343,21 @@ class EvaluationHarness:
         verifier_response_mode_counts = Counter()
         final_answer_safety_severity_counts = Counter()
         final_answer_audit_severity_counts = Counter()
+        route_bucket_counts = Counter()
+        hallucination_case_count = 0
+        repair_case_count = 0
+        degrade_case_count = 0
+        high_risk_case_count = 0
+        high_risk_unsupported_case_count = 0
+        total_claim_count = 0
+        total_supported_claim_count = 0
+        total_partial_claim_count = 0
+        total_unsupported_claim_count = 0
+        total_conflicted_claim_count = 0
+        claim_support_status_counts = Counter()
+        claim_type_counts = Counter()
+        claim_facet_counts = Counter()
+        claim_risk_level_counts = Counter()
 
         for result in results:
             trace = dict(result.actual_trace or {})
@@ -347,6 +365,11 @@ class EvaluationHarness:
             phase5_trace = dict(trace.get("phase5_trace") or {})
             phase4_trace = dict(trace.get("phase4_trace") or {})
             _ = dict(trace.get("routing_trace") or {})
+            final_answer_safety = dict(trace.get("final_answer_safety") or {})
+            final_answer_audit = dict(trace.get("final_answer_audit") or {})
+            claim_bindings = list(trace.get("claim_bindings") or final_answer_safety.get("claim_bindings") or final_answer_audit.get("claim_bindings") or [])
+            claim_summary = summarize_claim_bindings(claim_bindings)
+            route_bucket = str(phase0_trace.get("response_origin") or phase5_trace.get("runner_kind") or "unknown").strip() or "unknown"
             for failure in result.failures:
                 failure_buckets[str(failure)] += 1
             response_mode = str(
@@ -354,6 +377,7 @@ class EvaluationHarness:
                 or result.actual_response_mode
                 or "unknown"
             ).strip() or "unknown"
+            route_bucket_counts[route_bucket] += 1
             response_mode_counts[response_mode] += 1
             response_origin = str(phase0_trace.get("response_origin") or "unknown").strip() or "unknown"
             response_origin_counts[response_origin] += 1
@@ -378,14 +402,46 @@ class EvaluationHarness:
                 verifier_response_mode_counts[verifier_response_mode] += 1
                 for issue in phase4_trace.get("verifier_issues") or []:
                     verifier_issue_counts[str(issue)] += 1
-            final_answer_safety = dict(trace.get("final_answer_safety") or {})
             if final_answer_safety:
                 final_answer_safety_severity = str(final_answer_safety.get("severity") or "unknown").strip() or "unknown"
                 final_answer_safety_severity_counts[final_answer_safety_severity] += 1
-            final_answer_audit = dict(trace.get("final_answer_audit") or {})
             if final_answer_audit:
                 final_answer_audit_severity = str(final_answer_audit.get("severity") or "unknown").strip() or "unknown"
                 final_answer_audit_severity_counts[final_answer_audit_severity] += 1
+            claim_count = int(claim_summary.get("claim_count") or 0)
+            supported_claim_count = int(claim_summary.get("supported_claim_count") or 0)
+            partial_claim_count = int(claim_summary.get("partial_claim_count") or 0)
+            unsupported_claim_count = int(claim_summary.get("unsupported_claim_count") or 0)
+            conflicted_claim_count = int(claim_summary.get("conflicted_claim_count") or 0)
+            total_claim_count += claim_count
+            total_supported_claim_count += supported_claim_count
+            total_partial_claim_count += partial_claim_count
+            total_unsupported_claim_count += unsupported_claim_count
+            total_conflicted_claim_count += conflicted_claim_count
+            if unsupported_claim_count > 0:
+                hallucination_case_count += 1
+            if bool(final_answer_safety.get("sanitized")) and not bool(final_answer_safety.get("blocked")):
+                repair_case_count += 1
+            if bool(final_answer_safety.get("blocked")) or str(final_answer_audit.get("severity") or "").strip().lower() == "block" or response_mode in {"partial_grounded", "no_answer", "ask_clarification"}:
+                degrade_case_count += 1
+            if any(
+                str(binding.get("risk_level") or "").strip().lower() == "high"
+                or str(binding.get("facet") or binding.get("claim_type") or "").strip().lower() in HIGH_RISK_FACETS
+                for binding in claim_bindings
+            ):
+                high_risk_case_count += 1
+                if unsupported_claim_count > 0:
+                    high_risk_unsupported_case_count += 1
+            for binding in claim_bindings:
+                claim_type = str(binding.get("claim_type") or "").strip().lower() or "generic"
+                facet = str(binding.get("facet") or claim_type).strip().lower() or "generic"
+                risk_level = str(binding.get("risk_level") or "").strip().lower()
+                if not risk_level:
+                    risk_level = "high" if facet in HIGH_RISK_FACETS or claim_type in HIGH_RISK_FACETS else "low"
+                claim_type_counts[claim_type] += 1
+                claim_facet_counts[facet] += 1
+                claim_risk_level_counts[risk_level] += 1
+                claim_support_status_counts[str(binding.get("support_status") or "unknown").strip().lower() or "unknown"] += 1
 
         return EvaluationReport(
             total_cases=total_cases,
@@ -403,11 +459,33 @@ class EvaluationHarness:
                     "present": sum(1 for result in results if dict(result.actual_trace or {}).get("routing_trace")),
                     "absent": sum(1 for result in results if not dict(result.actual_trace or {}).get("routing_trace")),
                 },
+                "route_bucket_distribution": dict(sorted(route_bucket_counts.items())),
                 "verifier_status_distribution": dict(sorted(verifier_status_counts.items())),
                 "verifier_issue_distribution": dict(sorted(verifier_issue_counts.items())),
                 "verifier_response_mode_distribution": dict(sorted(verifier_response_mode_counts.items())),
                 "final_answer_safety_severity_distribution": dict(sorted(final_answer_safety_severity_counts.items())),
                 "final_answer_audit_severity_distribution": dict(sorted(final_answer_audit_severity_counts.items())),
+                "hallucination_rate": hallucination_case_count / max(1, total_cases),
+                "unsupported_claim_rate": total_unsupported_claim_count / max(1, total_claim_count),
+                "repair_rate": repair_case_count / max(1, total_cases),
+                "degrade_rate": degrade_case_count / max(1, total_cases),
+                "repair_degrade_ratio": repair_case_count / max(1, degrade_case_count),
+                "claim_coverage": {
+                    "claim_count": total_claim_count,
+                    "supported_claim_count": total_supported_claim_count,
+                    "partial_claim_count": total_partial_claim_count,
+                    "unsupported_claim_count": total_unsupported_claim_count,
+                    "conflicted_claim_count": total_conflicted_claim_count,
+                    "support_status_distribution": dict(sorted(claim_support_status_counts.items())),
+                    "claim_type_distribution": dict(sorted(claim_type_counts.items())),
+                    "claim_facet_distribution": dict(sorted(claim_facet_counts.items())),
+                    "claim_risk_level_distribution": dict(sorted(claim_risk_level_counts.items())),
+                },
+                "high_risk_subset": {
+                    "case_count": high_risk_case_count,
+                    "unsupported_case_count": high_risk_unsupported_case_count,
+                    "unsupported_claim_rate": high_risk_unsupported_case_count / max(1, high_risk_case_count),
+                },
             },
         )
 

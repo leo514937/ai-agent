@@ -7,10 +7,15 @@ from typing import Any
 
 from ...domain.contracts import Citation, EvidencePack, EvidenceItem
 from ...domain.state import GraphState, clone_graph_state
-from .services import PlanExecuteSubgraphServices, RagSubgraphServices, ToolSubgraphServices, UnderstandTurnServices
+from .services import (
+    EvidenceSubgraphServices,
+    PlanExecuteSubgraphServices,
+    ToolSubgraphServices,
+    UnderstandTurnServices,
+)
 from .state import append_runtime_error as _append_state_runtime_error
 from .subgraphs import (
-    _ensure_rag_result,
+    _ensure_evidence_result,
     _ensure_raw_tool_result,
     _ensure_tool_result,
     _filter_evidence_by_contract,
@@ -22,8 +27,12 @@ from .subgraphs import (
     can_enter_retrieval,
     should_run_tools,
 )
-from ..router.base import _update_phase3_trace
-from .topology import MAIN_GRAPH_TOPOLOGY, describe_langgraph_topology as describe_main_graph_topology, export_langgraph_mermaid as export_main_graph_mermaid
+from .adapters.helpers import _update_phase3_trace
+from .topology import (
+    MAIN_GRAPH_TOPOLOGY,
+    describe_langgraph_topology as describe_main_graph_topology,
+    export_langgraph_mermaid as export_main_graph_mermaid,
+)
 from ...local_life.boundary_prompts import get_boundary_prompt
 
 StateGraph: Any = None
@@ -53,24 +62,24 @@ class _GraphTopology:
     edges: tuple[tuple[str, str], ...]
 
 
-_RAG_TOPOLOGY = _GraphTopology(
-    entry_point="build_retrieval_plan",
+_EVIDENCE_TOPOLOGY = _GraphTopology(
+    entry_point="build_evidence_plan",
     terminal="END",
     nodes=(
-        "build_retrieval_plan",
-        "rag_executor",
-        "filter_rag",
-        "rerank_rag",
+        "build_evidence_plan",
+        "collect_evidence",
+        "filter_evidence",
+        "rank_evidence",
         "build_evidence_pack",
-        "finalize_rag",
+        "finalize_evidence",
     ),
     edges=(
-        ("build_retrieval_plan", "rag_executor"),
-        ("rag_executor", "filter_rag"),
-        ("filter_rag", "rerank_rag"),
-        ("rerank_rag", "build_evidence_pack"),
-        ("build_evidence_pack", "finalize_rag"),
-        ("finalize_rag", "END"),
+        ("build_evidence_plan", "collect_evidence"),
+        ("collect_evidence", "filter_evidence"),
+        ("filter_evidence", "rank_evidence"),
+        ("rank_evidence", "build_evidence_pack"),
+        ("build_evidence_pack", "finalize_evidence"),
+        ("finalize_evidence", "END"),
     ),
 )
 
@@ -81,14 +90,12 @@ _UNDERSTAND_TOPOLOGY = _GraphTopology(
         "parse_intent_slots",
         "resolve_reference",
         "ambiguity_check",
-        "rag_gate",
         "finalize_understand_turn",
     ),
     edges=(
         ("parse_intent_slots", "resolve_reference"),
         ("resolve_reference", "ambiguity_check"),
-        ("ambiguity_check", "rag_gate"),
-        ("rag_gate", "finalize_understand_turn"),
+        ("ambiguity_check", "finalize_understand_turn"),
         ("finalize_understand_turn", "END"),
     ),
 )
@@ -173,17 +180,27 @@ def _graph_cached(name: str, services: object, builder) -> Any:
     return graph
 
 
-def _prepare_rag(state: GraphState) -> GraphState:
+def _prepare_evidence(state: GraphState) -> GraphState:
     return clone_graph_state(state)
 
 
-def _recall_rag(state: GraphState, services: RagSubgraphServices) -> GraphState:
+def _collect_evidence(state: GraphState, services: EvidenceSubgraphServices) -> GraphState:
     contract = state["turn"].routing_contract
-    rag_allowed = contract.rag_allowed if contract is not None else can_enter_retrieval(state).allowed
-    if not rag_allowed:
-        return _ensure_rag_result(state)
+    evidence_allowed = (
+        contract.rag_allowed if contract is not None else can_enter_retrieval(state).allowed
+    )
+    if not evidence_allowed:
+        return _ensure_evidence_result(state)
 
-    state = _mark_stage(state, "rag", "running", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])))
+    state = _mark_stage(
+        state,
+        "evidence",
+        "running",
+        route_decision=_route_decision_for_turn(state["turn"]),
+        route_reason=str(
+            state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])
+        ),
+    )
     try:
         state = services.hybrid_retrieve(state)
         state = services.evaluate_evidence(state)
@@ -191,45 +208,53 @@ def _recall_rag(state: GraphState, services: RagSubgraphServices) -> GraphState:
         state = services.citation_builder(state)
         state = _mark_stage(
             state,
-            "rag",
+            "evidence",
             "completed",
             route_decision=_route_decision_for_turn(state["turn"]),
-            route_reason=str(state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])),
-            detail={"evidence_count": len(state["turn"].evidence_pack.items) if state["turn"].evidence_pack else 0},
+            route_reason=str(
+                state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])
+            ),
+            detail={
+                "evidence_count": len(state["turn"].evidence_pack.items)
+                if state["turn"].evidence_pack
+                else 0
+            },
         )
     except Exception as exc:
         import logging
 
         logger = logging.getLogger(__name__)
-        logger.exception("RAG recall stage failed.")
+        logger.exception("Evidence collection stage failed.")
         from learning_agent_service.domain.errors import WorkflowErrorCode, build_error
 
         err = build_error(
             WorkflowErrorCode.INTERNAL_ERROR,
             stage="retrieval",
-            message=f"RAG recall failed: {exc}",
+            message=f"Evidence collection failed: {exc}",
             retryable=False,
             is_terminal=False,
         )
         state = _append_state_runtime_error(state, err)
         runtime = state["runtime"]
         metrics = dict(getattr(runtime, "metrics", {}) or {})
-        metrics["rag_degraded"] = True
-        metrics["rag_error"] = str(exc)
-        state["runtime"] = runtime.model_copy(update={"metrics": metrics, "degrade_to": "retrieval_degraded"})
+        metrics["evidence_degraded"] = True
+        metrics["evidence_error"] = str(exc)
+        state["runtime"] = runtime.model_copy(
+            update={"metrics": metrics, "degrade_to": "retrieval_degraded"}
+        )
         turn = state["turn"]
         turn_extra = dict(turn.extra)
-        failures = list(turn_extra.get("rag_stage_failures", []) or [])
+        failures = list(turn_extra.get("evidence_stage_failures", []) or [])
         failures.append({"stage": "recall", "error": str(exc)})
-        turn_extra["rag_stage_failures"] = failures
-        turn_extra["rag_failure_reason"] = str(exc)
+        turn_extra["evidence_stage_failures"] = failures
+        turn_extra["evidence_failure_reason"] = str(exc)
         state["turn"] = turn.model_copy(update={"extra": turn_extra})
         raise
     return state
 
 
-def _filter_rag(state: GraphState) -> GraphState:
-    state = _ensure_rag_result(state)
+def _filter_evidence(state: GraphState) -> GraphState:
+    state = _ensure_evidence_result(state)
     try:
         state = state
         state = _filter_evidence_by_contract(state)
@@ -237,34 +262,36 @@ def _filter_rag(state: GraphState) -> GraphState:
         import logging
 
         logger = logging.getLogger(__name__)
-        logger.exception("RAG filtering stage failed.")
+        logger.exception("Evidence filtering stage failed.")
         from learning_agent_service.domain.errors import WorkflowErrorCode, build_error
 
         err = build_error(
             WorkflowErrorCode.INTERNAL_ERROR,
             stage="retrieval",
-            message=f"RAG filtering failed: {exc}",
+            message=f"Evidence filtering failed: {exc}",
             retryable=False,
             is_terminal=False,
         )
         state = _append_state_runtime_error(state, err)
         runtime = state["runtime"]
         metrics = dict(getattr(runtime, "metrics", {}) or {})
-        metrics["rag_degraded"] = True
-        metrics["rag_filter_error"] = str(exc)
-        state["runtime"] = runtime.model_copy(update={"metrics": metrics, "degrade_to": "retrieval_degraded"})
+        metrics["evidence_degraded"] = True
+        metrics["evidence_filter_error"] = str(exc)
+        state["runtime"] = runtime.model_copy(
+            update={"metrics": metrics, "degrade_to": "retrieval_degraded"}
+        )
         turn = state["turn"]
         turn_extra = dict(turn.extra)
-        failures = list(turn_extra.get("rag_stage_failures", []) or [])
+        failures = list(turn_extra.get("evidence_stage_failures", []) or [])
         failures.append({"stage": "filter", "error": str(exc)})
-        turn_extra["rag_stage_failures"] = failures
-        turn_extra["rag_failure_reason"] = str(exc)
+        turn_extra["evidence_stage_failures"] = failures
+        turn_extra["evidence_failure_reason"] = str(exc)
         state["turn"] = turn.model_copy(update={"extra": turn_extra})
         raise
     return state
 
 
-def _rerank_rag(state: GraphState) -> GraphState:
+def _rank_evidence(state: GraphState) -> GraphState:
     turn = state["turn"]
     evidence_pack = getattr(turn, "evidence_pack", None)
     if evidence_pack is None or not getattr(evidence_pack, "items", None):
@@ -272,12 +299,20 @@ def _rerank_rag(state: GraphState) -> GraphState:
 
     items = list(getattr(evidence_pack, "items", []) or [])
     strong_items = sorted(
-        [item for item in items if str(getattr(item, "tier", "strong") or "strong").strip().lower() != "weak"],
+        [
+            item
+            for item in items
+            if str(getattr(item, "tier", "strong") or "strong").strip().lower() != "weak"
+        ],
         key=lambda item: float(getattr(item, "score", 0.0) or 0.0),
         reverse=True,
     )
     weak_items = sorted(
-        [item for item in items if str(getattr(item, "tier", "strong") or "strong").strip().lower() == "weak"],
+        [
+            item
+            for item in items
+            if str(getattr(item, "tier", "strong") or "strong").strip().lower() == "weak"
+        ],
         key=lambda item: float(getattr(item, "score", 0.0) or 0.0),
         reverse=True,
     )
@@ -298,52 +333,54 @@ def _rerank_rag(state: GraphState) -> GraphState:
     return state
 
 
-def _build_evidence_pack(state: GraphState, services: RagSubgraphServices) -> GraphState:
+def _build_evidence_pack(state: GraphState, services: EvidenceSubgraphServices) -> GraphState:
     try:
         state = services.citation_builder(state)
     except Exception as exc:
         import logging
 
         logger = logging.getLogger(__name__)
-        logger.exception("RAG evidence pack construction failed.")
+        logger.exception("Evidence pack construction failed.")
         from learning_agent_service.domain.errors import WorkflowErrorCode, build_error
 
         err = build_error(
             WorkflowErrorCode.INTERNAL_ERROR,
             stage="retrieval",
-            message=f"RAG evidence pack failed: {exc}",
+            message=f"Evidence pack failed: {exc}",
             retryable=False,
             is_terminal=False,
         )
         state = _append_state_runtime_error(state, err)
         runtime = state["runtime"]
         metrics = dict(getattr(runtime, "metrics", {}) or {})
-        metrics["rag_degraded"] = True
-        metrics["rag_citation_error"] = str(exc)
-        state["runtime"] = runtime.model_copy(update={"metrics": metrics, "degrade_to": "retrieval_degraded"})
+        metrics["evidence_degraded"] = True
+        metrics["evidence_citation_error"] = str(exc)
+        state["runtime"] = runtime.model_copy(
+            update={"metrics": metrics, "degrade_to": "retrieval_degraded"}
+        )
         turn = state["turn"]
         turn_extra = dict(turn.extra)
-        failures = list(turn_extra.get("rag_stage_failures", []) or [])
+        failures = list(turn_extra.get("evidence_stage_failures", []) or [])
         failures.append({"stage": "citation", "error": str(exc)})
-        turn_extra["rag_stage_failures"] = failures
-        turn_extra["rag_failure_reason"] = str(exc)
+        turn_extra["evidence_stage_failures"] = failures
+        turn_extra["evidence_failure_reason"] = str(exc)
         state["turn"] = turn.model_copy(update={"extra": turn_extra})
         raise
-    return _ensure_rag_result(state)
+    return _ensure_evidence_result(state)
 
 
-def _execute_rag_pipeline(state: GraphState, services: RagSubgraphServices) -> GraphState:
+def _execute_evidence_pipeline(state: GraphState, services: EvidenceSubgraphServices) -> GraphState:
     try:
-        state = _recall_rag(state, services)
-        state = _filter_rag(state)
-        state = _rerank_rag(state)
+        state = _collect_evidence(state, services)
+        state = _filter_evidence(state)
+        state = _rank_evidence(state)
         state = _build_evidence_pack(state, services)
         return state
     except Exception as exc:  # pragma: no cover - exercised via integration tests
         import logging
 
         logger = logging.getLogger(__name__)
-        logger.exception("RAG retrieval failed, applying degrade mechanism.")
+        logger.exception("Evidence retrieval failed, applying degrade mechanism.")
         from learning_agent_service.domain.contracts import EvidencePack, RagResult
         from learning_agent_service.domain.enums import RagStatus
         from learning_agent_service.domain.errors import WorkflowErrorCode, build_error
@@ -351,7 +388,7 @@ def _execute_rag_pipeline(state: GraphState, services: RagSubgraphServices) -> G
         err = build_error(
             WorkflowErrorCode.INTERNAL_ERROR,
             stage="retrieval",
-            message=f"RAG retrieval degraded due to exception: {exc}",
+            message=f"Evidence retrieval degraded due to exception: {exc}",
             retryable=False,
             is_terminal=False,
         )
@@ -362,10 +399,14 @@ def _execute_rag_pipeline(state: GraphState, services: RagSubgraphServices) -> G
         metrics["retrieval_error"] = str(exc)
 
         state = _append_state_runtime_error(state, err)
-        state["runtime"] = state["runtime"].model_copy(update={"degrade_to": "retrieval_degraded", "metrics": metrics})
+        state["runtime"] = state["runtime"].model_copy(
+            update={"degrade_to": "retrieval_degraded", "metrics": metrics}
+        )
 
         turn = state["turn"]
-        degraded_pack = EvidencePack(items=[], evidence_status="DEGRADED", extra={"degrade_reason": str(exc)})
+        degraded_pack = EvidencePack(
+            items=[], evidence_status="DEGRADED", extra={"degrade_reason": str(exc)}
+        )
         state["turn"] = turn.model_copy(
             update={
                 "evidence_pack": degraded_pack,
@@ -379,13 +420,19 @@ def _execute_rag_pipeline(state: GraphState, services: RagSubgraphServices) -> G
                 ),
             }
         )
-        state = _mark_stage(state, "rag", "failed", route_decision=_route_decision_for_turn(state["turn"]), route_reason=f"retrieval_degraded: {exc}")
+        state = _mark_stage(
+            state,
+            "evidence",
+            "failed",
+            route_decision=_route_decision_for_turn(state["turn"]),
+            route_reason=f"retrieval_degraded: {exc}",
+        )
 
-    return _ensure_rag_result(state)
+    return _ensure_evidence_result(state)
 
 
-def _finalize_rag(state: GraphState) -> GraphState:
-    return _ensure_rag_result(state)
+def _finalize_evidence(state: GraphState) -> GraphState:
+    return _ensure_evidence_result(state)
 
 
 def _prepare_plan_execute(state: GraphState) -> GraphState:
@@ -432,7 +479,9 @@ def _ensure_plan_summary(state: GraphState) -> GraphState:
     if summary is None:
         plan = list(getattr(turn, "plan", []) or [])
         step_results = list(getattr(turn, "step_results", []) or [])
-        completed_steps = len([item for item in step_results if getattr(item, "status", None) == "success"])
+        completed_steps = len(
+            [item for item in step_results if getattr(item, "status", None) == "success"]
+        )
         total_steps = len(plan)
         if getattr(turn, "need_human_approval", False):
             status = "need_approval"
@@ -459,7 +508,9 @@ def _ensure_plan_summary(state: GraphState) -> GraphState:
             elif isinstance(payload, str):
                 final_decision = payload
         if not final_decision:
-            final_decision = "等待人工审批" if getattr(turn, "need_human_approval", False) else "计划已完成"
+            final_decision = (
+                "等待人工审批" if getattr(turn, "need_human_approval", False) else "计划已完成"
+            )
 
         from ...domain.contracts import PlanExecutionSummary
 
@@ -477,17 +528,29 @@ def _ensure_plan_summary(state: GraphState) -> GraphState:
 
 def _planner_node(state: GraphState, services: PlanExecuteSubgraphServices) -> GraphState:
     turn = state["turn"]
-    if turn.task_plan is None and turn.execution_mode != "plan_execute" and not (
-        turn.execution_mode == "auto"
-        and (
-            turn.task_complexity == "complex"
-            or turn.need_human_approval
-            or turn.risk_level in {"medium", "high"}
+    if (
+        turn.task_plan is None
+        and turn.execution_mode != "plan_execute"
+        and not (
+            turn.execution_mode == "auto"
+            and (
+                turn.task_complexity == "complex"
+                or turn.need_human_approval
+                or turn.risk_level in {"medium", "high"}
+            )
         )
     ):
         return state
 
-    state = _mark_stage(state, "plan_execute", "running", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])))
+    state = _mark_stage(
+        state,
+        "plan_execute",
+        "running",
+        route_decision=_route_decision_for_turn(state["turn"]),
+        route_reason=str(
+            state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])
+        ),
+    )
     state = services.plan_planner(state)
     state = _ensure_plan_progress_state(state)
     return state
@@ -520,7 +583,17 @@ def _complex_review(state: GraphState, services: PlanExecuteSubgraphServices) ->
     turn = state["turn"]
     if turn.need_human_approval:
         state = services.human_approval_stub(state)
-        state = _mark_stage(state, "plan_execute", "blocked", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].replan_reason or state["turn"].approval_request.get("reason") or "need_human_approval"))
+        state = _mark_stage(
+            state,
+            "plan_execute",
+            "blocked",
+            route_decision=_route_decision_for_turn(state["turn"]),
+            route_reason=str(
+                state["turn"].replan_reason
+                or state["turn"].approval_request.get("reason")
+                or "need_human_approval"
+            ),
+        )
         return state
 
     if turn.need_replan:
@@ -528,7 +601,13 @@ def _complex_review(state: GraphState, services: PlanExecuteSubgraphServices) ->
         state = _ensure_plan_progress_state(state)
         if state["turn"].need_replan:
             state = services.plan_reviewer(state)
-            state = _mark_stage(state, "plan_execute", "blocked", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].replan_reason or "need_replan"))
+            state = _mark_stage(
+                state,
+                "plan_execute",
+                "blocked",
+                route_decision=_route_decision_for_turn(state["turn"]),
+                route_reason=str(state["turn"].replan_reason or "need_replan"),
+            )
             return state
         return state
 
@@ -536,14 +615,30 @@ def _complex_review(state: GraphState, services: PlanExecuteSubgraphServices) ->
 
 
 def _finalize_plan_execute(state: GraphState) -> GraphState:
-    state = _mark_stage(state, "plan_execute", "completed", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])))
+    state = _mark_stage(
+        state,
+        "plan_execute",
+        "completed",
+        route_decision=_route_decision_for_turn(state["turn"]),
+        route_reason=str(
+            state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])
+        ),
+    )
     summary = state["turn"].final_task_summary
     state = _update_phase3_trace(
         state,
-        task_plan_execution_status=getattr(summary, "status", "completed") if summary is not None else "completed",
-        task_plan_completed_steps=getattr(summary, "completed_steps", 0) if summary is not None else len([result for result in state["turn"].step_results if result.status == "success"]),
-        task_plan_total_steps=getattr(summary, "total_steps", 0) if summary is not None else len(state["turn"].plan),
-        task_plan_final_decision=getattr(summary, "final_decision", None) if summary is not None else state["turn"].final_answer,
+        task_plan_execution_status=getattr(summary, "status", "completed")
+        if summary is not None
+        else "completed",
+        task_plan_completed_steps=getattr(summary, "completed_steps", 0)
+        if summary is not None
+        else len([result for result in state["turn"].step_results if result.status == "success"]),
+        task_plan_total_steps=getattr(summary, "total_steps", 0)
+        if summary is not None
+        else len(state["turn"].plan),
+        task_plan_final_decision=getattr(summary, "final_decision", None)
+        if summary is not None
+        else state["turn"].final_answer,
         task_plan_step_results=len(state["turn"].step_results),
     )
     return _ensure_plan_summary(state)
@@ -565,15 +660,33 @@ def _execute_tool_pipeline(state: GraphState, services: ToolSubgraphServices) ->
         "tool",
         "running",
         route_decision=_route_decision_for_turn(state["turn"]),
-        route_reason=str(state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])),
-        detail={"decision": _route_decision_for_turn(state["turn"]), "intent": state["turn"].intent.value if state["turn"].intent else None},
+        route_reason=str(
+            state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])
+        ),
+        detail={
+            "decision": _route_decision_for_turn(state["turn"]),
+            "intent": state["turn"].intent.value if state["turn"].intent else None,
+        },
     )
     try:
         state = services.tool_planner(state)
         selection = state["turn"].tool_plan
-        if selection is None or not selection.should_execute:
-            state = _ensure_raw_tool_result(state)
-        else:
+        if selection is not None and selection.should_execute:
+            # 从路由决策中注入 resolved_shop_id 到单店工具 payload
+            routing = getattr(state["turn"], "routing_decision", None)
+            if routing is not None:
+                resolved_shop_id = getattr(routing, "resolved_shop_id", None)
+                if resolved_shop_id is not None:
+                    payload = dict(selection.input_payload)
+                    if payload.get("shop_id") is None:
+                        payload["shop_id"] = resolved_shop_id
+                        state["turn"] = state["turn"].model_copy(
+                            update={
+                                "tool_plan": selection.model_copy(
+                                    update={"input_payload": payload}
+                                ),
+                            }
+                        )
             state = services.tool_executor(state)
             state = _ensure_raw_tool_result(state)
 
@@ -583,7 +696,10 @@ def _execute_tool_pipeline(state: GraphState, services: ToolSubgraphServices) ->
 
         logger = logging.getLogger(__name__)
         logger.exception("Tool execution failed, applying degrade mechanism.")
-        from learning_agent_service.domain.contracts import NormalizedToolResult, ToolExecutionResult
+        from learning_agent_service.domain.contracts import (
+            NormalizedToolResult,
+            ToolExecutionResult,
+        )
         from learning_agent_service.domain.enums import ToolExecutionStatus
         from learning_agent_service.domain.errors import WorkflowErrorCode, build_error
 
@@ -623,7 +739,11 @@ def _execute_tool_pipeline(state: GraphState, services: ToolSubgraphServices) ->
                 "tool_result": NormalizedToolResult(
                     status=ToolExecutionStatus.DEGRADED,
                     tool_name=tool_name,
-                    normalized_output={"status": "degraded", "error": str(exc), "message": get_boundary_prompt("service_unavailable")},
+                    normalized_output={
+                        "status": "degraded",
+                        "error": str(exc),
+                        "message": get_boundary_prompt("service_unavailable"),
+                    },
                     used_tools=[tool_name] if tool_name else [],
                     approval_status=None,
                 ),
@@ -636,7 +756,9 @@ def _execute_tool_pipeline(state: GraphState, services: ToolSubgraphServices) ->
         "tool",
         "completed",
         route_decision=_route_decision_for_turn(state["turn"]),
-        route_reason=str(state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])),
+        route_reason=str(
+            state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])
+        ),
         detail=_tool_stage_detail(state["turn"]),
     )
     return _ensure_tool_result(state)
@@ -654,15 +776,27 @@ def _prepare_recommendation(state: GraphState) -> GraphState:
     turn_extra["recommendation_candidates"] = _recommendation_candidate_shop_ids(state)
     turn_extra["recommendation_index"] = 0
     turn_extra["recommendation_done"] = False
-    turn_extra["route_gate"] = {**dict(turn_extra.get("route_gate", {}) or {}), "branch": "recommendation"}
+    turn_extra["route_gate"] = {
+        **dict(turn_extra.get("route_gate", {}) or {}),
+        "branch": "recommendation",
+    }
     state["turn"] = turn.model_copy(update={"extra": turn_extra})
 
     runtime_metrics = dict(getattr(runtime, "metrics", {}) or {})
     runtime_metrics["recommendation_mode"] = True
-    runtime_metrics["rag_mode"] = "recommendation_rag"
+    runtime_metrics["evidence_mode"] = "recommendation_evidence"
     state["runtime"] = runtime.model_copy(update={"metrics": runtime_metrics})
 
-    state = _mark_stage(state, "recommendation", "running", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])), detail={"branch": "recommendation"})
+    state = _mark_stage(
+        state,
+        "recommendation",
+        "running",
+        route_decision=_route_decision_for_turn(state["turn"]),
+        route_reason=str(
+            state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])
+        ),
+        detail={"branch": "recommendation"},
+    )
     return state
 
 
@@ -671,11 +805,44 @@ def _recommendation_candidate_shop_ids(state: GraphState) -> list[int]:
     routing = getattr(turn, "routing_contract", None)
     turn_extra = dict(getattr(turn, "extra", {}) or {})
     runtime_context = dict(state.get("runtime_context", {}) or {})
+
+    def _shop_id_from_candidate(candidate: Any) -> Any:
+        if isinstance(candidate, dict):
+            return candidate.get("shop_id") or candidate.get("id")
+        return getattr(candidate, "shop_id", None) or getattr(candidate, "id", None)
+
     raw_candidates = []
     if routing is not None:
         raw_candidates.extend(list(getattr(routing, "candidate_shop_ids", []) or []))
     raw_candidates.extend(list(turn_extra.get("candidate_shop_ids") or []))
+    raw_candidates.extend(
+        [
+            _shop_id_from_candidate(candidate)
+            for candidate in list(turn_extra.get("ranked_candidates") or [])
+        ]
+    )
     raw_candidates.extend(list(runtime_context.get("candidate_shop_ids") or []))
+    ranked_candidates = list(getattr(turn, "ranked_candidates", []) or [])
+    raw_candidates.extend([_shop_id_from_candidate(candidate) for candidate in ranked_candidates])
+    evidence_pack = getattr(turn, "evidence_pack", None)
+    if evidence_pack is not None:
+        raw_candidates.extend(
+            [
+                _shop_id_from_candidate(candidate)
+                for candidate in list(getattr(evidence_pack, "ranked_candidates", []) or [])
+            ]
+        )
+        evidence_result = getattr(turn, "rag_result", None)
+        evidence_pack_from_result = getattr(evidence_result, "evidence_pack", None)
+        if evidence_pack_from_result is not None:
+            raw_candidates.extend(
+                [
+                    _shop_id_from_candidate(candidate)
+                    for candidate in list(
+                        getattr(evidence_pack_from_result, "ranked_candidates", []) or []
+                    )
+                ]
+            )
     candidate_ids: list[int] = []
     for value in raw_candidates:
         try:
@@ -690,7 +857,9 @@ def _recommendation_candidate_shop_ids(state: GraphState) -> list[int]:
 def _dispatch_recommendation_shop(state: GraphState) -> GraphState:
     turn = state["turn"]
     turn_extra = dict(getattr(turn, "extra", {}) or {})
-    candidates = list(turn_extra.get("recommendation_candidates") or _recommendation_candidate_shop_ids(state))
+    candidates = list(
+        turn_extra.get("recommendation_candidates") or _recommendation_candidate_shop_ids(state)
+    )
     index = int(turn_extra.get("recommendation_index", 0) or 0)
     shop_id = candidates[index] if 0 <= index < len(candidates) else None
     routing = getattr(turn, "routing_contract", None)
@@ -771,13 +940,15 @@ def _store_recommendation_branch_state(state: GraphState, shop_id: Any) -> str:
     branch_state = _prepare_recommendation_branch_state(state, shop_id)
     runtime = state.get("runtime")
     runtime_context = dict(state.get("runtime_context", {}) or {})
-    trace_id = str(getattr(runtime, "trace_id", None) or runtime_context.get("trace_id") or "recommendation")
+    trace_id = str(
+        getattr(runtime, "trace_id", None) or runtime_context.get("trace_id") or "recommendation"
+    )
     branch_id = f"{trace_id}:{shop_id}:{len(_RECOMMENDATION_BRANCH_CACHE) + 1}"
     _RECOMMENDATION_BRANCH_CACHE[branch_id] = branch_state
     return branch_id
 
 
-def _analyze_one_shop(state: GraphState, services: RagSubgraphServices) -> GraphState:
+def _analyze_one_shop(state: GraphState, services: EvidenceSubgraphServices) -> GraphState:
     if bool(getattr(state["turn"], "extra", {}).get("recommendation_done")):
         return state
     branch_id = state.get("branch_id")  # type: ignore[typeddict-item]
@@ -796,17 +967,26 @@ def _analyze_one_shop(state: GraphState, services: RagSubgraphServices) -> Graph
     analysis_turn_extra = dict(getattr(analysis_turn, "extra", {}) or {})
     analysis_turn_extra["recommendation_analysis_shop_id"] = shop_id
     analysis_state["turn"] = analysis_turn.model_copy(update={"extra": analysis_turn_extra})
-    analysis_state = _execute_rag_pipeline(analysis_state, services)
+    analysis_state = _execute_evidence_pipeline(analysis_state, services)
     analysis_turn = analysis_state["turn"]
     evidence_pack = getattr(analysis_turn, "evidence_pack", None)
     analysis = {
         "shop_id": shop_id,
-        "shop_name": analysis_turn.extra.get("target_shop_name") or analysis_turn.extra.get("selected_shop_name") or analysis_turn.extra.get("recommendation_analysis_shop_name"),
+        "shop_name": analysis_turn.extra.get("target_shop_name")
+        or analysis_turn.extra.get("selected_shop_name")
+        or analysis_turn.extra.get("recommendation_analysis_shop_name"),
         "score": _analysis_score_from_state(analysis_state),
         "evidence_status": getattr(evidence_pack, "evidence_status", None),
         "evidence_count": len(getattr(evidence_pack, "items", []) or []),
-        "citations": [citation.model_dump(mode="json") if hasattr(citation, "model_dump") else dict(citation) for citation in getattr(analysis_turn, "citations", [])],
-        "summary": str(analysis_turn.extra.get("route_reason") or analysis_turn.extra.get("recommendation_analysis_reason") or "shop_analysis"),
+        "citations": [
+            citation.model_dump(mode="json") if hasattr(citation, "model_dump") else dict(citation)
+            for citation in getattr(analysis_turn, "citations", [])
+        ],
+        "summary": str(
+            analysis_turn.extra.get("route_reason")
+            or analysis_turn.extra.get("recommendation_analysis_reason")
+            or "shop_analysis"
+        ),
     }
     state["shop_analyses"] = list(state.get("shop_analyses", []) or []) + [analysis]
     turn_extra = dict(getattr(state["turn"], "extra", {}) or {})
@@ -822,17 +1002,21 @@ def _analyze_one_shop(state: GraphState, services: RagSubgraphServices) -> Graph
 
 def _reduce_shop_results(state: GraphState) -> GraphState:
     if bool(getattr(state["turn"], "extra", {}).get("recommendation_done")):
-        return _ensure_rag_result(state)
+        return _ensure_evidence_result(state)
     analyses = list(state.get("shop_analyses", []) or [])
     if not analyses:
-        return _ensure_rag_result(state)
+        return _ensure_evidence_result(state)
     deduped: dict[Any, dict[str, Any]] = {}
     for item in analyses:
         key = item.get("shop_id")
         current = deduped.get(key)
-        if current is None or float(item.get("score", 0.0) or 0.0) > float(current.get("score", 0.0) or 0.0):
+        if current is None or float(item.get("score", 0.0) or 0.0) > float(
+            current.get("score", 0.0) or 0.0
+        ):
             deduped[key] = dict(item)
-    reduced = sorted(deduped.values(), key=lambda item: float(item.get("score", 0.0) or 0.0), reverse=True)
+    reduced = sorted(
+        deduped.values(), key=lambda item: float(item.get("score", 0.0) or 0.0), reverse=True
+    )
     top_n = int(state.get("runtime_context", {}).get("recommendation_top_n", 3) or 3)
     reduced = reduced[: max(1, top_n)]
     state["shop_analyses"] = reduced
@@ -849,19 +1033,37 @@ def _reduce_shop_results(state: GraphState) -> GraphState:
         if evidence_pack is not None:
             extra = dict(getattr(evidence_pack, "extra", {}) or {})
             extra["recommendation_top_shop_id"] = best.get("shop_id")
-            state["turn"] = turn.model_copy(update={"evidence_pack": evidence_pack.model_copy(update={"extra": extra})})
+            state["turn"] = turn.model_copy(
+                update={"evidence_pack": evidence_pack.model_copy(update={"extra": extra})}
+            )
         turn_extra = dict(turn.extra)
         turn_extra["recommendation_top_shop_id"] = best.get("shop_id")
         turn_extra["recommendation_top_shop_name"] = best.get("shop_name")
+        # 方案A 修复：将 shop_analyses 转为 ranked_candidates 写入 turn.extra
+        # 这样 _merge_rank_node 和 compose_answer 都能正确读取候选列表，
+        # 进而写入 persistent.last_candidates，支持下一轮代词解析。
+        if "ranked_candidates" not in turn_extra or not turn_extra.get("ranked_candidates"):
+            turn_extra["ranked_candidates"] = [
+                {
+                    "shop_id": item.get("shop_id"),
+                    "name": item.get("shop_name"),
+                    "shop_name": item.get("shop_name"),
+                    "score": item.get("score", 0.0),
+                }
+                for item in reduced
+                if item.get("shop_id") is not None
+            ]
         state["turn"] = state["turn"].model_copy(update={"extra": turn_extra})
-    return _ensure_rag_result(state)
+    return _ensure_evidence_result(state)
 
 
 def _route_recommendation_after_reduce(state: GraphState) -> str:
     if bool(getattr(state["turn"], "extra", {}).get("recommendation_done")):
         return "finalize_recommendation"
     turn_extra = dict(getattr(state["turn"], "extra", {}) or {})
-    candidates = list(turn_extra.get("recommendation_candidates") or _recommendation_candidate_shop_ids(state))
+    candidates = list(
+        turn_extra.get("recommendation_candidates") or _recommendation_candidate_shop_ids(state)
+    )
     index = int(turn_extra.get("recommendation_index", 0) or 0)
     if index < len(candidates):
         return "dispatch_shop_analysis"
@@ -884,7 +1086,9 @@ def _dispatch_recommendation_send(state: GraphState):
     return ["analyze_one_shop"] * len(candidate_shop_ids)
 
 
-def _execute_recommendation_pipeline(state: GraphState, services: RagSubgraphServices) -> GraphState:
+def _execute_recommendation_pipeline(
+    state: GraphState, services: EvidenceSubgraphServices
+) -> GraphState:
     candidate_shop_ids = _recommendation_candidate_shop_ids(state)
     if not candidate_shop_ids:
         state = _analyze_one_shop(state, services)
@@ -898,9 +1102,15 @@ def _execute_recommendation_pipeline(state: GraphState, services: RagSubgraphSer
     routing = getattr(turn, "routing_contract", None)
     base_state = clone_graph_state(state)
     analyses: list[dict[str, Any]] = []
-    max_rounds = int(state.get("runtime_context", {}).get("recommendation_expand_max_rounds", len(candidate_shop_ids)) or len(candidate_shop_ids))
+    max_rounds = int(
+        state.get("runtime_context", {}).get(
+            "recommendation_expand_max_rounds", len(candidate_shop_ids)
+        )
+        or len(candidate_shop_ids)
+    )
     branch_shop_ids = candidate_shop_ids[: max(1, max_rounds)]
     if branch_shop_ids:
+
         def _run_branch(shop_id: int) -> dict[str, Any] | None:
             branch_state = _prepare_recommendation_branch_state(base_state, shop_id)
             branch_state = _analyze_one_shop(branch_state, services)
@@ -911,7 +1121,9 @@ def _execute_recommendation_pipeline(state: GraphState, services: RagSubgraphSer
 
         max_workers = min(max(1, len(branch_shop_ids)), 8)
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(_run_branch, shop_id): shop_id for shop_id in branch_shop_ids}
+            futures = {
+                executor.submit(_run_branch, shop_id): shop_id for shop_id in branch_shop_ids
+            }
             for future in as_completed(futures):
                 try:
                     analysis = future.result()
@@ -939,8 +1151,17 @@ def _execute_recommendation_pipeline(state: GraphState, services: RagSubgraphSer
 
 
 def _finalize_recommendation(state: GraphState) -> GraphState:
-    state = _mark_stage(state, "recommendation", "completed", route_decision=_route_decision_for_turn(state["turn"]), route_reason=str(state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])), detail={"branch": "recommendation"})
-    state = _ensure_rag_result(state)
+    state = _mark_stage(
+        state,
+        "recommendation",
+        "completed",
+        route_decision=_route_decision_for_turn(state["turn"]),
+        route_reason=str(
+            state["turn"].extra.get("route_reason") or _route_decision_for_turn(state["turn"])
+        ),
+        detail={"branch": "recommendation"},
+    )
+    state = _ensure_evidence_result(state)
     return state
 
 
@@ -955,7 +1176,11 @@ def _rule_review(state: GraphState) -> GraphState:
     turn_extra = dict(turn.extra)
     turn_extra["rule_review"] = {
         "reviewed": True,
-        "current_action": str(getattr(turn.routing_decision, "required_action", "") or "").strip().lower() if getattr(turn, "routing_decision", None) is not None else None,
+        "current_action": str(getattr(turn.routing_decision, "required_action", "") or "")
+        .strip()
+        .lower()
+        if getattr(turn, "routing_decision", None) is not None
+        else None,
         "route_review_decision": dict(turn_extra.get("route_review_decision") or {}),
     }
     state["turn"] = turn.model_copy(update={"extra": turn_extra})
@@ -982,7 +1207,13 @@ def _merge_rank_node(state: GraphState) -> GraphState:
         "reviewed": True,
         "ranked_candidate_count": len(ranked_candidates),
         "evidence_claim_count": len(evidence_claims),
-        "top_candidate": (ranked_candidates[0].get("name") if ranked_candidates and isinstance(ranked_candidates[0], dict) else getattr(ranked_candidates[0], "name", None)) if ranked_candidates else None,
+        "top_candidate": (
+            ranked_candidates[0].get("name")
+            if ranked_candidates and isinstance(ranked_candidates[0], dict)
+            else getattr(ranked_candidates[0], "name", None)
+        )
+        if ranked_candidates
+        else None,
     }
     state["turn"] = turn.model_copy(update={"extra": turn_extra})
     return _mark_stage(
@@ -1015,42 +1246,48 @@ def _contract_review(state: GraphState) -> GraphState:
     )
 
 
-def _build_rag_graph(services: RagSubgraphServices):
+def _build_evidence_graph(services: EvidenceSubgraphServices):
     graph = StateGraph(GraphState)  # type: ignore[type-var]
-    graph.add_node("build_retrieval_plan", _prepare_rag)
-    graph.add_node("rag_executor", lambda state: _recall_rag(state, services))
-    graph.add_node("filter_rag", _filter_rag)
-    graph.add_node("rerank_rag", _rerank_rag)
+    # 这里是证据子图的编排层，检索计划和排序是规则调度，真正的能力由注入服务完成。
+    graph.add_node("build_evidence_plan", _prepare_evidence)
+    graph.add_node("collect_evidence", lambda state: _collect_evidence(state, services))
+    graph.add_node("filter_evidence", _filter_evidence)
+    graph.add_node("rank_evidence", _rank_evidence)
     graph.add_node("build_evidence_pack", lambda state: _build_evidence_pack(state, services))
-    graph.add_node("finalize_rag", _finalize_rag)
-    graph.set_entry_point("build_retrieval_plan")
-    graph.add_edge("build_retrieval_plan", "rag_executor")
-    graph.add_edge("rag_executor", "filter_rag")
-    graph.add_edge("filter_rag", "rerank_rag")
-    graph.add_edge("rerank_rag", "build_evidence_pack")
-    graph.add_edge("build_evidence_pack", "finalize_rag")
-    graph.add_edge("finalize_rag", END)
+    graph.add_node("finalize_evidence", _finalize_evidence)
+    graph.set_entry_point("build_evidence_plan")
+    graph.add_edge("build_evidence_plan", "collect_evidence")
+    graph.add_edge("collect_evidence", "filter_evidence")
+    graph.add_edge("filter_evidence", "rank_evidence")
+    graph.add_edge("rank_evidence", "build_evidence_pack")
+    graph.add_edge("build_evidence_pack", "finalize_evidence")
+    graph.add_edge("finalize_evidence", END)
     return graph.compile()
 
 
 def _build_understand_turn_graph(services: UnderstandTurnServices):
     graph = StateGraph(GraphState)  # type: ignore[type-var]
-    graph.add_node("parse_intent_slots", lambda state: services.parse_intent_slots(_prepare_understand_turn(state)))
+    # understand_turn 子图里，parse_intent_slots 是模型分类节点，resolve_reference 走实体消歧服务，ambiguity_check 是规则判断。
+    graph.add_node(
+        "parse_intent_slots",
+        lambda state: services.parse_intent_slots(_prepare_understand_turn(state)),
+    )
     graph.add_node("resolve_reference", lambda state: services.resolve_reference(state))
     graph.add_node("ambiguity_check", lambda state: services.ambiguity_check(state))
-    graph.add_node("rag_gate", lambda state: services.rag_gate(state))
-    graph.add_node("finalize_understand_turn", lambda state: _finalize_understand_turn(state, services))
+    graph.add_node(
+        "finalize_understand_turn", lambda state: _finalize_understand_turn(state, services)
+    )
     graph.set_entry_point("parse_intent_slots")
     graph.add_edge("parse_intent_slots", "resolve_reference")
     graph.add_edge("resolve_reference", "ambiguity_check")
-    graph.add_edge("ambiguity_check", "rag_gate")
-    graph.add_edge("rag_gate", "finalize_understand_turn")
+    graph.add_edge("ambiguity_check", "finalize_understand_turn")
     graph.add_edge("finalize_understand_turn", END)
     return graph.compile()
 
 
 def _build_plan_execute_graph(services: PlanExecuteSubgraphServices):
     graph = StateGraph(GraphState)  # type: ignore[type-var]
+    # 计划执行子图以规则编排为主，planner/reviewer 负责总结，step_executor 负责逐步推进。
     graph.add_node("planner_node", _prepare_plan_execute)
     graph.add_node("plan_validator", lambda state: _plan_validator(state, services))
     graph.add_node("plan_executor", _plan_executor)
@@ -1072,6 +1309,7 @@ def _build_plan_execute_graph(services: PlanExecuteSubgraphServices):
 
 def _build_tool_graph(services: ToolSubgraphServices):
     graph = StateGraph(GraphState)  # type: ignore[type-var]
+    # 工具子图本身是调度层，真正的工具调用由注入的执行器处理。
     graph.add_node("tool_plan", _prepare_tool)
     graph.add_node("tool_executor", lambda state: _execute_tool_pipeline(state, services))
     graph.add_node("finalize_tool", _finalize_tool)
@@ -1082,11 +1320,15 @@ def _build_tool_graph(services: ToolSubgraphServices):
     return graph.compile()
 
 
-def _build_recommendation_graph(services: RagSubgraphServices):
+def _build_recommendation_graph(services: EvidenceSubgraphServices):
     graph = StateGraph(GraphState)  # type: ignore[type-var]
+    # 推荐子图同样是编排层，门店分析和聚合逻辑由注入服务实现。
     graph.add_node("prepare_recommendation", _prepare_recommendation)
     graph.add_node("dispatch_shop_analysis", lambda state: clone_graph_state(state))
-    graph.add_node("analyze_one_shop", lambda state: _execute_recommendation_pipeline(clone_graph_state(state), services))
+    graph.add_node(
+        "analyze_one_shop",
+        lambda state: _execute_recommendation_pipeline(clone_graph_state(state), services),
+    )
     graph.add_node("reduce_shop_results", _reduce_shop_results)
     graph.add_node("finalize_recommendation", _finalize_recommendation)
     graph.set_entry_point("prepare_recommendation")
@@ -1098,12 +1340,14 @@ def _build_recommendation_graph(services: RagSubgraphServices):
     return graph.compile()
 
 
-def build_rag_graph(services: RagSubgraphServices):
-    return _graph_cached("rag", services, lambda: _build_rag_graph(services))
+def build_evidence_graph(services: EvidenceSubgraphServices):
+    return _graph_cached("evidence", services, lambda: _build_evidence_graph(services))
 
 
 def build_understand_turn_graph(services: UnderstandTurnServices):
-    return _graph_cached("understand_turn", services, lambda: _build_understand_turn_graph(services))
+    return _graph_cached(
+        "understand_turn", services, lambda: _build_understand_turn_graph(services)
+    )
 
 
 def build_plan_execute_graph(services: PlanExecuteSubgraphServices):
@@ -1114,7 +1358,7 @@ def build_tool_graph(services: ToolSubgraphServices):
     return _graph_cached("tool", services, lambda: _build_tool_graph(services))
 
 
-def build_recommendation_graph(services: RagSubgraphServices):
+def build_recommendation_graph(services: EvidenceSubgraphServices):
     return _graph_cached("recommendation", services, lambda: _build_recommendation_graph(services))
 
 
@@ -1127,12 +1371,12 @@ def describe_langgraph_topology() -> dict[str, Any]:
     }
 
 
-def describe_rag_graph_topology() -> dict[str, Any]:
+def describe_evidence_graph_topology() -> dict[str, Any]:
     return {
-        "entry_point": _RAG_TOPOLOGY.entry_point,
-        "terminal": _RAG_TOPOLOGY.terminal,
-        "nodes": list(_RAG_TOPOLOGY.nodes),
-        "edges": [tuple(edge) for edge in _RAG_TOPOLOGY.edges],
+        "entry_point": _EVIDENCE_TOPOLOGY.entry_point,
+        "terminal": _EVIDENCE_TOPOLOGY.terminal,
+        "nodes": list(_EVIDENCE_TOPOLOGY.nodes),
+        "edges": [tuple(edge) for edge in _EVIDENCE_TOPOLOGY.edges],
     }
 
 
@@ -1172,9 +1416,9 @@ def describe_recommendation_graph_topology() -> dict[str, Any]:
     }
 
 
-def export_rag_graph_mermaid() -> str:
+def export_evidence_graph_mermaid() -> str:
     lines = ["graph TD"]
-    for left, right in _RAG_TOPOLOGY.edges:
+    for left, right in _EVIDENCE_TOPOLOGY.edges:
         lines.append(f"  {left} --> {right}")
     return "\n".join(lines)
 

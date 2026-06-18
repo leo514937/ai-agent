@@ -37,6 +37,7 @@ class ExecutionContract(LocalLifeModel):
     source: str = "session"
     shop_context_source: str | None = None
     target_shop: Any | None = None
+    comparison_targets: list[dict[str, Any]] = Field(default_factory=list)
     extra: dict[str, Any] = Field(default_factory=dict)
     
     # Day3 Unification: Consolidating FacetExecutionPlan directly inside ExecutionContract 

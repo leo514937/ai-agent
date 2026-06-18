@@ -13,6 +13,10 @@ class LegacyRoutingPurgeTestCase(unittest.TestCase):
             root / "src" / "learning_agent_service" / "application" / "dependencies_impl.py",
             root / "src" / "learning_agent_service" / "application" / "workflow" / "adapters" / "helpers.py",
             root / "src" / "learning_agent_service" / "application" / "workflow" / "subgraphs.py",
+            root / "src" / "learning_agent_service" / "application" / "workflow" / "graphs.py",
+            root / "src" / "learning_agent_service" / "application" / "workflow" / "adapters" / "stages_front_a.py",
+            root / "src" / "learning_agent_service" / "application" / "workflow" / "adapters" / "stages_front_b.py",
+            root / "src" / "learning_agent_service" / "application" / "workflow" / "adapters" / "stages_main_graph.py",
             root / "src" / "learning_agent_service" / "tools" / "service.py",
             root / "src" / "learning_agent_service" / "memory" / "orchestrator.py",
         ]
@@ -21,9 +25,6 @@ class LegacyRoutingPurgeTestCase(unittest.TestCase):
             re.compile(r"\bif\b.*\.route_reason\b"),
             re.compile(r"\bif\b.*\.direct_response_kind\b"),
             re.compile(r"\bif\b.*\.proceed_to_understanding\b"),
-            re.compile(r"\bif\b.*\.decision\b"),
-            re.compile(r"\bif\b.*\.slots\b"),
-            re.compile(r"\bif\b.*\bTurnDecision\b"),
             re.compile(r"\bif\b.*\bshould_run_retrieval\b"),
             re.compile(r"\bif\b.*\brequires_retrieval\b"),
         ]

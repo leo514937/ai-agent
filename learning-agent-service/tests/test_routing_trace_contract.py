@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import _bootstrap  # noqa: F401
 
-from learning_agent_service.application.router.trace import (
+from learning_agent_service.application.workflow.adapters.helpers import (
     StageTrace,
     build_routing_trace,
     build_routing_trace_from_state,

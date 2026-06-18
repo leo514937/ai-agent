@@ -26,6 +26,7 @@ class ToolSpec:
     risk_level: str = "low"
     allowed_execution_modes: tuple[str, ...] = ("auto", "simple", "plan_execute")
     requires_approval: bool = False
+    requires_shop_id: bool = False  # v4: 是否需要 resolved_shop_id
     fallback_strategy: str | None = None
     degrade_to: str | None = None
     timeout_ms: int = 5000

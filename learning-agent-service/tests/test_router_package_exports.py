@@ -3,8 +3,8 @@ import sys
 
 import pytest
 
-from learning_agent_service.application.router.phase0_quality import build_initial_routing_decision
-from learning_agent_service.application.router.base import routing_trace_payload
+from learning_agent_service.application.workflow.adapters.helpers import build_initial_routing_decision
+from learning_agent_service.application.workflow.adapters.helpers import routing_trace_payload
 from learning_agent_service.domain.contracts import PersistentSessionContext
 
 

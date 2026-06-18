@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# DEPRECATED: 由 application/router/facet_planner.py 替代。保留用于旧路径兼容，将在下一个版本移除。
+
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any

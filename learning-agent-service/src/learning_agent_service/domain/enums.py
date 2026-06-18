@@ -45,3 +45,43 @@ class IntentType(StrValueEnum):
     RECOMMEND = "recommend"
     SUMMARY = "summary"
     FOLLOW_UP = "follow_up"
+
+
+class PolarityType(StrValueEnum):
+    POSITIVE = "positive"
+    NEGATIVE = "negative"
+    NEUTRAL = "neutral"
+    SKEPTICAL = "skeptical"
+    NEGATIVE_QUESTION = "negative_question"
+
+
+class NegativeScopeType(StrValueEnum):
+    ACTION = "action"
+    SHOP = "shop"
+    CATEGORY = "category"
+    PRICE = "price"
+    DISTANCE = "distance"
+    FEATURE = "feature"
+    COMPARISON_TARGET = "comparison_target"
+
+
+class TargetType(StrValueEnum):
+    SHOP = "shop"
+    BRAND = "brand"
+    CATEGORY = "category"
+    MALL = "mall"
+    AREA = "area"
+    DISH = "dish"
+    PREVIOUS_CANDIDATE = "previous_candidate"
+    AMBIGUOUS = "ambiguous"
+
+
+class LocalRouteType(StrValueEnum):
+    RECOMMENDATION = "recommendation"
+    COMPARISON = "comparison"
+    SINGLE_SHOP = "single_shop"
+    REALTIME_TOOL = "realtime_tool"
+    MERCHANT_REASONING = "merchant_reasoning"
+    TRANSACTION = "transaction"
+    LOCAL_CHAT = "local_chat"
+    CLARIFY = "clarify"

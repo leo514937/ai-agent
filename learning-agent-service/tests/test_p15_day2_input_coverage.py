@@ -13,7 +13,7 @@ for candidate in (str(TESTS_DIR), str(PROJECT_ROOT), str(SRC_ROOT)):
 
 import _bootstrap  # noqa: F401
 
-from learning_agent_service.application.router.stages import (
+from learning_agent_service.application.workflow.adapters.helpers import (
     check_query_safety,
     check_request_legality,
     merge_local_life_query_context,

@@ -58,6 +58,18 @@ from learning_agent_service.infrastructure.repositories.records import OutboxEve
 from .router.stages import check_request_legality
 
 
+def _workflow_graph_or_none(runner: Any) -> Any | None:
+    graph = getattr(runner, "_graph", None)
+    if graph is None:
+        return None
+    underlying = getattr(graph, "_graph", graph)
+    if underlying is None:
+        return None
+    if not hasattr(underlying, "invoke"):
+        return None
+    return graph
+
+
 def _memory_record_summary(record) -> MemoryRecordSummary:
     return MemoryRecordSummary.model_validate(record.model_dump(mode="json"))
 
@@ -210,10 +222,11 @@ class WorkflowLearningAgentService:
     def get_session_state_history(self, session_id: str) -> SessionHistoryResponse:
         runner = self.chat_use_case._workflow_runner
         history_list = []
-        if hasattr(runner, "_graph"):
+        workflow_graph = _workflow_graph_or_none(runner)
+        if workflow_graph is not None:
             config = {"configurable": {"thread_id": session_id}}
             try:
-                for snapshot in runner._graph.get_state_history(config):
+                for snapshot in workflow_graph.get_state_history(config):
                     checkpoint_id = snapshot.config.get("configurable", {}).get("checkpoint_id")
                     parent_checkpoint_id = (
                         snapshot.parent_config.get("configurable", {}).get("checkpoint_id")
@@ -272,7 +285,8 @@ class WorkflowLearningAgentService:
 
     def replay_session_state(self, session_id: str, request: ReplayRequest) -> SessionStateResponse:
         runner = self.chat_use_case._workflow_runner
-        if not hasattr(runner, "_graph") or getattr(runner, "_checkpointer", None) is None:
+        workflow_graph = _workflow_graph_or_none(runner)
+        if workflow_graph is None or getattr(runner, "_checkpointer", None) is None:
             return self.get_session_state(session_id)
 
         if str(request.checkpoint_id or "").startswith("fallback-"):
@@ -284,9 +298,9 @@ class WorkflowLearningAgentService:
                 "checkpoint_id": request.checkpoint_id,
             }
         }
-        
+
         try:
-            result = runner._graph.invoke(None, config=config)
+            result = workflow_graph.invoke(None, config=config)
             session_context_store = getattr(self.container, "session_context_store", None)
             if session_context_store is not None:
                 runtime = result.get("runtime")
@@ -294,7 +308,7 @@ class WorkflowLearningAgentService:
                     session_context_store.save(result["persistent"], runtime)
             return self.get_session_state(session_id)
         except GraphInterrupt:
-            snapshot = runner._graph.get_state(config)
+            snapshot = workflow_graph.get_state(config)
             if snapshot and snapshot.values:
                 session_context_store = getattr(self.container, "session_context_store", None)
                 if session_context_store is not None:
@@ -310,7 +324,8 @@ class WorkflowLearningAgentService:
 
     def fork_session_state(self, session_id: str, request: ForkRequest) -> SessionStateResponse:
         runner = self.chat_use_case._workflow_runner
-        if not hasattr(runner, "_graph") or getattr(runner, "_checkpointer", None) is None:
+        workflow_graph = _workflow_graph_or_none(runner)
+        if workflow_graph is None or getattr(runner, "_checkpointer", None) is None:
             session_context_store = getattr(self.container, "session_context_store", None)
             if session_context_store is None:
                 raise RuntimeError("Session context store is unavailable")
@@ -354,7 +369,7 @@ class WorkflowLearningAgentService:
                 "checkpoint_id": request.checkpoint_id,
             }
         }
-        snapshot = runner._graph.get_state(config)
+        snapshot = workflow_graph.get_state(config)
         if not snapshot or not snapshot.values:
             raise RuntimeError(f"Checkpoint {request.checkpoint_id} not found for session {session_id}")
             
@@ -391,10 +406,10 @@ class WorkflowLearningAgentService:
             }
         }
         as_node = snapshot.next[0] if snapshot.next else None
-        runner._graph.update_state(target_config, forked_values, as_node=as_node)
+        workflow_graph.update_state(target_config, forked_values, as_node=as_node)
         
         try:
-            result = runner._graph.invoke(None, config=target_config)
+            result = workflow_graph.invoke(None, config=target_config)
             session_context_store = getattr(self.container, "session_context_store", None)
             if session_context_store is not None:
                 runtime = result.get("runtime")
@@ -402,7 +417,7 @@ class WorkflowLearningAgentService:
                     session_context_store.save(result["persistent"], runtime)
             return self.get_session_state(effective_target_session_id)
         except GraphInterrupt:
-            snapshot_fork = runner._graph.get_state(target_config)
+            snapshot_fork = workflow_graph.get_state(target_config)
             if snapshot_fork and snapshot_fork.values:
                 session_context_store = getattr(self.container, "session_context_store", None)
                 if session_context_store is not None:
@@ -462,7 +477,8 @@ class WorkflowLearningAgentService:
             raise RuntimeError("Unable to persist approval decision") from exc
 
         runner = self.chat_use_case._workflow_runner
-        if not hasattr(runner, "_graph") or getattr(runner, "_checkpointer", None) is None:
+        workflow_graph = _workflow_graph_or_none(runner)
+        if workflow_graph is None or getattr(runner, "_checkpointer", None) is None:
             if decision == "approved":
                 updated = updated.model_copy(update={"current_stage": "emit_final", "stage_status": "completed"})
             else:
@@ -482,7 +498,7 @@ class WorkflowLearningAgentService:
                 message="审批结果已记录",
             )
         config = {"configurable": {"thread_id": request.session_id}}
-        snapshot = runner._graph.get_state(config)
+        snapshot = workflow_graph.get_state(config)
         if snapshot and getattr(snapshot, "values", None):
             forked_values = deepcopy(snapshot.values)
             if "turn" in forked_values:
@@ -510,15 +526,15 @@ class WorkflowLearningAgentService:
             next_nodes = list(getattr(snapshot, "next", []) or [])
             if next_nodes:
                 as_node = next_nodes[0]
-                runner._graph.update_state(config, forked_values, as_node=as_node)
+                workflow_graph.update_state(config, forked_values, as_node=as_node)
 
                 try:
-                    result = runner._graph.invoke(None, config=config)
+                    result = workflow_graph.invoke(None, config=config)
                     result_runtime = result.get("runtime")
                     if result_runtime is not None:
                         session_context_store.save(result["persistent"], result_runtime)
                 except GraphInterrupt:
-                    snapshot_approval = runner._graph.get_state(config)
+                    snapshot_approval = workflow_graph.get_state(config)
                     if snapshot_approval and snapshot_approval.values:
                         runtime = snapshot_approval.values.get("runtime")
                         if runtime is not None:

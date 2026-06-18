@@ -12,17 +12,21 @@ from pydantic import BaseModel
 from learning_agent_service.adapters.java_business import JavaBusinessClient
 from learning_agent_service.config import Settings
 from learning_agent_service.domain import (
+    AnswerContract,
     AnswerComposeRequest,
     ChatTurnCommand,
     Citation,
     EvidenceItem,
     EvidencePack,
+    EvidenceQualityDecision,
     MemoryRecord,
     MemoryScope,
     MemoryStatus,
     MemoryType,
+    NormalizedToolResult,
     PersistentSessionContext,
     RagResult,
+    RoutingDecision,
     ToolExecutionCommand,
     ToolExecutionResult as DomainToolExecutionResult,
     ToolNormalizationRequest,
@@ -48,7 +52,7 @@ from learning_agent_service.tools.service import (
     build_default_tool_registry,
 )
 from learning_agent_service.application.dependencies_impl import OpenAIAnswerComposeAdapter
-from learning_agent_service.application.router.phase0_quality import build_initial_routing_decision
+from learning_agent_service.application.workflow.adapters.helpers import build_initial_routing_decision
 from learning_agent_service.infrastructure.db.openai_client import OpenAIRuntime
 
 
@@ -930,6 +934,30 @@ class ToolsTestCase(unittest.TestCase):
         self.assertNotEqual(output.answer_text, "当前知识库中没有找到足够依据回答该问题。")
         self.assertTrue("上下文" in output.answer_text or "更具体" in output.answer_text)
 
+    def test_answer_composer_uses_single_shop_fallback_when_evidence_is_empty(self) -> None:
+        empty_pack = EvidencePack(evidence_status="EMPTY")
+        rag_result = RagResult(status=RagStatus.EMPTY, evidence_pack=empty_pack, evidence_status="EMPTY")
+        contract = AnswerContract(original_query="海底捞怎么样", answer_style="single_shop_review")
+
+        def fake_llm(_: AnswerComposeRequest):
+            return {}
+
+        from learning_agent_service.tools.service import AnswerComposer
+
+        output = AnswerComposer(llm_answerer=fake_llm).compose(
+            AnswerComposeRequest(
+                raw_query="海底捞怎么样",
+                rag_result=rag_result,
+                answer_contract=contract,
+                answer_context={"current_shop": "海底捞"},
+            )
+        )
+
+        self.assertNotIn("RAG_EMPTY_REFUSED", output.answer_text)
+        self.assertNotIn("先聊点别的", output.answer_text)
+        self.assertIn("目前证据有限", output.answer_text)
+        self.assertIn("海底捞", output.answer_text)
+
     def test_answer_composer_uses_llm_for_open_ended_questions_when_evidence_empty(self) -> None:
         calls: list[str] = []
 
@@ -1201,14 +1229,13 @@ class ToolsTestCase(unittest.TestCase):
 
         answer = adapter(request)
 
-        self.assertIn("先思考一下", answer)
-        self.assertTrue(answer.endswith("你好，世界"))
+        self.assertEqual(answer, "你好，世界")
         self.assertEqual(len(emitted_events), 3)
         self.assertEqual(emitted_events[0].event_type, "delta")
         self.assertEqual(emitted_events[0].payload["delta"], "先思考一下")
-        self.assertIn("先思考一下", emitted_events[0].payload["answer_text"])
+        self.assertEqual(emitted_events[0].payload["answer_text"], "")
         self.assertEqual(emitted_events[1].payload["delta"], "你好")
-        self.assertIn("先思考一下", emitted_events[1].payload["answer_text"])
+        self.assertEqual(emitted_events[1].payload["answer_text"], "你好")
         self.assertEqual(emitted_events[2].payload["answer_text"], answer)
         self.assertEqual(emitted_events[2].workflow_version, "test/v1")
 
@@ -1256,6 +1283,399 @@ class ToolsTestCase(unittest.TestCase):
         self.assertTrue(all(event.event_type == "delta" for event in emitted_events))
         self.assertEqual(emitted_events[-1].payload["answer_text"], output.answer_text)
         self.assertIn("我先帮你筛到这些更匹配的门店", output.answer_text)
+
+    def test_answer_composer_strict_grounded_open_status_uses_only_tool_evidence(self) -> None:
+        from learning_agent_service.tools.service import AnswerComposer
+
+        emitted_events = []
+        tool_result = RuntimeToolResultNormalizer().normalize(
+            ToolNormalizationRequest(
+                result=DomainToolExecutionResult(
+                    status=ToolExecutionStatus.SUCCESS,
+                    tool_name="check_open_status",
+                    output_payload={
+                        "data": {
+                            "shop_id": 1001,
+                            "shop_name": "某某家常菜",
+                            "open_status": "open",
+                            "open_hours": "10:00-22:00",
+                        }
+                    },
+                )
+            )
+        )
+
+        request = AnswerComposeRequest(
+            raw_query="某某家常菜现在营业吗",
+            rag_result=None,
+            tool_result=NormalizedToolResult(
+                status=ToolExecutionStatus.SUCCESS,
+                tool_name=tool_result.tool_name,
+                normalized_output=tool_result.model_dump(mode="json"),
+                extra={},
+            ),
+            answer_contract=AnswerContract(
+                allowed_facets=["open_status"],
+                optional_facets=[],
+                forbidden_facets=[],
+                required_facets=[],
+                evidence_requirements={},
+                tool_requirements={},
+                forbidden_without_evidence=[],
+                candidate_entities=["某某家常菜"],
+                selected_entity="某某家常菜",
+                missing_slots=[],
+                clarification_slot=None,
+                answer_style="open_status_only",
+                scope_kind="single_shop",
+                facet_source_expectations={},
+                extra={},
+            ),
+            answer_context={
+                "current_shop": "某某家常菜",
+                "required_facets": ["open_status"],
+            },
+            ranked_candidates=[
+                {
+                    "shop_id": 1001,
+                    "name": "某某家常菜",
+                    "score": 4.8,
+                    "distance_km": 1.2,
+                    "avg_price": 68,
+                }
+            ],
+            evidence_quality=EvidenceQualityDecision(response_mode="grounded", is_valid=True),
+            final_response_mode="grounded_strict",
+            stream_event_sink=emitted_events.append,
+        )
+
+        output = AnswerComposer().compose(request)
+
+        self.assertEqual(output.answer_text, "某某家常菜现在营业中，营业时间是 10:00-22:00。")
+        self.assertNotIn("评分", output.answer_text)
+        self.assertNotIn("优惠券", output.answer_text)
+        self.assertGreaterEqual(len(emitted_events), 1)
+        self.assertEqual(emitted_events[-1].payload["answer_text"], output.answer_text)
+        self.assertTrue(all(event.event_type == "delta" for event in emitted_events))
+
+    def test_answer_composer_strict_grounded_rejects_catalog_coupon_source(self) -> None:
+        from learning_agent_service.tools.service import AnswerComposer
+
+        calls: list[str] = []
+
+        def fake_llm(_: AnswerComposeRequest):
+            calls.append("called")
+            raise AssertionError("strict grounded mode should not call llm_answerer")
+
+        output = AnswerComposer(llm_answerer=fake_llm).compose(
+            AnswerComposeRequest(
+                raw_query="某某家常菜有券吗",
+                answer_contract=AnswerContract(
+                    allowed_facets=["coupon"],
+                    optional_facets=[],
+                    forbidden_facets=[],
+                    required_facets=[],
+                    evidence_requirements={},
+                    tool_requirements={},
+                    forbidden_without_evidence=[],
+                    candidate_entities=["某某家常菜"],
+                    selected_entity="某某家常菜",
+                    missing_slots=[],
+                    clarification_slot=None,
+                    answer_style="coupon_only",
+                    scope_kind="single_shop",
+                    facet_source_expectations={},
+                    extra={},
+                ),
+                answer_context={
+                    "current_shop": "某某家常菜",
+                    "required_facets": ["coupon"],
+                },
+                ranked_candidates=[
+                    {
+                        "shop_id": 1001,
+                        "name": "某某家常菜",
+                        "score": 4.8,
+                        "distance_km": 1.2,
+                        "avg_price": 68,
+                    }
+                ],
+                facet_result_bundle={
+                    "coupon_result": {
+                        "shop_id": 1001,
+                        "realtime_available_count": 1,
+                        "realtime_total_count": 1,
+                        "items": [
+                            {
+                                "coupon_id": "coupon-1",
+                                "title": "伪造券",
+                                "status": "available",
+                                "source": "catalog",
+                                "shop_id": 1001,
+                            }
+                        ],
+                        "query_success": True,
+                        "source": "catalog",
+                    }
+                },
+                evidence_quality=EvidenceQualityDecision(response_mode="grounded", is_valid=True),
+                final_response_mode="grounded_strict",
+            )
+        )
+
+        self.assertEqual(calls, [])
+        self.assertTrue(
+            "暂时没有找到足够可靠的依据" in output.answer_text
+            or "暂时无法确认" in output.answer_text
+            or "请" in output.answer_text
+            or "无法" in output.answer_text
+        )
+        self.assertNotIn("当前有", output.answer_text)
+        self.assertNotIn("伪造券", output.answer_text)
+
+    def test_answer_composer_strict_grounded_rejects_catalog_distance_source(self) -> None:
+        from learning_agent_service.tools.service import AnswerComposer
+
+        calls: list[str] = []
+
+        def fake_llm(_: AnswerComposeRequest):
+            calls.append("called")
+            raise AssertionError("strict grounded mode should not call llm_answerer")
+
+        output = AnswerComposer(llm_answerer=fake_llm).compose(
+            AnswerComposeRequest(
+                raw_query="某某家常菜离我多远",
+                answer_contract=AnswerContract(
+                    allowed_facets=["distance_eta"],
+                    optional_facets=[],
+                    forbidden_facets=[],
+                    required_facets=[],
+                    evidence_requirements={},
+                    tool_requirements={},
+                    forbidden_without_evidence=[],
+                    candidate_entities=["某某家常菜"],
+                    selected_entity="某某家常菜",
+                    missing_slots=[],
+                    clarification_slot=None,
+                    answer_style="distance_only",
+                    scope_kind="single_shop",
+                    facet_source_expectations={},
+                    extra={},
+                ),
+                answer_context={
+                    "current_shop": "某某家常菜",
+                    "required_facets": ["distance_eta"],
+                },
+                ranked_candidates=[
+                    {
+                        "shop_id": 1001,
+                        "name": "某某家常菜",
+                        "score": 4.8,
+                        "distance_km": 1.2,
+                        "avg_price": 68,
+                    }
+                ],
+                facet_result_bundle={
+                    "tool_results": [
+                        {
+                            "tool_name": "get_distance_eta",
+                            "facet": "distance_eta",
+                            "shop_id": 1001,
+                            "shop_name": "某某家常菜",
+                            "status": "success",
+                            "data": {
+                                "distance_km": 1.2,
+                                "eta_minutes": 10,
+                                "mode": "drive",
+                                "shop_source": "catalog",
+                            },
+                            "source": "catalog",
+                        }
+                    ]
+                },
+                evidence_quality=EvidenceQualityDecision(response_mode="grounded", is_valid=True),
+                final_response_mode="grounded_strict",
+            )
+        )
+
+        self.assertEqual(calls, [])
+        self.assertTrue(
+            "暂时没有找到足够可靠的依据" in output.answer_text
+            or "暂时无法确认" in output.answer_text
+            or "请" in output.answer_text
+            or "无法" in output.answer_text
+        )
+        self.assertNotIn("1.2", output.answer_text)
+        self.assertNotIn("距离你约", output.answer_text)
+
+    def test_answer_composer_strict_grounded_rejects_when_coupon_evidence_is_missing(self) -> None:
+        calls: list[str] = []
+
+        def fake_llm(_: AnswerComposeRequest):
+            calls.append("called")
+            raise AssertionError("strict grounded mode should not call llm_answerer")
+
+        from learning_agent_service.tools.service import AnswerComposer
+
+        output = AnswerComposer(llm_answerer=fake_llm).compose(
+            AnswerComposeRequest(
+                raw_query="某某家常菜有券吗",
+                answer_contract=AnswerContract(
+                    allowed_facets=["coupon"],
+                    optional_facets=[],
+                    forbidden_facets=[],
+                    required_facets=[],
+                    evidence_requirements={},
+                    tool_requirements={},
+                    forbidden_without_evidence=[],
+                    candidate_entities=["某某家常菜"],
+                    selected_entity="某某家常菜",
+                    missing_slots=[],
+                    clarification_slot=None,
+                    answer_style="coupon_only",
+                    scope_kind="single_shop",
+                    facet_source_expectations={},
+                    extra={},
+                ),
+                answer_context={
+                    "current_shop": "某某家常菜",
+                    "required_facets": ["coupon"],
+                },
+                ranked_candidates=[
+                    {
+                        "shop_id": 1001,
+                        "name": "某某家常菜",
+                        "score": 4.8,
+                        "distance_km": 1.2,
+                        "avg_price": 68,
+                    }
+                ],
+                evidence_quality=EvidenceQualityDecision(response_mode="grounded", is_valid=True),
+                final_response_mode="grounded_strict",
+            )
+        )
+
+        self.assertEqual(calls, [])
+        self.assertIn("暂时没有找到足够可靠的依据", output.answer_text)
+        self.assertNotIn("当前有", output.answer_text)
+        self.assertNotIn("评分", output.answer_text)
+
+    def test_build_single_shop_review_answer_includes_address(self) -> None:
+        from learning_agent_service.local_life.response_builder.answers import build_single_shop_review_answer
+        from learning_agent_service.local_life.schemas import RankedCandidate
+
+        candidate = RankedCandidate.model_validate(
+            {
+                "shop_id": 1001,
+                "name": "某某家常菜",
+                "structured_features": {
+                    "score": 4.8,
+                    "avg_price": 68,
+                    "distance_km": 1.2,
+                    "address": "北京市朝阳区幸福路 18 号",
+                },
+            }
+        )
+
+        answer = build_single_shop_review_answer(
+            "某某家常菜",
+            [candidate],
+            [],
+        )
+
+        self.assertIn("地址：北京市朝阳区幸福路 18 号。", answer)
+
+    def test_answer_composer_strict_grounded_natural_branch_sanitizes_history_and_blocks_hallucinations(self) -> None:
+        calls: list[AnswerComposeRequest] = []
+
+        def fake_llm(request: AnswerComposeRequest):
+            calls.append(request)
+            return {"answer_text": "假店评分 5.0，推荐先去假店看看。"}
+
+        from learning_agent_service.tools.service import AnswerComposer
+
+        pack = EvidencePack(
+            evidence_status="OK",
+            items=[
+                EvidenceItem(
+                    chunk_id="child-1",
+                    content="山城一锅适合家庭聚餐，环境比较稳。",
+                    score=0.92,
+                    document_id="doc-1",
+                    chunk_type="review",
+                    citation_chunk_id="child-1",
+                    metadata={"title": "山城一锅评价"},
+                ),
+                EvidenceItem(
+                    chunk_id="child-2",
+                    content="海底捞服务更强，但价格更高。",
+                    score=0.89,
+                    document_id="doc-2",
+                    chunk_type="review",
+                    citation_chunk_id="child-2",
+                    metadata={"title": "海底捞评价"},
+                ),
+            ],
+            strong_items=[],
+        )
+        rag_result = RagResult(
+            status=RagStatus.OK,
+            evidence_pack=pack,
+            evidence_status="OK",
+        )
+
+        output = AnswerComposer(llm_answerer=fake_llm).compose(
+            AnswerComposeRequest(
+                raw_query="山城一锅和海底捞哪个好",
+                rag_result=rag_result,
+                answer_contract=AnswerContract(
+                    allowed_facets=["environment", "taste", "service", "recommendation", "scene_fit", "shop_detail"],
+                    optional_facets=[],
+                    forbidden_facets=[],
+                    required_facets=[],
+                    evidence_requirements={},
+                    tool_requirements={},
+                    forbidden_without_evidence=[],
+                    candidate_entities=["山城一锅", "海底捞"],
+                    selected_entity="山城一锅",
+                    missing_slots=[],
+                    clarification_slot=None,
+                    answer_style="comparison",
+                    scope_kind="comparison",
+                    facet_source_expectations={},
+                    extra={},
+                ),
+                answer_context={
+                    "current_shop": "山城一锅",
+                    "required_facets": ["environment", "service", "recommendation"],
+                    "history_summary": "刚才在聊一家叫幻影烧烤的店，评分 5.0。",
+                },
+                ranked_candidates=[
+                    {
+                        "shop_id": 1001,
+                        "name": "山城一锅",
+                        "score": 4.8,
+                        "distance_km": 1.2,
+                        "avg_price": 68,
+                    },
+                    {
+                        "shop_id": 1002,
+                        "name": "海底捞",
+                        "score": 4.9,
+                        "distance_km": 2.0,
+                        "avg_price": 98,
+                    },
+                ],
+                evidence_quality=EvidenceQualityDecision(response_mode="grounded", is_valid=True),
+                final_response_mode="grounded_strict",
+                history_summary="刚才在聊一家叫幻影烧烤的店，评分 5.0。",
+            )
+        )
+
+        self.assertEqual(len(calls), 0)
+        self.assertNotIn("幻影烧烤", output.answer_text)
+        self.assertNotIn("5.0", output.answer_text)
+        self.assertTrue(output.answer_text.strip())
 
     def test_answer_composer_can_return_direct_response_when_gate_denies_rag(self) -> None:
         from learning_agent_service.tools.service import AnswerComposer

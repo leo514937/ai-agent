@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from learning_agent_service.domain import (
+    FacetPlan,
     NormalizedToolResult,
     SseEnvelope,
     ToolExecutionCommand,
@@ -17,6 +18,7 @@ from learning_agent_service.domain import (
     ToolSelection,
 )
 from learning_agent_service.domain.enums import IntentType, ToolExecutionStatus
+from learning_agent_service.domain.errors import WorkflowErrorCode
 
 from .builtin import build_builtin_tool_registry
 from .executor import ToolExecutor as BaseToolExecutor
@@ -24,9 +26,31 @@ from .models import ToolExecutionResult as BaseExecutionResult
 from .models import ToolSelection as BaseToolSelection
 from .normalizer import ToolResultNormalizer as BaseToolResultNormalizer
 from .planner import ToolPlanner as BaseToolPlanner
+from .tool_adapter import ToolAdapter
+from .tool_call_validator import ToolCallValidationError, ToolCallValidator
 from .tool_error_classifier import classify_tool_error
 from .registry import ToolRegistry
+from .shop_id_enforcer import ShopIdMissingError
 from .transaction_store import InMemoryTransactionStore
+
+# ── Entity resolution for local life shop tools ─────────────────────────────
+# Tools that need a resolved shop_id to function properly.
+_TOOLS_NEEDING_SHOP_ID: frozenset[str] = frozenset({
+    "get_shop_detail", "restaurant_detail", "local_life_detail",
+    "create_booking", "restaurant_booking", "local_life_booking",
+    "create_order",
+    "get_coupon_list", "restaurant_coupon", "local_life_coupon",
+    "get_blog_list", "restaurant_blog", "local_life_blog",
+    "get_distance_eta", "restaurant_distance_eta", "local_life_distance_eta",
+    "restaurant_navigation", "local_life_navigation",
+    "check_open_status", "restaurant_open_status", "local_life_open_status",
+})
+
+# Tools that benefit from entity decomposition for search enrichment.
+_TOOLS_WITH_SEARCH: frozenset[str] = frozenset({
+    "search_restaurants", "restaurant_recommendation", "local_life_recommendation",
+    "restaurant_comparison", "local_life_comparison",
+})
 
 
 def build_default_tool_registry(
@@ -380,7 +404,7 @@ def _build_local_life_tool_input(tool_name: str, request: ToolPlanningRequest, s
 
     if normalized_tool_name in {"get_shop_detail", "restaurant_detail", "local_life_detail"}:
         return {
-            "shop_id": _slot_value(slots, "shop_id", "selected_shop_id"),
+            "shop_id": _slot_value(slots, "resolved_shop_id", "shop_id", "selected_shop_id"),
             "shop_name": _slot_value(slots, "shop_name", "shop_query", "name"),
             "query": _slot_value(slots, "query") or request.raw_query,
             "lat": _slot_value(slots, "lat"),
@@ -392,7 +416,7 @@ def _build_local_life_tool_input(tool_name: str, request: ToolPlanningRequest, s
         time_slot = _slot_mapping(_slot_value(slots, "time"))
         companions = _slot_list(slots, "companions")
         return {
-            "shop_id": _slot_value(slots, "shop_id", "selected_shop_id"),
+            "shop_id": _slot_value(slots, "resolved_shop_id", "shop_id", "selected_shop_id"),
             "shop_name": _slot_value(slots, "shop_name", "shop_query", "name"),
             "booking_time": _slot_value(slots, "booking_time") or time_slot.get("preferred_time") or time_slot.get("date"),
             "party_size": int(_slot_value(slots, "party_size") or (len(companions) + 1 if companions else 2)),
@@ -404,7 +428,7 @@ def _build_local_life_tool_input(tool_name: str, request: ToolPlanningRequest, s
 
     if normalized_tool_name in {"create_order"}:
         return {
-            "shop_id": _slot_value(slots, "shop_id", "selected_shop_id"),
+            "shop_id": _slot_value(slots, "resolved_shop_id", "shop_id", "selected_shop_id"),
             "shop_name": _slot_value(slots, "shop_name", "shop_query", "name"),
             "amount": _slot_value(slots, "amount") or _slot_value(slots, "target_price"),
             "note": _slot_value(slots, "note") or request.raw_query,
@@ -424,14 +448,14 @@ def _build_local_life_tool_input(tool_name: str, request: ToolPlanningRequest, s
 
     if normalized_tool_name in {"get_coupon_list", "restaurant_coupon", "local_life_coupon"}:
         return {
-            "shop_id": _slot_value(slots, "shop_id", "selected_shop_id"),
+            "shop_id": _slot_value(slots, "resolved_shop_id", "shop_id", "selected_shop_id"),
             "shop_name": _slot_value(slots, "shop_name", "shop_query", "name"),
             "limit": int(_slot_value(slots, "limit") or 10),
         }
 
     if normalized_tool_name in {"get_blog_list", "restaurant_blog", "local_life_blog"}:
         return {
-            "shop_id": _slot_value(slots, "shop_id", "selected_shop_id"),
+            "shop_id": _slot_value(slots, "resolved_shop_id", "shop_id", "selected_shop_id"),
             "user_id": _slot_value(slots, "user_id"),
             "shop_name": _slot_value(slots, "shop_name", "shop_query", "name"),
             "current": int(_slot_value(slots, "current") or 1),
@@ -441,7 +465,7 @@ def _build_local_life_tool_input(tool_name: str, request: ToolPlanningRequest, s
     if normalized_tool_name in {"get_distance_eta", "restaurant_distance_eta", "local_life_distance_eta", "restaurant_navigation", "local_life_navigation"}:
         location = _slot_mapping(_slot_value(slots, "location"))
         return {
-            "shop_id": _slot_value(slots, "shop_id", "selected_shop_id"),
+            "shop_id": _slot_value(slots, "resolved_shop_id", "shop_id", "selected_shop_id"),
             "shop_name": _slot_value(slots, "shop_name", "shop_query", "name"),
             "lat": _slot_value(slots, "lat") or location.get("lat"),
             "lng": _slot_value(slots, "lng") or location.get("lng"),
@@ -453,7 +477,7 @@ def _build_local_life_tool_input(tool_name: str, request: ToolPlanningRequest, s
 
     if normalized_tool_name in {"check_open_status", "restaurant_open_status", "local_life_open_status"}:
         return {
-            "shop_id": _slot_value(slots, "shop_id", "selected_shop_id"),
+            "shop_id": _slot_value(slots, "resolved_shop_id", "shop_id", "selected_shop_id"),
             "shop_name": _slot_value(slots, "shop_name", "shop_query", "name"),
             "open_hours": _slot_value(slots, "open_hours"),
         }
@@ -535,6 +559,45 @@ def _has_business_evidence(tool_name: str | None, payload: Mapping[str, Any] | N
     return bool(data)
 
 
+def _has_rag_evidence(request: Any) -> bool:
+    """检查是否有 RAG evidence"""
+    if request is None:
+        return False
+    rag_result = getattr(request, "rag_result", None)
+    if rag_result is None:
+        return False
+    evidence_pack = getattr(rag_result, "evidence_pack", None)
+    if evidence_pack is None:
+        return False
+    items = getattr(evidence_pack, "items", [])
+    return bool(items)
+
+
+def _classify_grounding_source(
+    tool_name: str | None,
+    payload: Mapping[str, Any] | None,
+    request: Any = None,
+) -> str:
+    """
+    分类 grounding source，支持 4 种类型：
+    - business_evidence: Tool 返回了有效数据
+    - rag_evidence: RAG 返回了有效 evidence
+    - mixed_evidence: Tool + RAG 都有
+    - not_grounded: 都没有
+    """
+    has_tool = _has_business_evidence(tool_name, payload)
+    has_rag = _has_rag_evidence(request)
+    
+    if has_tool and has_rag:
+        return "mixed_evidence"
+    elif has_tool:
+        return "business_evidence"
+    elif has_rag:
+        return "rag_evidence"
+    else:
+        return "not_grounded"
+
+
 def _classify_tool_failure(
     *,
     tool_name: str | None,
@@ -556,6 +619,10 @@ def _classify_tool_failure(
         approval_status=approval_state,
     )
     category = classification.category
+    
+    if category is None and _looks_like_no_result(tool_name, payload):
+        category = "no_result"
+        
     if category is None:
         return None
     mapping = {
@@ -608,7 +675,7 @@ class ToolPlanner:
                 }
             )
 
-    def plan(self, request: ToolPlanningRequest) -> ToolSelection:
+    def plan(self, request: ToolPlanningRequest, facet_plans: list[FacetPlan] | None = None) -> ToolSelection:
         routing = getattr(request, "routing_decision", None)
         required_action = str(getattr(routing, "required_action", "") or "").strip().lower()
         legacy_decision = str(getattr(request, "decision", "") or "").strip().lower()
@@ -617,16 +684,58 @@ class ToolPlanner:
         slots.setdefault("topic", request.current_topic or request.raw_query)
         slot_approval_status = str(_slot_value(slots, "approval_status", "approval_decision") or "").strip().lower() or None
         slot_approval_request = dict(_slot_mapping(_slot_value(slots, "approval_request")))
-        resolved_intent = _resolve_planner_intent(request, slots)
-        slots.setdefault("tool_input", {"topic": slots.get("topic")})
-        planning_meta = {
+
+        planning_meta: dict[str, Any] = {
             "decision": required_action or str(request.decision),
             "requested_intent": _normalize_key(request.intent),
-            "resolved_intent": resolved_intent,
             "need_tool": need_tool,
             "current_topic": request.current_topic,
             "raw_query": request.raw_query,
         }
+        if not need_tool:
+            return ToolSelection(
+                tool_name=None,
+                should_execute=False,
+                reason="decision_not_tool_then_answer",
+                approval_status=None,
+                approval_request={},
+                extra={**planning_meta, "planning_state": "not_required"},
+            )
+
+        # facet_plan 新路径：当 facet_plans 非空时，直接从 FacetPlan 生成 ToolSelection
+        if facet_plans:
+            planner = self.planner
+            assert planner is not None
+            facet_selections = planner.plan_from_facets(facet_plans, slots)
+            if facet_selections:
+                sel = facet_selections[0]
+                approval_required = sel.tool_name in _APPROVAL_REQUIRED_TOOLS if sel.tool_name else False
+                approval_request = slot_approval_request or _build_approval_request(
+                    sel.tool_name, sel.input_payload, reason=sel.reason,
+                )
+                return ToolSelection(
+                    tool_name=sel.tool_name,
+                    should_execute=True,
+                    input_payload=sel.input_payload,
+                    reason=sel.reason,
+                    approval_required=approval_required or bool(getattr(sel, "approval_required", False)),
+                    approval_status=slot_approval_status if approval_required else None,
+                    approval_request=approval_request if approval_required else {},
+                    extra={
+                        **planning_meta,
+                        "resolved_intent": f"facet_plan:{[fp.name for fp in facet_plans]}",
+                        "planning_state": "facet_plan",
+                        "selection_source": "facet_planner",
+                        "tool_call_id": str(uuid.uuid4()),
+                        "approval_required": approval_required,
+                        "approval_request": approval_request if approval_required else {},
+                    },
+                )
+
+        # 旧路径：通过 intent 解析链
+        resolved_intent = _resolve_planner_intent(request, slots)
+        planning_meta["resolved_intent"] = resolved_intent
+        slots.setdefault("tool_input", {"topic": slots.get("topic")})
         if not need_tool:
             return ToolSelection(
                 tool_name=None,
@@ -731,12 +840,144 @@ class ToolPlanner:
         )
 
 
+# ── Shop resolution: decompose → recall → bind ──────────────────────────────
+import logging as _logging
+
+_shop_resolution_logger = _logging.getLogger(__name__)
+
+
+def _resolve_shop_from_query(
+    client: Any,
+    tool_name: str,
+    input_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Resolve shop_query → shop_id via entity decomposition + recall + bind.
+
+    For tools needing shop_id: if shop_id is absent but shop_query exists,
+    decompose the query, recall candidates, and bind a single shop_id.
+    Enriches the input_payload with resolved_shop_id and entity metadata.
+
+    Returns the (possibly enriched) input_payload.
+    On error, returns the original input_payload unchanged.
+    """
+    from ..local_life.entity_decomposer import decompose_shop_query
+    from ..local_life.recall_service import recall_candidates
+    from ..local_life.shop_binding import bind_shop_id
+
+    shop_query = input_payload.get("shop_query") or input_payload.get("shop_name") or ""
+    if not shop_query or not isinstance(shop_query, str) or not shop_query.strip():
+        return input_payload
+
+    # Gather known brands/areas from client (with fallback to hardcoded lists)
+    known_brands: list[str] | None = None
+    known_areas: list[str] | None = None
+    if client is not None:
+        try:
+            if hasattr(client, "get_brand_list"):
+                known_brands = client.get_brand_list()
+        except Exception:
+            pass
+        try:
+            if hasattr(client, "get_area_list"):
+                known_areas = client.get_area_list()
+        except Exception:
+            pass
+
+    entity = decompose_shop_query(
+        raw_query=shop_query,
+        known_brands=known_brands,
+        known_areas=known_areas,
+    )
+
+    _shop_resolution_logger.debug(
+        "entity_resolved: tool=%s brand=%s area=%s category=%s",
+        tool_name, entity.brand, entity.area, entity.category,
+    )
+
+    if client is None:
+        return input_payload
+
+    try:
+        recall = recall_candidates(client, entity)
+    except Exception as exc:
+        _shop_resolution_logger.warning("recall_candidates failed: %s", exc)
+        return input_payload
+
+    shop_id, clarification_card = bind_shop_id(recall, allow_clarification=True)
+
+    enriched = dict(input_payload)
+
+    # Always attach entity metadata for downstream use
+    enriched["entity_brand"] = entity.brand
+    enriched["entity_area"] = entity.area
+    enriched["entity_category"] = entity.category
+    enriched["recall_strategy"] = recall.strategy
+    enriched["recall_count"] = len(recall.candidates)
+
+    if shop_id is not None:
+        enriched["resolved_shop_id"] = shop_id
+        if "shop_id" not in enriched or not enriched.get("shop_id"):
+            enriched["shop_id"] = shop_id
+        _shop_resolution_logger.info(
+            "shop_bound: tool=%s shop_id=%d strategy=%s",
+            tool_name, shop_id, recall.strategy,
+        )
+
+    if clarification_card is not None:
+        enriched["clarification_card"] = clarification_card.model_dump(mode="json")
+        _shop_resolution_logger.info(
+            "clarification_needed: tool=%s candidates=%d",
+            tool_name, len(recall.candidates),
+        )
+
+    return enriched
+
+
+def _build_tool_failure_result(
+    selection: BaseToolSelection,
+    *,
+    error_code: WorkflowErrorCode,
+    message: str,
+    status: ToolExecutionStatus = ToolExecutionStatus.FAILED,
+    clarification_needed: bool = False,
+) -> ToolExecutionResult:
+    extra: dict[str, Any] = {
+        "tool_call_id": (getattr(selection, "extra", {}) or {}).get("tool_call_id"),
+        "error_code": error_code.value,
+        "error_message": message,
+        "retryable": False,
+        "degraded": False,
+        "degrade_to": None,
+        "duration_ms": 0,
+        "clarification_needed": clarification_needed,
+    }
+    output_payload: dict[str, Any] = {}
+    if clarification_needed:
+        output_payload = {
+            "clarification_needed": True,
+            "clarification_question": "请补充店铺信息后再试。",
+        }
+    return ToolExecutionResult(
+        status=status,
+        tool_name=selection.tool_name,
+        output_payload=output_payload,
+        degraded_to=None,
+        error=error_code,
+        approval_required=False,
+        approval_status=None,
+        approval_request={},
+        extra=extra,
+    )
+
+
 @dataclass
 class ToolExecutor:
     java_business_client: Any | None = None
     transaction_store: InMemoryTransactionStore | None = None
     registry: ToolRegistry | None = None
     executor: BaseToolExecutor | None = None
+    tool_call_validator: ToolCallValidator | None = None
+    tool_adapter: ToolAdapter | None = None
 
     def __post_init__(self) -> None:
         if self.registry is None:
@@ -746,6 +987,10 @@ class ToolExecutor:
             )
         if self.executor is None:
             self.executor = BaseToolExecutor(self.registry)
+        if self.tool_call_validator is None:
+            self.tool_call_validator = ToolCallValidator(self.registry)
+        if self.tool_adapter is None:
+            self.tool_adapter = ToolAdapter()
 
     def execute(self, command: ToolExecutionCommand) -> ToolExecutionResult:
         selection = command.selection
@@ -790,6 +1035,48 @@ class ToolExecutor:
                     "p0_enabled": False,
                 },
             )
+
+        validator = self.tool_call_validator
+        adapter = self.tool_adapter
+        assert validator is not None
+        assert adapter is not None
+
+        try:
+            validator.validate(selection.tool_name, dict(selection.input_payload))
+        except ToolCallValidationError as exc:
+            return _build_tool_failure_result(
+                selection,
+                error_code=WorkflowErrorCode.INVALID_REQUEST,
+                message=str(exc),
+            )
+
+        try:
+            adapted_selection = adapter.adapt(
+                BaseToolSelection(
+                    tool_name=selection.tool_name,
+                    input_payload=dict(selection.input_payload),
+                    reason=selection.reason,
+                    degrade_to=selection.extra.get("degrade_to") if selection.extra else None,
+                    timeout_ms=selection.extra.get("timeout_ms") if selection.extra else None,
+                    approval_required=bool(getattr(selection, "approval_required", False) or (selection.extra or {}).get("approval_required")),
+                    approval_status=getattr(selection, "approval_status", None) or (selection.extra or {}).get("approval_status"),
+                    approval_request=dict(getattr(selection, "approval_request", {}) or (selection.extra or {}).get("approval_request", {})),
+                ),
+                resolved_shop=(selection.extra or {}).get("resolved_shop"),
+                shop_id=selection.input_payload.get("shop_id"),
+            )
+        except ShopIdMissingError as exc:
+            return _build_tool_failure_result(
+                selection,
+                error_code=WorkflowErrorCode.CLARIFICATION_PENDING,
+                message=str(exc),
+                status=ToolExecutionStatus.FAILED,
+                clarification_needed=True,
+            )
+
+        selection = selection.model_copy(
+            update={"input_payload": adapted_selection.input_payload}
+        )
 
         base_selection = BaseToolSelection(
             tool_name=selection.tool_name,
@@ -884,7 +1171,7 @@ class ToolResultNormalizer:
             approval_required=payload.approval_required,
             approval_status=payload.approval_status,
         )
-        grounding_source = "business_evidence" if _has_business_evidence(normalized.tool_name, normalized.payload) else "not_grounded"
+        grounding_source = _classify_grounding_source(normalized.tool_name, normalized.payload, request)
         return NormalizedToolResult(
             status=normalized_status,
             tool_name=normalized.tool_name,

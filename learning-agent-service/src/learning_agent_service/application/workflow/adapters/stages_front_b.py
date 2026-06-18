@@ -1,16 +1,71 @@
+import json
+import logging
 from typing import Any
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
 
-from learning_agent_service.application.router.base import routing_trace_payload, _update_phase0_trace, _update_phase1_trace, _update_phase2_trace
-from learning_agent_service.local_life.hybrid_router import build_routing_decision_from_hybrid_router as build_initial_routing_decision
-from learning_agent_service.application.router.phase1_intent import build_rewrite_decision
-from learning_agent_service.application.router.phase2_slots import build_evidence_quality
-from learning_agent_service.application.router.phase5_retrieval import can_enter_retrieval
-from learning_agent_service.application.router.phase6_tool import ensure_tool_plan
+from .helpers import _effective_should_call_tool, routing_trace_payload, _update_phase0_trace, _update_phase1_trace, _update_phase2_trace
+from .helpers import _build_facet_routing_decision
+from .helpers import build_rewrite_decision
+from .helpers import build_evidence_quality
+from .helpers import can_enter_retrieval
+from .helpers import ensure_tool_plan
 from learning_agent_service.domain.contracts import CitationBuildRequest, EvidenceEvaluationRequest, HybridRetrieveRequest, QueryRewriteRequest, ReviewReport, ToolExecutionCommand, ToolNormalizationRequest, ToolPlanningRequest
 
 from .helpers import Any, ClarificationCard, GraphState, Mapping, _append_stage_metric, _apply_phase1_routing_extra, _build_phase2_trace, _build_raw_retrieval_plan, _coerce_retrieval_plan, _emit_stage_state, _mark_degrade, _QUERY_REWRITE_TIMEOUT_SECONDS, _routing_decision_for_turn
+
+_LOGGER = logging.getLogger(__name__)
+
+
+def _facet_name_list(value: Any) -> list[str]:
+    names: list[str] = []
+    for item in list(value or []):
+        if isinstance(item, Mapping):
+            name = str(item.get("name") or "").strip()
+        else:
+            name = str(item or "").strip()
+        if name:
+            names.append(name)
+    return names
+
+
+def _tool_status_text(value: Any) -> str | None:
+    if value is None:
+        return None
+    raw = getattr(value, "value", value)
+    text = str(raw).strip()
+    return text or None
+
+
+def _emit_tool_pipeline_trace(state: GraphState, stage: str) -> None:
+    turn = state["turn"]
+    routing = _routing_decision_for_turn(turn)
+    turn_extra = dict(getattr(turn, "extra", {}) or {})
+    routing_extra = dict(getattr(routing, "extra", {}) or {}) if routing is not None else {}
+    answer_contract = dict(turn_extra.get("answer_contract") or {})
+    selection = getattr(turn, "tool_plan", None)
+    raw_result = getattr(turn, "raw_tool_result", None)
+    normalized_result = getattr(turn, "tool_result", None)
+    payload = {
+        "trace_id": state["runtime"].trace_id,
+        "session_id": state["runtime"].session_id,
+        "turn_id": state["runtime"].turn_id,
+        "stage": stage,
+        "routing_required_facets": _facet_name_list(routing_extra.get("required_facets")),
+        "answer_contract_required_facets": _facet_name_list(answer_contract.get("required_facets")),
+        "tool_plan": {
+            "tool_name": getattr(selection, "tool_name", None),
+            "should_execute": bool(getattr(selection, "should_execute", False)) if selection is not None else False,
+            "approval_required": bool(getattr(selection, "approval_required", False)) if selection is not None else False,
+            "reason": getattr(selection, "reason", None) if selection is not None else None,
+            "selection_source": getattr(selection, "extra", {}).get("selection_source") if selection is not None else None,
+        },
+        "tool_result": {
+            "tool_name": getattr(normalized_result, "tool_name", None) if normalized_result is not None else getattr(raw_result, "tool_name", None),
+            "status": _tool_status_text(normalized_result.status if normalized_result is not None else (raw_result.status if raw_result is not None else None)),
+        },
+    }
+    _LOGGER.info("tool_pipeline_trace %s", json.dumps(payload, ensure_ascii=False, default=str))
 
 
 class WorkflowNodeAdapterStagesFrontBMixin:
@@ -48,6 +103,9 @@ class WorkflowNodeAdapterStagesFrontBMixin:
             return clarification_result, pending_clarification
     
         def rewrite_query(self, state: GraphState) -> GraphState:
+            settings = getattr(self.container, "settings", None)
+            if settings is not None and not bool(getattr(settings, "enable_rag", True)):
+                return state
             rag_orchestrator = getattr(self.container, "rag_orchestrator", None)
             if rag_orchestrator is None or not hasattr(rag_orchestrator, "rewrite_query"):
                 return state
@@ -91,7 +149,7 @@ class WorkflowNodeAdapterStagesFrontBMixin:
                     extra=cached_plan.extra,
                 )
                 if routing is None:
-                    routing = build_initial_routing_decision(turn.raw_query, state["persistent"], client_context=state["runtime"].client_context)
+                    routing = _build_facet_routing_decision(turn.raw_query, state["persistent"], client_context=state["runtime"].client_context)
                 routing = routing.model_copy(update={"rewrite_decision": rewrite_decision})
                 elapsed_ms = (time.perf_counter() - started_at) * 1000.0
                 _append_stage_metric(state, "query_rewrite", elapsed_ms)
@@ -138,7 +196,7 @@ class WorkflowNodeAdapterStagesFrontBMixin:
                     extra=plan.extra,
                 )
                 if routing is None:
-                    routing = build_initial_routing_decision(turn.raw_query, state["persistent"], client_context=state["runtime"].client_context)
+                    routing = _build_facet_routing_decision(turn.raw_query, state["persistent"], client_context=state["runtime"].client_context)
                 routing = routing.model_copy(update={"rewrite_decision": rewrite_decision})
                 elapsed_ms = (time.perf_counter() - started_at) * 1000.0
                 _append_stage_metric(state, "query_rewrite", elapsed_ms)
@@ -230,7 +288,7 @@ class WorkflowNodeAdapterStagesFrontBMixin:
                 extra=plan.extra,
             )
             if routing is None:
-                routing = build_initial_routing_decision(turn.raw_query, state["persistent"], client_context=state["runtime"].client_context)
+                    routing = _build_facet_routing_decision(turn.raw_query, state["persistent"], client_context=state["runtime"].client_context)
             routing = routing.model_copy(update={"rewrite_decision": rewrite_decision})
             _emit_stage_state(
                 state,
@@ -254,6 +312,9 @@ class WorkflowNodeAdapterStagesFrontBMixin:
             return state
     
         def hybrid_retrieve(self, state: GraphState) -> GraphState:
+            settings = getattr(self.container, "settings", None)
+            if settings is not None and not bool(getattr(settings, "enable_rag", True)):
+                return state
             rag_orchestrator = getattr(self.container, "rag_orchestrator", None)
             turn = state["turn"]
             routing = _routing_decision_for_turn(turn)
@@ -330,6 +391,9 @@ class WorkflowNodeAdapterStagesFrontBMixin:
             return state
     
         def evaluate_evidence(self, state: GraphState) -> GraphState:
+            settings = getattr(self.container, "settings", None)
+            if settings is not None and not bool(getattr(settings, "enable_rag", True)):
+                return state
             rag_orchestrator = getattr(self.container, "rag_orchestrator", None)
             turn = state["turn"]
             eligibility = can_enter_retrieval(state)
@@ -443,6 +507,9 @@ class WorkflowNodeAdapterStagesFrontBMixin:
             return state
     
         def citation_builder(self, state: GraphState) -> GraphState:
+            settings = getattr(self.container, "settings", None)
+            if settings is not None and not bool(getattr(settings, "enable_rag", True)):
+                return state
             rag_orchestrator = getattr(self.container, "rag_orchestrator", None)
             turn = state["turn"]
             eligibility = can_enter_retrieval(state)
@@ -457,11 +524,73 @@ class WorkflowNodeAdapterStagesFrontBMixin:
             planner = getattr(self.container, "tool_planner", None)
             if planner is None or not hasattr(planner, "plan"):
                 return state
-    
+
             turn = state["turn"]
             routing = _routing_decision_for_turn(turn)
-            if routing is not None and not routing.should_call_tool:
+            if routing is not None and not _effective_should_call_tool(routing):
                 return state
+
+            slots = dict(turn.slots)
+            routing_extra = dict(getattr(routing, "extra", {}) or {}) if routing is not None else {}
+            turn_extra = dict(getattr(turn, "extra", {}) or {})
+            current_shop = str(
+                turn_extra.get("current_shop")
+                or turn_extra.get("selected_shop_name")
+                or getattr(state["persistent"], "current_shop", None)
+                or getattr(state["persistent"], "selected_shop_name", None)
+                or ""
+            ).strip() or None
+            selected_shop_id = turn_extra.get("selected_shop_id") or turn_extra.get("target_shop_id") or getattr(state["persistent"], "selected_shop_id", None)
+            if current_shop:
+                slots.setdefault("shop_name", current_shop)
+                slots.setdefault("selected_shop_name", current_shop)
+                slots.setdefault("current_shop", current_shop)
+                slots.setdefault("shop_query", current_shop)
+            if selected_shop_id is not None:
+                slots.setdefault("shop_id", selected_shop_id)
+                slots.setdefault("selected_shop_id", selected_shop_id)
+            answer_contract = dict(turn_extra.get("answer_contract") or {})
+            required_facets = list(answer_contract.get("required_facets") or routing_extra.get("required_facets") or [])
+            facet_tool_map = {
+                "open_status": "check_open_status",
+                "coupon": "get_coupon_list",
+                "distance_eta": "get_distance_eta",
+                "distance": "get_distance_eta",
+            }
+            # 把实时 facet 显式翻译成 tool_name，避免 planner 只看 intent 时漏掉本地生活工具。
+            if "tool_name" not in slots:
+                for facet_item in required_facets:
+                    facet_name = str(facet_item.get("name") or "").strip() if isinstance(facet_item, dict) else ""
+                    tool_name = facet_tool_map.get(facet_name)
+                    if not tool_name:
+                        continue
+                    slots["tool_name"] = tool_name
+                    slots.setdefault("action", facet_name)
+                    slots.setdefault("local_life_action", facet_name)
+                    break
+            if "tool_name" not in slots:
+                for facet_item in list(answer_contract.get("required_facets") or []):
+                    facet_name = str(facet_item.get("name") or "").strip().lower() if isinstance(facet_item, dict) else ""
+                    tool_name = facet_tool_map.get(facet_name)
+                    if not tool_name:
+                        continue
+                    slots["tool_name"] = tool_name
+                    slots.setdefault("action", facet_name)
+                    slots.setdefault("local_life_action", facet_name)
+                    break
+            if "tool_name" not in slots:
+                semantic_route = dict((routing_extra.get("route_review_decision") or {}).get("semantic_route") or {})
+                for candidate_name in list(semantic_route.get("tool_candidates") or []):
+                    candidate_text = str(candidate_name or "").strip()
+                    if candidate_text:
+                        slots["tool_name"] = candidate_text
+                        break
+
+            # 这里要把补全后的 slots 写回 turn，否则后面的 synthesize_tool_selection 仍然只能看到旧上下文。
+            if slots != dict(turn.slots):
+                state["turn"] = turn.model_copy(update={"slots": slots})
+                turn = state["turn"]
+
             state = ensure_tool_plan(state)
             turn = state["turn"]
             routing = _routing_decision_for_turn(turn)
@@ -486,6 +615,7 @@ class WorkflowNodeAdapterStagesFrontBMixin:
                     turn_extra["routing_decision"] = routing.model_dump(mode="json")
                     turn_extra["routing_trace"] = routing_trace_payload(routing)
                 state["turn"] = turn.model_copy(update={"tool_plan": selection, "extra": turn_extra})
+                _emit_tool_pipeline_trace(state, "tool_planner")
                 return state
             selection = planner.plan(
                 ToolPlanningRequest(
@@ -493,7 +623,7 @@ class WorkflowNodeAdapterStagesFrontBMixin:
                     decision=(routing.required_action if routing is not None else "no_op"),
                     routing_decision=routing,
                     intent=turn.intent,
-                    slots=dict(turn.slots),
+                    slots=slots,
                     current_topic=state["persistent"].current_topic,
                 )
             )
@@ -516,6 +646,7 @@ class WorkflowNodeAdapterStagesFrontBMixin:
                 turn_extra["routing_decision"] = routing.model_dump(mode="json")
                 turn_extra["routing_trace"] = routing_trace_payload(routing)
             state["turn"] = turn.model_copy(update={"tool_plan": selection, "extra": turn_extra})
+            _emit_tool_pipeline_trace(state, "tool_planner")
             return state
     
         def tool_executor(self, state: GraphState) -> GraphState:
@@ -535,7 +666,30 @@ class WorkflowNodeAdapterStagesFrontBMixin:
                 "degrade_to": getattr(result, "degrade_to", None),
                 "duration_ms": getattr(result, "duration_ms", 0),
             }
-            state["turn"] = turn.model_copy(update={"raw_tool_result": result, "extra": turn_extra})
+            # ── Entity resolution clarification bridge ──────────────────────
+            # When ToolExecutor short-circuits with a clarification_card
+            # (from entity resolution: multi-shop ambiguity), propagate it
+            # to turn.clarification_card and set terminal_event so the emit
+            # stage emits a dedicated clarification_card SSE event.
+            update_kwargs: dict[str, Any] = {"raw_tool_result": result, "extra": turn_extra}
+            cc_from_result = (result.extra or {}).get("clarification_card")
+            if cc_from_result is not None and turn.clarification_card is None:
+                try:
+                    from learning_agent_service.domain.contracts import ClarificationCard
+                    if isinstance(cc_from_result, dict):
+                        cc = ClarificationCard.model_validate(cc_from_result)
+                    else:
+                        cc = cc_from_result
+                    update_kwargs["clarification_card"] = cc
+                    turn_extra["clarification_needed"] = True
+                    from learning_agent_service.domain.errors import TerminalEvent
+                    state["runtime"] = state["runtime"].model_copy(
+                        update={"terminal_event": TerminalEvent.CLARIFICATION_CARD}
+                    )
+                except Exception:
+                    pass
+            state["turn"] = turn.model_copy(update=update_kwargs)
+            _emit_tool_pipeline_trace(state, "tool_executor")
             return state
     
         def tool_result_normalizer(self, state: GraphState) -> GraphState:
@@ -545,6 +699,23 @@ class WorkflowNodeAdapterStagesFrontBMixin:
                 return state
             result = normalizer.normalize(ToolNormalizationRequest(result=turn.raw_tool_result))
             turn_extra = dict(turn.extra)
+            serialized_result = result.model_dump(mode="json") if hasattr(result, "model_dump") else dict(result)
+            facet_result_bundle = dict(turn_extra.get("facet_result_bundle") or {})
+            tool_results = list(facet_result_bundle.get("tool_results") or turn_extra.get("tool_results") or [])
+            tool_results = [
+                item
+                for item in tool_results
+                if not (
+                    isinstance(item, dict)
+                    and str(item.get("tool_name") or "").strip() == str(serialized_result.get("tool_name") or "").strip()
+                    and str(item.get("facet") or "").strip() == str(serialized_result.get("facet") or "").strip()
+                    and str(item.get("shop_id") or "").strip() == str(serialized_result.get("shop_id") or "").strip()
+                )
+            ]
+            tool_results.append(serialized_result)
+            facet_result_bundle["tool_results"] = tool_results
+            turn_extra["tool_results"] = tool_results
+            turn_extra["facet_result_bundle"] = facet_result_bundle
             turn_extra["tool_result_normalizer"] = {
                 "tool_name": result.tool_name,
                 "status": str(getattr(getattr(result, "status", None), "value", getattr(result, "status", ""))),
@@ -570,4 +741,5 @@ class WorkflowNodeAdapterStagesFrontBMixin:
                     },
                 )
             state["turn"] = turn.model_copy(update={"tool_result": result, "extra": turn_extra})
+            _emit_tool_pipeline_trace(state, "tool_result_normalizer")
             return state

@@ -14,17 +14,21 @@ try:
     import ormsgpack
 
     if not hasattr(JsonPlusSerializer, "dumps"):
+
         def _jsonplus_dumps(self, obj):
             type_, data = self.dumps_typed(obj)
             return ormsgpack.packb((type_, data))
+
         JsonPlusSerializer.dumps = _jsonplus_dumps
 
     if not hasattr(JsonPlusSerializer, "loads"):
+
         def _jsonplus_loads(self, data):
             if not data:
                 return {}
             type_, data_ = ormsgpack.unpackb(data)
             return self.loads_typed((type_, data_))
+
         JsonPlusSerializer.loads = _jsonplus_loads
 except Exception:
     pass
@@ -39,7 +43,11 @@ from ...domain.state import GraphState, clone_graph_state
 from ...domain import ChatTurnCommand, build_initial_state
 from ...domain.contracts import PersistentSessionContext, SseEnvelope
 from collections.abc import Iterable, Mapping
-from .topology import MAIN_GRAPH_TOPOLOGY, describe_langgraph_topology as describe_main_graph_topology, export_langgraph_mermaid as export_main_graph_mermaid
+from .topology import (
+    MAIN_GRAPH_TOPOLOGY,
+    describe_langgraph_topology as describe_main_graph_topology,
+    export_langgraph_mermaid as export_main_graph_mermaid,
+)
 from .subgraphs import (
     route_gate,
     route_decider,
@@ -49,6 +57,7 @@ StateGraph: Any = None
 END: Any = "__end__"
 try:
     from langgraph.graph import END as _END, StateGraph as _StateGraph  # type: ignore[import-not-found, import]
+
     END = _END
     StateGraph = _StateGraph
 except ImportError:  # pragma: no cover - optional dependency
@@ -123,11 +132,17 @@ class LangGraphWorkflowRunner(BaseWorkflowRunner):
         workflow_version: str = "learn-agent/v1",
         checkpointer: Any = None,
     ) -> None:
-        super().__init__(services=services, workflow_version=workflow_version, runner_kind="langgraph")
+        super().__init__(
+            services=services, workflow_version=workflow_version, runner_kind="langgraph"
+        )
         self._checkpointer = checkpointer
-        self._graph = _CheckpointAwareGraphProxy(_build_langgraph_runner(services, checkpointer=checkpointer))
-        self._graph_without_checkpointer = self._graph if checkpointer is None else _CheckpointAwareGraphProxy(
-            _build_langgraph_runner(services, checkpointer=None)
+        self._graph = _CheckpointAwareGraphProxy(
+            _build_langgraph_runner(services, checkpointer=checkpointer)
+        )
+        self._graph_without_checkpointer = (
+            self._graph
+            if checkpointer is None
+            else _CheckpointAwareGraphProxy(_build_langgraph_runner(services, checkpointer=None))
         )
 
     def _execution_graph(self):
@@ -187,7 +202,7 @@ class LangGraphWorkflowRunner(BaseWorkflowRunner):
                 return
             except Exception:
                 pass
-        
+
         try:
             result = graph.invoke(state, config=_build_graph_config(state))
         except Exception as exc:
@@ -202,7 +217,9 @@ class LangGraphWorkflowRunner(BaseWorkflowRunner):
     @staticmethod
     def _normalize_emitted_events(events, state):
         turn = state.get("turn") if isinstance(state, dict) else None
-        final_answer = str(getattr(turn, "final_answer", "") or "").strip() if turn is not None else ""
+        final_answer = (
+            str(getattr(turn, "final_answer", "") or "").strip() if turn is not None else ""
+        )
         for event in events:
             yield LangGraphWorkflowRunner._normalize_emitted_event(event, state, final_answer)
 
@@ -237,7 +254,9 @@ class LangGraphWorkflowRunner(BaseWorkflowRunner):
         runtime_metrics = dict(getattr(runtime, "metrics", {}) or {}) if runtime is not None else {}
         payload = dict(payload_dict or {})
 
-        final_answer = str(payload.get("answer_text") or getattr(turn, "final_answer", "") or "").strip()
+        final_answer = str(
+            payload.get("answer_text") or getattr(turn, "final_answer", "") or ""
+        ).strip()
         if final_answer:
             payload["answer_text"] = final_answer
 
@@ -245,7 +264,9 @@ class LangGraphWorkflowRunner(BaseWorkflowRunner):
         if not isinstance(citations, list):
             turn_citations = list(getattr(turn, "citations", []) or []) if turn is not None else []
             payload["citations"] = [
-                citation.model_dump(mode="json") if hasattr(citation, "model_dump") else dict(citation)
+                citation.model_dump(mode="json")
+                if hasattr(citation, "model_dump")
+                else dict(citation)
                 for citation in turn_citations
             ]
 
@@ -271,13 +292,18 @@ class LangGraphWorkflowRunner(BaseWorkflowRunner):
         payload.setdefault("mode", str(turn_extra.get("mode") or "recommend"))
         payload.setdefault("source", "local-life-agent")
         payload.setdefault("page", getattr(runtime, "page", None))
-        payload.setdefault("selected_shop_id", turn_extra.get("selected_shop_id") or getattr(persistent, "selected_shop_id", None))
+        payload.setdefault(
+            "selected_shop_id",
+            turn_extra.get("selected_shop_id") or getattr(persistent, "selected_shop_id", None),
+        )
         routing = getattr(turn, "routing_decision", None) if turn is not None else None
         payload.setdefault("route_decision", getattr(routing, "required_action", None))
         payload.setdefault("route_reason", getattr(routing, "route_reason", None))
         payload.setdefault("current_stage", getattr(turn, "current_stage", None))
         payload.setdefault("stage_status", getattr(turn, "stage_status", None))
-        payload.setdefault("stage_timeline", [dict(item) for item in (getattr(turn, "stage_timeline", None) or [])])
+        payload.setdefault(
+            "stage_timeline", [dict(item) for item in (getattr(turn, "stage_timeline", None) or [])]
+        )
         payload.setdefault("cards", list(turn_extra.get("cards") or []))
         payload.setdefault("shops", list(turn_extra.get("shops") or []))
         payload.setdefault("vouchers", list(turn_extra.get("vouchers") or []))
@@ -291,7 +317,9 @@ class LangGraphWorkflowRunner(BaseWorkflowRunner):
         payload.setdefault("retrieval_summary", turn_extra.get("retrieval_summary"))
         payload.setdefault("memory_used_summary", turn_extra.get("memory_used_summary"))
         payload.setdefault("memory_updates", dict(turn_extra.get("memory_updates") or {}))
-        payload.setdefault("confidence", getattr(turn, "intent_confidence", 0.0) if turn is not None else 0.0)
+        payload.setdefault(
+            "confidence", getattr(turn, "intent_confidence", 0.0) if turn is not None else 0.0
+        )
         payload.setdefault("approval_required", bool(turn_extra.get("approval_required")))
         payload.setdefault("approval_request", dict(turn_extra.get("approval_request") or {}))
         payload.setdefault("transaction_draft", dict(turn_extra.get("transaction_draft") or {}))
@@ -302,8 +330,14 @@ class LangGraphWorkflowRunner(BaseWorkflowRunner):
         payload.setdefault("context", dict(turn_extra.get("context") or {}))
         payload["context"].setdefault("answer_text", final_answer)
         payload["context"].setdefault("final_answer", final_answer)
-        payload["context"].setdefault("current_shop", turn_extra.get("current_shop") or getattr(persistent, "current_shop", None))
-        payload["context"].setdefault("selected_shop_name", turn_extra.get("selected_shop_name") or getattr(persistent, "selected_shop_name", None))
+        payload["context"].setdefault(
+            "current_shop",
+            turn_extra.get("current_shop") or getattr(persistent, "current_shop", None),
+        )
+        payload["context"].setdefault(
+            "selected_shop_name",
+            turn_extra.get("selected_shop_name") or getattr(persistent, "selected_shop_name", None),
+        )
         return payload
 
     @staticmethod
@@ -393,11 +427,30 @@ def _routing_decision(state: GraphState):
 
 def _routing_action(state: GraphState) -> str:
     routing = _routing_decision(state)
-    return str(getattr(routing, "required_action", "") or "").strip().lower() if routing is not None else ""
+    return (
+        str(getattr(routing, "required_action", "") or "").strip().lower()
+        if routing is not None
+        else ""
+    )
 
 
 def _route_branch(state: GraphState) -> str:
     try:
+        routing = _routing_decision(state)
+        semantic_frame = getattr(routing, "semantic_parse_result", None) if routing is not None else None
+        if semantic_frame is not None:
+            local_route = str(getattr(semantic_frame, "local_route", "") or "").strip().lower()
+            if local_route in {"recommendation", "comparison"}:
+                return "recommendation"
+            if local_route in {"single_shop", "realtime_tool", "merchant_reasoning", "transaction"}:
+                return "tool"
+            if local_route in {"clarify"}:
+                return "clarify"
+        canonical_route = str(getattr(routing, "canonical_route", "") or "").strip().lower() if routing is not None else ""
+        if canonical_route in {"recommendation", "comparison"}:
+            return "recommendation"
+        if canonical_route in {"tool", "single_shop", "single_shop_tool", "realtime_tool", "merchant_reasoning", "transaction"}:
+            return "tool"
         return str(route_decider(state) or "").strip().lower()
     except Exception:
         return ""
@@ -413,6 +466,16 @@ def _update_turn_extra(state: GraphState, **updates: Any) -> GraphState:
     turn = state["turn"]
     turn_extra = _turn_extra(state)
     turn_extra.update(updates)
+    state["turn"] = turn.model_copy(update={"extra": turn_extra})
+    return state
+
+
+def _update_routing_trace(state: GraphState, **updates: Any) -> GraphState:
+    turn = state["turn"]
+    turn_extra = _turn_extra(state)
+    routing_trace = dict(turn_extra.get("routing_trace") or {})
+    routing_trace.update({key: value for key, value in updates.items() if value is not None})
+    turn_extra["routing_trace"] = routing_trace
     state["turn"] = turn.model_copy(update={"extra": turn_extra})
     return state
 
@@ -460,7 +523,16 @@ def _build_answer_contract_stage(state: GraphState, services: WorkflowServices) 
 
 
 def _build_source_contract_stage(state: GraphState, services: WorkflowServices) -> GraphState:
-    return services.main_graph.build_source_contract(state)
+    result = services.main_graph.build_source_contract(state)
+    routing = _routing_decision(result)
+    if routing is not None:
+        result = _update_routing_trace(
+            result,
+            final_dispatch_basis="canonical_route+required_action+facet_plan+required_sources",
+            canonical_route=str(getattr(routing, "canonical_route", "") or "").strip().lower() or None,
+            required_action=str(getattr(routing, "required_action", "") or "").strip().lower() or None,
+        )
+    return result
 
 
 def _complexity_router_stage(state: GraphState, services: WorkflowServices) -> GraphState:
@@ -473,7 +545,9 @@ def _hard_guard_stage(state: GraphState, services: WorkflowServices) -> GraphSta
 
 def _complexity_router_route(state: GraphState) -> str:
     complexity_router = _turn_extra(state).get("complexity_router") or {}
-    execution_mode = str(complexity_router.get("execution_mode") or "").strip().lower() or _route_execution_mode(state)
+    execution_mode = str(
+        complexity_router.get("execution_mode") or ""
+    ).strip().lower() or _route_execution_mode(state)
     if execution_mode == "clarify":
         return "clarification_node"
     if execution_mode == "complex":
@@ -551,7 +625,10 @@ def _query_safety_route(state: GraphState) -> str:
     routing = _routing_decision(state)
     if str(getattr(state["turn"], "execution_mode", "") or "").strip().lower() == "plan_execute":
         return "query_merge_for_local_life"
-    if routing is not None and str(getattr(routing, "required_action", "") or "").strip().lower() == "reject":
+    if (
+        routing is not None
+        and str(getattr(routing, "required_action", "") or "").strip().lower() == "reject"
+    ):
         return "safety_reject_response"
     return "query_merge_for_local_life"
 
@@ -561,7 +638,9 @@ def _requires_query_merge(state: GraphState) -> bool:
     if not compact:
         return False
     merge_tokens = ("对比", "比较", "和", "以及", "还是", "一起", "附近", "推荐")
-    return any(token in compact for token in merge_tokens) and any(token in compact for token in ("店", "券", "营业", "路线", "优惠", "推荐"))
+    return any(token in compact for token in merge_tokens) and any(
+        token in compact for token in ("店", "券", "营业", "路线", "优惠", "推荐")
+    )
 
 
 def _query_merge_route(state: GraphState) -> str:
@@ -570,7 +649,10 @@ def _query_merge_route(state: GraphState) -> str:
 
 def _top_level_intent_route(state: GraphState) -> str:
     routing = _routing_decision(state)
-    if routing is not None and (bool(getattr(routing, "blocked", False)) or str(getattr(routing, "required_action", "") or "").strip().lower() == "reject"):
+    if routing is not None and (
+        bool(getattr(routing, "blocked", False))
+        or str(getattr(routing, "required_action", "") or "").strip().lower() == "reject"
+    ):
         return "safety_reject_response"
     top_level_intent_router = _turn_extra(state).get("top_level_intent_router") or {}
     route = str(top_level_intent_router.get("route") or "").strip()
@@ -589,7 +671,7 @@ def _merged_query_safety_route(state: GraphState) -> str:
     merged = _turn_extra(state).get("merged_query_safety") or {}
     if bool(merged.get("blocked")):
         return "safety_reject_response"
-    return "understand_turn"
+    return "build_answer_contract"
 
 
 def _route_after_select_required_sources(state: GraphState) -> str:
@@ -598,29 +680,22 @@ def _route_after_select_required_sources(state: GraphState) -> str:
         return "recommendation_executor"
     if branch == "tool":
         return "tool_executor"
-    if branch in {"rag", "rag_plus_tool"}:
-        return "rag_executor"
-    return "rag_executor"
-
-
-def _route_after_rag_executor(state: GraphState) -> str:
-    branch = _route_branch(state)
-    if branch in {"tool", "rag_plus_tool"}:
-        return "tool_executor"
-    if branch == "recommendation":
-        return "recommendation_executor"
-    return "merge_or_rank"
+    return "tool_executor"
 
 
 def _route_after_tool_executor(state: GraphState) -> str:
-    return "recommendation_executor" if _route_branch(state) == "recommendation" else "merge_or_rank"
+    return (
+        "recommendation_executor" if _route_branch(state) == "recommendation" else "merge_or_rank"
+    )
 
 
 def _route_after_execute_plan_step(state: GraphState) -> str:
     step = getattr(state["turn"], "current_step", None)
     step_id = str(getattr(step, "step_id", "") or "").strip().lower()
     goal = str(getattr(step, "goal", "") or "").strip().lower()
-    allowed_tools = " ".join(str(tool or "").strip().lower() for tool in list(getattr(step, "allowed_tools", []) or []))
+    allowed_tools = " ".join(
+        str(tool or "").strip().lower() for tool in list(getattr(step, "allowed_tools", []) or [])
+    )
     haystack = " ".join(part for part in (step_id, goal, allowed_tools) if part)
     if "compose" in haystack or "answer" in haystack:
         return "compose_draft"
@@ -630,16 +705,21 @@ def _route_after_execute_plan_step(state: GraphState) -> str:
         return "rank_executor"
     if any(token in haystack for token in ("recommend", "compare", "multi")):
         return "recommendation_executor_complex"
-    if any(token in haystack for token in ("tool", "coupon", "open", "book", "reserve", "search", "lookup")):
+    if any(
+        token in haystack
+        for token in ("tool", "coupon", "open", "book", "reserve", "search", "lookup")
+    ):
         return "tool_executor_complex"
-    return "rag_executor_complex"
+    return "tool_executor_complex"
 
 
 def _route_after_complex_review(state: GraphState) -> str:
     turn = state["turn"]
     attempts = int(getattr(turn, "extra", {}).get("complex_review_attempts", 0) or 0)
     summary = getattr(turn, "final_task_summary", None)
-    status = str(getattr(summary, "status", "") or "").strip().lower() if summary is not None else ""
+    status = (
+        str(getattr(summary, "status", "") or "").strip().lower() if summary is not None else ""
+    )
     if bool(getattr(turn, "need_replan", False)):
         if attempts < 1:
             return "execute_plan_step"
@@ -657,7 +737,10 @@ def _complex_step_node(state: GraphState, node_name: str) -> GraphState:
     turn_extra = _turn_extra(state)
     turn_extra["complex_step_node"] = {
         "node": node_name,
-        "current_step_id": str(getattr(getattr(state["turn"], "current_step", None), "step_id", "") or "").strip() or None,
+        "current_step_id": str(
+            getattr(getattr(state["turn"], "current_step", None), "step_id", "") or ""
+        ).strip()
+        or None,
     }
     state["turn"] = state["turn"].model_copy(update={"extra": turn_extra})
     runtime = state["runtime"]
@@ -671,9 +754,15 @@ def _all_steps_done_node(state: GraphState) -> GraphState:
     turn = state["turn"]
     plan = list(getattr(turn, "plan", []) or [])
     step_results = list(getattr(turn, "step_results", []) or [])
-    completed_steps = len([item for item in step_results if getattr(item, "status", None) == "success"])
+    completed_steps = len(
+        [item for item in step_results if getattr(item, "status", None) == "success"]
+    )
     total_steps = len(plan)
-    is_done = bool(total_steps) and completed_steps >= total_steps and not bool(getattr(turn, "need_human_approval", False))
+    is_done = (
+        bool(total_steps)
+        and completed_steps >= total_steps
+        and not bool(getattr(turn, "need_human_approval", False))
+    )
     turn_extra = _turn_extra(state)
     turn_extra["all_steps_done"] = {
         "completed": is_done,
@@ -692,11 +781,17 @@ def _route_after_all_steps_done(state: GraphState) -> str:
     turn = state["turn"]
     plan = list(getattr(turn, "plan", []) or [])
     step_results = list(getattr(turn, "step_results", []) or [])
-    completed_steps = len([item for item in step_results if getattr(item, "status", None) == "success"])
+    completed_steps = len(
+        [item for item in step_results if getattr(item, "status", None) == "success"]
+    )
     total_steps = len(plan)
     if bool(getattr(turn, "need_human_approval", False)):
         return "complex_review"
-    is_done = bool(total_steps) and completed_steps >= total_steps and not bool(getattr(turn, "need_human_approval", False))
+    is_done = (
+        bool(total_steps)
+        and completed_steps >= total_steps
+        and not bool(getattr(turn, "need_human_approval", False))
+    )
     return "complex_review" if is_done else "execute_plan_step"
 
 
@@ -782,7 +877,9 @@ def _collect_query_metrics(state: GraphState, bundle: Any = None) -> None:
     route = str(_routing_action(state) or "")
     answer_style = str(getattr(answer_contract, "answer_style", "") or "")
 
-    target_shop_id = turn_extra.get("selected_shop_id") or getattr(persistent, "selected_shop_id", None)
+    target_shop_id = turn_extra.get("selected_shop_id") or getattr(
+        persistent, "selected_shop_id", None
+    )
     answer_shop_ids = list(turn_extra.get("answer_shop_ids") or [])
     forbidden_facets = list(getattr(answer_contract, "forbidden_facets", []) or [])
     realtime_facets = list(getattr(answer_contract, "realtime_facets", []) or [])
@@ -790,7 +887,9 @@ def _collect_query_metrics(state: GraphState, bundle: Any = None) -> None:
     tool_results = list(turn_extra.get("tool_results") or [])
 
     degraded = bool(turn_extra.get("degraded") or getattr(state["runtime"], "degrade_to", ""))
-    degraded_reason = str(getattr(state["runtime"], "degrade_to", "") or turn_extra.get("degraded_reason", "") or "")
+    degraded_reason = str(
+        getattr(state["runtime"], "degrade_to", "") or turn_extra.get("degraded_reason", "") or ""
+    )
     fallback = bool(turn_extra.get("fallback"))
     clarification_asked = bool(turn_extra.get("clarification_asked"))
     clarification_needed = bool(turn_extra.get("clarification_needed"))
@@ -806,7 +905,9 @@ def _collect_query_metrics(state: GraphState, bundle: Any = None) -> None:
         single_shop_mode=answer_style == "single_shop_review",
         recommendation_mode=answer_style == "multi_shop_recommendation",
         tool_called=bool(tool_results),
-        tools_called=[str(item.get("tool_name", "")) for item in tool_results if isinstance(item, dict)],
+        tools_called=[
+            str(item.get("tool_name", "")) for item in tool_results if isinstance(item, dict)
+        ],
         evidence_count=len(evidence_claims),
         target_shop_id=target_shop_id,
         answer_shop_ids=answer_shop_ids,
@@ -855,7 +956,7 @@ def _route_after_contract_review(state: GraphState) -> str:
     review_report = turn_extra.get("review_report")
     if not review_report:
         return "final_answer"
-    
+
     decision = getattr(review_report, "decision", "")
     if decision in {"repair_answer", "retry_tool"}:
         retry_count = int(getattr(review_report, "retry_count", 0))
@@ -965,11 +1066,6 @@ def export_full_langgraph_mermaid() -> str:
     lines.append("  end")
     lines.extend(
         [
-            "  subgraph rag[RAG Subgraph]",
-            "    rag_build_plan[build_retrieval_plan]",
-            "    rag_execute[rag_executor]",
-            "    rag_finalize[finalize_rag]",
-            "  end",
             "  subgraph tool[Tool Subgraph]",
             "    tool_plan[tool_plan]",
             "    tool_execute[tool_executor]",
@@ -983,19 +1079,11 @@ def export_full_langgraph_mermaid() -> str:
             "  subgraph stages[Workflow Stages]",
             "    stage_load_context[load_context]",
             "    stage_parse_intent_slots[parse_intent_slots]",
-            "    stage_rag_gate[rag_gate]",
-            "    stage_query_rewrite[query_rewrite]",
-            "    stage_embedding[embedding]",
-            "    stage_qdrant_search[qdrant_search]",
-            "    stage_rerank[rerank]",
-            "    stage_hybrid_retrieve[hybrid_retrieve]",
-            "    stage_evaluate_evidence[evaluate_evidence]",
-            "    stage_citation_builder[citation_builder]",
             "    stage_tool_planner[tool_planner]",
             "    stage_tool_executor[tool_executor]",
             "    stage_tool_result_normalizer[tool_result_normalizer]",
             "  end",
-    ]
+        ]
     )
     for source, target, label in _main_graph_mermaid_edges():
         if label:
@@ -1004,9 +1092,6 @@ def export_full_langgraph_mermaid() -> str:
             lines.append(f"  {source} --> {target}")
     lines.extend(
         [
-            "  rag_build_plan --> rag_execute",
-            "  rag_execute --> rag_finalize",
-            "  rag_finalize --> main_final_answer",
             "  tool_plan --> tool_execute",
             "  tool_execute --> tool_finalize",
             "  tool_finalize --> main_final_answer",
@@ -1014,15 +1099,7 @@ def export_full_langgraph_mermaid() -> str:
             "  rec_dispatch --> rec_finalize",
             "  rec_finalize --> main_final_answer",
             "  stage_load_context --> stage_parse_intent_slots",
-            "  stage_parse_intent_slots --> stage_rag_gate",
-            "  stage_rag_gate --> stage_query_rewrite",
-            "  stage_query_rewrite --> stage_embedding",
-            "  stage_embedding --> stage_qdrant_search",
-            "  stage_qdrant_search --> stage_rerank",
-            "  stage_rerank --> stage_hybrid_retrieve",
-            "  stage_hybrid_retrieve --> stage_evaluate_evidence",
-            "  stage_evaluate_evidence --> stage_citation_builder",
-            "  stage_citation_builder --> stage_tool_planner",
+            "  stage_parse_intent_slots --> stage_tool_planner",
             "  stage_tool_planner --> stage_tool_executor",
             "  stage_tool_executor --> stage_tool_result_normalizer",
         ]
@@ -1118,21 +1195,8 @@ def _render_full_graph_png(_mermaid_text: str) -> bytes | None:
             "outline": (121, 143, 201),
         },
         {
-            "title": "RAG Subgraph",
-            "x": 120,
-            "y": 540,
-            "width": 560,
-            "nodes": [
-                ("rag_build_plan", "build_retrieval_plan"),
-                ("rag_execute", "rag_executor"),
-                ("rag_finalize", "finalize_rag"),
-            ],
-            "fill": (242, 250, 244),
-            "outline": (112, 163, 125),
-        },
-        {
             "title": "Tool Subgraph",
-            "x": 780,
+            "x": 120,
             "y": 540,
             "width": 560,
             "nodes": [
@@ -1145,7 +1209,7 @@ def _render_full_graph_png(_mermaid_text: str) -> bytes | None:
         },
         {
             "title": "Recommendation Subgraph",
-            "x": 1440,
+            "x": 780,
             "y": 540,
             "width": 640,
             "nodes": [
@@ -1164,14 +1228,6 @@ def _render_full_graph_png(_mermaid_text: str) -> bytes | None:
             "nodes": [
                 ("stage_load_context", "load_context"),
                 ("stage_parse_intent_slots", "parse_intent_slots"),
-                ("stage_rag_gate", "rag_gate"),
-                ("stage_query_rewrite", "query_rewrite"),
-                ("stage_embedding", "embedding"),
-                ("stage_qdrant_search", "qdrant_search"),
-                ("stage_rerank", "rerank"),
-                ("stage_hybrid_retrieve", "hybrid_retrieve"),
-                ("stage_evaluate_evidence", "evaluate_evidence"),
-                ("stage_citation_builder", "citation_builder"),
                 ("stage_tool_planner", "tool_planner"),
                 ("stage_tool_executor", "tool_executor"),
                 ("stage_tool_result_normalizer", "tool_result_normalizer"),
@@ -1195,14 +1251,19 @@ def _render_full_graph_png(_mermaid_text: str) -> bytes | None:
 
     for group in groups:
         nodes = group["nodes"]
-        group_height = header_h + group_pad + len(nodes) * (node_h + node_gap) + group_pad - node_gap
+        group_height = (
+            header_h + group_pad + len(nodes) * (node_h + node_gap) + group_pad - node_gap
+        )
         from typing import cast
+
         x0 = cast(int, group["x"])
         y0 = cast(int, group["y"])
         width = cast(int, group["width"])
         x1 = x0 + width
         y1 = y0 + group_height
-        draw.rounded_rectangle((x0, y0, x1, y1), radius=18, fill=group["fill"], outline=group["outline"], width=3)
+        draw.rounded_rectangle(
+            (x0, y0, x1, y1), radius=18, fill=group["fill"], outline=group["outline"], width=3
+        )
         draw.text((x0 + 18, y0 + 10), group["title"], fill=(30, 30, 30), font=title_font)
 
         base_y = y0 + header_h
@@ -1213,7 +1274,13 @@ def _render_full_graph_png(_mermaid_text: str) -> bytes | None:
             right = left + node_w
             bottom = top + node_h
             node_boxes[node_id] = (left, top, right, bottom)
-            draw.rounded_rectangle((left, top, right, bottom), radius=12, fill=(255, 255, 255), outline=group["outline"], width=2)
+            draw.rounded_rectangle(
+                (left, top, right, bottom),
+                radius=12,
+                fill=(255, 255, 255),
+                outline=group["outline"],
+                width=2,
+            )
             text_bbox = draw.textbbox((0, 0), label, font=font)
             text_w = text_bbox[2] - text_bbox[0]
             text_h = text_bbox[3] - text_bbox[1]
@@ -1260,7 +1327,6 @@ def _render_full_graph_png(_mermaid_text: str) -> bytes | None:
         ("main_rule_review", "main_final_answer"),
         ("main_workflow_executor", "main_select_required_sources"),
         ("main_select_required_sources", "main_planner_node"),
-        ("main_select_required_sources", "main_rag_executor"),
         ("main_select_required_sources", "main_tool_executor"),
         ("main_select_required_sources", "main_recommendation_executor"),
         ("main_select_required_sources", "main_merge_or_rank"),
@@ -1271,9 +1337,6 @@ def _render_full_graph_png(_mermaid_text: str) -> bytes | None:
         ("main_collect_step_result", "main_complex_review"),
         ("main_complex_review", "main_plan_executor"),
         ("main_complex_review", "main_merge_or_rank"),
-        ("main_rag_executor", "main_tool_executor"),
-        ("main_rag_executor", "main_recommendation_executor"),
-        ("main_rag_executor", "main_merge_or_rank"),
         ("main_tool_executor", "main_recommendation_executor"),
         ("main_tool_executor", "main_merge_or_rank"),
         ("main_recommendation_executor", "main_merge_or_rank"),
@@ -1285,9 +1348,6 @@ def _render_full_graph_png(_mermaid_text: str) -> bytes | None:
         ("main_repair_answer", "main_final_with_limitations"),
         ("main_final_with_limitations", "main_persist_session"),
         ("main_persist_session", "main_emit_final"),
-        ("rag_build_plan", "rag_execute"),
-        ("rag_execute", "rag_finalize"),
-        ("rag_finalize", "main_final_answer"),
         ("tool_plan", "tool_execute"),
         ("tool_execute", "tool_finalize"),
         ("tool_finalize", "main_final_answer"),
@@ -1295,15 +1355,6 @@ def _render_full_graph_png(_mermaid_text: str) -> bytes | None:
         ("rec_dispatch", "rec_finalize"),
         ("rec_finalize", "main_final_answer"),
         ("stage_load_context", "stage_parse_intent_slots"),
-        ("stage_parse_intent_slots", "stage_rag_gate"),
-        ("stage_rag_gate", "stage_query_rewrite"),
-        ("stage_query_rewrite", "stage_embedding"),
-        ("stage_embedding", "stage_qdrant_search"),
-        ("stage_qdrant_search", "stage_rerank"),
-        ("stage_rerank", "stage_hybrid_retrieve"),
-        ("stage_hybrid_retrieve", "stage_evaluate_evidence"),
-        ("stage_evaluate_evidence", "stage_citation_builder"),
-        ("stage_citation_builder", "stage_tool_planner"),
         ("stage_tool_planner", "stage_tool_executor"),
         ("stage_tool_executor", "stage_tool_result_normalizer"),
     ]
@@ -1348,11 +1399,27 @@ def _render_mermaid_with_mmdc(mermaid_text: str, output_path: Path) -> bool:
         import subprocess
         import tempfile
         import os
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".mmd", delete=False, encoding="utf-8") as tmp:
+
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".mmd", delete=False, encoding="utf-8"
+        ) as tmp:
             tmp.write(mermaid_text)
             tmp_path = tmp.name
         result = subprocess.run(
-            ["npx", "@mermaid-js/mermaid-cli", "-i", tmp_path, "-o", str(output_path), "-b", "white", "-w", "2400", "-H", "1600"],
+            [
+                "npx",
+                "@mermaid-js/mermaid-cli",
+                "-i",
+                tmp_path,
+                "-o",
+                str(output_path),
+                "-b",
+                "white",
+                "-w",
+                "2400",
+                "-H",
+                "1600",
+            ],
             capture_output=True,
             timeout=120,
         )
@@ -1368,7 +1435,12 @@ def _render_mermaid_with_mmdc(mermaid_text: str, output_path: Path) -> bool:
 def _render_mermaid_with_graphviz(mermaid_text: str, output_path: Path) -> bool:
     try:
         import subprocess
-        dot_lines = ["digraph G {", "  rankdir=TB;", "  node [shape=box, style=filled, fillcolor=lightblue];"]
+
+        dot_lines = [
+            "digraph G {",
+            "  rankdir=TB;",
+            "  node [shape=box, style=filled, fillcolor=lightblue];",
+        ]
         edge_pattern = re.compile(r"^(?P<src>.+?)\s*-->(?:\|[^|]+\|)?\s*(?P<dst>.+?)\s*$")
 
         def _dot_node_id(token: str) -> str:
@@ -1381,12 +1453,23 @@ def _render_mermaid_with_graphviz(mermaid_text: str, output_path: Path) -> bool:
         lines = mermaid_text.strip().split("\n")
         for line in lines:
             line = line.strip()
-            if not line or line.startswith("---") or line.startswith("config:") or line.startswith("flowchart:") or line.startswith("curve:") or line == "graph TD;":
+            if (
+                not line
+                or line.startswith("---")
+                or line.startswith("config:")
+                or line.startswith("flowchart:")
+                or line.startswith("curve:")
+                or line == "graph TD;"
+            ):
                 continue
             match = edge_pattern.match(line.rstrip(";"))
             if match:
-                src = _dot_node_id(match.group("src").replace(":::first", "").replace(":::last", ""))
-                dst = _dot_node_id(match.group("dst").replace(":::first", "").replace(":::last", ""))
+                src = _dot_node_id(
+                    match.group("src").replace(":::first", "").replace(":::last", "")
+                )
+                dst = _dot_node_id(
+                    match.group("dst").replace(":::first", "").replace(":::last", "")
+                )
                 if src and dst:
                     dot_lines.append(f'  "{src}" -> "{dst}";')
                 continue
@@ -1415,7 +1498,11 @@ def _write_graph_artifacts(
     use_compiled_mermaid: bool = True,
     custom_png_renderer: Any = None,
 ) -> dict[str, str]:
-    mermaid_text = _draw_compiled_graph_mermaid(graph, fallback_mermaid) if use_compiled_mermaid else fallback_mermaid
+    mermaid_text = (
+        _draw_compiled_graph_mermaid(graph, fallback_mermaid)
+        if use_compiled_mermaid
+        else fallback_mermaid
+    )
     mermaid_path = target_dir / f"{stem}.mmd"
     mermaid_path.write_text(mermaid_text, encoding="utf-8")
 
@@ -1451,25 +1538,26 @@ def write_langgraph_visualizations(
 ) -> dict[str, str]:
     from .graphs import (
         build_understand_turn_graph,
-        export_rag_graph_mermaid,
+        build_evidence_graph,
         export_recommendation_graph_mermaid,
         export_tool_graph_mermaid,
-        describe_rag_graph_topology,
         describe_recommendation_graph_topology,
         describe_tool_graph_topology,
-        build_rag_graph,
         build_recommendation_graph,
         build_tool_graph,
     )
 
     workflow_services = services or WorkflowServices()
-    target_dir = Path(output_dir) if output_dir is not None else Path(__file__).resolve().parents[5] / "docs" / "langgraph"
+    target_dir = (
+        Path(output_dir)
+        if output_dir is not None
+        else Path(__file__).resolve().parents[5] / "docs" / "langgraph"
+    )
     target_dir.mkdir(parents=True, exist_ok=True)
 
     main_graph = _build_langgraph_runner(workflow_services)
-    rag_graph = build_rag_graph(workflow_services.rag_subgraph)
     tool_graph = build_tool_graph(workflow_services.tool_subgraph)
-    recommendation_graph = build_recommendation_graph(workflow_services.rag_subgraph)
+    recommendation_graph = build_recommendation_graph(workflow_services.evidence_subgraph)
 
     files = {}
     files.update(
@@ -1489,14 +1577,6 @@ def write_langgraph_visualizations(
             export_full_langgraph_mermaid(),
             use_compiled_mermaid=False,
             custom_png_renderer=_render_full_graph_png,
-        )
-    )
-    files.update(
-        _write_graph_artifacts(
-            target_dir,
-            "rag_graph",
-            rag_graph,
-            export_rag_graph_mermaid(),
         )
     )
     files.update(
@@ -1536,13 +1616,6 @@ def write_langgraph_visualizations(
                 export_full_langgraph_mermaid(),
                 "```",
                 "",
-                "## Rag Graph",
-                f"- entry_point: {describe_rag_graph_topology()['entry_point']}",
-                "",
-                "```mermaid",
-                _draw_compiled_graph_mermaid(rag_graph, export_rag_graph_mermaid()),
-                "```",
-                "",
                 "## Tool Graph",
                 f"- entry_point: {describe_tool_graph_topology()['entry_point']}",
                 "",
@@ -1554,7 +1627,9 @@ def write_langgraph_visualizations(
                 f"- entry_point: {describe_recommendation_graph_topology()['entry_point']}",
                 "",
                 "```mermaid",
-                _draw_compiled_graph_mermaid(recommendation_graph, export_recommendation_graph_mermaid()),
+                _draw_compiled_graph_mermaid(
+                    recommendation_graph, export_recommendation_graph_mermaid()
+                ),
                 "```",
                 "",
             ]
@@ -1569,7 +1644,12 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None
     if not LANGGRAPH_AVAILABLE:
         raise RuntimeError("langgraph is not installed")
 
-    from .graphs import build_rag_graph, build_recommendation_graph, build_tool_graph, build_understand_turn_graph
+    from .graphs import (
+        build_recommendation_graph,
+        build_tool_graph,
+        build_understand_turn_graph,
+        build_evidence_graph,
+    )
     from langgraph.types import RetryPolicy
 
     workflow_retry_policy = RetryPolicy(
@@ -1580,6 +1660,7 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None
     )
 
     graph = StateGraph(GraphState)  # type: ignore[type-var]
+
     def _route_gate_stage(state: GraphState) -> GraphState:
         command = route_gate(state)
         updated = getattr(command, "update", None)
@@ -1591,7 +1672,101 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None
         return services.main_graph.rule_review(state)
 
     def _select_required_sources_stage(state: GraphState) -> GraphState:
-        return services.main_graph.select_required_sources(state)
+        result = services.main_graph.select_required_sources(state)
+        routing = _routing_decision(result)
+        if routing is not None:
+            result = _update_routing_trace(
+                result,
+                final_dispatch_basis="canonical_route+required_action+facet_plan+required_sources",
+                canonical_route=str(getattr(routing, "canonical_route", "") or "").strip().lower() or None,
+                required_action=str(getattr(routing, "required_action", "") or "").strip().lower() or None,
+            )
+        return result
+
+    def _parallel_facet_executor_stage(state: GraphState) -> GraphState:
+        """Run evidence and Tool subgraphs in parallel, merge results."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import copy as _copy
+
+        turn = state["turn"]
+        turn_extra = _turn_extra(state)
+        contract = getattr(turn, "routing_contract", None)
+        if contract is None:
+            return state
+
+        # 获取编译后的子图（_graph_cached 保证只构建一次）
+        evidence_graph = build_evidence_graph(services.evidence_subgraph)
+        tool_graph = build_tool_graph(services.tool_subgraph)
+
+        # 判断需要运行哪些子图
+        run_evidence = bool(contract.rag_allowed)
+        run_tool = bool(contract.tool_allowed)
+
+        if not (run_evidence and run_tool):
+            # 只需要一个源时顺序执行
+            if run_evidence:
+                state = evidence_graph.invoke(state)
+            if run_tool:
+                state = tool_graph.invoke(state)
+            return state
+
+        # 并行执行 evidence + Tool
+        evidence_state = _copy.deepcopy(state)
+        tool_state = _copy.deepcopy(state)
+
+        results: dict[str, GraphState] = {}
+        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="facet-par") as executor:
+            future_map = {}
+            if run_evidence:
+                future_map[executor.submit(evidence_graph.invoke, evidence_state)] = "evidence"
+            if run_tool:
+                future_map[executor.submit(tool_graph.invoke, tool_state)] = "tool"
+            for future in as_completed(future_map):
+                name = future_map[future]
+                try:
+                    results[name] = future.result()
+                except Exception as exc:
+                    logging.getLogger(__name__).warning(
+                        "parallel_facet_executor: %s failed: %s", name, exc
+                    )
+
+        # 合并结果
+        evidence_result_state = results.get("evidence")
+        tool_result_state = results.get("tool")
+
+        # 优先 Tool 的 extra（tool 结果更关键）
+        merged_extra = dict(turn.extra)
+        if evidence_result_state is not None:
+            evidence_extra = _turn_extra(evidence_result_state)
+            for k, v in evidence_extra.items():
+                if k not in merged_extra:
+                    merged_extra[k] = v
+        if tool_result_state is not None:
+            tool_extra = _turn_extra(tool_result_state)
+            merged_extra.update(tool_extra)
+
+        merged_extra["parallel_execution"] = {
+            "evidence_success": evidence_result_state is not None,
+            "tool_success": tool_result_state is not None,
+        }
+
+        # 合并 turn 字段
+        update_kw: dict[str, Any] = {"extra": merged_extra}
+        if evidence_result_state is not None:
+            evidence_turn = evidence_result_state["turn"]
+            for fld in ("rag_result", "evidence_pack", "citations"):
+                val = getattr(evidence_turn, fld, None)
+                if val is not None:
+                    update_kw[fld] = val
+        if tool_result_state is not None:
+            tool_turn = tool_result_state["turn"]
+            for fld in ("tool_plan", "raw_tool_result", "tool_result"):
+                val = getattr(tool_turn, fld, None)
+                if val is not None:
+                    update_kw[fld] = val
+
+        state["turn"] = turn.model_copy(update=update_kw)
+        return state
 
     def _plan_executor_stage(state: GraphState) -> GraphState:
         turn_extra = _turn_extra(state)
@@ -1603,12 +1778,26 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None
         return state
 
     def _plan_planner_stage(state: GraphState) -> GraphState:
+        # planner_node 由计划执行器做规则性计划整理，不是 LLM 自由生成。
         state = services.plan_execute.plan_planner(state)
         turn = state["turn"]
-        if not bool(getattr(turn, "need_human_approval", False)) and not getattr(turn, "approval_request", None):
+        if not bool(getattr(turn, "need_human_approval", False)) and not getattr(
+            turn, "approval_request", None
+        ):
             for step in list(getattr(turn, "plan", []) or []):
-                allowed_tools = [str(tool or "").strip() for tool in list(getattr(step, "allowed_tools", []) or [])]
-                booking_tool = next((tool for tool in allowed_tools if tool and ("booking" in tool or "reserve" in tool or "reservation" in tool)), None)
+                allowed_tools = [
+                    str(tool or "").strip()
+                    for tool in list(getattr(step, "allowed_tools", []) or [])
+                ]
+                booking_tool = next(
+                    (
+                        tool
+                        for tool in allowed_tools
+                        if tool
+                        and ("booking" in tool or "reserve" in tool or "reservation" in tool)
+                    ),
+                    None,
+                )
                 if booking_tool:
                     request = {
                         "step_id": getattr(step, "step_id", None),
@@ -1638,12 +1827,26 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None
         return state
 
     def _plan_validator_stage(state: GraphState) -> GraphState:
+        # plan_validator 是纯规则校验：检查步骤、工具和审批条件是否满足。
         state = services.plan_execute.plan_validator(state)
         turn = state["turn"]
-        if not bool(getattr(turn, "need_human_approval", False)) and not getattr(turn, "approval_request", None):
+        if not bool(getattr(turn, "need_human_approval", False)) and not getattr(
+            turn, "approval_request", None
+        ):
             for step in list(getattr(turn, "plan", []) or []):
-                allowed_tools = [str(tool or "").strip() for tool in list(getattr(step, "allowed_tools", []) or [])]
-                booking_tool = next((tool for tool in allowed_tools if tool and ("booking" in tool or "reserve" in tool or "reservation" in tool)), None)
+                allowed_tools = [
+                    str(tool or "").strip()
+                    for tool in list(getattr(step, "allowed_tools", []) or [])
+                ]
+                booking_tool = next(
+                    (
+                        tool
+                        for tool in allowed_tools
+                        if tool
+                        and ("booking" in tool or "reserve" in tool or "reservation" in tool)
+                    ),
+                    None,
+                )
                 if booking_tool:
                     request = {
                         "step_id": getattr(step, "step_id", None),
@@ -1670,11 +1873,14 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None
                         },
                     )
                     return state
-        if bool(getattr(turn, "need_human_approval", False)) or bool(getattr(turn, "approval_request", None)):
+        if bool(getattr(turn, "need_human_approval", False)) or bool(
+            getattr(turn, "approval_request", None)
+        ):
             state = services.plan_execute.human_approval_stub(state)
         return state
 
     def _complex_review_stage(state: GraphState) -> GraphState:
+        # complex_review 也是规则复盘：汇总 step 结果、判断是否重规划或审批。
         state = services.plan_execute.plan_reviewer(state)
         turn = state["turn"]
         if bool(getattr(turn, "need_human_approval", False)):
@@ -1682,7 +1888,9 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None
         elif bool(getattr(turn, "need_replan", False)):
             state = services.plan_execute.replanner(state)
         turn_extra = _turn_extra(state)
-        turn_extra["complex_review_attempts"] = int(turn_extra.get("complex_review_attempts", 0) or 0) + 1
+        turn_extra["complex_review_attempts"] = (
+            int(turn_extra.get("complex_review_attempts", 0) or 0) + 1
+        )
         turn_extra["complex_review"] = {
             "need_human_approval": bool(getattr(state["turn"], "need_human_approval", False)),
             "need_replan": bool(getattr(state["turn"], "need_replan", False)),
@@ -1692,7 +1900,9 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None
             summary_text = str(getattr(summary, "final_decision", "") or "").strip()
             summary_status = str(getattr(summary, "status", "") or "").strip()
             if summary_text:
-                turn_extra["plan_execution_answer"] = f"Plan execution {summary_status}: {summary_text}".strip()
+                turn_extra["plan_execution_answer"] = (
+                    f"Plan execution {summary_status}: {summary_text}".strip()
+                )
                 state["turn"] = state["turn"].model_copy(
                     update={
                         "final_answer": turn_extra["plan_execution_answer"],
@@ -1704,56 +1914,220 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None
         return state
 
     graph.add_node("load_context", lambda state: services.load_context(state))
-    graph.add_node("request_legality", lambda state: _request_legality_node(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("illegal_request_response", lambda state: _illegal_request_response_node(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("hard_guard", lambda state: _hard_guard_stage(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("clarification_or_reject", lambda state: _clarification_or_reject_stage(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("query_safety", lambda state: _query_safety_node(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("safety_reject_response", lambda state: _safety_reject_response_node(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("query_merge_for_local_life", lambda state: _query_merge_node(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("merged_query_safety", lambda state: _merged_query_safety_node(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("top_level_intent_router", lambda state: _top_level_intent_router_node(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("identity_answer", lambda state: _identity_answer_node(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("capability_answer", lambda state: _capability_answer_node(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("direct_chat_answer", lambda state: _direct_chat_answer_node(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("out_of_scope_response", lambda state: _out_of_scope_response_node(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("understand_turn", build_understand_turn_graph(services.understand_turn), retry_policy=workflow_retry_policy)
-    graph.add_node("resolve_target_shop", lambda state: _resolve_target_shop_stage(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("build_answer_contract", lambda state: _build_answer_contract_stage(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("build_source_contract", lambda state: _build_source_contract_stage(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("complexity_router", lambda state: _complexity_router_stage(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("clarification_node", lambda state: _clarification_node_stage(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("direct_executor", lambda state: _direct_executor_stage(state, services), retry_policy=workflow_retry_policy)
+    graph.add_node(
+        "request_legality",
+        lambda state: _request_legality_node(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "illegal_request_response",
+        lambda state: _illegal_request_response_node(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "hard_guard",
+        lambda state: _hard_guard_stage(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "clarification_or_reject",
+        lambda state: _clarification_or_reject_stage(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "query_safety",
+        lambda state: _query_safety_node(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "safety_reject_response",
+        lambda state: _safety_reject_response_node(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "query_merge_for_local_life",
+        lambda state: _query_merge_node(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "merged_query_safety",
+        lambda state: _merged_query_safety_node(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "top_level_intent_router",
+        lambda state: _top_level_intent_router_node(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "identity_answer",
+        lambda state: _identity_answer_node(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "capability_answer",
+        lambda state: _capability_answer_node(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "direct_chat_answer",
+        lambda state: _direct_chat_answer_node(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "out_of_scope_response",
+        lambda state: _out_of_scope_response_node(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "understand_turn",
+        build_understand_turn_graph(services.understand_turn),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "resolve_target_shop",
+        lambda state: _resolve_target_shop_stage(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "build_answer_contract",
+        lambda state: _build_answer_contract_stage(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "build_source_contract",
+        lambda state: _build_source_contract_stage(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "complexity_router",
+        lambda state: _complexity_router_stage(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "clarification_node",
+        lambda state: _clarification_node_stage(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "direct_executor",
+        lambda state: _direct_executor_stage(state, services),
+        retry_policy=workflow_retry_policy,
+    )
     graph.add_node("rule_review", _rule_review_stage, retry_policy=workflow_retry_policy)
-    graph.add_node("workflow_executor", lambda state: _workflow_executor_stage(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("select_required_sources", _select_required_sources_stage, retry_policy=workflow_retry_policy)
-    graph.add_node("rag_executor", build_rag_graph(services.rag_subgraph), retry_policy=workflow_retry_policy)
-    graph.add_node("tool_executor", build_tool_graph(services.tool_subgraph), retry_policy=workflow_retry_policy)
-    graph.add_node("recommendation_executor", build_recommendation_graph(services.rag_subgraph), retry_policy=workflow_retry_policy)
-    graph.add_node("merge_or_rank", lambda state: _merge_or_rank_node(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("contract_review", lambda state: _contract_review_node(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("prepare_retry", lambda state: _prepare_retry_node(state, services), retry_policy=workflow_retry_policy)
+    graph.add_node(
+        "workflow_executor",
+        lambda state: _workflow_executor_stage(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "select_required_sources",
+        _select_required_sources_stage,
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "tool_executor",
+        build_tool_graph(services.tool_subgraph),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "recommendation_executor",
+        build_recommendation_graph(services.evidence_subgraph),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "merge_or_rank",
+        lambda state: _merge_or_rank_node(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "contract_review",
+        lambda state: _contract_review_node(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "prepare_retry",
+        lambda state: _prepare_retry_node(state, services),
+        retry_policy=workflow_retry_policy,
+    )
     graph.add_node("planner_node", _plan_planner_stage, retry_policy=workflow_retry_policy)
     graph.add_node("plan_validator", _plan_validator_stage, retry_policy=workflow_retry_policy)
     graph.add_node("plan_executor", _plan_executor_stage, retry_policy=workflow_retry_policy)
-    graph.add_node("execute_plan_step", lambda state: services.plan_execute.step_executor(state), retry_policy=workflow_retry_policy)
-    graph.add_node("rag_executor_complex", lambda state: _complex_step_node(state, "rag_executor_complex"), retry_policy=workflow_retry_policy)
-    graph.add_node("tool_executor_complex", lambda state: _complex_step_node(state, "tool_executor_complex"), retry_policy=workflow_retry_policy)
-    graph.add_node("recommendation_executor_complex", lambda state: _complex_step_node(state, "recommendation_executor_complex"), retry_policy=workflow_retry_policy)
-    graph.add_node("rank_executor", lambda state: _complex_step_node(state, "rank_executor"), retry_policy=workflow_retry_policy)
-    graph.add_node("merge_executor", lambda state: _complex_step_node(state, "merge_executor"), retry_policy=workflow_retry_policy)
-    graph.add_node("compose_draft", lambda state: _complex_step_node(state, "compose_draft"), retry_policy=workflow_retry_policy)
-    graph.add_node("collect_step_result", lambda state: services.plan_execute.progress_checker(state), retry_policy=workflow_retry_policy)
+    graph.add_node(
+        "execute_plan_step",
+        lambda state: services.plan_execute.step_executor(state),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "tool_executor_complex",
+        lambda state: _complex_step_node(state, "tool_executor_complex"),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "recommendation_executor_complex",
+        lambda state: _complex_step_node(state, "recommendation_executor_complex"),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "rank_executor",
+        lambda state: _complex_step_node(state, "rank_executor"),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "merge_executor",
+        lambda state: _complex_step_node(state, "merge_executor"),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "compose_draft",
+        lambda state: _complex_step_node(state, "compose_draft"),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "collect_step_result",
+        lambda state: services.plan_execute.progress_checker(state),
+        retry_policy=workflow_retry_policy,
+    )
     graph.add_node("all_steps_done?", _all_steps_done_node, retry_policy=workflow_retry_policy)
     graph.add_node("complex_review", _complex_review_stage, retry_policy=workflow_retry_policy)
-    graph.add_node("final_answer", lambda state: _final_answer_node(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("final_answer_safety", lambda state: _final_answer_safety_node(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("final_safety_fallback", lambda state: _final_safety_fallback_node(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("repair_answer", lambda state: _repair_answer_node(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("final_with_limitations", lambda state: _final_with_limitations_node(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("response_builder", lambda state: _response_builder_node(state, services), retry_policy=workflow_retry_policy)
-    graph.add_node("persist_session", lambda state: services.persist_session(state), retry_policy=workflow_retry_policy)
-    graph.add_node("emit_final", lambda state: services.emit_final(state), retry_policy=workflow_retry_policy)
+    graph.add_node(
+        "final_answer",
+        lambda state: _final_answer_node(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "final_answer_safety",
+        lambda state: _final_answer_safety_node(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "final_safety_fallback",
+        lambda state: _final_safety_fallback_node(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "repair_answer",
+        lambda state: _repair_answer_node(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "final_with_limitations",
+        lambda state: _final_with_limitations_node(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "response_builder",
+        lambda state: _response_builder_node(state, services),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "persist_session",
+        lambda state: services.persist_session(state),
+        retry_policy=workflow_retry_policy,
+    )
+    graph.add_node(
+        "emit_final", lambda state: services.emit_final(state), retry_policy=workflow_retry_policy
+    )
 
     graph.set_entry_point("load_context")
     graph.add_edge("load_context", "request_legality")
@@ -1790,7 +2164,7 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None
         _merged_query_safety_route,
         {
             "safety_reject_response": "safety_reject_response",
-            "understand_turn": "understand_turn",
+            "build_answer_contract": "build_answer_contract",
         },
     )
     graph.add_conditional_edges(
@@ -1803,6 +2177,7 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None
             "out_of_scope_response": "out_of_scope_response",
             "safety_reject_response": "safety_reject_response",
             "final_answer": "final_answer",
+            "query_merge_for_local_life": "query_merge_for_local_life",
             "resolve_target_shop": "resolve_target_shop",
         },
     )
@@ -1832,7 +2207,6 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None
         "select_required_sources",
         _route_after_select_required_sources,
         {
-            "rag_executor": "rag_executor",
             "tool_executor": "tool_executor",
             "recommendation_executor": "recommendation_executor",
         },
@@ -1844,7 +2218,6 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None
         "execute_plan_step",
         _route_after_execute_plan_step,
         {
-            "rag_executor_complex": "rag_executor_complex",
             "tool_executor_complex": "tool_executor_complex",
             "recommendation_executor_complex": "recommendation_executor_complex",
             "rank_executor": "rank_executor",
@@ -1852,7 +2225,6 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None
             "compose_draft": "compose_draft",
         },
     )
-    graph.add_edge("rag_executor_complex", "collect_step_result")
     graph.add_edge("tool_executor_complex", "collect_step_result")
     graph.add_edge("recommendation_executor_complex", "collect_step_result")
     graph.add_edge("rank_executor", "collect_step_result")
@@ -1879,15 +2251,6 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None
         },
     )
     graph.add_conditional_edges(
-        "rag_executor",
-        _route_after_rag_executor,
-        {
-            "tool_executor": "tool_executor",
-            "recommendation_executor": "recommendation_executor",
-            "merge_or_rank": "merge_or_rank",
-        },
-    )
-    graph.add_conditional_edges(
         "tool_executor",
         _route_after_tool_executor,
         {
@@ -1903,9 +2266,9 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None
         {
             "prepare_retry": "prepare_retry",
             "final_answer": "final_answer",
-        }
+        },
     )
-    graph.add_edge("prepare_retry", "rag_executor")
+    graph.add_edge("prepare_retry", "workflow_executor")
     graph.add_edge("final_answer", "final_answer_safety")
     graph.add_conditional_edges(
         "final_answer_safety",
@@ -1923,7 +2286,6 @@ def _build_langgraph_runner(services: WorkflowServices, checkpointer: Any = None
     graph.add_edge("emit_final", END)
     compiled = graph.compile(checkpointer=checkpointer)
     return compiled
-
 
 
 def create_workflow_runner(

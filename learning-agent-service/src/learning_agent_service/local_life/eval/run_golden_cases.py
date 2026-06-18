@@ -10,7 +10,7 @@ from typing import Any
 import httpx
 
 from learning_agent_service.domain.utils import as_mapping as _as_mapping, clean_text as _clean_text
-from learning_agent_service.application.router.trace import (
+from learning_agent_service.application.workflow.adapters.helpers import (
     build_routing_trace_from_metrics,
     routing_trace_to_dict,
 )

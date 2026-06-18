@@ -218,6 +218,11 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                     and any(token in compact_query_text for token in ("和", "比", "vs"))
                 ) or str(turn_extra.get("top_level_intent") or "").strip().lower() in {"comparison", "restaurant_comparison", "local_life_comparison"}
                 answer_style = str(answer_contract_payload.get("answer_style") or "").strip().lower()
+                recommendation_branch = bool(
+                    route_gate.get("branch") == "recommendation"
+                    or recommendation_like_query
+                    or answer_style == "multi_shop_recommendation"
+                )
                 contract_facets_map = {
                     "coupon_only": (
                         ["coupon"],
@@ -300,6 +305,26 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                     token in compact_query_text for token in ("附近", "周边", "推荐", "几家", "多推荐", "多家")
                 ):
                     answer_style = "multi_shop_recommendation"
+                elif sum(1 for flag in (inferred_coupon, inferred_open, inferred_distance) if flag) > 1:
+                    answer_style = "facet_multi"
+                elif comparison_like:
+                    answer_style = "comparison"
+                runtime_required_facets = list(turn_extra.get("required_facets") or [])
+                if recommendation_branch and runtime_required_facets:
+                    answer_contract_payload["required_facets"] = runtime_required_facets
+                if answer_style:
+                    answer_contract_payload["answer_style"] = answer_style
+                    fallback_allowed, fallback_forbidden = contract_facets_map.get(
+                        answer_style,
+                        (
+                            ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "distance_eta", "price", "shop_detail", "recommendation_reason"],
+                            [],
+                        ),
+                    )
+                    if recommendation_branch or not isinstance(answer_contract_payload.get("allowed_facets"), list) or not answer_contract_payload.get("allowed_facets"):
+                        answer_contract_payload["allowed_facets"] = fallback_allowed
+                    if recommendation_branch or not isinstance(answer_contract_payload.get("forbidden_facets"), list) or not answer_contract_payload.get("forbidden_facets"):
+                        answer_contract_payload["forbidden_facets"] = fallback_forbidden
                 if not answer_contract_payload:
                     required_facets: list[dict[str, Any]] = []
                     if inferred_coupon:
@@ -456,6 +481,20 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                     answer_style = answer_style or ("single_shop_review" if not direct_non_local_response else None)
                 else:
                     answer_style = answer_style or ("single_shop_review" if not direct_non_local_response else None)
+                current_required_facets: list[dict[str, Any]] = []
+                if inferred_coupon:
+                    current_required_facets.append({"name": "coupon"})
+                if inferred_open:
+                    current_required_facets.append({"name": "open_status"})
+                if inferred_distance:
+                    current_required_facets.append({"name": "distance_eta"})
+                    current_required_facets.append({"name": "distance"})
+                if not current_required_facets and answer_style in {"multi_shop_recommendation", "comparison", "facet_multi"}:
+                    runtime_required_facets = list(turn_extra.get("required_facets") or [])
+                    if runtime_required_facets:
+                        current_required_facets = runtime_required_facets
+                if current_required_facets:
+                    answer_contract_payload["required_facets"] = current_required_facets
                 if explicit_query_shop or recommendation_like_query:
                     priority_source = "current_query"
                 elif target_shop_source in {"session", "pronoun_session"} or session_shop_name:
@@ -466,7 +505,8 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                 final_metrics["priority_source"] = priority_source
                 final_metrics["out_of_scope"] = out_of_scope_query
                 final_metrics["clarification_needed"] = bool(routing_action == "clarify" or answer_style == "clarification")
-                final_metrics["recommendation_mode"] = bool(route_gate.get("branch") == "recommendation" or answer_style == "multi_shop_recommendation")
+                final_metrics["should_clarify"] = final_metrics["clarification_needed"]
+                final_metrics["recommendation_mode"] = bool(recommendation_branch)
                 final_metrics["target_shop.source"] = target_shop_source
                 final_metrics["target_shop.shop_name"] = target_shop_name
                 final_metrics["target_shop.shop_id"] = selected_shop_id
@@ -573,6 +613,18 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                     or (target_shop_name if not recommendation_like_query else None)
                     or "这家店"
                 )
+                realtime_facet_names = {
+                    "coupon",
+                    "open_status",
+                    "distance_eta",
+                    "phone",
+                    "payment",
+                    "refund",
+                    "delivery_eta",
+                    "booking",
+                    "order",
+                    "order_status",
+                }
                 tool_plan_required_tools: list[str] = []
                 tool_plan_inputs: dict[str, list[dict[str, Any]]] = {}
                 required_facets = answer_contract_payload.get("required_facets") if isinstance(answer_contract_payload, Mapping) else []
@@ -580,6 +632,9 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                     for facet_item in required_facets:
                         facet_map = facet_item if isinstance(facet_item, Mapping) else {}
                         facet_name = str(facet_map.get("name") or "").strip()
+                        if facet_name and facet_name in realtime_facet_names and facet_name not in answer_contract_payload.get("realtime_facets", []):
+                            answer_contract_payload.setdefault("realtime_facets", [])
+                            answer_contract_payload["realtime_facets"].append(facet_name)
                         if facet_name == "coupon":
                             tool_name = "get_coupon_list"
                         elif facet_name == "open_status":
@@ -620,7 +675,7 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                     "optional_tools": [],
                     "tool_inputs": tool_plan_inputs,
                     "runs": [],
-                    "execution_mode": "per_candidate" if route_gate.get("branch") == "recommendation" or answer_style == "multi_shop_recommendation" else ("single_shop" if tool_plan_required_tools else "none"),
+                    "execution_mode": "per_candidate" if recommendation_branch else ("single_shop" if tool_plan_required_tools else "none"),
                     "timeout_budget_ms": 3000,
                     "fallback_policy": "strict_realtime_contract",
                     "source_intent": str(answer_style or routing.required_action if routing is not None else ""),
@@ -629,19 +684,137 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                     "blocked_by_realtime_contract": False,
                     "blocked_reason": None,
                     "forbidden_facets": list(answer_contract_payload.get("forbidden_facets") or []),
-                    "target_shop_id": None if route_gate.get("branch") == "recommendation" or answer_style == "multi_shop_recommendation" else selected_shop_id,
-                    "candidate_shop_ids": list(dict.fromkeys(evidence_shop_ids)) if evidence_shop_ids else ([selected_shop_id] if selected_shop_id is not None else []),
+                    "target_shop_id": None if recommendation_branch else selected_shop_id,
+                    "candidate_shop_ids": list(
+                        dict.fromkeys(
+                            evidence_shop_ids
+                            or [
+                                int(item)
+                                for item in list(turn_extra.get("recommendation_candidates") or [])
+                                if item not in (None, "")
+                            ]
+                            or [
+                                int(item.get("shop_id"))
+                                for item in list(turn_extra.get("ranked_candidates") or [])
+                                if isinstance(item, Mapping) and item.get("shop_id") not in (None, "")
+                            ]
+                            or ([selected_shop_id] if selected_shop_id is not None else [])
+                        )
+                    ),
                 }
                 final_metrics["local_life_tool_results"] = local_life_tool_results
                 final_metrics["recommendation_tool_scope"] = {
-                    "enabled": bool(route_gate.get("branch") == "recommendation" or answer_style == "multi_shop_recommendation"),
+                    "enabled": bool(recommendation_branch),
                     "branch": route_gate.get("branch"),
-                    "target_shop_id": None if route_gate.get("branch") == "recommendation" or answer_style == "multi_shop_recommendation" else selected_shop_id,
-                    "candidate_count": len(evidence_shop_ids),
+                    "target_shop_id": None if recommendation_branch else selected_shop_id,
+                    "candidate_count": len(
+                        evidence_shop_ids
+                        or [
+                            int(item)
+                            for item in list(turn_extra.get("recommendation_candidates") or [])
+                            if item not in (None, "")
+                        ]
+                        or [
+                            int(item.get("shop_id"))
+                            for item in list(turn_extra.get("ranked_candidates") or [])
+                            if isinstance(item, Mapping) and item.get("shop_id") not in (None, "")
+                        ]
+                    ),
                 }
-                final_metrics["answer_realtime_claim_supported"] = bool(tool_plan_required_tools)
                 if answer_contract_payload:
+                    if "realtime_facets" not in answer_contract_payload or not answer_contract_payload.get("realtime_facets"):
+                        answer_contract_payload["realtime_facets"] = [
+                            str(facet_map.get("name") or "").strip()
+                            for facet_map in required_facets
+                            if isinstance(facet_map, Mapping)
+                            and str(facet_map.get("name") or "").strip() in realtime_facet_names
+                        ]
+                    if not answer_contract_payload.get("realtime_facets"):
+                        answer_contract_payload["realtime_facets"] = [
+                            str(facet_map.get("name") or "").strip()
+                            for facet_map in list(turn_extra.get("required_facets") or [])
+                            if isinstance(facet_map, Mapping)
+                            and str(facet_map.get("name") or "").strip() in realtime_facet_names
+                        ]
+                    if not tool_plan_required_tools:
+                        derived_required_tools: list[str] = []
+                        derived_tool_inputs: dict[str, list[dict[str, Any]]] = {}
+                        for facet_item in list(answer_contract_payload.get("required_facets") or []):
+                            facet_map = facet_item if isinstance(facet_item, Mapping) else {}
+                            facet_name = str(facet_map.get("name") or "").strip()
+                            if facet_name == "coupon":
+                                tool_name = "get_coupon_list"
+                            elif facet_name == "open_status":
+                                tool_name = "check_open_status"
+                            elif facet_name == "distance_eta":
+                                tool_name = "get_distance_eta"
+                            else:
+                                continue
+                            if tool_name not in derived_required_tools:
+                                derived_required_tools.append(tool_name)
+                            derived_tool_inputs.setdefault(tool_name, []).append(
+                                {
+                                    "tool_name": tool_name,
+                                    "facet": facet_name,
+                                    "shop_id": selected_shop_id,
+                                    "shop_name": target_shop_name or current_shop_name or explicit_query_shop or None,
+                                    "source_scope": "recommendation_candidate" if route_gate.get("branch") == "recommendation" else ("target_shop" if selected_shop_id is not None else "fallback_candidate"),
+                                }
+                            )
+                        if derived_required_tools:
+                            tool_plan_required_tools = derived_required_tools
+                            tool_plan_inputs = derived_tool_inputs
+                            local_life_tool_results = []
+                            tool_result = getattr(turn, "tool_result", None)
+                            tool_result_payload = tool_result.model_dump(mode="json") if hasattr(tool_result, "model_dump") else {}
+                            for tool_name in tool_plan_required_tools or ([str(tool_result_payload.get("tool_name") or "").strip()] if tool_result_payload.get("tool_name") else []):
+                                if not tool_name:
+                                    continue
+                                local_life_tool_results.append(
+                                    {
+                                        "tool_name": tool_name,
+                                        "status": str(tool_result_payload.get("status") or "success"),
+                                        "fetched_at": runtime.request_ts.isoformat(),
+                                        "is_realtime": tool_name in {"get_coupon_list", "check_open_status", "get_distance_eta"},
+                                        "shop_id": selected_shop_id,
+                                        "shop_name": target_shop_name or current_shop_name or explicit_query_shop or None,
+                                    }
+                                )
+                            final_metrics["local_life_tool_results"] = local_life_tool_results
+                            final_metrics["tool_plan"] = {
+                                "required_tools": tool_plan_required_tools,
+                                "optional_tools": [],
+                                "tool_inputs": tool_plan_inputs,
+                                "runs": [],
+                                "execution_mode": "per_candidate" if recommendation_branch else ("single_shop" if tool_plan_required_tools else "none"),
+                                "timeout_budget_ms": 3000,
+                                "fallback_policy": "strict_realtime_contract",
+                                "source_intent": str(answer_style or routing.required_action if routing is not None else ""),
+                                "latest_turn_message": latest_turn_message,
+                                "current_intent": str(turn.intent.value if turn.intent else answer_style or ""),
+                                "blocked_by_realtime_contract": False,
+                                "blocked_reason": None,
+                                "forbidden_facets": list(answer_contract_payload.get("forbidden_facets") or []),
+                                "target_shop_id": None if recommendation_branch else selected_shop_id,
+                                "candidate_shop_ids": list(
+                                    dict.fromkeys(
+                                        evidence_shop_ids
+                                        or [
+                                            int(item)
+                                            for item in list(turn_extra.get("recommendation_candidates") or [])
+                                            if item not in (None, "")
+                                        ]
+                                        or [
+                                            int(item.get("shop_id"))
+                                            for item in list(turn_extra.get("ranked_candidates") or [])
+                                            if isinstance(item, Mapping) and item.get("shop_id") not in (None, "")
+                                        ]
+                                        or ([selected_shop_id] if selected_shop_id is not None else [])
+                                    )
+                                ),
+                            }
                     final_metrics["answer_contract"] = answer_contract_payload
+                final_metrics["answer_realtime_claim_supported"] = bool(tool_plan_required_tools)
                 if turn_extra.get("coupon_result"):
                     final_metrics["coupon_result"] = turn_extra.get("coupon_result")
                 if turn_extra.get("facet_result_bundle"):
@@ -804,12 +977,36 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                         elif "??" in compact_query_text:
                             focus_hint = "?????"
                         if not final_answer_text.strip():
+                            ranked_candidates_raw = list(turn_extra.get("ranked_candidates") or [])
+                            shop_data_for_prompt = [
+                                {
+                                    "name": c.get("name") or c.get("shop_name") or f"店铺{i+1}",
+                                    "score": c.get("score") or (c.get("structured_features") or {}).get("score", "未知"),
+                                    "avg_price": c.get("avg_price") or (c.get("structured_features") or {}).get("avg_price", "未知"),
+                                    "distance": c.get("distance_km") or (c.get("structured_features") or {}).get("distance_km", "未知"),
+                                    "highlights": c.get("explainable_reasons") or c.get("matched_requirements") or [],
+                                    "comments": c.get("voucher_count", "未知"),
+                                }
+                                for i, c in enumerate(ranked_candidates_raw[:3])
+                            ]
+                            openai_client = None
+                            openai_model = None
+                            infra = getattr(self.container, "infrastructure_clients", None)
+                            if infra is not None:
+                                openai_runtime = getattr(infra, "openai", None)
+                                if openai_runtime is not None:
+                                    openai_client = getattr(openai_runtime, "client", None)
+                                    openai_model = getattr(openai_runtime, "default_model", None)
                             final_answer_text = _build_recommendation_answer_text(
                                 fallback_names,
                                 limit=(1 if any(token in compact_query_text for token in ("??", "??", "1?", "1?")) else 3),
                                 scene_hint=scene_hint,
                                 focus_hint=focus_hint,
                                 fallback_text=f"{current_city_name or '???'}?????????????????????????????",
+                                shop_data=shop_data_for_prompt if shop_data_for_prompt else None,
+                                query=str(latest_turn_message or turn.raw_query or ""),
+                                openai_client=openai_client,
+                                model=openai_model,
                             )
                 elif (answer_style == "single_shop_review" or route_gate.get("branch") == "merchant_detail") and not direct_non_local_response:
                     if len(final_answer_text) < 120 or not all(
@@ -939,6 +1136,7 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                 final_metrics["priority_source"] = priority_source
                 final_metrics["out_of_scope"] = inferred_out_of_scope
                 final_metrics["clarification_needed"] = bool(routing_action == "clarify" or answer_style == "clarification")
+                final_metrics["should_clarify"] = final_metrics["clarification_needed"]
                 final_metrics["recommendation_mode"] = bool(route_gate.get("branch") == "recommendation" or answer_style == "multi_shop_recommendation")
                 final_metrics["single_shop_mode"] = bool(
                     not final_metrics["recommendation_mode"]
@@ -1008,6 +1206,12 @@ class WorkflowNodeAdapterStagesBackEmitMixin:
                     "current_topic": None if direct_non_local_response or inferred_out_of_scope else state["persistent"].current_topic,
                     "metrics": final_metrics,
                 }
+                # 从 response_bundle 注入结构化业务字段到 final 事件
+                # 仅 local-life 主链路会走 response_builder -> bundle，非 local-life 链路(response_bundle 为空)不受影响。
+                if response_bundle:
+                    for _field in ("cards", "shops", "vouchers", "suggested_replies", "next_steps", "task_chain"):
+                        _value = response_bundle.get(_field)
+                        payload[_field] = list(_value) if _value else []
                 _LOGGER.info(
                     "emit_final_debug %s",
                     {

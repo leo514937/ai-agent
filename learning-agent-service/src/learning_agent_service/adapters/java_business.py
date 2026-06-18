@@ -158,6 +158,26 @@ def _normalize_shop_name_query(value: str) -> str:
     return re.sub(r"\s+", "", str(value or "")).strip()
 
 
+# Common suffixes that users append when asking about a shop
+_SHOP_QUERY_SUFFIXES = [
+    "店怎么样", "店好不好", "店如何", "店好吃吗",
+    "怎么样", "好不好", "如何", "好吃吗", "好吃不",
+    "有券吗", "有优惠吗", "有团购吗",
+    "怎么走", "在哪", "地址", "电话", "营业时间",
+]
+
+
+def _strip_shop_query_suffixes(name: str) -> str:
+    """Strip common conversational suffixes from shop query before Java lookup."""
+    if not name:
+        return name
+    for suffix in _SHOP_QUERY_SUFFIXES:
+        if name.endswith(suffix):
+            name = name[:-len(suffix)]
+            break
+    return name.strip()
+
+
 _KNOWN_FALLBACK_SHOPS_BY_ID: dict[int, ShopRecord] = {
     3: ShopRecord(
         id=3,
@@ -342,6 +362,9 @@ class JavaBusinessClient:
         self.timeout_seconds = float(getattr(self.settings, "java_business_timeout_seconds", 5.0) or 5.0)
         self.enable_fallback = bool(getattr(self.settings, "java_business_enable_fallback", True)) and not _is_production_like(self.settings)
         self._client: httpx.Client | None = None
+        # brand/area cache: (data, timestamp)
+        self._brand_cache: tuple[list[str], float] | None = None
+        self._area_cache: tuple[list[str], float] | None = None
 
     @property
     def fallback_catalog(self) -> LocalLifeCatalog:
@@ -401,6 +424,40 @@ class JavaBusinessClient:
         if self.enable_fallback:
             return self.fallback_catalog.list_shop_types()
         return items
+
+    def get_brand_list(self, *, ttl: float = 300.0) -> list[str]:
+        """获取品牌列表，带 TTL 缓存（默认 300s）。"""
+        import time
+        now = time.monotonic()
+        if self._brand_cache is not None:
+            data, ts = self._brand_cache
+            if now - ts < ttl:
+                return data
+        payload = self._request_json("GET", "/shop/brands")
+        raw = _unwrap_result(payload)
+        brands = [str(b) for b in (raw or []) if b]
+        if not brands and self.enable_fallback:
+            from ..local_life.entity_decomposer import _FALLBACK_BRANDS
+            brands = list(_FALLBACK_BRANDS)
+        self._brand_cache = (brands, now)
+        return brands
+
+    def get_area_list(self, *, ttl: float = 300.0) -> list[str]:
+        """获取区域列表，带 TTL 缓存（默认 300s）。"""
+        import time
+        now = time.monotonic()
+        if self._area_cache is not None:
+            data, ts = self._area_cache
+            if now - ts < ttl:
+                return data
+        payload = self._request_json("GET", "/shop/areas")
+        raw = _unwrap_result(payload)
+        areas = [str(a) for a in (raw or []) if a]
+        if not areas and self.enable_fallback:
+            from ..local_life.entity_decomposer import _FALLBACK_AREAS
+            areas = list(_FALLBACK_AREAS)
+        self._area_cache = (areas, now)
+        return areas
 
     def get_shop_detail(self, shop_id: int) -> ShopRecord:
         payload = self._request_json("GET", f"/internal/v1/business/shops/{shop_id}/detail")
@@ -463,28 +520,42 @@ class JavaBusinessClient:
         return items
 
     def search_shops_by_name(self, *, name: str, current: int = 1) -> list[ShopRecord]:
-        params = {"name": name, "current": current}
+        # Strip conversational suffixes before Java lookup
+        # e.g. "海底捞水晶城店怎么样" -> "海底捞水晶城店"
+        stripped_name = _strip_shop_query_suffixes(name)
+        params = {"name": stripped_name, "current": current}
         payload = self._request_json("GET", "/shop/of/name", params=params)
         raw_shops = [_coerce_shop(item) for item in _coerce_list(_unwrap_result(payload))]
         items = cast(list[ShopRecord], [item for item in raw_shops if item is not None])
         if items:
             return items
 
+        # Retry with original name if stripped name didn't match
+        if stripped_name != name:
+            params = {"name": name, "current": current}
+            payload = self._request_json("GET", "/shop/of/name", params=params)
+            raw_shops = [_coerce_shop(item) for item in _coerce_list(_unwrap_result(payload))]
+            items = cast(list[ShopRecord], [item for item in raw_shops if item is not None])
+            if items:
+                return items
+
         if self.enable_fallback:
             known_shop = _fallback_known_shop_by_query(name)
             if known_shop is not None:
                 return [known_shop]
             
-        # Fallback fuzzy matching for known database shops if exact substring search returned empty (P0-Fix)
-        for brand in ["海底捞", "蔡馬洪涛", "新白鹿", "Mamala", "幸福里", "炉鱼", "浅草屋", "羊老三", "开乐迪", "INLOVE", "星聚会"]:
+        # Fallback fuzzy matching for known database shops if exact substring search returned empty.
+        # Use dynamic brand/area lists from Java backend instead of hardcoded values.
+        known_brands = self.get_brand_list()
+        for brand in known_brands:
             if brand in name or name in brand:
                 params = {"name": brand, "current": current}
                 payload = self._request_json("GET", "/shop/of/name", params=params)
                 raw_fallback = [_coerce_shop(item) for item in _coerce_list(_unwrap_result(payload))]
                 fallback_items = cast(list[ShopRecord], [item for item in raw_fallback if item is not None])
                 if fallback_items:
-                    area_words = ["水晶城", "运河上街", "丝联", "万达", "乐堤港", "北城天地", "城西", "武林广场"]
-                    matched_area = next((w for w in area_words if w in name), None)
+                    known_areas = self.get_area_list()
+                    matched_area = next((w for w in known_areas if w in name), None)
                     if matched_area:
                         filtered = [s for s in fallback_items if matched_area in s.name or matched_area in (s.area or "")]
                         if filtered:

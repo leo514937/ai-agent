@@ -16,7 +16,10 @@ from ...domain.contracts import (
 )
 from ...domain.errors import TerminalEvent, WorkflowErrorCode, build_error
 from ...domain.state import GraphState, build_initial_state, clone_graph_state
-from ..routing_primitives import _looks_like_unserviceable_location, _pending_clarification_matches_query
+from ..routing_primitives import (
+    _looks_like_unserviceable_location,
+    _pending_clarification_matches_query,
+)
 from .state import append_runtime_error as _append_state_runtime_error
 from .state import append_runtime_event as _append_state_runtime_event
 from .state import append_stage_timeline_entry as _append_stage_timeline_entry
@@ -24,7 +27,7 @@ from .services import WorkflowServices
 from .subgraphs import (
     route_decider,
     route_gate,
-    run_rag_subgraph,
+    run_evidence_subgraph,
     run_tool_subgraph,
 )
 
@@ -56,15 +59,13 @@ class WorkflowRunner(Protocol):
         self,
         command: ChatTurnCommand,
         persistent_context: PersistentSessionContext | None = None,
-    ) -> GraphState:
-        ...
+    ) -> GraphState: ...
 
     def run_stream(
         self,
         command: ChatTurnCommand,
         persistent_context: PersistentSessionContext | None = None,
-    ) -> Iterable[SseEnvelope]:
-        ...
+    ) -> Iterable[SseEnvelope]: ...
 
 
 class BaseWorkflowRunner:
@@ -78,7 +79,6 @@ class BaseWorkflowRunner:
         self.services = services
         self.workflow_version = workflow_version
         self.runner_kind = runner_kind
-
 
     def _annotate_runner_context(self, state: GraphState) -> GraphState:
         state = _update_phase5_trace(
@@ -159,14 +159,25 @@ class BaseWorkflowRunner:
         try:
             state = func(state)
             elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            self._emit_stage_event(state, "workflow_stage_event", stage_name, "ok", elapsed_ms=elapsed_ms)
+            self._emit_stage_event(
+                state, "workflow_stage_event", stage_name, "ok", elapsed_ms=elapsed_ms
+            )
         except Exception as exc:
             elapsed_ms = (time.perf_counter() - started_at) * 1000.0
-            self._emit_stage_event(state, "workflow_stage_event", stage_name, "error", error=str(exc), elapsed_ms=elapsed_ms)
+            self._emit_stage_event(
+                state,
+                "workflow_stage_event",
+                stage_name,
+                "error",
+                error=str(exc),
+                elapsed_ms=elapsed_ms,
+            )
             state = self._record_unexpected_error(state, stage_name, exc)
         return state
 
-    def _record_unexpected_error(self, state: GraphState, stage_name: str, exc: Exception) -> GraphState:
+    def _record_unexpected_error(
+        self, state: GraphState, stage_name: str, exc: Exception
+    ) -> GraphState:
         runtime = state["runtime"]
         error = build_error(
             WorkflowErrorCode.INTERNAL_ERROR,
@@ -175,7 +186,9 @@ class BaseWorkflowRunner:
             is_terminal=True,
         )
         state = _append_state_runtime_error(state, error)
-        state["runtime"] = state["runtime"].model_copy(update={"terminal_event": TerminalEvent.ERROR})
+        state["runtime"] = state["runtime"].model_copy(
+            update={"terminal_event": TerminalEvent.ERROR}
+        )
         return state
 
     @staticmethod
@@ -194,5 +207,7 @@ class BaseWorkflowRunner:
         state = self._invoke_stage("emit_final", self.services.emit_final, state)
         runtime = state["runtime"]
         if runtime.terminal_event is None:
-            state["runtime"] = runtime.model_copy(update={"terminal_event": default_terminal or TerminalEvent.FINAL})
+            state["runtime"] = runtime.model_copy(
+                update={"terminal_event": default_terminal or TerminalEvent.FINAL}
+            )
         return state

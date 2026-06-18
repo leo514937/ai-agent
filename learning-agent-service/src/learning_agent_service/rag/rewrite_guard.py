@@ -5,6 +5,12 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+# Lazy import: FacetPlan from domain contracts (avoid circular import at module level)
+try:
+    from ..domain.contracts import FacetPlan
+except ImportError:
+    from typing import Any as FacetPlan  # type: ignore[assignment]
+
 _LOGGER = logging.getLogger(__name__)
 
 _TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_+#.:-]+|[\u4e00-\u9fff]+")
@@ -96,6 +102,7 @@ class QueryRewriteGuard:
         context_slots: dict[str, Any] | None = None,
         intent: str | None = None,
         extra: dict[str, Any] | None = None,
+        facet_plans: list[FacetPlan] | None = None,
     ) -> QueryRewriteGuardResult:
         if not self._config.enabled:
             return QueryRewriteGuardResult(
@@ -127,7 +134,7 @@ class QueryRewriteGuard:
 
         slot_loss = self._detect_slot_loss(original_query, rewrite_query, context_slots or {})
         new_constraints = self._detect_new_constraints(original_query, rewrite_query)
-        intent_changed = self._detect_intent_drift(original_query, rewrite_query, intent)
+        intent_changed = self._detect_intent_drift(original_query, rewrite_query, intent, facet_plans=facet_plans)
 
         debug = {
             "semantic_similarity": round(semantic_sim, 4),
@@ -302,7 +309,10 @@ class QueryRewriteGuard:
 
         return tuple(dict.fromkeys(new_constraints))
 
-    def _detect_intent_drift(self, original: str, rewrite: str, intent: str | None) -> bool:
+    def _detect_intent_drift(self, original: str, rewrite: str, intent: str | None, *, facet_plans: list[FacetPlan] | None = None) -> bool:
+        # facet_plan 路径：LLM 直接输出 facet，不需要 intent drift 检测
+        if facet_plans:
+            return False
         if not intent:
             return False
 

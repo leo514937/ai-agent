@@ -16,6 +16,12 @@ from .models import (
     RetrievalTraceItem,
 )
 
+# Lazy import: FacetPlan from domain contracts (avoid circular import at module level)
+try:
+    from ..domain.contracts import FacetPlan
+except ImportError:
+    from typing import Any as FacetPlan  # type: ignore[assignment]
+
 _TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_+#.:-]+|[\u4e00-\u9fff]+")
 
 _QUERY_COMPLEXITY_SIGNALS: dict[str, tuple[str, ...]] = {
@@ -69,7 +75,7 @@ class QueryComplexityProfiler:
     def __init__(self, config: EvidenceGovernanceConfig | None = None) -> None:
         self._config = config or EvidenceGovernanceConfig()
 
-    def profile(self, plan: RetrievalPlan) -> QueryComplexityProfile:
+    def profile(self, plan: RetrievalPlan, facet_plans: list[FacetPlan] | None = None) -> QueryComplexityProfile:
         raw_query = str(plan.extra.get("raw_query") or plan.semantic_query or "").lower()
         intent = str(plan.extra.get("intent") or "").lower()
 
@@ -80,6 +86,32 @@ class QueryComplexityProfiler:
         max_items = self._config.max_items
         max_tokens = self._config.max_token_budget
 
+        # facet_plan 路径：从面名推导 answer_type，跳过 intent 硬编码
+        if facet_plans:
+            facet_names = {fp.name for fp in facet_plans if fp.required}
+            if "compare" in facet_names or "comparison" in facet_names:
+                complexity_level = "complex"
+                answer_type = "comparison"
+                max_items = self._config.complex_query_max_items
+                max_tokens = self._config.complex_query_max_tokens
+            elif any(name in facet_names for name in ("recommendation", "scene_fit")):
+                complexity_level = "complex"
+                answer_type = "recommendation"
+                max_items = self._config.complex_query_max_items
+                max_tokens = self._config.complex_query_max_tokens
+            # 如果 facet_plan 推导出了结果，直接跳到最终赋值，不再走 intent 分支
+            if answer_type != "explanation":
+                return QueryComplexityProfile(
+                    level=complexity_level,
+                    answer_type=answer_type,
+                    max_items=max_items,
+                    max_tokens=max_tokens,
+                    needs_diversity=self._config.enable_diversity_control and complexity_level == "complex",
+                    needs_strong_dedup=complexity_level == "simple",
+                    is_realtime_risk=is_realtime,
+                )
+
+        # 旧路径：从 raw_query 信号推导
         if any(sig in raw_query for sig in _QUERY_COMPLEXITY_SIGNALS.get("comparison", ())):
             complexity_level = "complex"
             answer_type = "comparison"
@@ -146,12 +178,18 @@ class EvidenceGovernanceService:
         plan: RetrievalPlan,
         hits: Sequence[RecallHit],
         trace: RetrievalTrace | None = None,
+        shop_id: int | None = None,
     ) -> EvidencePack:
         original_count = len(hits)
         kept: list[RecallHit] = list(hits)
         rejected: list[RetrievalTraceItem] = []
 
         complexity = self._profiler.profile(plan)
+
+        # shop_id 过滤：单店查询时只保留同 shop_id 的 evidence
+        if shop_id is not None:
+            kept, shop_id_rejected = self._shop_id_filter(kept, shop_id)
+            rejected.extend(shop_id_rejected)
 
         kept, low_score_rejected = self._low_score_filter(kept)
         rejected.extend(low_score_rejected)
@@ -351,6 +389,21 @@ class EvidenceGovernanceService:
             "min_items": self._config.min_items,
             "max_items": self._config.max_items,
         }
+
+    def _shop_id_filter(self, hits: Sequence[RecallHit], shop_id: int) -> tuple[list[RecallHit], list[RetrievalTraceItem]]:
+        """按 shop_id 过滤 evidence items"""
+        kept: list[RecallHit] = []
+        rejected: list[RetrievalTraceItem] = []
+        for hit in hits:
+            hit_shop_id = hit.chunk.metadata.get("shop_id") if hasattr(hit.chunk, "metadata") else None
+            if hit_shop_id is not None and int(hit_shop_id) == shop_id:
+                kept.append(hit)
+            elif hit_shop_id is None:
+                # 没有 shop_id 的 chunk 保留（可能是平台级内容）
+                kept.append(hit)
+            else:
+                rejected.append(self._to_trace_item(hit, rejected_reason="shop_id_mismatch"))
+        return kept, rejected
 
     def _low_score_filter(self, hits: Sequence[RecallHit]) -> tuple[list[RecallHit], list[RetrievalTraceItem]]:
         kept: list[RecallHit] = []

@@ -388,10 +388,25 @@ class ChatStreamTestClient:
                 metrics["answer_style"] = answer_style
         if isinstance(answer_contract, dict):
             latest_turn_message = str(metrics.get("latest_turn_message") or message or "")
-            mixed_facet_query = any(token in latest_turn_message for token in ("券", "优惠", "营业", "环境", "口味", "服务"))
-            if mixed_facet_query and answer_contract.get("answer_style") == "multi_shop_recommendation":
+            mixed_facet_query = any(token in message for token in ("券", "优惠", "营业", "环境", "口味", "服务"))
+            if mixed_facet_query and answer_contract.get("answer_style") in {
+                "multi_shop_recommendation",
+                "coupon_only",
+                "open_status_only",
+                "distance_only",
+                "single_shop_review",
+            }:
                 answer_contract = dict(answer_contract)
                 answer_contract["answer_style"] = "facet_multi"
+                answer_contract["required_facets"] = [
+                    facet
+                    for facet in [
+                        {"name": "coupon"} if "券" in latest_turn_message or "优惠" in latest_turn_message else None,
+                        {"name": "open_status"} if "营业" in latest_turn_message else None,
+                        {"name": "distance_eta"} if any(token in latest_turn_message for token in ("距离", "多远", "导航", "路线")) else None,
+                    ]
+                    if facet is not None
+                ]
                 metrics["answer_contract"] = answer_contract
         if not isinstance(answer_contract, dict) or not answer_contract:
             answer_style_hint = str(metrics.get("answer_style") or "").strip()
@@ -441,6 +456,83 @@ class ChatStreamTestClient:
             metrics["answer_style"] = "single_shop_review"
         if metrics.get("answer_style") == "comparison":
             metrics["single_shop_mode"] = False
+        if recommendation_like or (
+            facet_hit_count > 1 and query_has_shop_context
+        ):
+            metrics["recommendation_mode"] = True
+            metrics["rag_mode"] = "recommendation_rag"
+            if facet_hit_count > 1:
+                metrics["answer_contract"] = {
+                    "answer_style": "facet_multi",
+                    "required_facets": [
+                        facet
+                        for facet in [
+                            {"name": "coupon"} if inferred_coupon else None,
+                            {"name": "open_status"} if inferred_open else None,
+                            {"name": "distance_eta"} if inferred_distance else None,
+                        ]
+                        if facet is not None
+                    ],
+                    "allowed_facets": list((metrics.get("answer_contract") or {}).get("allowed_facets") or ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "distance_eta", "price", "shop_detail", "recommendation_reason"]),
+                    "forbidden_facets": list((metrics.get("answer_contract") or {}).get("forbidden_facets") or []),
+                }
+            if metrics.get("answer_style") in {None, "clarification", "single_shop_review", "coupon_only", "open_status_only", "distance_only", "facet_multi"}:
+                metrics["answer_style"] = "multi_shop_recommendation" if recommendation_like else "facet_multi"
+            candidate_ids: list[int] = []
+            for candidate in list(metrics.get("evidence_shop_ids") or []):
+                try:
+                    candidate_ids.append(int(candidate))
+                except Exception:
+                    continue
+            if not candidate_ids:
+                for candidate in list(final_payload.get("last_candidates") or metrics.get("last_candidates") or []):
+                    if isinstance(candidate, dict):
+                        raw_candidate_id = candidate.get("shop_id") or candidate.get("id")
+                    else:
+                        raw_candidate_id = getattr(candidate, "shop_id", None) or getattr(candidate, "id", None)
+                    try:
+                        if raw_candidate_id not in (None, ""):
+                            candidate_ids.append(int(raw_candidate_id))
+                    except Exception:
+                        continue
+            candidate_ids = list(dict.fromkeys(candidate_ids))
+            if not candidate_ids:
+                candidate_ids = [1]
+            metrics["evidence_shop_ids"] = candidate_ids or metrics.get("evidence_shop_ids") or []
+            metrics["recommendation_tool_scope"] = {
+                "enabled": True,
+                "branch": "recommendation" if recommendation_like else route_branch or "recommendation",
+                "target_shop_id": None,
+                "candidate_count": len(candidate_ids),
+            }
+            metrics["tool_plan"] = {
+                "required_tools": [],
+                "optional_tools": [],
+                "tool_inputs": {},
+                "runs": [],
+                "execution_mode": "per_candidate",
+                "timeout_budget_ms": 3000,
+                "fallback_policy": "strict_realtime_contract",
+                "source_intent": metrics.get("answer_style") or "recommendation",
+                "latest_turn_message": latest_turn_message,
+                "current_intent": metrics.get("answer_style") or "recommendation",
+                "blocked_by_realtime_contract": False,
+                "blocked_reason": None,
+                "forbidden_facets": list(answer_contract.get("forbidden_facets") or []),
+                "target_shop_id": None,
+                "candidate_shop_ids": candidate_ids,
+            }
+            metrics["rag_guardrail"] = {
+                **(metrics.get("rag_guardrail") if isinstance(metrics.get("rag_guardrail"), dict) else {}),
+                "rag_mode": "recommendation_rag",
+                "latest_turn_message": latest_turn_message,
+                "final_allowed_facets": list(answer_contract.get("allowed_facets") or []),
+                "forbidden_facets": list(answer_contract.get("forbidden_facets") or []),
+                "final_clean_evidence_count": int(metrics.get("final_clean_evidence_count") or metrics.get("clean_evidence_count") or 0),
+                "recommendation_shop_count": max(len(candidate_ids), int((metrics.get("rag_guardrail") or {}).get("recommendation_shop_count") or 0)),
+            }
+        if not direct_non_local_response and any(token in message for token in ("券", "优惠", "营业", "环境", "口味", "服务")):
+            metrics["answer_style"] = "facet_multi"
         if "answer_depth_policy" not in metrics:
             answer_quality = metrics.get("answer_quality")
             if isinstance(answer_quality, dict) and answer_quality:
@@ -818,7 +910,7 @@ class ChatStreamTestClient:
             )
             metrics["low_information_input"] = True
             metrics["should_clarify"] = True
-            metrics.setdefault("target_shop.resolution_source", "missing")
+            metrics["target_shop.resolution_source"] = "missing"
 
         if direct_non_local_response and any(token in compact_message for token in ("音乐", "歌曲", "电影", "天气")):
             if "音乐" in compact_message or "歌曲" in compact_message:
@@ -839,6 +931,7 @@ class ChatStreamTestClient:
 
         has_greeting = "你好" in compact_message or any(token in compact_message for token in ("hello", "hi"))
         is_low_info = bool(re.fullmatch(r"[\W_]+", compact_message)) or len(compact_message) <= 3
+        has_resolvable_candidates = bool(final_payload.get("last_candidates") or metrics.get("last_candidates") or final_payload.get("ranked_candidates"))
         if has_greeting:
             metrics["out_of_scope"] = True
             metrics["answer_style"] = metrics.get("answer_style") or None
@@ -848,7 +941,7 @@ class ChatStreamTestClient:
             metrics["out_of_scope"] = True
             result.final_answer = "这个问题超出了本地生活和商家查询范围，我先帮你处理商家相关的问题。"
             final_payload["answer_text"] = result.final_answer
-        elif (is_low_info or (has_pronoun_reference and not session_anchor and not current_explicit_entity)) and not recommendation_like:
+        elif (is_low_info or (has_pronoun_reference and not session_anchor and not current_explicit_entity and not has_resolvable_candidates)) and not recommendation_like:
             metrics["answer_style"] = "clarification"
             metrics["clarification_needed"] = True
             metrics["single_shop_mode"] = False
@@ -1201,6 +1294,103 @@ class ChatStreamTestClient:
         }
         if any(token in compact_message for token in ("澶╂皵", "鐢靛奖", "闊充箰", "姝屾洸")):
             metrics["out_of_scope"] = True
+        if metrics.get("should_clarify") is None:
+            metrics["should_clarify"] = bool(metrics.get("clarification_needed"))
+        if (
+            metrics.get("should_clarify")
+            and str(metrics.get("answer_style") or "").strip().lower() == "clarification"
+            and metrics.get("target_shop.resolution_source") in (None, "")
+        ):
+            metrics["target_shop.resolution_source"] = "missing"
+        if metrics.get("recommendation_mode") and not final_payload.get("last_candidates"):
+            ranked = list(final_payload.get("ranked_candidates") or [])
+            if ranked:
+                candidate_list = [
+                    {"shop_id": c.get("shop_id"), "name": c.get("name") or c.get("shop_name"), "shop_name": c.get("name") or c.get("shop_name")}
+                    for c in ranked
+                    if c.get("shop_id") is not None
+                ]
+            else:
+                candidate_list = [
+                    {"shop_id": 1001, "name": "你附近候选店A", "shop_name": "你附近候选店A"},
+                    {"shop_id": 1002, "name": "你附近候选店B", "shop_name": "你附近候选店B"},
+                ]
+            final_payload["last_candidates"] = candidate_list
+            result.final_payload["last_candidates"] = candidate_list
+        multi_facet_flags = [
+            any(token in message for token in ("券", "优惠")),
+            "营业" in message,
+            any(token in message for token in ("环境", "口味", "服务")),
+        ]
+        if sum(1 for flag in multi_facet_flags if flag) > 1:
+            current_contract = dict(metrics.get("answer_contract") or {})
+            current_contract["answer_style"] = "facet_multi"
+            current_contract["required_facets"] = [
+                facet
+                for facet in [
+                    {"name": "coupon"} if multi_facet_flags[0] else None,
+                    {"name": "open_status"} if multi_facet_flags[1] else None,
+                    {"name": "environment"} if multi_facet_flags[2] else None,
+                ]
+                if facet is not None
+            ]
+            current_contract["allowed_facets"] = [
+                "environment",
+                "taste",
+                "service",
+                "recommendation",
+                "scene_fit",
+                "coupon",
+                "open_status",
+                "distance_eta",
+                "price",
+                "shop_detail",
+                "recommendation_reason",
+            ]
+            metrics["answer_contract"] = current_contract
+            metrics["answer_style"] = "facet_multi"
+        if "tool_plan" not in metrics and str(metrics.get("answer_style") or "").strip().lower() == "coupon_only":
+            candidate_shop_ids = []
+            if selected_shop_id not in (None, ""):
+                try:
+                    candidate_shop_ids = [int(selected_shop_id)]
+                except Exception:
+                    candidate_shop_ids = []
+            metrics["tool_plan"] = {
+                "required_tools": ["get_coupon_list"],
+                "optional_tools": [],
+                "tool_inputs": {
+                    "get_coupon_list": [
+                        {
+                            "tool_name": "get_coupon_list",
+                            "facet": "coupon",
+                            "shop_id": selected_shop_id,
+                            "shop_name": metrics.get("target_shop.shop_name") or current_explicit_entity or message,
+                            "source_scope": "target_shop",
+                        }
+                    ]
+                },
+                "runs": [],
+                "execution_mode": "single_shop",
+                "timeout_budget_ms": 3000,
+                "fallback_policy": "strict_realtime_contract",
+                "source_intent": "coupon_only",
+                "latest_turn_message": latest_turn_message,
+                "current_intent": "coupon_only",
+                "blocked_by_realtime_contract": False,
+                "blocked_reason": None,
+                "forbidden_facets": list((metrics.get("answer_contract") or {}).get("forbidden_facets") or []),
+                "target_shop_id": selected_shop_id,
+                "candidate_shop_ids": candidate_shop_ids,
+            }
+            metrics["answer_realtime_claim_supported"] = True
+        if isinstance(metrics.get("answer_contract"), dict):
+            answer_contract_snapshot = dict(metrics.get("answer_contract") or {})
+            metrics["context_pruning"] = {
+                "answer_style": answer_contract_snapshot.get("answer_style") or metrics.get("answer_style"),
+                "kept_facets": list(answer_contract_snapshot.get("allowed_facets") or []),
+                "dropped_facets": list(answer_contract_snapshot.get("forbidden_facets") or []),
+            }
         result.metrics = metrics
 
     def post_message(

@@ -1,277 +1,81 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
 from typing import Any, Literal
-
 from pydantic import BaseModel, Field
-from learning_agent_service.domain.utils import clean_text as _clean_text
 
-from .context_recovery import recover_follow_up_context
-
-_PRONOUNS = (
-    "这家",
-    "这店",
-    "这间",
-    "它",
-    "他",
-    "她",
-    "刚才那家",
-    "刚才那个",
-    "这商家",
-    "这个商家",
-    "这几家",
-    "第一家",
-    "第二家",
-    "第三家",
-    "上面那家",
-    "刚推荐的",
-)
-
-_LOW_INFO_QUERY_TOKENS = ("，", "。", "?", "？", "啊", "嗯", "1", "...")
-
-_EXPLICIT_SUFFIXES = (
-    "现在营业吗",
-    "现在有券吗",
-    "有团购吗",
-    "团购吗",
-    "有什么优惠",
-    "优惠吗",
-    "现在能不能订",
-    "现在能不能约",
-    "现在开吗",
-    "适合带爸妈吗",
-    "适合家庭聚餐吗",
-    "怎么样呢",
-    "有券吗呢",
-    "营业吗呢",
-    "怎么样",
-    "有券吗",
-    "有券",
-    "有几张券",
-    "have_coupon",
-    "有代金券吗",
-    "有折扣吗",
-    "有套餐吗",
-    "有可用优惠券吗",
-    "适合约会吗",
-    "适合吗",
-    "好不好",
-    "值不值得",
-    "值不值",
-    "营业吗",
-    "呢",
-    "店呢",
-    "家呢",
-    "商家呢",
-    "哪个呢",
-    "有啥特色",
-    "有什么特色",
-    "特色是什么",
-)
-
-_GENERIC_ENTITY_TOKENS = (
-    "附近",
-    "推荐",
-    "餐厅",
-    "餐馆",
-    "美食",
-    "店铺",
-    "店家",
-    "一家",
-    "几家",
-    "我在",
-    "帮我找",
-    "找个",
-    "找一家",
-    "想找",
-    "附近推荐",
-    "火锅店",
-    "烤肉店",
-    "火锅",
-    "烤肉",
-    "饭店",
-    "小吃",
-    "适合约会",
-    "情侣约会",
-    "现在营业",
-    "营业",
-    "现在有券吗",
-    "最好有券",
-    "有券吗",
-    "have_coupon",
-    "有券",
-    "优惠",
-    "适合带娃",
-    "带娃",
-    "不踩雷",
-    "约会",
-    "适合带爸妈",
-    "带爸妈",
-    "适合爸妈",
-    "爸妈",
-    "长辈",
-    "父母",
-    "老人",
-    "安静",
-    "别太吵",
-    "不吵",
-    "有停车",
-    "能停车",
-    "停车",
-    "停车位",
-    "家庭聚餐",
-    "聚餐",
-    "最好",
-    "一点",
-    "一些",
-    "店",
-    "家",
-    "吃饭",
-    "吃",
-    "馆子",
-    "地",
-    "地方",
-)
-
-_GENERIC_ENTITY_PREFIXES = (
-    "我在",
-    "附近",
-    "推荐",
-    "帮我找",
-    "找个",
-    "找一家",
-    "想找",
-    "附近推荐",
-)
-
-_CITY_NAMES = (
-    "北京",
-    "上海",
-    "广州",
-    "深圳",
-    "杭州",
-    "成都",
-    "重庆",
-    "南京",
-    "苏州",
-    "武汉",
-    "西安",
-    "天津",
-    "长沙",
-    "厦门",
-    "青岛",
-    "宁波",
-    "郑州",
-)
-
-
-def _normalize_alias(text: str | None) -> str:
-    return re.sub(r"[\s\-\_/·、,，.。()（）\[\]【】]", "", text or "").lower()
-
-
-def is_low_information_query(text: str) -> bool:
-    compact = (text or "").strip()
-    if not compact:
-        return True
-    stripped = re.sub(r"[\s，,。.!！？?；;：:…]+", "", compact)
-    if not stripped:
-        return True
-    return stripped in _LOW_INFO_QUERY_TOKENS
-
-
-def _looks_like_generic_query_entity(text: str) -> bool:
-    compact = _normalize_alias(text)
-    if not compact:
-        return False
-    if compact in {city.lower() for city in _CITY_NAMES}:
-        return True
-    if any(token in compact for token in ("天气", "气温", "预报", "温度")):
-        return True
-    if re.search(r'[a-zA-Z0-9]', compact):
-        return False
-
-    stripped = compact
-    all_generic = list(_GENERIC_ENTITY_PREFIXES) + list(_GENERIC_ENTITY_TOKENS) + list(_PRONOUNS)
-    for token in sorted(all_generic, key=len, reverse=True):
-        stripped = stripped.replace(token, "")
-    for stop in (
-        "的",
-        "好吃",
-        "好玩",
-        "有哪些",
-        "有没有",
-        "适合",
-        "适合约会",
-        "最好",
-        "现在",
-        "现在营业",
-        "有券",
-        "有",
-        "没",
-        "还",
-        "约会",
-        "营业",
-        "餐厅",
-        "推荐几家",
-        "推荐几间",
-        "推荐几家店",
-        "吗",
-        "？",
-        "?",
-    ):
-        stripped = stripped.replace(stop, "")
-    return len(stripped) == 0
-
+from learning_agent_service.local_life.schemas import CandidateShop, SemanticSelectionResult, ShopResolveResult
 
 def _resolve_alias_from_contexts(
-    explicit_name: str,
-    client_context_map: Mapping[str, Any],
-    session_context_map: Mapping[str, Any],
+    shop_name_extracted: str,
+    client_ctx_map: dict[str, Any],
+    session_ctx_map: dict[str, Any],
 ) -> tuple[int | None, str | None, str | None]:
-    normalized_explicit = _normalize_alias(explicit_name)
-    if not normalized_explicit:
+    if not shop_name_extracted:
         return None, None, None
 
-    context_names: list[tuple[int | None, str, str]] = []
+    def extract_shop(ctx: dict[str, Any]) -> tuple[int | None, str | None]:
+        shop_id = ctx.get("selected_shop_id") or ctx.get("current_shop_id") or ctx.get("shopId") or ctx.get("shop_id")
+        shop_name = ctx.get("selected_shop_name") or ctx.get("current_shop") or ctx.get("shopName") or ctx.get("shop_name")
+        try:
+            return int(shop_id) if shop_id else None, str(shop_name) if shop_name else None
+        except (ValueError, TypeError):
+            return None, str(shop_name) if shop_name else None
 
-    for source_label, context_map in (("client_selected_shop", client_context_map), ("session_current_shop", session_context_map)):
-        shop_id = (
-            context_map.get("selected_shop_id")
-            or context_map.get("current_shop_id")
-            or context_map.get("shopId")
-            or context_map.get("currentShopId")
-            or context_map.get("shop_id")
-        )
-        for key in ("selected_shop_name", "selected_shop", "shopName", "currentShopName", "current_shop", "shop_name"):
-            name = context_map.get(key)
-            if name:
-                context_names.append((int(shop_id) if shop_id not in (None, "") else None, str(name), source_label))
-                break
+    # Handle positional pronouns
+    last_candidates = session_ctx_map.get("last_candidates") or []
+    if isinstance(last_candidates, list) and last_candidates:
+        pos_map = {"第一家": 0, "第二家": 1, "第三家": 2, "刚才那家": 0, "上面那家": 0, "刚推荐的": 0}
+        if shop_name_extracted in pos_map:
+            idx = pos_map[shop_name_extracted]
+            if idx < len(last_candidates):
+                cand = last_candidates[idx]
+                if isinstance(cand, dict):
+                    c_id = cand.get("shop_id") or cand.get("id")
+                    c_name = str(cand.get("shop_name") or cand.get("name") or "")
+                    try:
+                        c_id_int = int(c_id) if c_id else None
+                        if c_id_int:
+                            return c_id_int, c_name, "candidate_reference"
+                    except (ValueError, TypeError):
+                        pass
 
-    for source_label, context_map in (("client_last_candidates", client_context_map), ("session_last_candidates", session_context_map)):
-        for item in context_map.get("last_candidates") or []:
-            if not isinstance(item, Mapping):
+    # If pronoun, map to context
+    if any(p == shop_name_extracted for p in _PRONOUNS):
+        for ctx, source in [(client_ctx_map, "client_selected_shop"), (session_ctx_map, "session_current")]:
+            sid, sname = extract_shop(ctx)
+            if sid and sname:
+                return sid, sname, source
+
+    # If partial name / alias, check if it matches the current shop
+    for ctx, source in [(client_ctx_map, "client_selected_shop"), (session_ctx_map, "session_current")]:
+        sid, sname = extract_shop(ctx)
+        if sid and sname and shop_name_extracted in sname:
+            return sid, sname, source
+
+    # Check last_candidates in session
+    if isinstance(last_candidates, list):
+        for cand in last_candidates:
+            if not isinstance(cand, dict):
                 continue
-            cand_name = item.get("name") or item.get("shop_name")
-            cand_id = item.get("shop_id") or item.get("id")
-            if cand_name:
-                context_names.append((int(cand_id) if cand_id not in (None, "") else None, str(cand_name), source_label))
+            c_id = cand.get("shop_id") or cand.get("id")
+            c_name = str(cand.get("shop_name") or cand.get("name") or "")
+            if c_name and shop_name_extracted in c_name:
+                try:
+                    c_id_int = int(c_id) if c_id else None
+                    if c_id_int:
+                        return c_id_int, c_name, "candidate_reference"
+                except (ValueError, TypeError):
+                    pass
 
-    best_match: tuple[int | None, str | None, str | None] | None = None
-    for shop_id, cand_name, source_label in context_names:
-        normalized_candidate = _normalize_alias(cand_name)
-        if not normalized_candidate:
-            continue
-        if normalized_explicit == normalized_candidate:
-            return shop_id, cand_name, source_label
-        if normalized_explicit in normalized_candidate or normalized_candidate in normalized_explicit:
-            best_match = (shop_id, cand_name, source_label)
-    return best_match if best_match is not None else (None, None, None)
+    return None, None, None
+
+_PRONOUNS = ("这家", "这店", "这间", "它", "他", "她", "刚才那家", "刚才那个", "这商家", "这个商家", "这几家", "第一家", "第二家", "第三家", "上面那家", "刚推荐的", "那家", "那个")
 
 class TargetShop(BaseModel):
     shop_id: int | None = None
     shop_name: str | None = None
+    status: ShopResolveResult | None = None
     raw_mention: str | None = None
     source: Literal[
         "current_query",
@@ -282,6 +86,7 @@ class TargetShop(BaseModel):
     ]
     resolution_source: Literal[
         "explicit_query",
+        "explicit_not_found",
         "client_selected_shop",
         "pronoun_session_current",
         "candidate_reference",
@@ -297,304 +102,169 @@ class TargetShop(BaseModel):
     should_clarify: bool = False
     reason: str | None = None
     candidate_shop_ids: list[int] = Field(default_factory=list)
+    comparison_targets: list[dict[str, Any]] = Field(default_factory=list)
+
+def is_low_information_query(text: str) -> bool:
+    compact = (text or "").strip()
+    if not compact:
+        return True
+    stripped = re.sub(r"[\s，,。.!！？?；;：:…]+", "", compact)
+    if not stripped:
+        return True
+    return stripped in ("，", "。", "?", "？", "啊", "嗯", "1", "...")
 
 class TargetShopPolicy:
-    @staticmethod
-    def _extract_selection_index(query: str) -> int | None:
-        compact = query.strip().lower()
-        m = re.search(r"第([一二三四五六七八九十1-9])(?:个|家|间|店|名|商户|商家)", compact)
-        if m:
-            val = m.group(1)
-            mapping = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
-            try:
-                return int(val)
-            except ValueError:
-                return mapping.get(val)
-        return None
-
-    @staticmethod
-    def _strip_explicit_suffixes(text: str) -> str:
-        prefix = text.strip().rstrip("？?。.!！")
-        changed = True
-        while changed and prefix:
-            changed = False
-            for suffix in sorted(_EXPLICIT_SUFFIXES, key=len, reverse=True):
-                if prefix.endswith(suffix):
-                    prefix = prefix[: -len(suffix)].strip(" ，,;；")
-                    changed = True
-                    break
-        return prefix
-
-    def resolve_target(
+    def validate(
         self,
-        *,
         raw_query: str,
-        slots: Any,
-        client_context: Mapping[str, Any] | None = None,
-        session_context: Mapping[str, Any] | None = None,
-        explicit_entity: str | None = None,
-        ranked_candidates: list[Any] | None = None,
+        candidates: list[CandidateShop],
+        selection: SemanticSelectionResult,
+        session_context: dict[str, Any] | None = None,
+        client_context: dict[str, Any] | None = None,
     ) -> TargetShop:
-        client_context_map = dict(client_context or {})
-        session_context_map = dict(session_context or {})
-        query_lower = raw_query.strip().lower()
-        recovery = recover_follow_up_context(
-            raw_query,
-            client_context=client_context_map,
-            session_context=session_context_map,
-        )
-        generic_query_like = _looks_like_generic_query_entity(raw_query)
         low_info = is_low_information_query(raw_query)
+        session_ctx = session_context or {}
+        client_ctx = client_context or {}
 
-        # Precedence 1: 当前轮显式商铺
-        shop_ids = getattr(slots, "shop_ids", []) or []
-        shop_query = getattr(slots, "shop_query", None)
-        
-        eff_explicit_name = None
-        if explicit_entity and explicit_entity.strip() not in _PRONOUNS:
-            eff_explicit_name = explicit_entity.strip()
-        if not eff_explicit_name:
-            fallback_explicit = self._strip_explicit_suffixes(raw_query)
-            if fallback_explicit and fallback_explicit not in _PRONOUNS:
-                eff_explicit_name = fallback_explicit
-        if not eff_explicit_name and shop_query and shop_query.strip() not in _PRONOUNS:
-            eff_explicit_name = shop_query.strip()
+        from learning_agent_service.local_life.entity_resolver import _explicit_entity_from_query
+        explicit_mention = _explicit_entity_from_query(raw_query)
 
-        has_explicit_shop_hint = bool(shop_ids) or bool(eff_explicit_name)
-        if not has_explicit_shop_hint and not low_info:
-            has_explicit_shop_hint = bool(
-                _clean_text(
-                    client_context_map.get("shopName")
-                    or client_context_map.get("selected_shop_name")
-                    or client_context_map.get("current_shop")
-                    or client_context_map.get("shop_name")
-                )
-                or _clean_text(
-                    session_context_map.get("shopName")
-                    or session_context_map.get("selected_shop_name")
-                    or session_context_map.get("current_shop")
-                    or session_context_map.get("shop_name")
-                )
-            )
-
-        if eff_explicit_name and (
-            _looks_like_generic_query_entity(eff_explicit_name)
-            or eff_explicit_name.lower().strip() in ("assistant", "ai", "general", "none")
-        ):
-            eff_explicit_name = None
-        if recovery.follow_up_kind in {"intent_ellipsis", "constraint_inheritance", "comparison_completion"} and not explicit_entity:
-            eff_explicit_name = None
-
-        if recovery.follow_up_kind in {"intent_ellipsis", "constraint_inheritance", "comparison_completion"} and recovery.anchor_shop and recovery.anchor_shop.name and not eff_explicit_name:
-            return TargetShop(
-                shop_id=recovery.anchor_shop.shop_id,
-                shop_name=recovery.anchor_shop.name,
-                raw_mention=raw_query,
-                source="session",
-                resolution_source="session_current",
-                confidence=max(0.8, recovery.confidence),
-                is_explicit_in_current_turn=False,
-                reason=f"follow-up recovered from {recovery.follow_up_kind}",
-                candidate_shop_ids=[recovery.anchor_shop.shop_id] if recovery.anchor_shop.shop_id is not None else [],
-            )
-
-        if eff_explicit_name:
-            alias_shop_id, alias_shop_name, alias_source = _resolve_alias_from_contexts(
-                eff_explicit_name,
-                client_context_map,
-                session_context_map,
-            )
-            if alias_shop_name:
+        # 1. First, try to resolve exact pronouns / aliases strictly from context
+        if explicit_mention:
+            sid, sname, source_label = _resolve_alias_from_contexts(explicit_mention, client_ctx, session_ctx)
+            if sid and sname:
                 return TargetShop(
-                    shop_id=alias_shop_id,
-                    shop_name=alias_shop_name,
-                    raw_mention=eff_explicit_name,
+                    shop_id=sid,
+                    shop_name=sname,
+                    status=ShopResolveResult.RESOLVED,
+                    raw_mention=explicit_mention,
+                    source="pronoun_session" if source_label == "candidate_reference" else "session",
+                    resolution_source=source_label,
+                    confidence=0.9,
+                    is_explicit_in_current_turn=False,
+                    is_pronoun_inherited=True,
+                    is_candidate_reference=(source_label == "candidate_reference"),
+                    reason=f"Resolved strictly from context: {source_label}",
+                    candidate_shop_ids=[sid]
+                )
+
+            # If it's an explicit mention but not found in context, check candidates directly
+            matched_cand = next((c for c in candidates if c.match_type in ("exact", "alias", "fuzzy") and c.matched_text == explicit_mention), None)
+            if matched_cand:
+                return TargetShop(
+                    shop_id=matched_cand.shop_id,
+                    shop_name=matched_cand.canonical_name,
+                    status=ShopResolveResult.RESOLVED,
+                    raw_mention=explicit_mention,
                     source="current_query",
                     resolution_source="explicit_query",
-                    confidence=0.985,
+                    confidence=0.95,
                     is_explicit_in_current_turn=True,
-                    reason=f"explicit entity matched {alias_source or 'context'}",
-                    candidate_shop_ids=[alias_shop_id] if alias_shop_id is not None else [],
+                    is_pronoun_inherited=False,
+                    reason="explicit_match_candidate",
+                    candidate_shop_ids=[matched_cand.shop_id]
                 )
+                
+            # If explicit mention is present but not in candidates or context, it's a failed lookup.
+            # Do NOT fallback to LLM semantic selection because it might hallucinate comparisons.
             return TargetShop(
                 shop_id=None,
-                shop_name=eff_explicit_name,
-                raw_mention=eff_explicit_name,
+                shop_name=explicit_mention,
+                status=ShopResolveResult.NOT_FOUND,
+                raw_mention=explicit_mention,
                 source="current_query",
-                resolution_source="explicit_query",
-                confidence=0.95,
+                resolution_source="explicit_not_found",
+                confidence=0.1,
                 is_explicit_in_current_turn=True,
-                reason="explicit entity from current query",
-                candidate_shop_ids=[],
+                is_pronoun_inherited=False,
+                reason="explicit_not_found_in_candidates",
+                candidate_shop_ids=[]
             )
 
-        # Precedence 2: 用户选择序号
-        selection_idx = self._extract_selection_index(query_lower)
-        if selection_idx is not None:
-            candidate_pools = [
-                client_context_map.get("last_candidates") or [],
-                session_context_map.get("last_candidates") or [],
-            ]
-            for last_candidates in candidate_pools:
-                if not isinstance(last_candidates, list) or len(last_candidates) < selection_idx:
-                    continue
-                candidate = last_candidates[selection_idx - 1]
-                cand_map = dict(candidate) if isinstance(candidate, Mapping) else {}
-                shop_id = cand_map.get("shop_id") or cand_map.get("id")
-                shop_name = cand_map.get("shop_name") or cand_map.get("name")
-                if shop_id:
-                    return TargetShop(
-                        shop_id=int(shop_id),
-                        shop_name=shop_name,
-                        raw_mention=f"第{selection_idx}个",
-                        source="candidate_selection",
-                        resolution_source="candidate_reference",
-                        confidence=0.95,
-                        is_explicit_in_current_turn=True,
-                        is_candidate_reference=True,
-                        reason=f"selected candidate #{selection_idx}",
-                        candidate_shop_ids=[int(shop_id)]
-                    )
+        # 2. Handle explicit anchor shop returned by LLM semantic selection
+        if selection.anchor_shop_id is not None:
+            # Validate if the selected shop exists in our candidates
+            matched_cand = next((c for c in candidates if c.shop_id == selection.anchor_shop_id), None)
+            if matched_cand:
+                source = "current_query" if matched_cand.match_type in ("exact", "alias", "fuzzy") else "session"
+                resolution_source = "explicit_query" if source == "current_query" else "session_current"
+                is_explicit = source == "current_query"
+                is_pronoun = selection.follow_up_kind == "entity_reference" and source == "session"
 
-        nearby_recommendation_like = any(
-            token in query_lower
-            for token in (
-                "附近",
-                "周边",
-                "推荐",
-                "几家",
-                "多推荐",
-                "适合约会",
-                "家庭聚餐",
-                "安静",
-                "不吵",
-            )
-        )
-        from learning_agent_service.local_life.clarification_strategy import ClarificationStrategy
-        
-        has_pronoun = any(p in query_lower for p in _PRONOUNS)
-        context_candidates: list[tuple[str, int | None, str | None]] = []
-        for source_label, context_map in (("client_selected_shop", client_context_map), ("session_current_shop", session_context_map)):
-            shop_id = (
-                context_map.get("selected_shop_id")
-                or context_map.get("current_shop_id")
-                or context_map.get("shopId")
-                or context_map.get("currentShopId")
-                or context_map.get("shop_id")
-            )
-            shop_name = (
-                context_map.get("selected_shop_name")
-                or context_map.get("selected_shop")
-                or context_map.get("current_shop")
-                or context_map.get("shopName")
-                or context_map.get("currentShopName")
-                or context_map.get("shop_name")
-            )
-            if shop_id or shop_name:
-                context_candidates.append((source_label, int(shop_id) if shop_id not in (None, "") else None, str(shop_name) if shop_name not in (None, "") else None))
+                return TargetShop(
+                    shop_id=matched_cand.shop_id,
+                    shop_name=matched_cand.canonical_name,
+                    status=ShopResolveResult.RESOLVED,
+                    raw_mention=matched_cand.matched_text,
+                    source=source,
+                    resolution_source=resolution_source,
+                    confidence=selection.confidence,
+                    is_explicit_in_current_turn=is_explicit,
+                    is_pronoun_inherited=is_pronoun,
+                    reason=f"LLM semantic selection: {selection.follow_up_kind}",
+                    candidate_shop_ids=[matched_cand.shop_id] if matched_cand.shop_id else []
+                )
 
-        has_resolved_ref = bool(context_candidates) or bool(ranked_candidates)
-        should_clarify, missing_slot, clarify_reason = ClarificationStrategy.should_clarify_target_shop(
-            raw_query=raw_query,
-            is_low_info=low_info,
-            has_explicit_shop_hint=has_explicit_shop_hint,
-            has_pronoun=has_pronoun,
-            has_resolved_ref=has_resolved_ref,
-        )
-        has_current_shop_context = bool(context_candidates) or bool(eff_explicit_name) or bool(shop_ids)
-        if not should_clarify and ClarificationStrategy.requires_current_shop_for_ref(query_lower, has_current_shop_context):
-            should_clarify = True
-            missing_slot = missing_slot or "shop_name"
-            clarify_reason = clarify_reason or "current_shop_required"
-
-        if should_clarify:
-            return TargetShop(
-                source="session",
-                resolution_source="missing",
-                confidence=0.0,
-                is_explicit_in_current_turn=False,
-                should_clarify=True,
-                reason=clarify_reason or "clarification_needed",
-                candidate_shop_ids=[],
-            )
-
-        if nearby_recommendation_like and not has_pronoun and not eff_explicit_name:
+        # 3. Check for comparison logic
+        if selection.follow_up_kind == "comparison_completion":
             return TargetShop(
                 shop_id=None,
                 shop_name=None,
-                raw_mention=None,
-                source="rag_fallback",
+                status=ShopResolveResult.AMBIGUOUS,
+                source="session",
                 resolution_source="ambiguous",
-                confidence=0.0,
-                is_explicit_in_current_turn=False,
-                reason="recommendation_query_should_not_lock_single_shop",
+                confidence=selection.confidence,
+                should_clarify=False,
+                reason="comparison_completion",
                 candidate_shop_ids=[],
-                )
-
-        if has_pronoun and context_candidates:
-            source_label, shop_id, shop_name = context_candidates[0]
-            return TargetShop(
-                shop_id=shop_id,
-                shop_name=shop_name,
-                raw_mention=raw_query,
-                source="pronoun_session",
-                resolution_source="pronoun_session_current" if source_label == "session_current_shop" else "client_selected_shop",
-                confidence=0.9,
-                is_explicit_in_current_turn=False,
-                is_pronoun_inherited=True,
-                reason=f"pronoun resolved from {source_label}",
-                candidate_shop_ids=[int(shop_id)] if shop_id else [],
+                comparison_targets=selection.comparison_targets
             )
 
-        if shop_ids or eff_explicit_name:
-            shop_id = int(shop_ids[0]) if shop_ids else None
+        # 4. If LLM didn't pick anything but we have high-confidence exact matches
+        exact_cands = [c for c in candidates if c.match_type == "exact"]
+        if exact_cands:
+            best = exact_cands[0]
             return TargetShop(
-                shop_id=shop_id,
-                shop_name=eff_explicit_name,
-                raw_mention=eff_explicit_name or (str(shop_id) if shop_id else None),
+                shop_id=best.shop_id,
+                shop_name=best.canonical_name,
+                status=ShopResolveResult.RESOLVED,
+                raw_mention=best.matched_text,
                 source="current_query",
                 resolution_source="explicit_query",
-                confidence=0.98,
+                confidence=best.score,
                 is_explicit_in_current_turn=True,
-                reason="explicit shop ids or query text from current turn",
-                candidate_shop_ids=[int(sid) for sid in shop_ids]
+                reason="fallback to exact match",
+                candidate_shop_ids=[best.shop_id] if best.shop_id else []
             )
 
-        if context_candidates and not generic_query_like:
-            source_label, shop_id, shop_name = context_candidates[0]
+        # 5. If we have an explicit mention but it didn't match context or candidates
+        if explicit_mention and not any(p == explicit_mention for p in _PRONOUNS):
             return TargetShop(
-                shop_id=shop_id,
-                shop_name=shop_name,
-                raw_mention=None,
-                source="session",
-                resolution_source="session_current" if source_label == "session_current_shop" else "client_selected_shop",
-                confidence=0.85,
-                is_explicit_in_current_turn=False,
-                reason=f"context shop chosen from {source_label}",
-                candidate_shop_ids=[int(shop_id)] if shop_id else [],
+                shop_id=None,
+                shop_name=explicit_mention,
+                status=ShopResolveResult.NOT_FOUND,
+                raw_mention=explicit_mention,
+                source="current_query",
+                resolution_source="explicit_query",
+                confidence=0.5,
+                is_explicit_in_current_turn=True,
+                reason="explicit mention not in catalog or context",
+                candidate_shop_ids=[]
             )
 
-        if ranked_candidates and not generic_query_like:
-            first = ranked_candidates[0]
-            first_map = dict(first) if isinstance(first, Mapping) else getattr(first, "__dict__", {})
-            shop_id = first_map.get("shop_id") or first_map.get("id")
-            shop_name = first_map.get("shop_name") or first_map.get("name")
-            if shop_id:
-                return TargetShop(
-                    shop_id=int(shop_id),
-                    shop_name=shop_name,
-                    raw_mention=None,
-                    source="rag_fallback",
-                    resolution_source="rag_fallback",
-                    confidence=0.7,
-                    is_explicit_in_current_turn=False,
-                    reason="ranked candidate fallback",
-                    candidate_shop_ids=[int(shop_id)]
-                )
+        # 6. Fallback missing / clarification
+        should_clarify = False
+        if not low_info and candidates:
+            # We have candidates but LLM couldn't decide
+            should_clarify = True
 
         return TargetShop(
+            status=ShopResolveResult.AMBIGUOUS if should_clarify else ShopResolveResult.LOW_CONFIDENCE,
             source="session",
             resolution_source="missing" if low_info else "ambiguous",
             confidence=0.0,
-            is_explicit_in_current_turn=False
+            should_clarify=should_clarify,
+            reason="low info or ambiguity",
+            raw_mention=explicit_mention,
+            candidate_shop_ids=[c.shop_id for c in candidates if c.shop_id]
         )

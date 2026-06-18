@@ -11,7 +11,7 @@ from ..workflow.builder import create_workflow_runner
 from ..workflow.services import (
     MainGraphServices,
     PlanExecuteSubgraphServices,
-    RagSubgraphServices,
+    EvidenceSubgraphServices,
     ToolSubgraphServices,
     UnderstandTurnServices,
     WorkflowServices,
@@ -46,7 +46,9 @@ class ChatWorkflowService:
         from typing import cast
 
         def _stream() -> Iterable[SseEnvelope]:
-            for event in self._workflow_runner.run_stream(command=command, persistent_context=persistent):
+            for event in self._workflow_runner.run_stream(
+                command=command, persistent_context=persistent
+            ):
                 yield cast(SseEnvelope, event)
 
         return _stream()
@@ -59,12 +61,12 @@ class ChatWorkflowService:
                 parse_intent_slots=adapter.parse_intent_slots,
                 resolve_reference=adapter.resolve_reference,
                 ambiguity_check=adapter.ambiguity_check,
-                rag_gate=adapter.rag_gate,
+                evidence_gate=adapter.evidence_gate,
                 rewrite_query=adapter.rewrite_query,
             ),
             consume_pending_clarification=adapter.consume_pending_clarification,
             conversation_recap_direct_response=adapter.conversation_recap_direct_response,
-            rag_subgraph=RagSubgraphServices(
+            evidence_subgraph=EvidenceSubgraphServices(
                 hybrid_retrieve=adapter.hybrid_retrieve,
                 evaluate_evidence=adapter.evaluate_evidence,
                 citation_builder=adapter.citation_builder,
@@ -114,6 +116,9 @@ class ChatWorkflowService:
                 final_safety_fallback=adapter.final_safety_fallback,
                 repair_answer=adapter.repair_answer,
                 final_with_limitations=adapter.final_with_limitations,
+                target_requirement_router=adapter.target_requirement_router,
+                resolve_comparison_targets=adapter.resolve_comparison_targets,
+                prepare_recommendation_context=adapter.prepare_recommendation_context,
                 response_builder=adapter.response_builder,
             ),
             compose_answer=adapter.compose_answer,

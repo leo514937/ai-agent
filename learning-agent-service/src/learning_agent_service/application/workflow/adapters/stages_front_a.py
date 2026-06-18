@@ -2,21 +2,22 @@ from typing import Any
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
-from learning_agent_service.application.rag_gate import RagGateRequest
-from learning_agent_service.application.router.base import routing_trace_payload, _update_phase0_trace
-from learning_agent_service.local_life.hybrid_router import build_routing_decision_from_hybrid_router as build_initial_routing_decision
-from learning_agent_service.application.router.phase1_intent import apply_fast_decision_to_routing
+from learning_agent_service.application.evidence_gate import EvidenceGateRequest
+from .helpers import routing_trace_payload, _update_phase0_trace
+from .helpers import _build_facet_routing_decision
+from .helpers import apply_fast_decision_to_routing
 from learning_agent_service.application.routing_utils import build_rewrite_decision
-from learning_agent_service.application.router.phase3_review import _apply_route_review
-from learning_agent_service.application.router.phase4_plan import ensure_task_plan
-from learning_agent_service.application.router.phase5_retrieval import ensure_retrieval_plan
-from learning_agent_service.application.router.phase6_tool import ensure_tool_plan
+from .helpers import _apply_route_review
+from .helpers import ensure_task_plan
+from .helpers import ensure_retrieval_plan
+from .helpers import ensure_tool_plan
 from learning_agent_service.application.routing_primitives import _mark_routing_blocked, _pending_clarification_matches_query
 from learning_agent_service.domain.contracts import ChatTurnCommand, FastDecision, ReferenceResolutionRequest, TurnUnderstandingRequest
 from learning_agent_service.domain.enums import TurnDecision
 from learning_agent_service.local_life.entity_resolver import _explicit_entity_from_query
+from learning_agent_service.local_life.query_rewriter import normalize_query as normalize_local_life_query
 
-from .helpers import Any, GraphState, IntentType, Mapping, _append_stage_metric, _apply_phase1_routing_extra, _build_cached_rag_gate, _build_raw_retrieval_plan, _cached_rag_gate, _CLASSIFY_TIMEOUT_SECONDS, _coerce_reference_resolution, _coerce_retrieval_plan, _copy_state, _log_routing_decision, _mark_degrade, _response_kind_for_turn, _restore_pending_clarification_from_result, _routing_decision_for_turn, _store_routing_decision
+from .helpers import Any, GraphState, IntentType, Mapping, _append_stage_metric, _apply_phase1_routing_extra, _build_cached_evidence_gate, _build_raw_retrieval_plan, _cached_evidence_gate, _CLASSIFY_TIMEOUT_SECONDS, _coerce_reference_resolution, _coerce_retrieval_plan, _copy_state, _log_routing_decision, _mark_degrade, _response_kind_for_turn, _restore_pending_clarification_from_result, _routing_decision_for_turn, _store_routing_decision
 
 
 class WorkflowNodeAdapterStagesFrontAMixin:
@@ -31,6 +32,7 @@ class WorkflowNodeAdapterStagesFrontAMixin:
         human_approval_stub: 'Any'
         business_client: 'Any'
         def load_context(self, state: GraphState) -> GraphState:
+            # 1. 拷贝状态并提取上下文，判断是否有处于等待澄清（pending clarification）的状态
             state = _copy_state(state)
             turn = state["turn"]
             persistent = state["persistent"]
@@ -42,6 +44,8 @@ class WorkflowNodeAdapterStagesFrontAMixin:
             )
             state["persistent"] = persistent
             state["turn"] = turn
+
+            # 2. 从客户端上下文（如小程序传来的页面参数）中提取当前的店铺信息，并更新到长期记忆（persistent）
             client_context = dict(state["runtime"].client_context)
             shop_anchor = str(
                 client_context.get("shopName")
@@ -67,6 +71,8 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                 if persistent_updates:
                     persistent = persistent.model_copy(update=persistent_updates)
                     state["persistent"] = persistent
+
+            # 3. 尝试从用户 query 中直接提取显式的实体（如直接提到某个店名），如果提取到了也更新到上下文中
             explicit_query_shop = _explicit_entity_from_query(turn.raw_query)
             if explicit_query_shop:
                 turn_extra = dict(turn.extra)
@@ -84,7 +90,9 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                     state["persistent"] = persistent
                 turn = turn.model_copy(update={"extra": turn_extra})
                 state["turn"] = turn
-            routing = build_initial_routing_decision(
+
+            # 4. 根据当前 Query 和历史上下文，构建一个初始的路由决策（Routing Decision）
+            routing = _build_facet_routing_decision(
                 turn.raw_query,
                 persistent,
                 client_context=state["runtime"].client_context,
@@ -96,6 +104,21 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                 client_context=state["runtime"].client_context,
             )
             turn = _store_routing_decision(turn, routing)
+
+            # 4.5 RoutingPolicyValidator: 初始路由校验（规则层 final gate）
+            try:
+                from learning_agent_service.application.routing_policy_validator import RoutingPolicyValidator
+                validated = RoutingPolicyValidator().validate(
+                    routing,
+                    resolved_shop=getattr(getattr(state.get("runtime"), "extra", {}), "resolved_shop", None),
+                )
+                if validated is not routing:
+                    routing = validated
+                    turn = _store_routing_decision(turn, routing)
+            except Exception:
+                pass  # Validator failure should not crash the pipeline
+
+            # 5. 如果之前有等待用户回答的澄清问题（pending clarification），检查当前 Query 是否匹配了澄清选项
             pending_match = getattr(persistent, "pending_clarification", None) is not None
             if pending_match:
                 if had_pending_clarification:
@@ -115,7 +138,7 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                         or getattr(persistent, "clarification_result", {}).get("original_route")
                         or "rag_retrieval"
                     ).strip() or "rag_retrieval"
-                    routing = build_initial_routing_decision(
+                    routing = _build_facet_routing_decision(
                         original_query or turn.raw_query,
                         persistent,
                         client_context=state["runtime"].client_context,
@@ -129,6 +152,7 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                     routing = routing.model_copy(
                         update={
                             "required_action": original_route,
+                            "should_retrieve": True,
                             "blocked": False,
                             "blocked_reason": None,
                         }
@@ -147,6 +171,7 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                     }
                     turn = turn.model_copy(update={"routing_decision": routing, "extra": turn_extra})
                     state["turn"] = turn
+
             if routing.required_action in {"clarify", "reject", "direct_answer", "memory_update", "no_op"}:
                 if routing.required_action == "clarify":
                     clarification_result, pending_clarification = self._build_pending_clarification_state(
@@ -188,10 +213,11 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                 )
                 _log_routing_decision(state, stage="load_context_terminal")
                 return state
-    
+
+            # 7. 调用 RAG 门禁（Rag Gate）进行预检（Precheck），判断当前查询是否适合触发 RAG 检索
             gate = getattr(self.container, "rag_route_gate", None)
             if gate is not None and hasattr(gate, "precheck"):
-                request = RagGateRequest(
+                request = EvidenceGateRequest(
                     raw_query=turn.raw_query,
                     intent=turn.intent,
                     intent_confidence=turn.intent_confidence,
@@ -225,15 +251,17 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                     cached_vote["response_kind"] = "pending_clarification"
                     cached_vote["final_vote"] = "allow"
                 turn_extra = dict(turn.extra)
-                turn_extra["rag_gate"] = {
-                    **dict(turn_extra.get("rag_gate", {})),
+                turn_extra["evidence_gate"] = {
+                    **dict(turn_extra.get("evidence_gate", {})),
                     "precheck_vote": vote.vote,
                     "precheck_reason": "pending_clarification" if pending_match else vote.reason,
                     "precheck_response_kind": "pending_clarification" if pending_match else vote.response_kind,
                 }
+                turn_extra["rag_gate"] = turn_extra["evidence_gate"]
+                turn_extra["cached_evidence_gate_vote"] = cached_vote
                 turn_extra["cached_rag_gate_vote"] = cached_vote
                 turn = turn.model_copy(update={"extra": turn_extra})
-    
+
             runtime = state["runtime"]
             metrics = dict(runtime.metrics)
             metrics["routing_decision"] = routing.model_dump(mode="json")
@@ -254,6 +282,8 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                 tool_plan_status="not_attempted",
                 tool_plan_failure_reason=None,
             )
+
+            # 8. 如果路由策略允许使用历史记忆（Should Use Memory），则调用记忆编排器进行相关的记忆检索和注入
             memory_retrieval_summary = {
                 "attempted": False,
                 "status": "skipped",
@@ -324,15 +354,16 @@ class WorkflowNodeAdapterStagesFrontAMixin:
             state["turn"] = state["turn"].model_copy(update={"extra": turn_extra})
             _log_routing_decision(state, stage="load_context")
             return state
-    
+
         def consume_pending_clarification(self, state: GraphState) -> GraphState:
+            # 消费并解析用户的澄清回答（例如用户刚才选择了具体的城市或店铺）
             turn = state["turn"]
             persistent = state["persistent"]
             runtime = state["runtime"]
             pending = getattr(persistent, "pending_clarification", None)
             if pending is None or not _pending_clarification_matches_query(turn.raw_query, persistent):
                 return state
-    
+
             clarification_result = dict(getattr(persistent, "clarification_result", {}) or {})
             turn_extra = dict(turn.extra)
             pending_restore = dict(turn_extra.get("pending_clarification_restore") or {})
@@ -344,7 +375,7 @@ class WorkflowNodeAdapterStagesFrontAMixin:
             ).strip()
             if not original_query:
                 return state
-    
+
             original_intent = str(
                 pending_restore.get("original_intent")
                 or clarification_result.get("original_intent")
@@ -355,20 +386,20 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                 or clarification_result.get("original_route")
                 or "rag_retrieval"
             ).strip() or "rag_retrieval"
-    
+
             follow_up_query = str(turn.raw_query or "").strip()
             ambiguity_type = str(
                 getattr(pending, "ambiguity_type", "")
                 or clarification_result.get("ambiguity_type")
                 or ""
             ).strip().lower()
-    
+
             restored_persistent: dict[str, Any] = {}
             if str(getattr(persistent, "current_topic", "") or "").strip() != original_query:
                 restored_persistent["current_topic"] = original_query
             if str(getattr(persistent, "last_retrieval_topic", "") or "").strip() != original_query:
                 restored_persistent["last_retrieval_topic"] = original_query
-    
+
             city = ""
             location_value: dict[str, Any] | None = None
             if ambiguity_type in {"location", "city", "area", "district", "region"}:
@@ -406,7 +437,7 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                             restored_persistent["current_city"] = city
                             restored_persistent["current_location"] = location_value
                             break
-    
+
             if clarification_result:
                 clarification_result = dict(clarification_result)
                 clarification_result["consumed"] = True
@@ -417,13 +448,13 @@ class WorkflowNodeAdapterStagesFrontAMixin:
             if clarification_result:
                 restored_persistent["clarification_result"] = clarification_result
             state["persistent"] = persistent.model_copy(update=restored_persistent)
-    
+
             turn_slots = dict(turn.slots)
             if city:
                 turn_slots["city"] = city
             if location_value is not None:
                 turn_slots["location"] = location_value
-    
+
             turn_extra.update(
                 {
                     "clarification_result": clarification_result,
@@ -463,9 +494,9 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                     "extra": turn_extra,
                 }
             )
-    
+
             routing_context = state["persistent"].model_copy(update={"pending_clarification": None})
-            routing = build_initial_routing_decision(
+            routing = _build_facet_routing_decision(
                 original_query,
                 routing_context,
                 client_context=runtime.client_context,
@@ -499,7 +530,7 @@ class WorkflowNodeAdapterStagesFrontAMixin:
             )
             _log_routing_decision(state, stage="consume_pending_clarification")
             return state
-    
+
         def conversation_recap_direct_response(self, state: GraphState) -> GraphState:
             turn = state["turn"]
             routing = _routing_decision_for_turn(turn)
@@ -518,8 +549,9 @@ class WorkflowNodeAdapterStagesFrontAMixin:
             )
             _log_routing_decision(state, stage="conversation_recap_direct_response")
             return state
-    
+
         def parse_intent_slots(self, state: GraphState) -> GraphState:
+            # 这里是模型分类节点，调用 model_gateway.classify_turn 做意图与槽位解析，不是纯规则分支。
             model_gateway = getattr(self.container, "model_gateway", None)
             if model_gateway is None or not hasattr(model_gateway, "classify_turn"):
                 return state
@@ -579,7 +611,7 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                         pass
                 if restored_persistent:
                     state["persistent"] = persistent.model_copy(update=restored_persistent)
-                routing = build_initial_routing_decision(
+                routing = _build_facet_routing_decision(
                     original_query or turn.raw_query,
                     state["persistent"],
                     client_context=state["runtime"].client_context,
@@ -622,6 +654,7 @@ class WorkflowNodeAdapterStagesFrontAMixin:
             fast_result: FastDecision | None = None
             degrade_to: str | None = None
             with ThreadPoolExecutor(max_workers=1, thread_name_prefix="intent-analysis") as executor:
+                # 这里是真正的模型/LLM 分类请求；如果超时或异常，再回退到规则/启发式兜底。
                 future = executor.submit(model_gateway.classify_turn, request)
                 try:
                     fast_result = future.result(timeout=_CLASSIFY_TIMEOUT_SECONDS)
@@ -630,7 +663,7 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                     fallback = gate.fallback_decide(request) if gate is not None and hasattr(gate, "fallback_decide") else None
                     if fallback is None:
                         from ...rag.heuristics import HeuristicIntentGate
-    
+
                         fallback = HeuristicIntentGate().fallback_decide(request)
                     fast_result = fallback
                     degrade_to = "classify_timeout_fallback"
@@ -639,7 +672,7 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                     fallback = gate.fallback_decide(request) if gate is not None and hasattr(gate, "fallback_decide") else None
                     if fallback is None:
                         from ...rag.heuristics import HeuristicIntentGate
-    
+
                         fallback = HeuristicIntentGate().fallback_decide(request)
                     fast_result = fallback
                     degrade_to = "classify_error_fallback"
@@ -651,26 +684,36 @@ class WorkflowNodeAdapterStagesFrontAMixin:
             _append_stage_metric(state, "intent_analysis", elapsed_ms)
             if degrade_to:
                 _mark_degrade(state, degrade_to)
-    
+
+            # 将 FastDecision 规范化，补充默认值，并将一些快捷决策转化为具体的行为标识
             decision_result = result
             if not isinstance(result, FastDecision):
                 decision_result = FastDecision(
                     intent=getattr(result, "intent", IntentType.EXPLAIN),
+                    # needs_rag 表示该意图是否需要进行知识库或店铺检索
                     needs_rag=bool(
                         getattr(result, "required_action", None) in {"rag_retrieval", "rag_plus_tool"}
                         or getattr(result, "retrieval_plan", None) is not None
                     ),
+                    # needs_tool 表示该意图是否需要调用工具API（如查询价格等）
                     needs_tool=bool(getattr(result, "required_action", None) in {"tool_call", "rag_plus_tool"}),
+                    # needs_clarify 表示用户的意图不清晰，必须向用户进行追问或澄清
                     needs_clarify=bool(getattr(result, "required_action", None) == "clarify"),
+                    # needs_query_rewrite 表示原始 query 需要被重写才能更好地给检索引擎用
                     needs_query_rewrite=bool(getattr(result, "needs_query_rewrite", False)),
+                    # 意图识别模型的置信度（0.0 到 1.0）
                     confidence=float(getattr(result, "intent_confidence", getattr(result, "confidence", 0.0)) or 0.0),
+                    # 识别出的核心槽位信息（例如：地点、菜系、商圈）
                     key_slots=dict(getattr(result, "slots", {}) or {}),
                     extra=dict(getattr(result, "extra", {}) or {}),
                 )
-    
+
+            # 合并意图分类器返回的额外上下文（semantic_context）
             turn_extra = {**dict(turn.extra), **dict(getattr(result, "extra", {}) or {})}
             turn_extra["needs_query_rewrite"] = bool(getattr(decision_result, "needs_query_rewrite", False))
             semantic_context = turn_extra.get("semantic_context")
+
+            # 解析语义上下文，如果是继承或对比场景，需要把实体信息塞入持久化长期记忆中（persistent updates）
             if isinstance(semantic_context, Mapping):
                 persistent_updates: dict[str, Any] = {}
                 anchor = semantic_context.get("anchor_shop")
@@ -718,23 +761,32 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                         persistent_updates["dialog_intent"] = promoted_intent or "detail"
                 if persistent_updates:
                     state["persistent"] = state["persistent"].model_copy(update=persistent_updates)
+
+            # 尝试从分类器中提取“指代消解（Reference Resolution）”的结果并强制类型化
             reference_resolution = _coerce_reference_resolution(
                 getattr(result, "reference_resolution", None)
                 or turn_extra.get("reference_resolution")
                 or turn_extra.get("cached_reference_resolution")
             )
+
+            # 尝试提取已经生成的检索计划（Retrieval Plan）
             retrieval_plan = _coerce_retrieval_plan(
                 getattr(result, "retrieval_plan", None)
                 or turn_extra.get("retrieval_plan")
                 or turn_extra.get("cached_retrieval_plan")
             )
+
+            # 如果需要走RAG但没有检索计划，则构造一个基础的原始检索计划
             if retrieval_plan is None and decision_result.needs_rag:
                 retrieval_plan = _build_raw_retrieval_plan(turn)
+
             if reference_resolution is not None:
                 turn_extra["cached_reference_resolution"] = reference_resolution.model_dump(mode="json")
             if retrieval_plan is not None:
                 turn_extra["cached_retrieval_plan"] = retrieval_plan.model_dump(mode="json")
-            routing = routing or build_initial_routing_decision(turn.raw_query, state["persistent"], client_context=runtime.client_context)
+
+            # 基于上述所有信息，更新最终的路由决策（Routing Decision）
+            routing = routing or _build_facet_routing_decision(turn.raw_query, state["persistent"], client_context=runtime.client_context)
             routing = apply_fast_decision_to_routing(
                 routing,
                 decision_result,
@@ -748,8 +800,20 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                 persistent=state["persistent"],
                 client_context=runtime.client_context,
             )
+            # RoutingPolicyValidator: 最终路由校验（规则层 final gate）
+            try:
+                from learning_agent_service.application.routing_policy_validator import RoutingPolicyValidator
+                validated = RoutingPolicyValidator().validate(
+                    routing,
+                    resolved_shop=getattr(getattr(state.get("runtime"), "extra", {}), "resolved_shop", None),
+                )
+                if validated is not routing:
+                    routing = validated
+            except Exception:
+                pass  # Validator failure should not crash the pipeline
             rewrite_decision = None
             if retrieval_plan is not None:
+                # 如果有检索计划，则一并生成 Query Rewrite 的结果和决策。
                 rewrite_confidence = float(retrieval_plan.extra.get("filter_confidence", decision_result.confidence) or decision_result.confidence)
                 rewrite_decision = build_rewrite_decision(
                     turn.raw_query,
@@ -760,7 +824,9 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                     extra=retrieval_plan.extra,
                 )
                 routing = routing.model_copy(update={"rewrite_decision": rewrite_decision})
-            existing_gate = turn_extra.get("rag_gate")
+
+            # 生成或者复用 Rag Gate 允许进入后续检索/工具链的门禁状态
+            existing_gate = turn_extra.get("evidence_gate")
             if isinstance(existing_gate, Mapping):
                 existing_gate = dict(existing_gate)
             else:
@@ -777,7 +843,7 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                     if decision_result.needs_rag
                     else "direct_answer"
                 )
-                computed_gate = _build_cached_rag_gate(
+                computed_gate = _build_cached_evidence_gate(
                     required_action,
                     decision_result.intent,
                     decision_result.confidence,
@@ -786,7 +852,9 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                 )
                 existing_gate = {**existing_gate, **computed_gate}
             turn_extra = _apply_phase1_routing_extra(turn_extra, routing)
+            turn_extra["evidence_gate"] = existing_gate
             turn_extra["rag_gate"] = existing_gate
+            turn_extra["cached_evidence_gate_vote"] = dict(existing_gate)
             turn_extra["cached_rag_gate_vote"] = dict(existing_gate)
             turn_extra["routing_decision"] = routing.model_dump(mode="json")
             turn_extra["routing_trace"] = routing_trace_payload(routing)
@@ -803,6 +871,8 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                     "extra": turn_extra,
                 }
             )
+
+            # 如果识别出路由被拦截，且动作为澄清（Clarify），则在此处构造澄清相关的对话状态并写入
             if routing.blocked and str(routing.required_action).strip().lower() == "clarify":
                 clarification_result, pending_clarification = self._build_pending_clarification_state(
                     runtime=runtime,
@@ -856,12 +926,13 @@ class WorkflowNodeAdapterStagesFrontAMixin:
             )
             _log_routing_decision(state, stage="intent_analysis")
             return state
-    
+
         def resolve_reference(self, state: GraphState) -> GraphState:
+            # 这里走的是实体消歧能力，通常会调用检索/消歧服务，不是纯规则字符串匹配。
             rag_orchestrator = getattr(self.container, "rag_orchestrator", None)
             if rag_orchestrator is None or not hasattr(rag_orchestrator, "resolve_reference"):
                 return state
-    
+
             turn = state["turn"]
             routing = _routing_decision_for_turn(turn)
             if routing is not None and routing.blocked:
@@ -886,7 +957,7 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                         updated_turn = _store_routing_decision(updated_turn, updated_routing)
                 state["turn"] = updated_turn
                 return state
-    
+
             persistent = state["persistent"]
             runtime = state["runtime"]
             request = ReferenceResolutionRequest(
@@ -911,8 +982,9 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                     updated_turn = _store_routing_decision(updated_turn, updated_routing)
             state["turn"] = updated_turn
             return state
-    
+
         def ambiguity_check(self, state: GraphState) -> GraphState:
+            # 这里是规则节点，基于置信度、信息残缺和路由状态做歧义判断与澄清信号补写。
             turn = state["turn"]
             routing = _routing_decision_for_turn(turn)
             if routing is not None and routing.blocked:
@@ -921,7 +993,7 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                 return state
             if turn.intent_confidence >= 0.5 and (routing is None or routing.input_quality.kind not in {"ambiguous_reference", "incomplete_recommendation", "low_information"}):
                 return state
-    
+
             turn_extra = dict(turn.extra)
             turn_extra["clarification_signal"] = {
                 "kind": "low_confidence",
@@ -941,19 +1013,26 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                 }
             state["turn"] = turn.model_copy(update={"extra": turn_extra})
             return state
-    
-        def rag_gate(self, state: GraphState) -> GraphState:
-            gate = getattr(self.container, "rag_route_gate", None)
-            if gate is None or not hasattr(gate, "decide"):
+
+        def evidence_gate(self, state: GraphState) -> GraphState:
+            # RAG 门禁：enable_rag=false 时直接短路，不进入任何检索相关执行。
+            settings = getattr(self.container, "settings", None)
+            if settings is not None and not bool(getattr(settings, "enable_rag", True)):
                 return state
-    
+
+            gate = getattr(self.container, "rag_route_gate", None)
+            if gate is None or not hasattr(gate, "precheck"):
+                return state
+
             turn = state["turn"]
             persistent = state["persistent"]
             routing = _routing_decision_for_turn(turn)
+            turn_extra = dict(turn.extra)
+            pending_match = getattr(persistent, "pending_clarification", None) is not None
+
             if routing is not None and not routing.should_retrieve:
                 response_kind = _response_kind_for_turn(turn) or "low_info"
-                turn_extra = dict(turn.extra)
-                turn_extra["rag_gate"] = {
+                gate_payload = {
                     "allowed": False,
                     "reason": routing.route_reason or routing.required_action,
                     "confidence": routing.input_quality.score,
@@ -965,83 +1044,58 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                     "metadata": {"source": "routing_decision"},
                 }
                 if response_kind in {"low_info", "empty"}:
+                    gate_payload["clarification_response_kind"] = response_kind
+                    gate_payload["clarification_signal"] = {
+                        "kind": response_kind,
+                        "reason": routing.route_reason or routing.required_action,
+                    }
+                turn_extra["evidence_gate"] = gate_payload
+                turn_extra["rag_gate"] = gate_payload
+                if response_kind in {"low_info", "empty"}:
                     turn_extra["clarification_response_kind"] = response_kind
                     turn_extra["clarification_signal"] = {
                         "kind": response_kind,
                         "reason": routing.route_reason or routing.required_action,
                     }
+                    turn = turn.model_copy(update={"decision": TurnDecision.DIRECT_ANSWER})
                 turn_extra["route_reason"] = routing.route_reason or turn_extra.get("route_reason")
                 if routing.blocked:
                     turn_extra["routing_decision"] = routing.model_dump(mode="json")
                     turn_extra["routing_trace"] = routing_trace_payload(routing)
-                turn_update = {"extra": turn_extra}
-                if response_kind in {"low_info", "empty"}:
-                    turn_update["decision"] = TurnDecision.DIRECT_ANSWER
-                state["turn"] = turn.model_copy(update=turn_update)
+                state["turn"] = turn.model_copy(update={"extra": turn_extra})
                 return state
-            cached_gate = _cached_rag_gate(turn)
+
+            cached_gate = _cached_evidence_gate(turn)
             if cached_gate is not None:
-                turn_extra = dict(turn.extra)
-                turn_extra["rag_gate"] = cached_gate
+                turn_extra["evidence_gate"] = dict(cached_gate)
+                turn_extra["rag_gate"] = dict(cached_gate)
                 turn_extra["route_reason"] = cached_gate.get("reason", turn_extra.get("route_reason"))
-                if not bool(cached_gate.get("allowed", True)) and cached_gate.get("response_kind") in {"low_info", "empty"}:
-                    blocked_routing = routing
-                    if blocked_routing is None:
-                        blocked_routing = build_initial_routing_decision(turn.raw_query, persistent, client_context=state["runtime"].client_context)
-                    blocked_action = "reject" if cached_gate.get("response_kind") == "empty" else "clarify"
-                    blocked_routing = _mark_routing_blocked(
-                        blocked_routing,
-                        reason=str(cached_gate.get("reason") or cached_gate.get("response_kind") or "rag_gate_blocked"),
-                        required_action=blocked_action,
-                        route_candidate=blocked_routing.route_candidate,
-                    )
+                if not bool(cached_gate.get("allowed", True)):
                     turn_extra["clarification_response_kind"] = cached_gate.get("response_kind")
                     turn_extra["clarification_signal"] = {
                         "kind": cached_gate.get("response_kind"),
                         "reason": cached_gate.get("reason"),
                     }
-                    if blocked_action == "clarify":
-                        clarification_result, pending_clarification = self._build_pending_clarification_state(
-                            runtime=state["runtime"],
-                            turn=turn,
-                            routing=blocked_routing,
-                            question=str(blocked_routing.clarification_question or ""),
+                    turn_extra["rag_gate"]["clarification_response_kind"] = cached_gate.get("response_kind")
+                    turn_extra["rag_gate"]["clarification_signal"] = {
+                        "kind": cached_gate.get("response_kind"),
+                        "reason": cached_gate.get("reason"),
+                    }
+                    if routing is not None:
+                        blocked_routing = _mark_routing_blocked(
+                            routing,
+                            reason=str(cached_gate.get("reason") or cached_gate.get("response_kind") or "evidence_gate_blocked"),
+                            required_action="clarify" if cached_gate.get("response_kind") != "empty" else "reject",
+                            route_candidate=routing.route_candidate,
                         )
-                        persistent = persistent.model_copy(
-                            update={
-                                "clarification_result": clarification_result,
-                                "pending_clarification": pending_clarification,
-                            }
-                        )
-                        state["persistent"] = persistent
-                        turn_extra["clarification_result"] = clarification_result
-                        turn_extra["pending_clarification"] = pending_clarification.model_dump(mode="json")
-                    runtime = state["runtime"]
-                    metrics = dict(runtime.metrics)
-                    state["runtime"] = runtime.model_copy(update={"metrics": metrics})
-                    turn_extra["routing_decision"] = blocked_routing.model_dump(mode="json")
-                    turn_extra["routing_trace"] = routing_trace_payload(blocked_routing)
-                    state["turn"] = turn.model_copy(update={"routing_decision": blocked_routing, "extra": turn_extra})
-                    return state
-                if not bool(cached_gate.get("allowed", True)):
-                    blocked_routing = routing
-                    if blocked_routing is None:
-                        blocked_routing = build_initial_routing_decision(turn.raw_query, persistent, client_context=state["runtime"].client_context)
-                    blocked_action = "reject" if cached_gate.get("response_kind") == "empty" else "clarify"
-                    blocked_routing = _mark_routing_blocked(
-                        blocked_routing,
-                        reason=str(cached_gate.get("reason") or cached_gate.get("response_kind") or "rag_gate_blocked"),
-                        required_action=blocked_action,
-                        route_candidate=blocked_routing.route_candidate,
-                    )
-                    turn_extra["routing_decision"] = blocked_routing.model_dump(mode="json")
-                    turn_extra["routing_trace"] = routing_trace_payload(blocked_routing)
-                    state["turn"] = turn.model_copy(update={"routing_decision": blocked_routing, "extra": turn_extra})
-                    return state
+                        turn_extra["routing_decision"] = blocked_routing.model_dump(mode="json")
+                        turn_extra["routing_trace"] = routing_trace_payload(blocked_routing)
+                        state["turn"] = turn.model_copy(update={"routing_decision": blocked_routing, "extra": turn_extra})
+                        return state
                 state["turn"] = turn.model_copy(update={"extra": turn_extra})
                 return state
-    
-            request = __import__("learning_agent_service.application.rag_gate", fromlist=["RagGateRequest"]).RagGateRequest(
+
+            request = EvidenceGateRequest(
                 raw_query=turn.raw_query,
                 intent=turn.intent,
                 intent_confidence=turn.intent_confidence,
@@ -1054,60 +1108,40 @@ class WorkflowNodeAdapterStagesFrontAMixin:
                 reference_resolved=getattr(turn.reference_resolution, "resolved", None) if turn.reference_resolution else None,
                 client_context=dict(state["runtime"].client_context),
             )
-            decision = gate.decide(request)
-            turn_extra = dict(turn.extra)
-            turn_extra["rag_gate"] = decision.as_dict()
-            turn_extra["route_reason"] = decision.reason
-            if decision.allowed and decision.response_kind == "fallback" and getattr(turn, "decision", None) == TurnDecision.DIRECT_ANSWER:
-                compact_turn_query = str(turn.raw_query or "").strip()
-                if len(compact_turn_query) <= 4:
-                    turn_extra["rag_gate"]["clarification_response_kind"] = "low_info"
-                    turn_extra["clarification_signal"] = {
-                        "kind": "low_info",
-                        "reason": decision.reason,
-                    }
-            if not decision.allowed:
-                blocked_routing = routing
-                if blocked_routing is None:
-                    blocked_routing = build_initial_routing_decision(turn.raw_query, persistent, client_context=state["runtime"].client_context)
-                blocked_action = "reject" if decision.response_kind in {"empty"} else "clarify"
-                blocked_routing = _mark_routing_blocked(
-                    blocked_routing,
-                    reason=str(decision.reason or decision.response_kind or "rag_gate_blocked"),
-                    required_action=blocked_action,
-                    route_candidate=blocked_routing.route_candidate,
-                )
-                response_kind = decision.response_kind
-                if response_kind == "empty" and getattr(turn, "decision", None) == TurnDecision.DIRECT_ANSWER:
-                    response_kind = "low_info"
-                if response_kind in {"low_info", "empty"}:
-                    turn_extra["rag_gate"]["clarification_response_kind"] = response_kind
-                runtime = state["runtime"]
-                metrics = dict(runtime.metrics)
-                state["runtime"] = runtime.model_copy(update={"metrics": metrics})
+            vote = gate.precheck(request)
+            cached_vote = {
+                "allowed": vote.vote == "allow",
+                "reason": vote.reason,
+                "confidence": vote.confidence,
+                "response_kind": vote.response_kind,
+                "precheck_skip_memory": False,
+                "final_vote": vote.vote,
+                "rule_vote": None,
+                "llm_vote": None,
+                "metadata": {
+                    "source": "precheck",
+                    "decision": vote.vote,
+                    "reason": vote.reason,
+                },
+            }
+            if pending_match:
+                cached_vote["reason"] = "pending_clarification"
+                cached_vote["response_kind"] = "pending_clarification"
+                cached_vote["final_vote"] = "allow"
+
+            turn_extra["evidence_gate"] = cached_vote
+            turn_extra["rag_gate"] = cached_vote
+            turn_extra["cached_evidence_gate_vote"] = dict(cached_vote)
+            turn_extra["cached_rag_gate_vote"] = dict(cached_vote)
+            if not bool(cached_vote.get("allowed", True)):
+                turn_extra["clarification_response_kind"] = cached_vote.get("response_kind")
                 turn_extra["clarification_signal"] = {
-                    "kind": response_kind,
-                    "reason": decision.reason,
+                    "kind": cached_vote.get("response_kind"),
+                    "reason": cached_vote.get("reason"),
                 }
-                if blocked_action == "clarify":
-                    clarification_result, pending_clarification = self._build_pending_clarification_state(
-                        runtime=state["runtime"],
-                        turn=turn,
-                        routing=blocked_routing,
-                        question=str(blocked_routing.clarification_question or ""),
-                    )
-                    persistent = persistent.model_copy(
-                        update={
-                            "clarification_result": clarification_result,
-                            "pending_clarification": pending_clarification,
-                        }
-                    )
-                    state["persistent"] = persistent
-                    turn_extra["clarification_result"] = clarification_result
-                    turn_extra["pending_clarification"] = pending_clarification.model_dump(mode="json")
-                turn_extra["routing_decision"] = blocked_routing.model_dump(mode="json")
-                turn_extra["routing_trace"] = routing_trace_payload(blocked_routing)
-                state["turn"] = turn.model_copy(update={"routing_decision": blocked_routing, "extra": turn_extra})
-                return state
-            state["turn"] = turn.model_copy(update={"extra": turn_extra})
+            turn = turn.model_copy(update={"extra": turn_extra})
+            state["turn"] = turn
             return state
+
+        def rag_gate(self, state: GraphState) -> GraphState:
+            return self.evidence_gate(state)

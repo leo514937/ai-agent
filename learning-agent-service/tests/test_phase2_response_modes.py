@@ -5,7 +5,7 @@ import unittest
 import _bootstrap  # noqa: F401
 
 from learning_agent_service.application.workflow.adapters import WorkflowNodeAdapter
-from learning_agent_service.application.router.phase2_slots import build_clarification_question, build_evidence_quality
+from learning_agent_service.application.workflow.adapters.helpers import build_clarification_question, build_evidence_quality
 from learning_agent_service.domain import (
     AnswerComposeRequest,
     ChatTurnCommand,
@@ -16,6 +16,7 @@ from learning_agent_service.domain import (
     RagResult,
     RagStatus,
     RoutingDecision,
+    NormalizedToolResult,
     build_initial_state,
 )
 from learning_agent_service.tools.service import AnswerComposer
@@ -75,6 +76,191 @@ class Phase2ResponseModesTestCase(unittest.TestCase):
         self.assertEqual(quality.response_mode, "ask_clarification")
         self.assertIn("location", quality.missing_slots)
         self.assertEqual(quality.clarification_slot, "location")
+
+    def test_compose_answer_marks_complete_shop_evidence_as_grounded_strict(self) -> None:
+        adapter = WorkflowNodeAdapter(type("Container", (), {"answer_composer": AnswerComposer()})())
+        command = ChatTurnCommand(
+            trace_id="trace-grounded-strict",
+            session_id="session-grounded-strict",
+            turn_id="turn-grounded-strict",
+            user_id="user-grounded-strict",
+            message="某某家常菜现在营业吗",
+        )
+        state = build_initial_state(command, persistent=PersistentSessionContext(current_shop="某某家常菜"))
+        state["turn"] = state["turn"].model_copy(
+            update={
+                "routing_decision": RoutingDecision(
+                    required_action="tool_call",
+                    should_call_tool=True,
+                    route_candidate="tool",
+                    route_reason="open_status_lookup",
+                ),
+                "evidence_quality": EvidenceQualityDecision(response_mode="grounded", is_valid=True),
+                "tool_result": NormalizedToolResult(
+                    status="success",
+                    tool_name="check_open_status",
+                    normalized_output={
+                        "data": {
+                            "shop_id": 1001,
+                            "shop_name": "某某家常菜",
+                            "open_status": "open",
+                            "open_hours": "10:00-22:00",
+                        }
+                    },
+                    extra={},
+                ),
+                "extra": {
+                    **dict(state["turn"].extra),
+                    "current_shop": "某某家常菜",
+                    "ranked_candidates": [
+                        {
+                            "shop_id": 1001,
+                            "name": "某某家常菜",
+                            "score": 4.8,
+                            "distance_km": 1.2,
+                            "avg_price": 68,
+                        }
+                    ],
+                },
+            }
+        )
+
+        updated = adapter.compose_answer(state)
+
+        self.assertEqual(updated["turn"].extra.get("final_response_mode"), "grounded_strict")
+        self.assertIn("现在营业中", updated["turn"].final_answer)
+        self.assertNotIn("评分", updated["turn"].final_answer)
+
+        final_state = adapter.emit_final(updated)
+        final_event = final_state["runtime"].emitted_events[-1]
+        self.assertEqual(final_event.event_type, "final")
+        self.assertEqual(final_event.payload["answer_text"], updated["turn"].final_answer)
+        self.assertNotIn("评分", final_event.payload["answer_text"])
+
+    def test_compose_answer_does_not_reenter_composer_for_grounded_strict_verifier_failure(self) -> None:
+        from unittest.mock import patch
+
+        from learning_agent_service.domain import AnswerComposeResult, AnswerContract, EntityJoinResult
+
+        class _FakeComposer:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def compose(self, request):  # noqa: ANN001 - adapter contract is dynamic here
+                self.calls += 1
+                return AnswerComposeResult(answer_text="某某家常菜现在营业中。", confidence=0.9)
+
+            def _compose_clarify_response(self, request, routing):  # noqa: ANN001 - test double
+                return "请告诉我更具体的店名。"
+
+            def _compose_no_answer(self, request, evidence_quality):  # noqa: ANN001 - test double
+                return "暂时没有找到足够可靠的依据。"
+
+            def _compose_partial_grounded_answer(self, request):  # noqa: ANN001 - test double
+                return "部分判断：某某家常菜现在营业中。"
+
+        class _ReviewReport:
+            def model_dump(self, mode="json"):  # noqa: ANN001 - test double
+                return {}
+
+        class _VerifierResult:
+            passed = False
+            suggested_response_mode = "ask_clarification"
+            extra = {"phase4_mode": "enforce"}
+            issues = []
+            repair_hint = None
+
+            def model_dump(self, mode="json"):  # noqa: ANN001 - test double
+                return {
+                    "passed": self.passed,
+                    "suggested_response_mode": self.suggested_response_mode,
+                    "extra": self.extra,
+                    "issues": self.issues,
+                    "repair_hint": self.repair_hint,
+                }
+
+        fake_composer = _FakeComposer()
+        adapter = WorkflowNodeAdapter(type("Container", (), {"answer_composer": fake_composer})())
+        command = ChatTurnCommand(
+            trace_id="trace-grounded-strict-enforce",
+            session_id="session-grounded-strict-enforce",
+            turn_id="turn-grounded-strict-enforce",
+            user_id="user-grounded-strict-enforce",
+            message="某某家常菜现在营业吗",
+        )
+        state = build_initial_state(command, persistent=PersistentSessionContext(current_shop="某某家常菜"))
+        state["turn"] = state["turn"].model_copy(
+            update={
+                "routing_decision": RoutingDecision(
+                    required_action="tool_call",
+                    should_call_tool=True,
+                    route_candidate="tool",
+                    route_reason="open_status_lookup",
+                ),
+                "evidence_quality": EvidenceQualityDecision(response_mode="grounded", is_valid=True),
+                "tool_result": NormalizedToolResult(
+                    status="success",
+                    tool_name="check_open_status",
+                    normalized_output={
+                        "data": {
+                            "shop_id": 1001,
+                            "shop_name": "某某家常菜",
+                            "open_status": "open",
+                            "open_hours": "10:00-22:00",
+                        }
+                    },
+                    extra={},
+                ),
+                "extra": {
+                    **dict(state["turn"].extra),
+                    "current_shop": "某某家常菜",
+                    "ranked_candidates": [
+                        {
+                            "shop_id": 1001,
+                            "name": "某某家常菜",
+                            "score": 4.8,
+                            "distance_km": 1.2,
+                            "avg_price": 68,
+                        }
+                    ],
+                },
+            }
+        )
+
+        with patch(
+            "learning_agent_service.application.workflow.adapters.stages_back_core._build_answer_contract",
+            return_value=AnswerContract(
+                allowed_facets=["open_status"],
+                optional_facets=[],
+                forbidden_facets=[],
+                required_facets=[],
+                evidence_requirements={},
+                tool_requirements={},
+                forbidden_without_evidence=[],
+                candidate_entities=["某某家常菜"],
+                selected_entity="某某家常菜",
+                missing_slots=[],
+                clarification_slot=None,
+                answer_style="open_status_only",
+                scope_kind="single_shop",
+                facet_source_expectations={},
+                extra={},
+            ),
+        ), patch(
+            "learning_agent_service.application.workflow.adapters.stages_back_core._build_entity_join_result",
+            return_value=EntityJoinResult(selected_entity="某某家常菜"),
+        ), patch(
+            "learning_agent_service.application.workflow.adapters.stages_back_core._build_answer_verifier_result",
+            return_value=_VerifierResult(),
+        ), patch(
+            "learning_agent_service.application.workflow.adapters.stages_back_core._build_review_report",
+            return_value=_ReviewReport(),
+        ):
+            updated = adapter.compose_answer(state)
+
+        self.assertEqual(fake_composer.calls, 1)
+        self.assertEqual(updated["turn"].extra.get("final_response_mode"), "ask_clarification")
+        self.assertIn("营业", updated["turn"].final_answer)
 
     def test_answer_composer_uses_slot_specific_clarification(self) -> None:
         composer = AnswerComposer()

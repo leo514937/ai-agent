@@ -325,6 +325,7 @@ class Settings(BaseSettings):
     enable_remote_reranker: bool = True
     reranker_provider: str = "remote"
     enable_llm_query_rewrite: bool = True
+    enable_rag: bool = False
     enable_hyde_sparse_retrieval: bool = False
     llm_query_rewrite_min_query_length: int = 6
     llm_query_rewrite_low_confidence_threshold: float = 0.5
@@ -595,6 +596,9 @@ class Settings(BaseSettings):
         reranker_provider = str(data.pop("reranker_provider", _env("LEARNING_AGENT_RERANKER_PROVIDER", "remote")) or "").strip().lower()
         enable_llm_query_rewrite = bool(
             data.pop("enable_llm_query_rewrite", _env_bool("LEARNING_AGENT_ENABLE_LLM_QUERY_REWRITE", True))
+        )
+        enable_rag = bool(
+            data.pop("enable_rag", _env_bool("LEARNING_AGENT_ENABLE_RAG", False))
         )
         enable_hyde_sparse_retrieval = bool(
             data.pop("enable_hyde_sparse_retrieval", _env_bool("LEARNING_AGENT_ENABLE_HYDE_SPARSE_RETRIEVAL", False))
@@ -1103,6 +1107,17 @@ class Settings(BaseSettings):
             )
 
         if "embedding" not in data:
+            memory_embedding_model = data.pop(
+                "memory_embedding_model",
+                _env_any(
+                    (
+                        "LEARNING_AGENT_MEMORY_EMBEDDING_MODEL",
+                        "LEARNING_AGENT_OPENAI_EMBEDDING_MODEL",
+                        "OPENAI_EMBEDDING_MODEL",
+                    ),
+                    "qwen-embedding-8b",
+                ),
+            ) or "qwen-embedding-8b"
             data["embedding"] = EmbeddingSettings(
                 memory_provider=(
                     data.pop(
@@ -1111,13 +1126,7 @@ class Settings(BaseSettings):
                     )
                     or "openai"
                 ),
-                memory_model=(
-                    data.pop(
-                        "memory_embedding_model",
-                        _env("LEARNING_AGENT_MEMORY_EMBEDDING_MODEL", "qwen-embedding-8b"),
-                    )
-                    or "qwen-embedding-8b"
-                ),
+                memory_model=memory_embedding_model,
             )
 
         if "memory_recall" not in data:
@@ -1234,6 +1243,7 @@ class Settings(BaseSettings):
         data.setdefault("enable_remote_reranker", enable_remote_reranker or reranker_provider == "remote")
         data.setdefault("reranker_provider", reranker_provider)
         data.setdefault("enable_llm_query_rewrite", enable_llm_query_rewrite)
+        data.setdefault("enable_rag", enable_rag)
         data.setdefault("enable_hyde_sparse_retrieval", enable_hyde_sparse_retrieval)
         data.setdefault("llm_query_rewrite_min_query_length", llm_query_rewrite_min_query_length)
         data.setdefault("llm_query_rewrite_low_confidence_threshold", llm_query_rewrite_low_confidence_threshold)

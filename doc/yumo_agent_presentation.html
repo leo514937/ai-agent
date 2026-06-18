@@ -1,0 +1,2548 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>禹墨科技教育 · 教案辅助设计智能体展示汇报</title>
+    <meta name="description" content="禹墨科技教育教案辅助设计智能体，以对话式向导形式引导教师完成四阶教案设计，融入双故、四疑、摹略、研取等墨家科学与逻辑思想方法。">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Inter:wght@300;400;500;600;700&family=Noto+Sans+SC:wght@300;400;500;700&family=Noto+Serif+SC:wght@500;700&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            /* 深色模式变量 (墨家金石与水墨黑) */
+            --bg-base: #0d0f12;
+            --bg-surface: rgba(22, 26, 33, 0.8);
+            --bg-surface-solid: #161a21;
+            --bg-input: #1a1f29;
+            --border-color: rgba(223, 177, 91, 0.2);
+            --border-color-glow: rgba(223, 177, 91, 0.4);
+            --text-primary: #f0f3f6;
+            --text-secondary: #8b949e;
+            --text-muted: #6e7681;
+            --accent-gold: #dfb15b;
+            --accent-gold-hover: #f0c97d;
+            --accent-gold-rgb: 223, 177, 91;
+            --accent-teal: #0ea5e9;
+            --accent-teal-hover: #38bdf8;
+            --accent-green: #10b981;
+            --glass-blur: blur(16px);
+            --shadow-glow: 0 8px 32px 0 rgba(0, 0, 0, 0.37), 0 0 16px 0 rgba(223, 177, 91, 0.1);
+            --transition-speed: 0.3s;
+            --font-serif: 'Noto Serif SC', Georgia, serif;
+            --font-sans: 'Inter', 'Noto Sans SC', sans-serif;
+            --font-display: 'Cinzel', serif;
+        }
+
+        [data-theme="light"] {
+            /* 浅色模式变量 (宣纸墨香与古朴金) */
+            --bg-base: #faf7f0;
+            --bg-surface: rgba(243, 239, 229, 0.85);
+            --bg-surface-solid: #f3efe5;
+            --bg-input: #e9e4d5;
+            --border-color: rgba(140, 110, 60, 0.25);
+            --border-color-glow: rgba(140, 110, 60, 0.5);
+            --text-primary: #2c2924;
+            --text-secondary: #5c564c;
+            --text-muted: #8c8273;
+            --accent-gold: #8c6e3c;
+            --accent-gold-hover: #735a30;
+            --accent-gold-rgb: 140, 110, 60;
+            --accent-teal: #0284c7;
+            --accent-teal-hover: #0369a1;
+            --accent-green: #059669;
+            --shadow-glow: 0 8px 32px 0 rgba(140, 110, 60, 0.08), 0 2px 8px 0 rgba(0, 0, 0, 0.05);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            scroll-behavior: smooth;
+        }
+
+        body {
+            background-color: var(--bg-base);
+            color: var(--text-primary);
+            font-family: var(--font-sans);
+            line-height: 1.6;
+            overflow-x: hidden;
+            transition: background-color var(--transition-speed) ease, color var(--transition-speed) ease;
+        }
+
+        /* 滚动条美化 */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: var(--bg-base);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--border-color);
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--accent-gold);
+        }
+
+        /* 背景微光粒子动画效果 */
+        .ambient-glow {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: -1;
+            pointer-events: none;
+            overflow: hidden;
+        }
+        .glow-circle {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(100px);
+            opacity: 0.15;
+            mix-blend-mode: screen;
+            animation: pulse-glow 15s infinite alternate;
+        }
+        [data-theme="light"] .glow-circle {
+            mix-blend-mode: multiply;
+            opacity: 0.05;
+        }
+        .glow-1 {
+            width: 500px;
+            height: 500px;
+            background: radial-gradient(circle, rgba(var(--accent-gold-rgb), 0.4) 0%, transparent 70%);
+            top: -100px;
+            right: -100px;
+        }
+        .glow-2 {
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, rgba(14, 165, 233, 0.3) 0%, transparent 70%);
+            bottom: -150px;
+            left: -150px;
+            animation-delay: -5s;
+        }
+
+        @keyframes pulse-glow {
+            0% { transform: scale(1) translate(0, 0); }
+            100% { transform: scale(1.15) translate(30px, 20px); }
+        }
+
+        /* Header Header Styling */
+        header {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background-color: rgba(var(--bg-base), 0.7);
+            backdrop-filter: var(--glass-blur);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            transition: all var(--transition-speed) ease;
+        }
+
+        .logo-area {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .logo-icon {
+            font-family: var(--font-display);
+            font-weight: 700;
+            font-size: 1.8rem;
+            color: var(--accent-gold);
+            border: 2px solid var(--accent-gold);
+            width: 45px;
+            height: 45px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            box-shadow: 0 0 10px rgba(var(--accent-gold-rgb), 0.2);
+            text-shadow: 0 0 5px rgba(var(--accent-gold-rgb), 0.5);
+            background: linear-gradient(135deg, rgba(var(--accent-gold-rgb), 0.1), transparent);
+        }
+
+        .logo-text h1 {
+            font-family: var(--font-serif);
+            font-size: 1.25rem;
+            font-weight: 700;
+            letter-spacing: 1px;
+        }
+
+        .logo-text p {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            letter-spacing: 0.5px;
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        /* 导航 Tabs */
+        .nav-tabs {
+            display: flex;
+            background-color: var(--bg-input);
+            padding: 4px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+
+        .tab-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            padding: 8px 16px;
+            font-family: var(--font-sans);
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            border-radius: 6px;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .tab-btn:hover {
+            color: var(--text-primary);
+        }
+
+        .tab-btn.active {
+            background-color: var(--bg-surface-solid);
+            color: var(--accent-gold);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+            border: 1px solid rgba(var(--accent-gold-rgb), 0.3);
+        }
+
+        /* 主题切换按钮 */
+        .theme-toggle {
+            background: var(--bg-input);
+            border: 1px solid var(--border-color);
+            color: var(--accent-gold);
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all var(--transition-speed) ease;
+        }
+        .theme-toggle:hover {
+            background: var(--bg-surface-solid);
+            border-color: var(--accent-gold);
+            transform: scale(1.05);
+        }
+
+        /* Main Container */
+        .container {
+            max-width: 1400px;
+            margin: 2rem auto;
+            padding: 0 1.5rem;
+        }
+
+        /* 顶部概念看板 */
+        .concept-hero {
+            background: linear-gradient(135deg, rgba(var(--accent-gold-rgb), 0.05) 0%, rgba(22, 26, 33, 0.4) 100%);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 2.5rem;
+            margin-bottom: 2rem;
+            box-shadow: var(--shadow-glow);
+            backdrop-filter: var(--glass-blur);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .concept-hero::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+            background: linear-gradient(to bottom, var(--accent-gold), transparent);
+        }
+
+        .concept-badge {
+            display: inline-block;
+            background: rgba(var(--accent-gold-rgb), 0.1);
+            color: var(--accent-gold);
+            border: 1px solid var(--border-color-glow);
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            text-transform: uppercase;
+        }
+
+        .concept-hero h2 {
+            font-family: var(--font-serif);
+            font-size: 2rem;
+            margin-bottom: 1rem;
+            font-weight: 700;
+        }
+
+        .concept-hero p {
+            color: var(--text-secondary);
+            font-size: 1.05rem;
+            max-width: 800px;
+            margin-bottom: 1.5rem;
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 1.5rem;
+            margin-top: 2rem;
+        }
+
+        .feature-card {
+            background: rgba(26, 31, 41, 0.4);
+            border: 1px solid rgba(255,255,255,0.05);
+            border-radius: 8px;
+            padding: 1.25rem;
+            transition: all var(--transition-speed) ease;
+        }
+        [data-theme="light"] .feature-card {
+            background: rgba(255, 255, 255, 0.5);
+            border-color: rgba(0,0,0,0.05);
+        }
+
+        .feature-card:hover {
+            transform: translateY(-5px);
+            border-color: var(--accent-gold);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+
+        .feature-card h3 {
+            font-family: var(--font-serif);
+            color: var(--accent-gold);
+            margin-bottom: 0.5rem;
+            font-size: 1.1rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .feature-card p {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin: 0;
+            line-height: 1.5;
+        }
+
+        /* 引导流程步骤轴 */
+        .flow-tracker {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--bg-surface);
+            backdrop-filter: var(--glass-blur);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 1.25rem 2rem;
+            margin-bottom: 2rem;
+            overflow-x: auto;
+            gap: 1rem;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+
+        .flow-step {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-shrink: 0;
+            position: relative;
+            cursor: pointer;
+            padding: 6px 12px;
+            border-radius: 6px;
+            transition: all 0.2s ease;
+        }
+
+        .flow-step:hover {
+            background-color: rgba(var(--accent-gold-rgb), 0.05);
+        }
+
+        .flow-step-num {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: var(--bg-input);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+        }
+
+        .flow-step-text {
+            font-size: 0.9rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+            transition: all 0.3s ease;
+        }
+
+        .flow-arrow {
+            color: var(--text-muted);
+            font-size: 1.2rem;
+        }
+
+        .flow-step.active .flow-step-num {
+            background: var(--accent-gold);
+            border-color: var(--accent-gold);
+            color: #000;
+            box-shadow: 0 0 10px rgba(var(--accent-gold-rgb), 0.4);
+        }
+
+        .flow-step.active .flow-step-text {
+            color: var(--accent-gold);
+            font-weight: 600;
+        }
+
+        .flow-step.completed .flow-step-num {
+            background: rgba(var(--accent-gold-rgb), 0.2);
+            border-color: var(--accent-gold);
+            color: var(--accent-gold);
+        }
+
+        .flow-step.completed .flow-step-text {
+            color: var(--text-primary);
+        }
+
+        /* 模拟器工作区 */
+        .workspace-grid {
+            display: grid;
+            grid-template-columns: 1.2fr 1fr;
+            gap: 2rem;
+            align-items: start;
+        }
+
+        @media (max-width: 1024px) {
+            .workspace-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* 对话区 */
+        .chat-section {
+            background: var(--bg-surface);
+            backdrop-filter: var(--glass-blur);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            height: 620px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: var(--shadow-glow);
+        }
+
+        .chat-header {
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+            background: rgba(0,0,0,0.15);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .chat-title-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .avatar-spark {
+            width: 8px;
+            height: 8px;
+            background-color: var(--accent-gold);
+            border-radius: 50%;
+            box-shadow: 0 0 8px var(--accent-gold);
+            animation: pulse-glow-dots 1.5s infinite alternate;
+        }
+
+        @keyframes pulse-glow-dots {
+            0% { opacity: 0.5; transform: scale(0.8); }
+            100% { opacity: 1; transform: scale(1.2); }
+        }
+
+        .chat-header h3 {
+            font-size: 1rem;
+            font-weight: 600;
+            font-family: var(--font-serif);
+            letter-spacing: 0.5px;
+        }
+
+        .topic-selector-container {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .select-label {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .preset-select {
+            background-color: var(--bg-input);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            outline: none;
+        }
+
+        .preset-select:focus {
+            border-color: var(--accent-gold);
+        }
+
+        .chat-messages {
+            flex-grow: 1;
+            padding: 1.5rem;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 1.25rem;
+        }
+
+        /* 气泡样式 */
+        .msg-row {
+            display: flex;
+            width: 100%;
+        }
+
+        .msg-row.ai {
+            justify-content: flex-start;
+        }
+
+        .msg-row.user {
+            justify-content: flex-end;
+        }
+
+        .msg-bubble {
+            max-width: 85%;
+            padding: 1rem 1.25rem;
+            border-radius: 12px;
+            font-size: 0.95rem;
+            line-height: 1.5;
+            position: relative;
+        }
+
+        .ai .msg-bubble {
+            background-color: rgba(var(--accent-gold-rgb), 0.05);
+            border: 1px solid var(--border-color);
+            border-top-left-radius: 2px;
+            color: var(--text-primary);
+        }
+
+        .user .msg-bubble {
+            background-color: var(--bg-input);
+            border: 1px solid rgba(255,255,255,0.08);
+            border-top-right-radius: 2px;
+            color: var(--text-primary);
+        }
+        [data-theme="light"] .user .msg-bubble {
+            background-color: rgba(140, 110, 60, 0.1);
+            border-color: rgba(140, 110, 60, 0.15);
+        }
+
+        .msg-bubble p {
+            margin-bottom: 0.5rem;
+        }
+        .msg-bubble p:last-child {
+            margin-bottom: 0;
+        }
+
+        .msg-bubble blockquote {
+            border-left: 3px solid var(--accent-gold);
+            padding-left: 10px;
+            margin: 0.5rem 0;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        .msg-bubble ul, .msg-bubble ol {
+            padding-left: 1.25rem;
+            margin: 0.5rem 0;
+        }
+
+        .msg-bubble li {
+            margin-bottom: 0.25rem;
+        }
+
+        /* 智能提示/选项建议卡 */
+        .recommendation-box {
+            background: rgba(var(--accent-gold-rgb), 0.08);
+            border: 1px dashed var(--accent-gold);
+            border-radius: 8px;
+            padding: 0.85rem;
+            margin-top: 0.75rem;
+        }
+
+        .recommendation-title {
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: var(--accent-gold);
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .recommendation-item {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.25rem;
+            list-style-type: none;
+            position: relative;
+            padding-left: 12px;
+        }
+
+        .recommendation-item::before {
+            content: '•';
+            position: absolute;
+            left: 0;
+            color: var(--accent-gold);
+        }
+
+        /* 选项按钮 */
+        .options-area {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-top: 0.75rem;
+        }
+
+        .option-btn {
+            background: var(--bg-surface-solid);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 6px 14px;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .option-btn:hover {
+            border-color: var(--accent-gold);
+            color: var(--accent-gold);
+            background-color: rgba(var(--accent-gold-rgb), 0.05);
+            transform: translateY(-1px);
+        }
+
+        /* 输入交互区 */
+        .chat-input-area {
+            padding: 1.25rem 1.5rem;
+            border-top: 1px solid var(--border-color);
+            background: rgba(0,0,0,0.1);
+        }
+
+        .interactive-prompt-tips {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.75rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .tip-badge {
+            background: rgba(14, 165, 233, 0.15);
+            color: var(--accent-teal);
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .input-wrapper {
+            display: flex;
+            gap: 10px;
+        }
+
+        .mock-input {
+            flex-grow: 1;
+            background-color: var(--bg-input);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 0.8rem 1rem;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            outline: none;
+            resize: none;
+            height: 44px;
+            display: flex;
+            align-items: center;
+            color: var(--text-muted);
+            cursor: not-allowed;
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+        }
+
+        .send-btn {
+            background-color: var(--accent-gold);
+            color: #000;
+            border: none;
+            width: 44px;
+            height: 44px;
+            border-radius: 8px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            transition: all 0.2s ease;
+        }
+
+        .send-btn:hover {
+            background-color: var(--accent-gold-hover);
+            transform: scale(1.02);
+        }
+
+        /* 右侧教案预览区 */
+        .preview-section {
+            background: var(--bg-surface);
+            backdrop-filter: var(--glass-blur);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            height: 620px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: var(--shadow-glow);
+        }
+
+        .preview-header {
+            padding: 1rem 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+            background: rgba(0,0,0,0.15);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .preview-header h3 {
+            font-size: 1rem;
+            font-weight: 600;
+            font-family: var(--font-serif);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .preview-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .preview-btn {
+            background: var(--bg-input);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .preview-btn:hover:not(:disabled) {
+            border-color: var(--accent-gold);
+            color: var(--accent-gold);
+        }
+
+        .preview-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .preview-doc {
+            flex-grow: 1;
+            padding: 2.5rem;
+            overflow-y: auto;
+            background-color: var(--bg-surface-solid);
+            color: var(--text-primary);
+            font-family: var(--font-serif);
+            position: relative;
+        }
+
+        /* 模拟真实的宣纸背景线 */
+        [data-theme="light"] .preview-doc {
+            background-image: linear-gradient(rgba(140, 110, 60, 0.05) 1px, transparent 1px);
+            background-size: 100% 28px;
+            line-height: 28px;
+        }
+
+        .preview-placeholder {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-muted);
+            text-align: center;
+            padding: 2rem;
+        }
+
+        .preview-placeholder-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+            color: var(--border-color-glow);
+        }
+
+        /* 教案内容排版 */
+        .doc-title {
+            text-align: center;
+            font-size: 1.5rem;
+            margin-bottom: 1.5rem;
+            color: var(--accent-gold);
+            font-weight: 700;
+            border-bottom: 2px solid var(--accent-gold);
+            padding-bottom: 0.5rem;
+        }
+
+        .doc-meta {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px 15px;
+            font-family: var(--font-sans);
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-bottom: 2rem;
+            padding: 10px;
+            background: rgba(0,0,0,0.1);
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+        }
+
+        .doc-section {
+            margin-bottom: 2rem;
+            position: relative;
+            animation: doc-fade-in 0.5s ease forwards;
+        }
+
+        @keyframes doc-fade-in {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .doc-section-title {
+            font-size: 1.15rem;
+            color: var(--accent-gold);
+            margin-bottom: 0.75rem;
+            border-left: 3px solid var(--accent-gold);
+            padding-left: 10px;
+            font-weight: 700;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .section-time {
+            font-family: var(--font-sans);
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            font-weight: normal;
+        }
+
+        .doc-section-body {
+            font-size: 0.95rem;
+            color: var(--text-primary);
+            padding-left: 13px;
+        }
+
+        .doc-section-body ul {
+            padding-left: 1.2rem;
+            margin: 0.5rem 0;
+        }
+
+        .doc-section-body li {
+            margin-bottom: 0.5rem;
+        }
+
+        .doc-highlight-box {
+            background-color: rgba(var(--accent-gold-rgb), 0.04);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 10px 15px;
+            margin: 0.75rem 0;
+        }
+
+        .doc-highlight-title {
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: var(--accent-gold);
+            margin-bottom: 0.25rem;
+            font-family: var(--font-sans);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        /* 原型表格预览 */
+        .preview-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0;
+            font-family: var(--font-sans);
+            font-size: 0.85rem;
+        }
+
+        .preview-table th, .preview-table td {
+            border: 1px solid var(--border-color);
+            padding: 8px 12px;
+            text-align: left;
+        }
+
+        .preview-table th {
+            background-color: rgba(var(--accent-gold-rgb), 0.08);
+            color: var(--accent-gold);
+            font-weight: 600;
+        }
+
+        /* 理论概念卡页签 (墨家科学论展示) */
+        .philosophy-container {
+            display: none; /* 默认隐藏，通过TAB切换 */
+            animation: fade-in 0.4s ease forwards;
+        }
+
+        .philosophy-intro {
+            text-align: center;
+            max-width: 800px;
+            margin: 0 auto 3rem auto;
+        }
+
+        .philosophy-intro h2 {
+            font-family: var(--font-serif);
+            font-size: 2.2rem;
+            color: var(--accent-gold);
+            margin-bottom: 1rem;
+        }
+
+        .philosophy-intro p {
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+        }
+
+        .philosophy-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 2rem;
+            margin-bottom: 3rem;
+        }
+
+        @media (max-width: 768px) {
+            .philosophy-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .philosophy-card {
+            background: var(--bg-surface);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 2rem;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .philosophy-card:hover {
+            transform: translateY(-5px);
+            border-color: var(--accent-gold-hover);
+            box-shadow: var(--shadow-glow);
+        }
+
+        .philosophy-card::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            right: 0;
+            width: 80px;
+            height: 80px;
+            background: linear-gradient(135deg, transparent, rgba(var(--accent-gold-rgb), 0.05));
+            border-radius: 50% 0 0 0;
+        }
+
+        .card-header-icon {
+            font-size: 2rem;
+            margin-bottom: 1rem;
+            display: inline-block;
+        }
+
+        .philosophy-card h3 {
+            font-family: var(--font-serif);
+            font-size: 1.4rem;
+            color: var(--accent-gold);
+            margin-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 0.5rem;
+        }
+
+        .philosophy-card .origin-quote {
+            font-family: var(--font-serif);
+            font-style: italic;
+            color: var(--text-muted);
+            margin-bottom: 1rem;
+            font-size: 0.95rem;
+            background: rgba(0,0,0,0.1);
+            padding: 8px 12px;
+            border-radius: 4px;
+            border-left: 2px solid var(--accent-gold);
+        }
+
+        .philosophy-card .desc {
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+            margin-bottom: 1.25rem;
+        }
+
+        .sub-methods {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 1rem;
+        }
+
+        .method-block {
+            background: rgba(0,0,0,0.15);
+            padding: 0.85rem;
+            border-radius: 6px;
+            border: 1px solid rgba(255,255,255,0.02);
+        }
+
+        .method-block h4 {
+            font-family: var(--font-serif);
+            color: var(--text-primary);
+            font-size: 0.95rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .method-block p {
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin: 0;
+            line-height: 1.4;
+        }
+
+        /* 底部设计原则 */
+        .principles-section {
+            background: linear-gradient(180deg, transparent 0%, rgba(var(--accent-gold-rgb), 0.03) 100%);
+            border-top: 1px solid var(--border-color);
+            padding: 4rem 0;
+            margin-top: 4rem;
+        }
+
+        .principles-title {
+            text-align: center;
+            margin-bottom: 3rem;
+        }
+
+        .principles-title h2 {
+            font-family: var(--font-serif);
+            font-size: 2rem;
+            color: var(--accent-gold);
+            margin-bottom: 0.5rem;
+        }
+
+        .principles-title p {
+            color: var(--text-secondary);
+        }
+
+        .principles-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 2rem;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        @media (max-width: 992px) {
+            .principles-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+        @media (max-width: 576px) {
+            .principles-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .principle-item {
+            text-align: center;
+            padding: 1.5rem;
+        }
+
+        .principle-icon {
+            width: 60px;
+            height: 60px;
+            background: rgba(var(--accent-gold-rgb), 0.1);
+            border: 1px solid var(--border-color-glow);
+            color: var(--accent-gold);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 1.25rem auto;
+            font-size: 1.5rem;
+            box-shadow: 0 0 15px rgba(var(--accent-gold-rgb), 0.15);
+        }
+
+        .principle-item h3 {
+            font-family: var(--font-serif);
+            font-size: 1.15rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .principle-item p {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            line-height: 1.6;
+        }
+
+        /* 模态框 - 教案导出/全屏查看 */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(10px);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            animation: fade-in 0.2s ease forwards;
+        }
+
+        @keyframes fade-in {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .modal-content {
+            background-color: var(--bg-surface-solid);
+            border: 1px solid var(--accent-gold);
+            border-radius: 12px;
+            width: 90%;
+            max-width: 800px;
+            max-height: 85vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: var(--shadow-glow);
+        }
+
+        .modal-header {
+            padding: 1.25rem 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-header h3 {
+            font-family: var(--font-serif);
+            color: var(--accent-gold);
+            font-size: 1.2rem;
+        }
+
+        .close-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 1.5rem;
+            cursor: pointer;
+            transition: color 0.2s;
+        }
+
+        .close-btn:hover {
+            color: var(--accent-gold);
+        }
+
+        .modal-body {
+            flex-grow: 1;
+            padding: 2rem;
+            overflow-y: auto;
+        }
+
+        .markdown-textarea {
+            width: 100%;
+            height: 350px;
+            background-color: var(--bg-input);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            border-radius: 6px;
+            padding: 1rem;
+            font-family: monospace;
+            font-size: 0.9rem;
+            resize: none;
+            outline: none;
+        }
+
+        .markdown-textarea:focus {
+            border-color: var(--accent-gold);
+        }
+
+        .modal-footer {
+            padding: 1rem 1.5rem;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+            background: rgba(0,0,0,0.1);
+        }
+
+        .btn {
+            padding: 8px 18px;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .btn-primary {
+            background-color: var(--accent-gold);
+            color: #000;
+            border: none;
+        }
+
+        .btn-primary:hover {
+            background-color: var(--accent-gold-hover);
+        }
+
+        .btn-secondary {
+            background: none;
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+        }
+
+        .btn-secondary:hover {
+            border-color: var(--text-primary);
+        }
+
+        footer {
+            text-align: center;
+            padding: 2rem;
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            border-top: 1px solid var(--border-color);
+        }
+
+        /* 响应式调整 */
+        @media (max-width: 768px) {
+            header {
+                flex-direction: column;
+                gap: 1rem;
+                padding: 1rem;
+            }
+            .header-actions {
+                width: 100%;
+                justify-content: space-between;
+            }
+            .nav-tabs {
+                flex-grow: 1;
+            }
+            .flow-tracker {
+                padding: 0.75rem 1rem;
+            }
+            .concept-hero {
+                padding: 1.5rem;
+            }
+            .concept-hero h2 {
+                font-size: 1.5rem;
+            }
+        }
+
+        /* 打印适配 */
+        @media print {
+            body {
+                background: #fff !important;
+                color: #000 !important;
+            }
+            header, .ambient-glow, .flow-tracker, .chat-section, .preview-header, .principles-section, footer, .concept-hero {
+                display: none !important;
+            }
+            .workspace-grid {
+                grid-template-columns: 1fr !important;
+            }
+            .preview-section {
+                border: none !important;
+                height: auto !important;
+                overflow: visible !important;
+                background: transparent !important;
+            }
+            .preview-doc {
+                padding: 0 !important;
+                background: transparent !important;
+            }
+        }
+    </style>
+</head>
+<body data-theme="dark">
+
+    <!-- 背景微光 -->
+    <div class="ambient-glow">
+        <div class="glow-circle glow-1"></div>
+        <div class="glow-circle glow-2"></div>
+    </div>
+
+    <!-- 头部区域 -->
+    <header>
+        <div class="logo-area">
+            <div class="logo-icon">墨</div>
+            <div class="logo-text">
+                <h1>禹墨教案辅助设计智能体</h1>
+                <p>发明有限 · 思想无限 / YUMO LESSON DESIGN CO-PILOT</p>
+            </div>
+        </div>
+        <div class="header-actions">
+            <!-- 导航Tabs -->
+            <div class="nav-tabs">
+                <button class="tab-btn active" onclick="switchTab('simulator')">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+                    智能对话向导
+                </button>
+                <button class="tab-btn" onclick="switchTab('philosophy')">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+                    禹墨科学思想
+                </button>
+            </div>
+            <!-- 主题切换 -->
+            <button class="theme-toggle" onclick="toggleTheme()" title="切换明暗主题">
+                <svg id="theme-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <!-- 默认太阳 -->
+                    <circle cx="12" cy="12" r="5"></circle>
+                    <line x1="12" y1="1" x2="12" y2="3"></line>
+                    <line x1="12" y1="21" x2="12" y2="23"></line>
+                    <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                    <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                    <line x1="1" y1="12" x2="3" y2="12"></line>
+                    <line x1="21" y1="12" x2="23" y2="12"></line>
+                    <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                    <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                </svg>
+            </button>
+        </div>
+    </header>
+
+    <div class="container">
+        
+        <!-- 引导对话向导标签页 -->
+        <div id="tab-simulator">
+            <!-- 概念标语板 -->
+            <section class="concept-hero">
+                <span class="concept-badge">定位说明</span>
+                <h2>对话式向导，而非一键生成器</h2>
+                <p>本智能体专门辅助教师设计融入<b>墨家逻辑与工程思维</b>的结构化教案。通过对话激发教师教学灵感，在关键节点嵌入“摹略”（结构化观察）、“双故”（因果建模）、“研取”（证据择取）、“四疑”（审辩反思）等禹墨思想体系。</p>
+                <div class="features-grid">
+                    <div class="feature-card">
+                        <h3>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-dasharray="null" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"></path></svg>
+                            引导而非替代
+                        </h3>
+                        <p>智能体只做问题搭建与策略支架，最终教案由教师与AI共同抉择、迭代共创而成。</p>
+                    </div>
+                    <div class="feature-card">
+                        <h3>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-dasharray="null" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+                            方法植入
+                        </h3>
+                        <p>将墨经逻辑思想（充分必要条件、审辩式思维）有机隐于现代项目式工程教学之中。</p>
+                    </div>
+                    <div class="feature-card">
+                        <h3>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-dasharray="null" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="M8 12h8M12 8v8"></path></svg>
+                            主题无关性
+                        </h3>
+                        <p>不限特定古代科学案例。水净化、火星探索等任何科学/工程主题皆可完美适用。</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 5步工作流状态器 -->
+            <div class="flow-tracker">
+                <div class="flow-step active" id="step-btn-0" onclick="goToStep(0)">
+                    <div class="flow-step-num">启</div>
+                    <div class="flow-step-text">参数采集</div>
+                </div>
+                <div class="flow-arrow">➔</div>
+                <div class="flow-step" id="step-btn-1" onclick="goToStep(1)">
+                    <div class="flow-step-num">1</div>
+                    <div class="flow-step-text">摩略万物 (情境)</div>
+                </div>
+                <div class="flow-arrow">➔</div>
+                <div class="flow-step" id="step-btn-2" onclick="goToStep(2)">
+                    <div class="flow-step-num">2</div>
+                    <div class="flow-step-text">系统探索 (关联)</div>
+                </div>
+                <div class="flow-arrow">➔</div>
+                <div class="flow-step" id="step-btn-3" onclick="goToStep(3)">
+                    <div class="flow-step-num">3</div>
+                    <div class="flow-step-text">测试研取 (验证)</div>
+                </div>
+                <div class="flow-arrow">➔</div>
+                <div class="flow-step" id="step-btn-4" onclick="goToStep(4)">
+                    <div class="flow-step-num">4</div>
+                    <div class="flow-step-text">结构反思 (迁移)</div>
+                </div>
+                <div class="flow-arrow">➔</div>
+                <div class="flow-step" id="step-btn-5" onclick="goToStep(5)">
+                    <div class="flow-step-num">终</div>
+                    <div class="flow-step-text">输出教案</div>
+                </div>
+            </div>
+
+            <!-- 主工作区 -->
+            <div class="workspace-grid">
+                <!-- 左侧：对话模拟器 -->
+                <div class="chat-section">
+                    <div class="chat-header">
+                        <div class="chat-title-info">
+                            <span class="avatar-spark"></span>
+                            <h3>禹墨教案设计辅助智能体 (向导模拟)</h3>
+                        </div>
+                        <div class="topic-selector-container">
+                            <span class="select-label">选择体验案例：</span>
+                            <select class="preset-select" id="case-select" onchange="changeThemeCase()">
+                                <option value="purifier">【案例一】简易净水装置 (小学/初中)</option>
+                                <option value="bridge">【案例二】桥梁承重优化 (初中/高中)</option>
+                                <option value="irrigation">【案例三】智能浇灌控制系统 (高中/大学)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <!-- 聊天消息区 -->
+                    <div class="chat-messages" id="chat-box">
+                        <!-- JS动态灌注对话内容 -->
+                    </div>
+                    <!-- 输入交互控制区 -->
+                    <div class="chat-input-area">
+                        <div class="interactive-prompt-tips">
+                            <span>交互提示：请选择上方智能体推荐的动作或点击按钮，以共创方式推进教案生成</span>
+                            <span class="tip-badge" id="step-badge">初始化</span>
+                        </div>
+                        <div class="input-wrapper">
+                            <div class="mock-input" id="input-text-placeholder">请在上方选择对话框内的建议答案...</div>
+                            <button class="send-btn" title="请直接使用上方交互卡片选项" disabled>
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 右侧：教案实时渲染 -->
+                <div class="preview-section">
+                    <div class="preview-header">
+                        <h3>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                            教案草稿同步装配
+                        </h3>
+                        <div class="preview-actions">
+                            <button class="preview-btn" onclick="openExportModal()" id="export-md-btn" disabled>
+                                导出MD
+                            </button>
+                            <button class="preview-btn" onclick="window.print()" id="print-btn" disabled>
+                                打印教案
+                            </button>
+                        </div>
+                    </div>
+                    <div class="preview-doc" id="doc-preview">
+                        <div class="preview-placeholder">
+                            <div class="preview-placeholder-icon">✍️</div>
+                            <h4>教案暂未生成</h4>
+                            <p>请在左侧对话向导中，与智能体互动采集课程基本信息。教案数据将会在此进行动态、结构化的编排装配。</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 禹墨科学思想理论卡片标签页 -->
+        <div id="tab-philosophy" class="philosophy-container">
+            <div class="philosophy-intro">
+                <h2>禹墨“四阶八法”思想模型</h2>
+                <p>将先秦墨家《墨经》中的墨辩逻辑、工程实践经验，解构转化为现代STEAM及探究式学习的科学思维支架，做到“用墨家的方法，解现代的命题”。</p>
+            </div>
+            
+            <div class="philosophy-grid">
+                <!-- 摹略 -->
+                <div class="philosophy-card">
+                    <div class="card-header-icon">🔍</div>
+                    <h3>摹略万物 —— 结构化观察</h3>
+                    <div class="origin-quote">“摹略万物之然，论求群言之比。” ——《墨子·小取》</div>
+                    <div class="desc">学生探究不是漫无目的的自由活动，而是进行有系统、有目的、结构化的观察。通过给定的工具支架，锁定被研究对象的宏观系统。</div>
+                    <div class="sub-methods">
+                        <div class="method-block">
+                            <h4>系统边界在哪？</h4>
+                            <p>圈定所观察现象的环境范围，明确研究的是哪个受控系统，分清系统内与系统外。</p>
+                        </div>
+                        <div class="method-block">
+                            <h4>要素如何变化？</h4>
+                            <p>找出变量与恒量：在情境暴露中，什么是正在变化的，什么又是保持不变的。</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 双故 -->
+                <div class="philosophy-card">
+                    <div class="card-header-icon">⚖️</div>
+                    <h3>双故思维 —— 因果关联解析</h3>
+                    <div class="origin-quote">“故，所得而后成也。小故，有之不必然，无之必不然。大故，有之必然，无之必不然。” ——《墨子·经上》</div>
+                    <div class="desc">墨子将原因分为必要条件（小故）和充分条件（大故）。引导学生建立因果分析，掌握要素的组合规律。</div>
+                    <div class="sub-methods">
+                        <div class="method-block">
+                            <h4>小故（必要条件）</h4>
+                            <p>“无之必不然”。排除法推导：缺少这个设计条件，整个工程方案是否必然失败？</p>
+                        </div>
+                        <div class="method-block">
+                            <h4>大故（充分条件）</h4>
+                            <p>“有之必然”。综合法推导：哪些条件要素同时具备，方案才能确保达到预期成功？</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 研取 -->
+                <div class="philosophy-card">
+                    <div class="card-header-icon">🛠️</div>
+                    <h3>测试研取 —— 证据基础上的择取</h3>
+                    <div class="origin-quote">“非以其名也，以其取也。” ——《墨子·小取》</div>
+                    <div class="desc">实践出真知，选择不是看其外在宣传口号（名），而是看实际运作表现（取）。通过建立低成本测试，用数据证明来作为技术和方案抉择的准绳。</div>
+                    <div class="sub-methods">
+                        <div class="method-block">
+                            <h4>原型数据化测试</h4>
+                            <p>设定受控测试变量，收集科学测量数据，而非依靠直觉做技术决断。</p>
+                        </div>
+                        <div class="method-block">
+                            <h4>资源约束下择取</h4>
+                            <p>引导学生在多重约束（材料、预算、时间）下，排除非优方案，找出最佳权衡取舍点。</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 四疑 -->
+                <div class="philosophy-card">
+                    <div class="card-header-icon">🧠</div>
+                    <h3>四疑反思 —— 审辩式思维外化</h3>
+                    <div class="origin-quote">墨辩四疑：“逢疑、循疑、遇疑、过疑。” —— 解构自《经说下》</div>
+                    <div class="desc">解决问题不仅关注结果，更关乎思维路径。设置四类思维阻碍的情境，激发元认知反思，构建通用思维模型。</div>
+                    <div class="sub-methods">
+                        <div class="method-block">
+                            <h4>逢疑 &amp; 循疑</h4>
+                            <p><b>逢疑</b>：勘破表象，看清实质。<b>循疑</b>：打破常规与盲从，质疑既定经验或权威说法的局限性。</p>
+                        </div>
+                        <div class="method-block">
+                            <h4>遇疑 &amp; 过疑</h4>
+                            <p><b>遇疑</b>：珍视偶遇的异常现象，探索隐藏变量。<b>过疑</b>：反思逻辑推理是否过度，有无缺失验证的跳跃步骤。</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- 底部设计原则区 -->
+    <section class="principles-section">
+        <div class="principles-title">
+            <h2>禹墨教案辅助设计智能体 核心设计原则</h2>
+            <p>基于“发明有限，思想无限”的教育理念，协助教师打造具有灵魂的探究课程</p>
+        </div>
+        <div class="principles-grid">
+            <div class="principle-item">
+                <div class="principle-icon">🤝</div>
+                <h3>引导而非替代</h3>
+                <p>教师始终是教学决策的核心。智能体提供结构化启发引导与知识沉淀，不一键生成空洞教案。</p>
+            </div>
+            <div class="principle-item">
+                <div class="principle-icon">🧬</div>
+                <h3>方法植入</h3>
+                <p>重点在于因果推导、科学实验逻辑方法的沉淀，而不是简单的堆砌科技常识或生搬古代背景。</p>
+            </div>
+            <div class="principle-item">
+                <div class="principle-icon">🌐</div>
+                <h3>主题无关性</h3>
+                <p>支持物理、化学、工程、未来科技等各种学科门类，证明墨家思维具备极强的跨学科普适性。</p>
+            </div>
+            <div class="principle-item">
+                <div class="principle-icon">💎</div>
+                <h3>共创式输出</h3>
+                <p>每一处教案细节均有教师的专业判断打底，融合智能体的系统化结构梳理，生成高质量、可落地的实践教案。</p>
+            </div>
+        </div>
+    </section>
+
+    <!-- 导出模态框 -->
+    <div class="modal" id="export-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>导出 Markdown 结构化教案</h3>
+                <button class="close-btn" onclick="closeExportModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <textarea class="markdown-textarea" id="markdown-output" readonly></textarea>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeExportModal()">关闭</button>
+                <button class="btn btn-primary" onclick="copyMarkdownText()">复制到剪贴板</button>
+            </div>
+        </div>
+    </div>
+
+    <footer>
+        <p>© 2026 禹墨科技教育. All rights reserved. 用墨辩逻辑赋能现代工程探究。</p>
+    </footer>
+
+    <!-- JS交互逻辑 -->
+    <script>
+        // 案例数据存储
+        const caseData = {
+            purifier: {
+                theme: "设计一个简易净水装置",
+                grade: "小学五年级",
+                periods: "2课时",
+                methods: "摹略、研取、四疑(逢疑、遇疑)",
+                
+                // 启动参数
+                meta: {
+                    theme: "设计一个简易净水装置",
+                    grade: "小学 (五年级)",
+                    periods: "2 课时",
+                    methods: "摹略万物、测试研取、四疑反思(重点：逢疑/遇疑)"
+                },
+
+                // 对话步骤配置
+                steps: [
+                    // Step 0: 启动
+                    {
+                        aiMsg: "您好！我是您的<b>禹墨教案辅助设计智能体</b>。我们将循着 <i>启动 ➔ 摩略万物 ➔ 系统探索 ➔ 测试研取 ➔ 结构化反思 ➔ 输出教案</i> 的四阶流程，合作共创出一份高质量教案。您的课程主题已选择：<b>设计一个简易净水装置</b>。在正式设计前，您是否有重点想融入的禹墨思想方法？（已默选：摹略、研取、四疑）",
+                        options: [
+                            { text: "同意默认推荐，重点植入“摹略、研取、四疑”", nextIdx: 1 },
+                            { text: "我想重点植入“双故思维”和“四疑”", nextIdx: 1 },
+                            { text: "请智能体根据本案例特点全量推荐", nextIdx: 1 }
+                        ],
+                        docPatch: null
+                    },
+                    // Step 1: 摩略万物
+                    {
+                        aiMsg: "【第一步：摩略万物 —— 情境导入设计】<br>“摹略”强调有结构的观察。为了引发学生探究兴趣，我们需要呈现一个<b>认知诱饵</b>。对于“简易净水装置”，学生能接触到的真实问题是水污染。如何让他们在观察中建立系统边界、分清“什么在变化”、“什么保持不变”？<br><br><b>智能体推荐策略</b>：",
+                        recommendations: [
+                            "<b>情境创设</b>：向学生展示两杯水：一杯天然混浊的池塘水，另一杯经过净化但散发异味的水。诱发学生思索“干净”的维度。",
+                            "<b>摹略观察重点</b>：设计《水样观察任务单》，引导关注：水质的澄清度、气味、漂浮物（哪些是看得见的杂质，哪些是溶解在水里的——划分系统边界）。"
+                        ],
+                        options: [
+                            { text: "采用“双水样对比+气味探究”情境，建立澄清与安全边界", nextIdx: 2 },
+                            { text: "采用“农田排灌泥浆水”纯物理去杂情境，引导观察悬浮物沉淀", nextIdx: 2 }
+                        ],
+                        docPatch: {
+                            section: "molue",
+                            title: "一、摩略万物 —— 情境导入与观察设计",
+                            time: "15分钟",
+                            content: `
+                                <ul>
+                                    <li><strong>情境导入（认知诱饵）：</strong>展示对比水样——天然浑浊的池塘水与轻度过滤但有异味的水，制造“澄清不等于安全”的认知冲突。</li>
+                                    <li><strong>摹略观察任务单：</strong>
+                                        <ul>
+                                            <li>引导学生观察并记录水质指标：悬浮物情况（边界限制）、澄清度变化（变量）、异味与溶解杂质（隐性变量）。</li>
+                                            <li>聚焦思考：“在泥沙下沉的过程中，什么在发生变化？什么保持不变？”。</li>
+                                        </ul>
+                                    </li>
+                                </ul>
+                                <div class="doc-highlight-box">
+                                    <div class="doc-highlight-title">🔍 摹略思维植入点</div>
+                                    引导学生利用《观察任务单》结构化区分“悬浮杂质”与“溶解质”的边界，避开“水变清了就彻底干净”的直觉误区。
+                                </div>
+                            `
+                        }
+                    },
+                    // Step 2: 系统探索
+                    {
+                        aiMsg: "【第二步：系统探索 —— 要素关联设计】<br>设计净水系统包含多个关键要素：滤料介质、流速、容积等。在此环节，我建议引入墨子的<b>双故思维</b>引导学生建模：<br><ul><li><b>小故（必要条件）</b>：“缺少什么，净水必然失败？”（如过滤孔径必须小于杂质）</li><li><b>大故（充分条件）</b>：“全部满足什么，必然能产出澄清饮用水？”（如沙滤+活性炭炭吸附+精密过滤的组合）</li></ul><br><b>智能体推荐策略</b>：",
+                        recommendations: [
+                            "<b>系统要素图</b>：让学生画出“污水流经层级图”，标出滤石、细沙、活性炭各要素之间的层级配合。",
+                            "<b>小故讨论问题</b>：如果不放棉花垫底，为什么净化好的水还会流出泥沙？（棉花挡漏为小故）"
+                        ],
+                        options: [
+                            { text: "采用双故框架，重点剖析“滤介孔隙（小故）与多层协同（大故）”", nextIdx: 3 },
+                            { text: "设计要素连线图，引导学生自主探究各滤料的因果关联", nextIdx: 3 }
+                        ],
+                        docPatch: {
+                            section: "xitong",
+                            title: "二、系统探索 —— 过滤要素与双故因果关联",
+                            time: "25分钟",
+                            content: `
+                                <ul>
+                                    <li><strong>系统边界与要素：</strong>识别系统变量（滤料粗细、填充高度、水流通过速度、杂质孔径）。学生绘制“净水器结构与水分层流动要素关系图”。</li>
+                                    <li><strong>双故因果建模分析：</strong>
+                                        <ul>
+                                            <li><strong>小故分析（必要条件）：</strong>“无之必不然”。分析得出：滤料之间必须存在由粗到细的孔径层级。若没有这个“孔径屏障”，物理杂质必然穿透。</li>
+                                            <li><strong>大故分析（充分条件）：</strong>“有之必然”。推导组合：[前置粗滤] ＋ [细沙孔径拦截] ＋ [活性炭吸附色素异味] ＋ [底部脱脂棉阻漏] ＝ 成功产出澄清无味的水。</li>
+                                        </ul>
+                                    </li>
+                                </ul>
+                                <div class="doc-highlight-box">
+                                    <div class="doc-highlight-title">⚖️ 双故思维植入点</div>
+                                    教师引导学生区分单个过滤材料的局部作用（小故）与多重滤料有机协同达成目标（大故）的辩证关系。
+                                </div>
+                            `
+                        }
+                    },
+                    // Step 3: 测试研取
+                    {
+                        aiMsg: "【第三步：测试研取 —— 验证与择取设计】<br>“非以其名，以其取也”——墨子强调技术判断要在实践中通过实效选择。我们需要设计低成本原型测试，并引导学生进行<b>择取判断</b>。<br><br><b>智能体推荐策略</b>：",
+                        recommendations: [
+                            "<b>低成本原型</b>：使用废弃饮料瓶切开、装入鹅卵石、石英砂、活性炭、棉花等制作初级净水器。",
+                            "<b>择取问题</b>：如果活性炭成本减半，我们能用更多的细沙来完全代替它吗？证据是什么？（引导对比细沙对墨水无吸附力，而活性炭吸附力极强的对比实验数据）"
+                        ],
+                        options: [
+                            { text: "设计“不同滤料组合效能对比表”，在成本约束下进行研取抉择", nextIdx: 4 },
+                            { text: "增加“限制水样体积”压力测试，评估净水耐久度与容错边界", nextIdx: 4 }
+                        ],
+                        docPatch: {
+                            section: "ceshi",
+                            title: "三、测试研取 —— 原型测试与证据择取",
+                            time: "30分钟",
+                            content: `
+                                <ul>
+                                    <li><strong>低成本原型搭建：</strong>使用聚酯塑料瓶、鹅卵石、细砂、活性炭、棉花制作重力流净水装置。</li>
+                                    <li><strong>测试与数据收集：</strong>对比不同材料组合在相同浑浊水下的表现，测量过滤时间与出水澄清度。
+                                        <table class="preview-table">
+                                            <thead>
+                                                <tr>
+                                                    <th>滤料方案</th>
+                                                    <th>成本评分</th>
+                                                    <th>过滤时长</th>
+                                                    <th>水质清晰度</th>
+                                                    <th>研取结果与理据</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr>
+                                                    <td>方案A（全细沙）</td>
+                                                    <td>低 (★)</td>
+                                                    <td>极慢</td>
+                                                    <td>半浑浊</td>
+                                                    <td>排除：流速极慢且无法去除溶解杂味</td>
+                                                </tr>
+                                                <tr>
+                                                    <td>方案B（混合多层）</td>
+                                                    <td>中 (★★)</td>
+                                                    <td>适中</td>
+                                                    <td>澄清无味</td>
+                                                    <td><strong>择取：</strong>多重故条件协同效果最佳</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </li>
+                                    <li><strong>研取抉择思考：</strong>“非以其名，以其取也”。学生面对“滤料失效”情境，基于数据决策：“如果池塘水中有农药等不可见污染，单凭水澄清就能说明我们选择方案成功吗？”</li>
+                                </ul>
+                                <div class="doc-highlight-box">
+                                    <div class="doc-highlight-title">🛠️ 研取思维植入点</div>
+                                    通过“变量剔除实验”，用数据证明细沙过滤与活性炭吸附的差异，在证据链下做出理性的方案迭代抉择。
+                                </div>
+                            `
+                        }
+                    },
+                    // Step 4: 结构化反思
+                    {
+                        aiMsg: "【第四步：结构化反思 —— 思维外化设计】<br>引导学生将经验提炼为模型。智能体根据“净水装置”的案例特征，重点推荐两类墨辩反思支架：<br><ul><li><b>逢疑（破表象）</b>：水变清澈了，是否代表已经是可以饮用的“纯水”？</li><li><b>遇疑（遇意外）</b>：实验中若净化出水速度变极慢甚至堵塞，是哪里的原因？如何利用“小故”分析排查？</li></ul><br><b>智能体推荐迁移任务</b>：如何将过滤思想，迁移到“生活垃圾分类筛选”或“网络信息噪点过滤”中去？",
+                        options: [
+                            { text: "重点选用“逢疑与遇疑”反思日志，并设计信息过滤的迁移任务", nextIdx: 5 },
+                            { text: "引入“循疑”设计：打破“只要棉花塞得紧，水就越干净”的旧经验局限", nextIdx: 5 }
+                        ],
+                        docPatch: {
+                            section: "fansi",
+                            title: "四、结构化反思 —— 四疑审辩与思维迁移",
+                            time: "10分钟",
+                            content: `
+                                <ul>
+                                    <li><strong>四疑反思支架设计：</strong>
+                                        <ul>
+                                            <li><strong>逢疑（破除直觉）：</strong>“你看到水变清澈了，就说明它安全能喝吗？我们忽略了什么微观要素？”（破除“水清则无害”的表象误区）。</li>
+                                            <li><strong>遇疑（异常分析）：</strong>“如果你的净水器在三分钟后水流完全停止了（堵塞现象），这是怎么回事？这和哪个‘小故’（必要条件）设计不合理有关？”（分析沙砾层太紧或位置倒置）。</li>
+                                        </ul>
+                                    </li>
+                                    <li><strong>思维模型迁移：</strong>“过滤与选择”思维模型迁移应用。
+                                        <br>任务设计：“我们今天设计物理过滤器净化了脏水。如果给你一堆包含谣言和垃圾广告的社交网络信息流，你会如何设计一个‘信息过滤器’？系统要素、小故（筛选机制）分别是什么？”
+                                    </li>
+                                </ul>
+                                <div class="doc-highlight-box">
+                                    <div class="doc-highlight-title">🧠 四疑思维植入点</div>
+                                    利用“逢疑”反思，将工程中“可见杂质的过滤”升华为元认知上“不可见危害的防范”与“抽象垃圾信息的筛选”。
+                                </div>
+                            `
+                        }
+                    },
+                    // Step 5: 最终输出
+                    {
+                        aiMsg: "【第五步：教案汇总输出】<br>太棒了！我们已经成功完成了所有教案共创步骤。我已将我们的对话成果、您在各个节点所作的决策以及智能体的禹墨思想策略，汇总装配成了一份完整的教案。<br><br><b>教案汇总框架</b>已经完整展现在右侧的预览面板中。您可以：<br>1. 点击右侧的 <b>[导出MD]</b> 按钮复制Markdown源码。<br>2. 点击 <b>[打印教案]</b> 直接生成纸质或PDF文档。<br><br>您对当前教案有何微调建议？如需对某个环节进一步细化（如细化小组讨论任务单或材料清单），请直接在下方与我沟通！",
+                        options: [],
+                        docPatch: null
+                    }
+                ]
+            },
+            bridge: {
+                theme: "桥梁承重优化设计",
+                grade: "初中二年级",
+                periods: "3课时",
+                methods: "双故、研取、四疑(过疑)",
+                
+                meta: {
+                    theme: "桥梁承重优化设计",
+                    grade: "初中 (八年级)",
+                    periods: "3 课时",
+                    methods: "双故思维(大小故分析)、测试研取、四疑反思(重点：过疑)"
+                },
+
+                steps: [
+                    {
+                        aiMsg: "您好！我是您的<b>禹墨教案辅助设计智能体</b>。针对课程主题：<b>桥梁承重优化设计</b>。我们推荐在系统探索阶段深度植入墨子的“双故思维（大故/小故因果律）”，在反思阶段侧重“过疑（排查逻辑跳跃与过推）”。您觉得这样可以吗？",
+                        options: [
+                            { text: "同意推荐，开始摩略万物情境设计", nextIdx: 1 },
+                            { text: "我希望能加入更多“摹略”的观察环节", nextIdx: 1 }
+                        ],
+                        docPatch: null
+                    },
+                    {
+                        aiMsg: "【第一步：摩略万物 —— 情境导入设计】<br>“桥梁承重”的核心矛盾在“自重”与“荷载”的失衡。我们如何引导学生去结构化观察这组矛盾？<br><br><b>智能体推荐策略</b>：",
+                        recommendations: [
+                            "<b>情境创设</b>：播放经典桥梁坍塌或受损桥梁超载限行的视频，激发“认知危机”。",
+                            "<b>观察引导</b>：分发纸板，让学生用一张纸横跨在两个桥墩间，放上硬币，观察纸桥在中部弯曲变形直至塌陷的动态过程（记录边界、变量、恒量）。"
+                        ],
+                        options: [
+                            { text: "设计“单张纸桥承重变形”微实验，进行极简性摹略观察", nextIdx: 2 },
+                            { text: "采用“古桥与现代钢架桥对比”图纸观察，分析跨度与形态变化", nextIdx: 2 }
+                        ],
+                        docPatch: {
+                            section: "molue",
+                            title: "一、摩略万物 —— 跨度、受荷与变形观察",
+                            time: "20分钟",
+                            content: `
+                                <ul>
+                                    <li><strong>情境导入：</strong>引入大桥超载下塌的新闻视频，或者展示一张平板纸在两个杯子（桥墩）之间因为几颗弹珠就塌陷的直观现象。</li>
+                                    <li><strong>摹略观察与纪录：</strong>
+                                        <ul>
+                                            <li>任务单要求学生盯着平板纸形变的微小过程，记录：跨度（边界）、桥面下挠距离（变化变量）、硬币数量（荷载）。</li>
+                                            <li>思考：“是什么促使了纸张在某一瞬间突然发生了不可逆的折弯？它的边缘发生了什么变化？”</li>
+                                        </ul>
+                                    </li>
+                                </ul>
+                            `
+                        }
+                    },
+                    {
+                        aiMsg: "【第二步：系统探索 —— 要素关联设计】<br>桥梁承重并非单由材料厚度决定，其几何拓扑结构（如拱形、桁架、拉索）是核心。这里非常适合套用<b>双故因果</b>建模：<br><ul><li><b>小故（必要）</b>：桥梁没有哪个设计必然垮塌？（如力的汇聚点必须有支撑，无之必不然）</li><li><b>大故（充分）</b>：各杆件如何协同，承重成功必然发生？（如桁架三角形合力闭环，有之必然）</li></ul>",
+                        recommendations: [
+                            "<b>大故分析</b>：三角形结构的稳定力流路径分压大故。",
+                            "<b>小组讨论</b>：将受拉力与受压力的要素标识出来，推导力是如何流向地面的。"
+                        ],
+                        options: [
+                            { text: "引导学生建立“力流传递图”，用大故/小故框架进行受力平衡建模", nextIdx: 3 },
+                            { text: "设计“拉力与压力元件分类”交互卡片，探讨杆件协同", nextIdx: 3 }
+                        ],
+                        docPatch: {
+                            section: "xitong",
+                            title: "二   系统探索 —— 桁架力流与双故平衡建模",
+                            time: "35分钟",
+                            content: `
+                                <ul>
+                                    <li><strong>系统要素识别：</strong>跨度、自重、杆件材质、节点连接方式、受压杆件、受拉杆件。</li>
+                                    <li><strong>双故关联模型：</strong>
+                                        <ul>
+                                            <li><strong>小故分析（必要条件）：</strong>节点必须刚性或铰接平衡。“无之必不然”——若连接点在外力下可以任意移动，则桥梁瞬间瓦解。</li>
+                                            <li><strong>大故分析（充分条件）：</strong>“有之必然”。[上弦杆承压] + [下弦杆拉紧] + [腹杆倾斜传力至桥墩] + [三角形几何不变性] = 桁架桥实现超常承重。</li>
+                                        </ul>
+                                    </li>
+                                </ul>
+                            `
+                        }
+                    },
+                    {
+                        aiMsg: "【第三步：测试研取 —— 验证与择取设计】<br>学生通常用雪糕棒或热熔胶制作模型。我们要引导他们依据<b>测试证据</b>进行抉择，在给定的“材料约束”和“跨度要求”下研取最佳方案。<br><br><b>智能体建议策略</b>：",
+                        recommendations: [
+                            "<b>原型制作</b>：使用限量的雪糕棒和热熔胶制作30cm跨度的桥梁模型。",
+                            "<b>择取提问</b>：测试中如果发现某根斜撑雪糕棒发生了弯曲（失稳），下一次迭代你该增加这根棒的厚度，还是改变它与主梁的角度？你的测试证据支持哪种做法？"
+                        ],
+                        options: [
+                            { text: "引入“雪糕棒桁架桥”破坏性承载力测试，利用数据指导方案迭代", nextIdx: 4 },
+                            { text: "设计“成本-承重效率比值评分表”，将造价纳入择取因子", nextIdx: 4 }
+                        ],
+                        docPatch: {
+                            section: "ceshi",
+                            title: "三、测试研取 —— 桥梁破坏性测试与效益择取",
+                            time: "40分钟",
+                            content: `
+                                <ul>
+                                    <li><strong>低成本原型：</strong>雪糕棒、棉线、热熔胶（限定造价）。</li>
+                                    <li><strong>破坏性载荷测试：</strong>逐步在桥面中心加载重物，直至结构完全坍塌，摄录坍塌瞬间的慢镜头，找出“首先失效的脆弱构件”。
+                                        <table class="preview-table">
+                                            <thead>
+                                                <tr>
+                                                    <th>结构类型</th>
+                                                    <th>棒数（造价）</th>
+                                                    <th>极限承载 (kg)</th>
+                                                    <th>结构效率（承重/自重）</th>
+                                                    <th>首毁节点分析</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr>
+                                                    <td>平板直梁</td>
+                                                    <td>20根</td>
+                                                    <td>1.5 kg</td>
+                                                    <td>15</td>
+                                                    <td>跨中弯曲失稳断裂</td>
+                                                </tr>
+                                                <tr>
+                                                    <td>上弦三角形桁架</td>
+                                                    <td>40根</td>
+                                                    <td>12.0 kg</td>
+                                                    <td>60</td>
+                                                    <td>斜腹棒节点剪切脱胶</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </li>
+                                    <li><strong>研取辩析：</strong>“非以其名，以其取也”。学生不盲信“拱形一定比梁桥好”的标签，而是从实测的“效率比值”数据中寻找最具性价比方案。</li>
+                                </ul>
+                            `
+                        }
+                    },
+                    {
+                        aiMsg: "【第四步：结构化反思 —— 思维外化设计】<br>对于物理结构工程，学生容易犯“想当然”的错误，这是墨辩中的<b>过疑（推理过度或缺失验证的跳跃）</b>。例如：“因为拱形承重好，所以我只要用纸折个拱，承重一定大”，忽略了拱形两端必须有巨大抵消水平推力的“拱座”这个小故。<br><br><b>智能体推荐策略</b>：设计审辩式问题链纠偏这一过疑结论。",
+                        options: [
+                            { text: "重点选用“过疑纠偏”反思支架，让学生绘制思维纠偏图", nextIdx: 5 },
+                            { text: "引入迁移设计：让学生用桁架受力平衡思维去优化一个“简易书架”", nextIdx: 5 }
+                        ],
+                        docPatch: {
+                            section: "fansi",
+                            title: "四、结构化反思 —— 破除“过疑”错误推导与思维外化",
+                            time: "15分钟",
+                            content: `
+                                <ul>
+                                    <li><strong>过疑反思设计（破除逻辑跳跃）：</strong>
+                                        <ul>
+                                            <li><strong>过疑纠偏：</strong>“你认为拱桥强度高，所以直接放了一个弯曲的纸拱，但放上东西后它立刻被压扁了。你的推论跳过了哪个关键的支撑要素？”（引导学生认识到：缺失了“抵住两端侧向推力的拱座”这一必要条件，推论就失效了）。</li>
+                                            <li><strong>四疑日志设计：</strong>请写出在慢动作坍塌视频中看到的“预料之外”和“理所当然”之间的差距。</li>
+                                        </ul>
+                                    </li>
+                                    <li><strong>通用模型迁移：</strong>“分散受力与节点稳定”思维迁移。
+                                        <br>任务设计：优化一个由瓦楞纸板制成的“简易书包架”，应用三角形受力分压结构，并指出你的系统边界与关键大故条件。
+                                    </li>
+                                </ul>
+                            `
+                        }
+                    },
+                    {
+                        aiMsg: "【第五步：教案汇总输出】<br>教案已根据您的决策在右侧实时装配完成！包含您在各个步骤中选用的桥梁受力、双故分析与过疑纠错设计。您可以直接在右侧面板导出或打印教案。有什么需要微调或扩充的细节吗？",
+                        options: [],
+                        docPatch: null
+                    }
+                ]
+            },
+            irrigation: {
+                theme: "智能浇灌控制系统",
+                grade: "高中一年级 / 大学",
+                periods: "4课时",
+                methods: "摹略、双故、研取",
+                
+                meta: {
+                    theme: "智能浇灌控制系统",
+                    grade: "高中 / 大学",
+                    periods: "4 课时",
+                    methods: "摹略万物(参数化观察)、双故思维(逻辑闭环)、测试研取(算法证据择取)"
+                },
+
+                steps: [
+                    {
+                        aiMsg: "您好！针对<b>智能浇灌控制系统</b>这门偏向软硬件控制的跨学科主题。系统包含传感器输入、逻辑判断、执行器输出等要素，是一座天然的“因果控制系统”。智能体建议重点强化“双故思维（输入条件如何组合成输出）”与“研取抉择（传感阈值算法选取）”。是否启动设计流程？",
+                        options: [
+                            { text: "同意推荐，开始信息参数设计", nextIdx: 1 },
+                            { text: "我想重点偏向纯物联网算法，弱化硬件搭接", nextIdx: 1 }
+                        ],
+                        docPatch: null
+                    },
+                    {
+                        aiMsg: "【第一步：摩略万物 —— 情境导入设计】<br>控制系统的核心是观测环境异常。智能浇灌系统中，学生如何“摹略”环境并确定测控边界？<br><br><b>智能体推荐策略</b>：",
+                        recommendations: [
+                            "<b>情境创设</b>：展示因干旱枯死和因浇水过度烂根的对比植株，引出如何精确感知土壤水分的需求。",
+                            "<b>摹略观察</b>：设计《土壤与水分状态观察单》，要求学生测算土壤湿度计在干土、潮湿土、水杯中的传感器读数变化，认识测量边界。"
+                        ],
+                        options: [
+                            { text: "采用“枯死与烂根植物对比”导入，确立传感器测量数值边界", nextIdx: 2 },
+                            { text: "采用“农田自动灌溉节水效益”案例，引导学生观察流速时间", nextIdx: 2 }
+                        ],
+                        docPatch: {
+                            section: "molue",
+                            title: "一、摩略万物 —— 环境水分状态观察与系统边界",
+                            time: "20分钟",
+                            content: `
+                                <ul>
+                                    <li><strong>情境导入：</strong>展示两盆处于极端状态的盆栽（一盆因缺水严重发黄枯萎，一盆因水涝烂根霉变），启发学生思考：如何让灌溉做到“恰到好处”？</li>
+                                    <li><strong>摹略观察与测算：</strong>
+                                        <ul>
+                                            <li>引导学生使用传感器读取环境数据，建立观察边界。记录：空气温湿度、土壤电导率阻值（变量）、日光强度。</li>
+                                            <li>思考：“传感器检测的数值范围在干燥和水涝状态下的绝对边界分别在哪里？”</li>
+                                        </ul>
+                                    </li>
+                                </ul>
+                            `
+                        }
+                    },
+                    {
+                        aiMsg: "【第二步：系统探索 —— 要素关联设计】<br>控制器（如Micro:bit或Arduino）、土壤湿度传感器、继电器和水泵构成了系统的核心要素。我们可以利用<b>双故分析</b>定义自动灌溉逻辑：<br><ul><li><b>小故（必要）</b>：传感器必须有供电且接触土壤（无之必不然，控制逻辑失灵）</li><li><b>大故（充分）</b>：[土壤湿度低于阈值] AND [时间处于清晨/傍晚] = 触发灌溉（有之必然，防止烈日下浇水灼伤植物）</li></ul>",
+                        recommendations: [
+                            "<b>大故分析</b>：多传感器联合触发浇水的门限机制逻辑图。",
+                            "<b>逻辑图绘制</b>：引导学生画出“控制系统因果决策树”。"
+                        ],
+                        options: [
+                            { text: "采用“多阈值联合触发（大故）”的条件分支控制图进行教学设计", nextIdx: 3 },
+                            { text: "设计“单路负反馈闭环控制”机制，简化因果判定", nextIdx: 3 }
+                        ],
+                        docPatch: {
+                            section: "xitong",
+                            title: "二、系统探索 —— 传感器控制闭环与双故逻辑关系",
+                            time: "35分钟",
+                            content: `
+                                <ul>
+                                    <li><strong>控制系统拓扑：</strong>传感器 -> 主控器判定 -> 继电器开闭 -> 水泵运转。</li>
+                                    <li><strong>控制逻辑的双故因果律：</strong>
+                                        <ul>
+                                            <li><strong>小故分析（必要条件）：</strong>“无之必不然”。土壤湿度计插入土中且主控器检测环路通畅，这是程序做出决策的前提，否则逻辑崩溃。</li>
+                                            <li><strong>大故分析（充分条件）：</strong>“有之必然”。[土壤湿度 < 30%] 且 [光照强度 < 200Lux（非暴晒）] 且 [水槽储水充裕] = 启动灌溉泵 5 秒。</li>
+                                        </ul>
+                                    </li>
+                                </ul>
+                            `
+                        }
+                    },
+                    {
+                        aiMsg: "【第三步：测试研取 —— 验证与择取设计】<br>系统的测试主要是软硬件联调。如何引导学生从测试数据中择取“最合理的算法控制参数”？<br><br><b>智能体推荐策略</b>：",
+                        recommendations: [
+                            "<b>测试设计</b>：将原型放置在测试盆栽中，观察系统能否在湿度低于设定阈值时准确给水。记录出水量和湿度回升速度。",
+                            "<b>研取问题</b>：若湿度阈值设得过高，水泵会出现频繁启停（震荡），这会缩短水泵寿命。如何通过数据测试得出一个“带有滞回区间（Hysteresis）”的控制方案？"
+                        ],
+                        options: [
+                            { text: "设计“阈值滞回算法测试”，基于性能测试曲线进行控制策略择取", nextIdx: 4 },
+                            { text: "设计“简易单点门限测试”，进行灌溉水量时序分析", nextIdx: 4 }
+                        ],
+                        docPatch: {
+                            section: "ceshi",
+                            title: "三、测试研取 —— 灌溉阈值测试与算法研取抉择",
+                            time: "45分钟",
+                            content: `
+                                <ul>
+                                    <li><strong>联调原型：</strong>Arduino/ESP32核心板、湿度阻值探测针、5V直流微型潜水泵。</li>
+                                    <li><strong>滞回阈值实测：</strong>收集土壤吸水滞后性数据，防止临界点水泵疯狂抽动（高频震荡故障）。
+                                        <table class="preview-table">
+                                            <thead>
+                                                <tr>
+                                                    <th>阈值策略</th>
+                                                    <th>水泵启停频率</th>
+                                                    <th>土壤吸水均匀度</th>
+                                                    <th>设备损耗评估</th>
+                                                    <th>研取结论</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr>
+                                                    <td>单门限(低于35%即开，高于35%即停)</td>
+                                                    <td>高（每分钟3次）</td>
+                                                    <td>表层湿，底层干</td>
+                                                    <td>高风险磨损</td>
+                                                    <td>排除</td>
+                                                </tr>
+                                                <tr>
+                                                    <td>滞回区间(低于30%开启，高于45%停止)</td>
+                                                    <td>低（每半小时1次）</td>
+                                                    <td>渗透均匀</td>
+                                                    <td>安全健康</td>
+                                                    <td><strong>择取：</strong>作为最优控制算法写入代码</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </li>
+                                </ul>
+                            `
+                        }
+                    },
+                    {
+                        aiMsg: "【第四步：结构化反思 —— 思维外化设计】<br>在自动化控制工程中，最容易遇到的四疑是<b>遇疑（异常故障，如传感器插在空气里导致水泵疯狂抽水把水箱抽干）</b>。<br><br><b>智能体建议反思</b>：如何教导学生防范这类传感器“失效/异常”造成的故障？<br><b>迁移任务</b>：如何将这种“闭环负反馈”以及“故障异常防线（Fail-safe）”的设计思想，迁移到无人驾驶避障或智能恒温器设计上？",
+                        options: [
+                            { text: "加入“传感器离土报警防御（遇疑）”安全防御设计，设计自动限时迁移", nextIdx: 5 },
+                            { text: "引入“循疑”：反思过度依赖数字传感器、忽视土壤物理渗透规律的经验偏见", nextIdx: 5 }
+                        ],
+                        docPatch: {
+                            section: "fansi",
+                            title: "四、结构化反思 —— 遇疑异常处理与Fail-safe系统迁移",
+                            time: "20分钟",
+                            content: `
+                                <ul>
+                                    <li><strong>遇疑反思与代码布防：</strong>
+                                        <ul>
+                                            <li><strong>遇疑异常场景模拟：</strong>“如果传感器在浇水后读数一直不增加（如拔出在空气中，或管路漏水没浇到），水泵会抽干水箱造成烧毁。这属于‘遇疑’。如何在代码中加入保护机制？”</li>
+                                            <li><strong>解决方案（逻辑锁）：</strong>设定“单次浇灌上限时间（如超过15秒未达标，强行锁定报警）”的软阈值防线。</li>
+                                        </ul>
+                                    </li>
+                                    <li><strong>思维模型迁移：</strong>“闭环反馈与异常容错（Fail-safe）”模型。
+                                        <br>任务设计：思考如何将这一冗余保护思想，应用到“智能恒温孵化箱”设计中，并标注系统中的关键必要条件（小故）。
+                                    </li>
+                                </ul>
+                            `
+                        }
+                    },
+                    {
+                        aiMsg: "【第五步：教案汇总输出】<br>智能控制教案已在右侧生成。融合了硬件拓扑、双故闭环逻辑、滞回区间测试和遇疑保护算法。您可以随时在右侧导出或打印教案！有什么我可以继续为您细化的吗？",
+                        options: [],
+                        docPatch: null
+                    }
+                ]
+            }
+        };
+
+        // 当前体验状态
+        let currentThemeKey = "purifier";
+        let currentStep = 0;
+        let generatedDoc = {
+            title: "",
+            meta: {},
+            molue: null,
+            xitong: null,
+            ceshi: null,
+            fansi: null
+        };
+
+        // 初始化页面
+        window.addEventListener("DOMContentLoaded", () => {
+            resetSession();
+        });
+
+        // 切换Tab
+        function switchTab(tabName) {
+            const tabs = document.querySelectorAll(".tab-btn");
+            tabs.forEach(tab => tab.classList.remove("active"));
+            
+            const tabSim = document.getElementById("tab-simulator");
+            const tabPhil = document.getElementById("tab-philosophy");
+
+            if (tabName === "simulator") {
+                tabs[0].classList.add("active");
+                tabSim.style.display = "block";
+                tabPhil.style.display = "none";
+            } else {
+                tabs[1].classList.add("active");
+                tabSim.style.display = "none";
+                tabPhil.style.display = "block";
+            }
+        }
+
+        // 切换主题模式
+        function toggleTheme() {
+            const body = document.body;
+            const currentTheme = body.getAttribute("data-theme");
+            const newTheme = currentTheme === "dark" ? "light" : "dark";
+            body.setAttribute("data-theme", newTheme);
+
+            const themeIcon = document.getElementById("theme-icon");
+            if (newTheme === "light") {
+                themeIcon.innerHTML = `
+                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                `;
+            } else {
+                themeIcon.innerHTML = `
+                    <circle cx="12" cy="12" r="5"></circle>
+                    <line x1="12" y1="1" x2="12" y2="3"></line>
+                    <line x1="12" y1="21" x2="12" y2="23"></line>
+                    <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                    <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                    <line x1="1" y1="12" x2="3" y2="12"></line>
+                    <line x1="21" y1="12" x2="23" y2="12"></line>
+                    <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                    <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                `;
+            }
+        }
+
+        // 重置会话
+        function resetSession() {
+            currentStep = 0;
+            const themeData = caseData[currentThemeKey];
+            generatedDoc = {
+                title: themeData.theme + " 探究课教案",
+                meta: themeData.meta,
+                molue: null,
+                xitong: null,
+                ceshi: null,
+                fansi: null
+            };
+            
+            // 清理聊天区
+            const chatBox = document.getElementById("chat-box");
+            chatBox.innerHTML = "";
+            
+            // 清理动作按钮与预览
+            updateFlowTracker();
+            renderPreviewPlaceholder();
+            
+            // 禁用打印导出
+            document.getElementById("export-md-btn").disabled = true;
+            document.getElementById("print-btn").disabled = true;
+
+            // 加载第一条AI消息
+            showAiStepMessage(0);
+        }
+
+        // 切换体验案例
+        function changeThemeCase() {
+            currentThemeKey = document.getElementById("case-select").value;
+            resetSession();
+        }
+
+        // 更新步骤导航状态
+        function updateFlowTracker() {
+            for (let i = 0; i <= 5; i++) {
+                const btn = document.getElementById(`step-btn-${i}`);
+                if (!btn) continue;
+                btn.className = "flow-step";
+                if (i === currentStep) {
+                    btn.classList.add("active");
+                } else if (i < currentStep) {
+                    btn.classList.add("completed");
+                }
+            }
+            
+            const badges = ["基本信息采集", "情境导入设计", "系统要素关联", "验证与测试择取", "结构化反思迁移", "教案汇总输出"];
+            document.getElementById("step-badge").textContent = badges[currentStep];
+        }
+
+        // 跳转到指定步数（允许回溯）
+        function goToStep(stepNum) {
+            if (stepNum > currentStep) {
+                alert("请沿着向导顺序进行，在对话中选择建议选项以解锁下一步。");
+                return;
+            }
+            
+            // 如果点击已完成的步骤，做体验回档
+            currentStep = stepNum;
+            
+            // 回档教案内容
+            if (currentStep <= 0) {
+                generatedDoc.molue = null;
+                generatedDoc.xitong = null;
+                generatedDoc.ceshi = null;
+                generatedDoc.fansi = null;
+            } else if (currentStep === 1) {
+                generatedDoc.xitong = null;
+                generatedDoc.ceshi = null;
+                generatedDoc.fansi = null;
+            } else if (currentStep === 2) {
+                generatedDoc.ceshi = null;
+                generatedDoc.fansi = null;
+            } else if (currentStep === 3) {
+                generatedDoc.fansi = null;
+            }
+            
+            // 清理对应步数之后的聊天记录
+            const chatBox = document.getElementById("chat-box");
+            const bubbles = chatBox.querySelectorAll(".chat-bubble-group");
+            for (let i = bubbles.length - 1; i >= stepNum; i--) {
+                bubbles[i].remove();
+            }
+
+            updateFlowTracker();
+            renderPreviewDoc();
+            showAiStepMessage(stepNum);
+        }
+
+        // 显示AI步骤消息
+        function showAiStepMessage(stepNum) {
+            const themeData = caseData[currentThemeKey];
+            const stepConfig = themeData.steps[stepNum];
+            
+            const chatBox = document.getElementById("chat-box");
+            
+            // 容器
+            const groupDiv = document.createElement("div");
+            groupDiv.className = "chat-bubble-group";
+            
+            // AI消息行
+            const aiRow = document.createElement("div");
+            aiRow.className = "msg-row ai";
+            
+            let bubbleHtml = `<div class="msg-bubble"><p>${stepConfig.aiMsg}</p>`;
+            
+            // 渲染策略建议框
+            if (stepConfig.recommendations && stepConfig.recommendations.length > 0) {
+                bubbleHtml += `
+                    <div class="recommendation-box">
+                        <div class="recommendation-title">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>
+                            智能体辅助建议策略
+                        </div>
+                        ${stepConfig.recommendations.map(r => `<div class="recommendation-item">${r}</div>`).join('')}
+                    </div>
+                `;
+            }
+
+            // 渲染选项按钮区
+            if (stepConfig.options && stepConfig.options.length > 0) {
+                bubbleHtml += `
+                    <div class="options-area">
+                        ${stepConfig.options.map((opt, oIdx) => `
+                            <button class="option-btn" onclick="selectUserOption(${stepNum}, ${oIdx})">${opt.text}</button>
+                        `).join('')}
+                    </div>
+                `;
+            }
+            
+            bubbleHtml += `</div>`;
+            aiRow.innerHTML = bubbleHtml;
+            groupDiv.appendChild(aiRow);
+            chatBox.appendChild(groupDiv);
+            
+            // 滚到底部
+            chatBox.scrollTop = chatBox.scrollHeight;
+        }
+
+        // 用户选择选项
+        function selectUserOption(stepNum, optionIdx) {
+            const themeData = caseData[currentThemeKey];
+            const stepConfig = themeData.steps[stepNum];
+            const selectedOpt = stepConfig.options[optionIdx];
+            
+            // 1. 在聊天窗口添加用户回复
+            const chatBox = document.getElementById("chat-box");
+            const activeGroup = chatBox.lastElementChild;
+            
+            // 隐藏旧的选项卡
+            const optionsArea = activeGroup.querySelector(".options-area");
+            if (optionsArea) optionsArea.remove();
+
+            const userRow = document.createElement("div");
+            userRow.className = "msg-row user";
+            userRow.innerHTML = `
+                <div class="msg-bubble">
+                    <p>我选择：<strong>${selectedOpt.text}</strong></p>
+                </div>
+            `;
+            activeGroup.appendChild(userRow);
+            
+            // 2. 注入教案片段
+            if (stepConfig.docPatch) {
+                const patch = stepConfig.docPatch;
+                generatedDoc[patch.section] = patch;
+            }
+
+            // 3. 更新步骤状态，过渡到下一步
+            currentStep = selectedOpt.nextIdx;
+            updateFlowTracker();
+            renderPreviewDoc();
+
+            // 延时添加AI下一步的反馈，制造智能交互感
+            setTimeout(() => {
+                showAiStepMessage(currentStep);
+                
+                // 如果是最后一步，点亮导出按钮
+                if (currentStep === 5) {
+                    document.getElementById("export-md-btn").disabled = false;
+                    document.getElementById("print-btn").disabled = false;
+                }
+            }, 600);
+        }
+
+        // 渲染教案草稿占位符
+        function renderPreviewPlaceholder() {
+            const preview = document.getElementById("doc-preview");
+            preview.innerHTML = `
+                <div class="preview-placeholder">
+                    <div class="preview-placeholder-icon">✍️</div>
+                    <h4>教案暂未生成</h4>
+                    <p>请在左侧对话向导中，与智能体互动采集课程基本信息。教案数据将会在此进行动态、结构化的编排装配。</p>
+                </div>
+            `;
+        }
+
+        // 渲染教案实时结果
+        function renderPreviewDoc() {
+            const preview = document.getElementById("doc-preview");
+            
+            let html = `
+                <div class="doc-title">${generatedDoc.title}</div>
+                <div class="doc-meta">
+                    <div><strong>课程主题：</strong>${generatedDoc.meta.theme || '---'}</div>
+                    <div><strong>授课学段：</strong>${generatedDoc.meta.grade || '---'}</div>
+                    <div><strong>课时安排：</strong>${generatedDoc.meta.periods || '---'}</div>
+                    <div><strong>融合思想方法：</strong>${generatedDoc.meta.methods || '---'}</div>
+                </div>
+            `;
+
+            let sectionsFilled = false;
+
+            // 1. 摩略万物
+            if (generatedDoc.molue) {
+                sectionsFilled = true;
+                html += `
+                    <div class="doc-section">
+                        <div class="doc-section-title">
+                            <span>${generatedDoc.molue.title}</span>
+                            <span class="section-time">${generatedDoc.molue.time}</span>
+                        </div>
+                        <div class="doc-section-body">${generatedDoc.molue.content}</div>
+                    </div>
+                `;
+            }
+
+            // 2. 系统探索
+            if (generatedDoc.xitong) {
+                html += `
+                    <div class="doc-section">
+                        <div class="doc-section-title">
+                            <span>${generatedDoc.xitong.title}</span>
+                            <span class="section-time">${generatedDoc.xitong.time}</span>
+                        </div>
+                        <div class="doc-section-body">${generatedDoc.xitong.content}</div>
+                    </div>
+                `;
+            }
+
+            // 3. 测试研取
+            if (generatedDoc.ceshi) {
+                html += `
+                    <div class="doc-section">
+                        <div class="doc-section-title">
+                            <span>${generatedDoc.ceshi.title}</span>
+                            <span class="section-time">${generatedDoc.ceshi.time}</span>
+                        </div>
+                        <div class="doc-section-body">${generatedDoc.ceshi.content}</div>
+                    </div>
+                `;
+            }
+
+            // 4. 结构化反思
+            if (generatedDoc.fansi) {
+                html += `
+                    <div class="doc-section">
+                        <div class="doc-section-title">
+                            <span>${generatedDoc.fansi.title}</span>
+                            <span class="section-time">${generatedDoc.fansi.time}</span>
+                        </div>
+                        <div class="doc-section-body">${generatedDoc.fansi.content}</div>
+                    </div>
+                `;
+            }
+
+            // 5. 教学资源清单
+            if (currentStep === 5) {
+                html += `
+                    <div class="doc-section">
+                        <div class="doc-section-title">五、教学资源与工具准备清单</div>
+                        <div class="doc-section-body">
+                            <ul>
+                                <li><strong>材料准备：</strong>分组工程工具箱、低成本测试包、安全剪刀及护目镜。</li>
+                                <li><strong>学习支架：</strong>《摹略观察记录单》、《双故因果网络图》、《四疑元认知反思日志卡》。</li>
+                                <li><strong>评价工具：</strong>融入“研取”合理性维度的多约束量规。</li>
+                            </ul>
+                        </div>
+                    </div>
+                `;
+            }
+
+            if (!sectionsFilled) {
+                renderPreviewPlaceholder();
+            } else {
+                preview.innerHTML = html;
+            }
+        }
+
+        // 生成Markdown教案源码
+        function generateMarkdown() {
+            const themeData = caseData[currentThemeKey];
+            let md = `# 教案名称：${generatedDoc.title}\n\n`;
+            md += `## 基本信息\n`;
+            md += `- **授课学段**：${generatedDoc.meta.grade}\n`;
+            md += `- **课时计划**：${generatedDoc.meta.periods}\n`;
+            md += `- **融入思想方法**：${generatedDoc.meta.methods}\n\n`;
+
+            if (generatedDoc.molue) {
+                md += `## ${generatedDoc.molue.title} (${generatedDoc.molue.time})\n`;
+                md += `### 1. 情境导入\n采用真实情境暴露引发认知失衡。\n`;
+                md += `### 2. 摹略观察任务\n引导关注“边界在哪”“什么在变”“什么不变”。\n\n`;
+            }
+
+            if (generatedDoc.xitong) {
+                md += `## ${generatedDoc.xitong.title} (${generatedDoc.xitong.time})\n`;
+                md += `### 1. 系统要素关联\n明确自变量与因变量的逻辑网状结构。\n`;
+                md += `### 2. 双故思维构建\n`;
+                md += `- **小故（必要条件）**：“无之必不然”，明确系统的底层门槛保障。\n`;
+                md += `- **大故（充分条件）**：“有之必然”，探讨多要素的协同闭环机制。\n\n`;
+            }
+
+            if (generatedDoc.ceshi) {
+                md += `## ${generatedDoc.ceshi.title} (${generatedDoc.ceshi.time})\n`;
+                md += `### 1. 原型制作方案\n以低成本物料测试因果模型。\n`;
+                md += `### 2. 实践研取选择\n“非以其名，以其取也”——依据测试的效率数据曲线做方案取舍和妥协判断。\n\n`;
+            }
+
+            if (generatedDoc.fansi) {
+                md += `## ${generatedDoc.fansi.title} (${generatedDoc.fansi.time})\n`;
+                md += `### 1. 四疑反思支架\n`;
+                md += `- **逢疑**：突破清澈等表象的遮蔽，看到微观本质。\n`;
+                md += `- **遇疑**：珍视故障与意外情况，从失效中挖掘新变量。\n`;
+                md += `### 2. 通用思维模型迁移\n引导从工程探究迁移到社会生活或网络信息的多维度过滤器设计。\n\n`;
+            }
+
+            md += `## 五、教学资源与辅助清单\n`;
+            md += `- **材料准备**：探究工具包及传感器装置。\n`;
+            md += `- **评价机制**：基于证据与方案迭代的多维度评价量规。\n`;
+
+            return md;
+        }
+
+        // 打开导出模态框
+        function openExportModal() {
+            const modal = document.getElementById("export-modal");
+            const textarea = document.getElementById("markdown-output");
+            textarea.value = generateMarkdown();
+            modal.style.display = "flex";
+        }
+
+        // 关闭导出模态框
+        function closeExportModal() {
+            document.getElementById("export-modal").style.display = "none";
+        }
+
+        // 复制Markdown文本
+        function copyMarkdownText() {
+            const textarea = document.getElementById("markdown-output");
+            textarea.select();
+            document.execCommand("copy");
+            alert("Markdown教案已复制到剪切板，您可以粘贴到您的本地编辑器中！");
+        }
+    </script>
+</body>
+</html>

@@ -63,6 +63,11 @@ from learning_agent_service.domain.protocols import (
     ToolResultNormalizerPort,
 
 )
+from learning_agent_service.application.routing_registry import (
+    resolve_execution_route,
+    resolve_top_level_route,
+    route_registry_hits,
+)
 from learning_agent_service.local_life.context_recovery import recover_follow_up_context
 
 from learning_agent_service.infrastructure.db.factories import InfrastructureClients
@@ -452,21 +457,21 @@ class OpenAIQueryRewriteAdapter:
             raise RuntimeError("OpenAI runtime does not expose Responses API")
 
         semantic_context = recover_follow_up_context(
-            command.message or "",
-            client_context=dict(command.client_context or {}),
+            context.raw_query or "",
+            client_context=dict(getattr(context, "client_context", None) or {}),
             session_context={
-                "current_topic": getattr(persistent, "current_topic", None),
-                "current_shop": getattr(persistent, "current_shop", None),
-                "current_shop_anchor": dict(getattr(persistent, "current_shop_anchor", {}) or {}),
-                "current_scene": getattr(persistent, "current_scene", None),
-                "current_constraints": dict(getattr(persistent, "current_constraints", {}) or {}),
-                "confirmed_facts": list(getattr(persistent, "confirmed_facts", []) or []),
-                "user_preferences": dict(getattr(persistent, "user_preferences", {}) or {}),
-                "dialog_state": getattr(persistent, "dialog_state", None),
-                "dialog_comparison_targets": list(getattr(persistent, "dialog_comparison_targets", []) or []),
-                "dialog_pending_slots": list(getattr(persistent, "dialog_pending_slots", []) or []),
-                "dialog_intent": getattr(persistent, "dialog_intent", None),
-                "dialog_task": getattr(persistent, "dialog_task", None),
+                "current_topic": getattr(context, "current_topic", None),
+                "current_shop": getattr(context, "current_shop", None),
+                "current_shop_anchor": dict(getattr(context, "current_shop_anchor", None) or {}),
+                "current_scene": getattr(context, "current_scene", None),
+                "current_constraints": dict(getattr(context, "current_constraints", None) or {}),
+                "confirmed_facts": list(getattr(context, "confirmed_facts", None) or []),
+                "user_preferences": dict(getattr(context, "user_preferences", None) or {}),
+                "dialog_state": getattr(context, "dialog_state", None),
+                "dialog_comparison_targets": list(getattr(context, "dialog_comparison_targets", None) or []),
+                "dialog_pending_slots": list(getattr(context, "dialog_pending_slots", None) or []),
+                "dialog_intent": getattr(context, "dialog_intent", None),
+                "dialog_task": getattr(context, "dialog_task", None),
             },
         )
         heuristic_candidate = (self.intent_gate or HeuristicIntentGate()).fallback_decide(request)
@@ -608,6 +613,83 @@ def _safe_intent(value: Any) -> IntentType | None:
             return IntentType[text.upper()]
         except Exception:
             return None
+
+
+def _safe_top_level_intent(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    alias_map = {
+        "direct": "direct_chat",
+        "chat": "direct_chat",
+        "conversation": "direct_chat",
+        "hello": "greeting",
+        "hi": "greeting",
+        "profile": "identity",
+        "help": "capability",
+        "recommend": "recommendation",
+        "compare": "comparison",
+        "coupon": "package_or_coupon",
+        "open_status": "merchant_status",
+        "navigation": "distance_eta",
+        "detail": "merchant_detail",
+        "realtime": "merchant_status",
+    }
+    text = alias_map.get(text, text)
+    allowed = {
+        "identity",
+        "capability",
+        "help",
+        "greeting",
+        "direct_chat",
+        "unsafe",
+        "math_or_code",
+        "document_or_knowledge",
+        "planning",
+        "out_of_scope",
+        "local_life",
+        "recommendation",
+        "comparison",
+        "package_or_coupon",
+        "merchant_detail",
+        "merchant_status",
+        "distance_eta",
+        "local_life_recommend",
+    }
+    return text if text in allowed else None
+
+
+def _infer_top_level_intent_from_text(message: str) -> str | None:
+    compact = (message or "").replace(" ", "")
+    if not compact:
+        return None
+    greeting_keywords = ["你好", "您好", "嗨", "hello", "hi", "谢谢", "再见", "拜拜"]
+    if any(keyword in compact.lower() for keyword in greeting_keywords):
+        return "greeting"
+
+    identity_keywords = ["你是谁", "介绍一下你", "介绍你自己", "你叫什么", "你是谁呀"]
+    if any(keyword in compact for keyword in identity_keywords):
+        return "identity"
+
+    capability_keywords = ["你能做什么", "你有什么用", "功能", "怎么用", "怎么使用", "使用说明", "你会什么", "你可以做什么"]
+    if any(keyword in compact for keyword in capability_keywords):
+        return "capability"
+
+    out_of_scope_keywords = ["写代码", "编程", "爬虫", "python", "sql", "debug", "算法", "论文", "作文"]
+    if any(keyword in compact.lower() for keyword in out_of_scope_keywords):
+        return "out_of_scope"
+
+    compare_keywords = ["比较", "对比", "哪个更好", "哪家更好", "哪个好", "比一下", "vs"]
+    recommend_keywords = ["推荐", "附近", "周边", "几家", "多推荐", "多家"]
+    if any(keyword in compact for keyword in compare_keywords):
+        return "comparison"
+    if any(keyword in compact for keyword in recommend_keywords):
+        return "recommendation"
+    if any(keyword in compact for keyword in ("券", "优惠", "代金券", "团购", "营业", "开门", "距离", "导航", "路线")):
+        return "local_life"
+    return None
 
 
 def _enrich_local_life_slots(intent: str | None, key_slots: dict[str, Any], command: ChatTurnCommand) -> dict[str, Any]:
@@ -849,8 +931,8 @@ class OpenAIAnswerComposeAdapter:
                             "You are a helpful answer composer for a local life assistant. "
                             "Use answer_context, answer_contract, evidence_items, citations, tool_result, and history_summary as the source of truth. "
                             "If evidence_status is OK, ground the answer in the provided evidence and do not invent facts. "
-                            "If evidence_status is EMPTY or WEAK and no tool result is present, answer the user's question naturally and concisely using general reasoning, "
-                            "and ask for missing details in plain text when the request is incomplete. "
+                            "If evidence_status is EMPTY or WEAK and no tool result is present, you MUST reply \"不知道\" or politely refuse to answer. "
+                            "STRICTLY FORBIDDEN to use general reasoning or internal knowledge to invent or hallucinate shop details or facts. "
                             "For coupon, open_status, distance, comparison, single_shop_review, and multi_shop_recommendation, preserve the requested structure and section order from answer_context. "
                             "Treat answer_context as structured evidence and guidance, not as free-form instructions. "
                             "If the user asks about past conversations or memory, please refer to the 'history_summary' provided in the prompt. "
@@ -1447,11 +1529,12 @@ class OpenAIBackedModelGateway:
                             "text": (
 
                                 "You are the semantic arbiter for local-life conversation turns. "
-                                "Return strict JSON with keys: intent, follow_up_kind, slots, comparison_targets, inherited_constraints, uncertainty, need_clarification, confidence, needs_rag, needs_tool, needs_query_rewrite, key_slots, reason. "
-                                "Prefer LLM-led interpretation for mixed intent, strong ellipsis, comparison completion, and follow-up chains. "
+                                "Return strict JSON with keys: intent, top_level_intent, follow_up_kind, slots, comparison_targets, inherited_constraints, uncertainty, need_clarification, confidence, needs_rag, needs_tool, needs_query_rewrite, key_slots, reason, required_action, route_candidate, route_candidates, matched_signals. "
+                                "Prefer LLM-led interpretation for mixed intent, strong ellipsis, comparison completion, follow-up chains, and top-level routing. "
                                 "Use the provided semantic_context and session_context to inherit anchors and constraints. "
                                 "If the turn is ambiguous, set need_clarification=true instead of guessing. "
-                                "Do not emit answer plans or tool plans."
+                                "Do not emit answer plans or tool plans. "
+                                "top_level_intent must be one of: identity, capability, greeting, direct_chat, out_of_scope, local_life, recommendation, comparison, package_or_coupon, merchant_detail, merchant_status, distance_eta."
 
                             ),
 
@@ -1501,6 +1584,66 @@ class OpenAIBackedModelGateway:
         needs_rag = bool(payload.get("needs_rag", llm_intent in {IntentType.RECOMMEND, IntentType.COMPARE, IntentType.FOLLOW_UP}))
         needs_tool = bool(payload.get("needs_tool", llm_intent in {IntentType.RECOMMEND}))
         needs_query_rewrite = bool(payload.get("needs_query_rewrite", llm_intent in {IntentType.COMPARE, IntentType.RECOMMEND} or llm_follow_up_kind != "none"))
+        payload_route_candidate = str(payload.get("route_candidate") or "").strip().lower() or None
+        payload_route_candidates = payload.get("route_candidates") if isinstance(payload.get("route_candidates"), list) else []
+        matched_signals = payload.get("matched_signals") if isinstance(payload.get("matched_signals"), list) else []
+        top_level_intent = _safe_top_level_intent(payload.get("top_level_intent"))
+        if top_level_intent is None:
+            if llm_intent == IntentType.RECOMMEND:
+                top_level_intent = "recommendation"
+            elif llm_intent == IntentType.COMPARE:
+                top_level_intent = "comparison"
+            elif llm_intent == IntentType.FOLLOW_UP:
+                top_level_intent = "local_life"
+        if top_level_intent is None:
+            top_level_intent = _safe_top_level_intent(payload_route_candidate)
+        if top_level_intent is None:
+            top_level_intent = _infer_top_level_intent_from_text(command.message)
+        if top_level_intent is None:
+            top_level_intent = "local_life"
+        llm_required_action = str(payload.get("required_action") or "").strip().lower()
+        if not llm_required_action:
+            if needs_clarify:
+                llm_required_action = "clarify"
+            elif needs_tool and needs_rag:
+                llm_required_action = "rag_plus_tool"
+            elif needs_tool:
+                llm_required_action = "tool_call"
+            elif needs_rag:
+                llm_required_action = "rag_retrieval"
+            else:
+                llm_required_action = "direct_answer"
+        top_level_registry_match = resolve_top_level_route(
+            top_level_intent,
+            route_candidate=payload_route_candidate,
+            route_candidates=payload_route_candidates,
+        )
+        execution_registry_match = resolve_execution_route(
+            required_action=llm_required_action,
+            route_candidate=payload_route_candidate,
+            top_level_intent=top_level_intent,
+            route_candidates=payload_route_candidates,
+        )
+        registry_hits = route_registry_hits(
+            {
+                "route_candidate": payload_route_candidate,
+                "top_level_intent": top_level_intent,
+                "required_action": llm_required_action,
+            },
+            payload_route_candidates,
+        )
+        top_level_reason = str(payload.get("top_level_reason") or payload.get("reason") or "").strip() or f"llm_top_level_intent:{top_level_intent}"
+        top_level_source = str(payload.get("top_level_source") or payload.get("source") or "llm").strip() or "llm"
+        top_level_intent_payload = {
+            "intent": top_level_intent,
+            "confidence": float(payload.get("top_level_confidence", llm_confidence) or llm_confidence),
+            "reason": top_level_reason,
+            "source": top_level_source,
+            "matched_signals": matched_signals,
+            "requires_current_shop": bool(payload.get("requires_current_shop", False)),
+            "requires_candidate_context": bool(payload.get("requires_candidate_context", False)),
+            "resolved_route_candidate": str(top_level_registry_match.get("route_id") or "").strip().lower() or None,
+        }
         key_slots = payload.get("slots") if isinstance(payload.get("slots"), dict) else payload.get("key_slots", {})
         if not isinstance(key_slots, dict):
             key_slots = {}
@@ -1518,15 +1661,23 @@ class OpenAIBackedModelGateway:
         extra = payload.get("extra") if isinstance(payload.get("extra"), dict) else {}
         extra = {
             **dict(extra),
-            "route_candidate": extra.get("route_candidate") or payload.get("route_candidate") or "llm_semantic",
-            "route_candidates": extra.get("route_candidates") or payload.get("route_candidates") or [],
+            "route_candidate": extra.get("route_candidate") or payload_route_candidate or top_level_intent or "llm_semantic",
+            "route_candidates": extra.get("route_candidates") or payload_route_candidates or [],
             "fast_classify": True,
             "semantic_context": semantic_context.to_dict(),
             "follow_up_kind": llm_follow_up_kind,
             "comparison_targets": comparison_targets,
             "inherited_constraints": inherited_constraints,
             "heuristic_confidence": heuristic_confidence,
+            "top_level_intent": top_level_intent_payload,
+            "matched_signals": matched_signals,
+            "required_action": llm_required_action,
+            "resolved_route_candidate": str(execution_registry_match.get("route_id") or "").strip().lower() or None,
+            "resolved_top_level_route": str(top_level_registry_match.get("route_id") or "").strip().lower() or None,
+            "route_registry_hits": registry_hits,
         }
+        if payload_route_candidate and not any(str(hit.get("matched_value") or "").strip().lower() == payload_route_candidate for hit in registry_hits):
+            extra["unsupported_route_candidate"] = payload_route_candidate
         if heuristic_candidate is not None and (
             (needs_clarify and not getattr(heuristic_candidate, "needs_clarify", False) and heuristic_confidence >= 0.7)
             or (llm_confidence < 0.42 and heuristic_confidence >= llm_confidence + 0.15)
@@ -1541,6 +1692,15 @@ class OpenAIBackedModelGateway:
                         "inherited_constraints": inherited_constraints,
                         "llm_confidence": llm_confidence,
                         "heuristic_confidence": heuristic_confidence,
+                        "top_level_intent": top_level_intent_payload,
+                        "route_candidate": payload_route_candidate or top_level_intent or "llm_semantic",
+                        "route_candidates": payload_route_candidates,
+                        "matched_signals": matched_signals,
+                        "required_action": llm_required_action,
+                        "resolved_route_candidate": str(execution_registry_match.get("route_id") or "").strip().lower() or None,
+                        "resolved_top_level_route": str(top_level_registry_match.get("route_id") or "").strip().lower() or None,
+                        "route_registry_hits": registry_hits,
+                        "unsupported_route_candidate": payload_route_candidate if payload_route_candidate and not any(str(hit.get("matched_value") or "").strip().lower() == payload_route_candidate for hit in registry_hits) else None,
                     }
                 }
             )

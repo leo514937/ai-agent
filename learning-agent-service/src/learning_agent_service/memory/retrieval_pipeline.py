@@ -163,7 +163,7 @@ class MemoryRetrievalPolicy:
                     source_memory_ids.append(record.memory_id)
                     budget_left -= self._estimate_tokens(record)
 
-        if long_term_store is not None:
+        if long_term_store is not None and recall_plan.enabled:
             preference_candidates = list(
                 long_term_store.search(
                     "",
@@ -254,7 +254,9 @@ class MemoryRetrievalPolicy:
         procedural_memories = self._truncate(procedural_memories, max(1, self.config.recall_top_k), budget_left)
         tool_memories = self._truncate(list(procedural_memories), self.config.tool_limit, budget_left)
 
-        retrieval_reason = "session+entity+long-term"
+        retrieval_reason = "session+entity"
+        if long_term_store is not None:
+            retrieval_reason += "|long-term" if recall_plan.enabled else "|long-term_skipped"
         if recall_plan.enabled:
             retrieval_reason += f"|recall:{recall_plan.reason or 'signal'}"
         if semantic_memories:

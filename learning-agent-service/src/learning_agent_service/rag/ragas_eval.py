@@ -158,7 +158,10 @@ class RagasRuntime:
 _METRIC_REGISTRY: dict[str, MetricSpec] = {
     "answer_relevancy": MetricSpec(
         name="answer_relevancy",
-        import_candidates=(("ragas.metrics.collections", "AnswerRelevancy"), ("ragas.metrics", "ResponseRelevancy")),
+        import_candidates=(
+            ("ragas.metrics._answer_relevance", "AnswerRelevancy"),
+            ("ragas.metrics.collections", "AnswerRelevancy"),
+        ),
         required_scalar_fields=("user_input", "response"),
         needs_llm=True,
         needs_embeddings=True,
@@ -166,7 +169,10 @@ _METRIC_REGISTRY: dict[str, MetricSpec] = {
     ),
     "faithfulness": MetricSpec(
         name="faithfulness",
-        import_candidates=(("ragas.metrics.collections", "Faithfulness"), ("ragas.metrics", "Faithfulness")),
+        import_candidates=(
+            ("ragas.metrics._faithfulness", "Faithfulness"),
+            ("ragas.metrics.collections", "Faithfulness"),
+        ),
         required_scalar_fields=("user_input", "response"),
         required_list_fields=("retrieved_contexts",),
         needs_llm=True,
@@ -174,7 +180,10 @@ _METRIC_REGISTRY: dict[str, MetricSpec] = {
     ),
     "context_precision": MetricSpec(
         name="context_precision",
-        import_candidates=(("ragas.metrics.collections", "ContextPrecision"), ("ragas.metrics", "LLMContextPrecisionWithReference")),
+        import_candidates=(
+            ("ragas.metrics._context_precision", "ContextPrecision"),
+            ("ragas.metrics.collections", "ContextPrecision"),
+        ),
         required_scalar_fields=("user_input", "reference"),
         required_list_fields=("retrieved_contexts",),
         needs_llm=True,
@@ -182,7 +191,10 @@ _METRIC_REGISTRY: dict[str, MetricSpec] = {
     ),
     "context_utilization": MetricSpec(
         name="context_utilization",
-        import_candidates=(("ragas.metrics.collections", "ContextUtilization"), ("ragas.metrics", "LLMContextPrecisionWithoutReference")),
+        import_candidates=(
+            ("ragas.metrics._context_precision", "ContextUtilization"),
+            ("ragas.metrics.collections", "ContextUtilization"),
+        ),
         required_scalar_fields=("user_input", "response"),
         required_list_fields=("retrieved_contexts",),
         needs_llm=True,
@@ -190,7 +202,10 @@ _METRIC_REGISTRY: dict[str, MetricSpec] = {
     ),
     "context_recall": MetricSpec(
         name="context_recall",
-        import_candidates=(("ragas.metrics.collections", "ContextRecall"), ("ragas.metrics", "LLMContextRecall")),
+        import_candidates=(
+            ("ragas.metrics._context_recall", "ContextRecall"),
+            ("ragas.metrics.collections", "ContextRecall"),
+        ),
         required_scalar_fields=("user_input", "reference"),
         required_list_fields=("retrieved_contexts",),
         needs_llm=True,
@@ -198,7 +213,10 @@ _METRIC_REGISTRY: dict[str, MetricSpec] = {
     ),
     "context_entity_recall": MetricSpec(
         name="context_entity_recall",
-        import_candidates=(("ragas.metrics.collections", "ContextEntityRecall"), ("ragas.metrics", "ContextEntityRecall")),
+        import_candidates=(
+            ("ragas.metrics._context_entities_recall", "ContextEntityRecall"),
+            ("ragas.metrics.collections", "ContextEntityRecall"),
+        ),
         required_scalar_fields=("reference",),
         required_list_fields=("retrieved_contexts",),
         needs_llm=True,
@@ -206,7 +224,10 @@ _METRIC_REGISTRY: dict[str, MetricSpec] = {
     ),
     "noise_sensitivity": MetricSpec(
         name="noise_sensitivity",
-        import_candidates=(("ragas.metrics.collections", "NoiseSensitivity"), ("ragas.metrics", "NoiseSensitivity")),
+        import_candidates=(
+            ("ragas.metrics._noise_sensitivity", "NoiseSensitivity"),
+            ("ragas.metrics.collections", "NoiseSensitivity"),
+        ),
         required_scalar_fields=("user_input", "reference", "response"),
         required_list_fields=("retrieved_contexts",),
         needs_llm=True,
@@ -215,7 +236,10 @@ _METRIC_REGISTRY: dict[str, MetricSpec] = {
     ),
     "answer_correctness": MetricSpec(
         name="answer_correctness",
-        import_candidates=(("ragas.metrics.collections", "AnswerCorrectness"), ("ragas.metrics", "AnswerCorrectness")),
+        import_candidates=(
+            ("ragas.metrics._answer_correctness", "AnswerCorrectness"),
+            ("ragas.metrics.collections", "AnswerCorrectness"),
+        ),
         required_scalar_fields=("reference", "response"),
         needs_llm=True,
         needs_embeddings=True,
@@ -224,9 +248,8 @@ _METRIC_REGISTRY: dict[str, MetricSpec] = {
     "factual_correctness": MetricSpec(
         name="factual_correctness",
         import_candidates=(
-            ("ragas.metrics.collections", "FactualCorrectness"),
-            ("ragas.metrics", "FactualCorrectness"),
             ("ragas.metrics._factual_correctness", "FactualCorrectness"),
+            ("ragas.metrics.collections", "FactualCorrectness"),
         ),
         required_scalar_fields=("reference", "response"),
         needs_llm=True,
@@ -234,56 +257,74 @@ _METRIC_REGISTRY: dict[str, MetricSpec] = {
     ),
     "semantic_similarity": MetricSpec(
         name="semantic_similarity",
-        import_candidates=(("ragas.metrics.collections", "SemanticSimilarity"), ("ragas.metrics", "SemanticSimilarity")),
+        import_candidates=(
+            ("ragas.metrics._answer_similarity", "SemanticSimilarity"),
+            ("ragas.metrics.collections", "SemanticSimilarity"),
+        ),
         required_scalar_fields=("reference", "response"),
         needs_embeddings=True,
         description="回答与标准答案的语义相似度",
     ),
     "nonllm_context_precision": MetricSpec(
         name="nonllm_context_precision",
-        import_candidates=(("ragas.metrics", "NonLLMContextPrecisionWithReference"),),
+        import_candidates=(("ragas.metrics._context_precision", "NonLLMContextPrecisionWithReference"),),
         required_list_fields=("retrieved_contexts", "reference_contexts"),
         description="基于 reference_contexts 的非 LLM 上下文精确率",
     ),
     "id_based_context_precision": MetricSpec(
         name="id_based_context_precision",
-        import_candidates=(("ragas.metrics", "IDBasedContextPrecision"),),
+        import_candidates=(("ragas.metrics._context_precision", "IDBasedContextPrecision"),),
         required_list_fields=("retrieved_context_ids", "reference_context_ids"),
         description="基于 context id 的精确率",
     ),
     "id_based_context_recall": MetricSpec(
         name="id_based_context_recall",
-        import_candidates=(("ragas.metrics", "IDBasedContextRecall"),),
+        import_candidates=(("ragas.metrics._context_recall", "IDBasedContextRecall"),),
         required_list_fields=("retrieved_context_ids", "reference_context_ids"),
         description="基于 context id 的召回率",
     ),
     "bleu_score": MetricSpec(
         name="bleu_score",
-        import_candidates=(("ragas.metrics.collections", "BleuScore"), ("ragas.metrics", "BleuScore")),
+        import_candidates=(
+            ("ragas.metrics._bleu_score", "BleuScore"),
+            ("ragas.metrics.collections", "BleuScore"),
+        ),
         required_scalar_fields=("reference", "response"),
         description="BLEU 传统文本指标",
     ),
     "rouge_score": MetricSpec(
         name="rouge_score",
-        import_candidates=(("ragas.metrics.collections", "RougeScore"), ("ragas.metrics", "RougeScore")),
+        import_candidates=(
+            ("ragas.metrics._rouge_score", "RougeScore"),
+            ("ragas.metrics.collections", "RougeScore"),
+        ),
         required_scalar_fields=("reference", "response"),
         description="ROUGE 传统文本指标",
     ),
     "string_presence": MetricSpec(
         name="string_presence",
-        import_candidates=(("ragas.metrics.collections", "StringPresence"), ("ragas.metrics", "StringPresence")),
+        import_candidates=(
+            ("ragas.metrics._string", "StringPresence"),
+            ("ragas.metrics.collections", "StringPresence"),
+        ),
         required_scalar_fields=("reference", "response"),
         description="回答是否包含参考关键词",
     ),
     "exact_match": MetricSpec(
         name="exact_match",
-        import_candidates=(("ragas.metrics.collections", "ExactMatch"), ("ragas.metrics", "ExactMatch")),
+        import_candidates=(
+            ("ragas.metrics._string", "ExactMatch"),
+            ("ragas.metrics.collections", "ExactMatch"),
+        ),
         required_scalar_fields=("reference", "response"),
         description="回答与标准答案是否完全一致",
     ),
     "chrf_score": MetricSpec(
         name="chrf_score",
-        import_candidates=(("ragas.metrics.collections", "CHRFScore"), ("ragas.metrics", "CHRFScore")),
+        import_candidates=(
+            ("ragas.metrics._chrf_score", "ChrfScore"),
+            ("ragas.metrics.collections", "ChrfScore"),
+        ),
         required_scalar_fields=("reference", "response"),
         description="字符级 F-score",
     ),
@@ -453,6 +494,20 @@ def build_ragas_runtime(
             model=embedding_model or settings_value.openai.embedding_model,
             client=client,
         )
+        # 旧式 Metric 类（如 AnswerRelevancy）依赖 embed_query()，
+        # 而 ragas 0.4.3 的现代 OpenAIEmbeddings（openai_provider）只有 embed_text()。
+        # 若缺少 embed_query，包装一层兼容垫片。
+        if not hasattr(runtime.embeddings, "embed_query") or not hasattr(runtime.embeddings, "embed_documents"):
+            _inner = runtime.embeddings
+
+            def _embed_query(text: str, **kwargs: Any) -> list[float]:
+                return _inner.embed_text(text, **kwargs)
+
+            def _embed_documents(texts: list[str], **kwargs: Any) -> list[list[float]]:
+                return _inner.embed_texts(texts, **kwargs)
+
+            runtime.embeddings.embed_query = _embed_query  # type: ignore[attr-defined]
+            runtime.embeddings.embed_documents = _embed_documents  # type: ignore[attr-defined]
     return runtime
 
 
@@ -499,6 +554,7 @@ def evaluate_ragas_rows(
 ) -> dict[str, Any]:
     try:
         from ragas import EvaluationDataset, evaluate
+        from ragas.run_config import RunConfig
     except ImportError as exc:  # pragma: no cover - exercised in runtime env
         raise RuntimeError("当前环境未安装 ragas，请先安装 `pip install -e .[ragas]`。") from exc
 
@@ -515,14 +571,42 @@ def evaluate_ragas_rows(
             "没有可执行的 RAGAS 指标。可能原因：未安装 ragas、缺少 LLM/Embeddings 凭证，或当前样本缺少必要字段。"
         )
     dataset = EvaluationDataset.from_list([dict(row) for row in rows])
+    run_config = RunConfig(
+        timeout=300,
+        max_retries=5,
+        max_wait=120,
+    )
     result = evaluate(
         dataset=dataset,
         metrics=metrics,
         raise_exceptions=False,
         show_progress=show_progress,
         experiment_name=experiment_name,
+        run_config=run_config,
     )
     score_rows = _extract_score_rows(result)
+    # 将 score_rows 中的 metric 内部名称映射为 spec 名称，确保 summarizer 能找到
+    _spec_map: dict[str, str] = {}
+    for metric in metrics:
+        mname = _metric_name(metric)
+        # 按 import class 推断对应哪个 spec
+        for spec in metric_specs:
+            cls = _import_metric_class(spec)
+            if cls is not None and mname == getattr(cls, "name", mname):
+                pass  # 精确匹配，不重映射
+            if cls is not None and isinstance(metric, cls):
+                if mname != spec.name:
+                    _spec_map[mname] = spec.name
+                break
+    if _spec_map:
+        remapped: list[dict[str, Any]] = []
+        for row in score_rows:
+            row_map = dict(row)
+            for old_key, new_key in _spec_map.items():
+                if old_key in row_map and new_key not in row_map:
+                    row_map[new_key] = row_map.pop(old_key)
+            remapped.append(row_map)
+        score_rows = remapped
     summary = summarize_ragas_results(
         rows=rows,
         score_rows=score_rows,

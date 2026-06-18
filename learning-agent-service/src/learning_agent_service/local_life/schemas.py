@@ -21,6 +21,13 @@ class LocalLifeIntentType(str, Enum):
     CLARIFY = "clarify"
 
 
+class ShopResolveResult(str, Enum):
+    RESOLVED = "resolved"
+    NOT_FOUND = "not_found"
+    AMBIGUOUS = "ambiguous"
+    LOW_CONFIDENCE = "low_confidence"
+
+
 class LocationNorm(LocalLifeModel):
     type: str = "near_user"
     city: str | None = None
@@ -270,6 +277,7 @@ class LocalLifeResponseBundle(LocalLifeModel):
     source_mode: str | None = None
     degraded_reason: str | None = None
     knowledge_freshness: dict[str, Any] = Field(default_factory=dict)
+    claim_bindings: list[dict[str, Any]] = Field(default_factory=list)
     fallback: bool = False
     page: str | None = None
     current_topic: str | None = None
@@ -343,6 +351,19 @@ class LocalLifeTurnState(LocalLifeModel):
     user_need: UserNeed | None = None
     route_review: RouteReviewResult | None = None
 
+
+class CandidateShop(LocalLifeModel):
+    shop_id: int | None = None
+    canonical_name: str
+    matched_text: str | None = None
+    match_type: Literal["exact", "alias", "session", "client", "pronoun", "fuzzy"] = "fuzzy"
+    score: float = 0.0
+
+class SemanticSelectionResult(LocalLifeModel):
+    follow_up_kind: str = "none"
+    anchor_shop_id: int | None = None
+    comparison_targets: list[dict[str, Any]] = Field(default_factory=list)
+    confidence: float = 0.0
 
 ClarificationDecision.model_rebuild()
 RouteReviewResult.model_rebuild()

@@ -1,17 +1,27 @@
 from __future__ import annotations
 
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import _bootstrap  # noqa: F401
 
-from learning_agent_service.application.router.phase0_quality import build_initial_routing_decision
-from learning_agent_service.application.router.phase2_slots import build_evidence_quality
-from learning_agent_service.application.router.phase5_retrieval import ensure_retrieval_plan
+from learning_agent_service.application.workflow.adapters.helpers import _apply_route_review
+from learning_agent_service.application.workflow.adapters.helpers import should_run_tool
+from learning_agent_service.application.workflow.adapters.helpers import build_initial_routing_decision
+from learning_agent_service.application.workflow.adapters.helpers import build_evidence_quality
+from learning_agent_service.application.workflow.adapters.helpers import can_enter_tool, ensure_tool_plan
+from learning_agent_service.application.workflow.adapters.helpers import ensure_retrieval_plan
+from learning_agent_service.application.workflow.subgraphs import route_gate
 from learning_agent_service.domain import (
     ChatTurnCommand,
     EvidenceItem,
     EvidencePack,
+    IntentRoutingDecision,
+    InputQualityDecision,
     PersistentSessionContext,
+    RoutingDecision,
+    ToolSelection,
     build_initial_state,
 )
 
@@ -70,6 +80,145 @@ class Phase1RoutingTestCase(unittest.TestCase):
         self.assertNotIn("scene_fit", facets)
         self.assertNotIn("shop_detail", facets)
         self.assertEqual(routing.extra["required_facets_source_constraints"]["open_status"], "dynamic_tool")
+
+    def test_route_review_preserves_semantic_tool_candidates_without_upgrade(self) -> None:
+        routing = RoutingDecision(
+            raw_query="海底捞水晶城店现在营业吗，有券吗，离我多远？",
+            normalized_query="海底捞水晶城店现在营业吗,有券吗,离我多远?",
+            domain="local_life",
+            confidence=0.82,
+            input_quality=InputQualityDecision(is_valid=True, reason="valid_task", score=0.92),
+            intent=IntentRoutingDecision(name="local_life", confidence=0.85, required_slots=[], missing_slots=[]),
+            required_action="tool_call",
+            should_rewrite_query=False,
+            should_retrieve=False,
+            should_call_tool=False,
+            should_use_memory=True,
+            should_persist_memory=True,
+            should_vectorize_memory=True,
+            should_emit_retrieval_events=False,
+            route_candidate="merchant_detail",
+            extra={},
+        )
+
+        semantic_route = {
+            "domain": "local_life",
+            "intent": "local_life",
+            "slots": {"shop_name": "海底捞水晶城店"},
+            "missing_slots": [],
+            "confidence": 0.9,
+            "route_candidate": "merchant_detail",
+            "should_rewrite_query": True,
+            "should_call_tool": True,
+            "tool_candidates": ["getShopDetail", "getBusinessStatus", "resolveShop"],
+            "preferred_chunk_roles": ["shop_detail"],
+            "clarification_question": None,
+        }
+
+        with (
+            patch("learning_agent_service.application.router.phase3_review._semantic_route_for_query", return_value=SimpleNamespace(**semantic_route)),
+            patch("learning_agent_service.application.router.phase3_review._build_required_facets", return_value=([{"name": "open_status", "data_source": "dynamic_tool"}], [])),
+            patch("learning_agent_service.application.router.phase3_review._recommended_action_for_facets", return_value="tool_call"),
+        ):
+            reviewed = _apply_route_review(
+                routing,
+                raw_query="海底捞水晶城店现在营业吗，有券吗，离我多远？",
+                persistent=PersistentSessionContext(current_topic="海底捞水晶城店"),
+                client_context={},
+            )
+
+        self.assertEqual(reviewed.required_action, "tool_call")
+        self.assertTrue(reviewed.should_call_tool)
+        self.assertEqual(reviewed.execution_mode, "standard")
+        self.assertEqual(
+            reviewed.tool_candidates,
+            ["getShopDetail", "getBusinessStatus", "resolveShop"],
+        )
+        self.assertEqual(
+            reviewed.extra["tool_candidates"],
+            ["getShopDetail", "getBusinessStatus", "resolveShop"],
+        )
+        self.assertEqual(
+            reviewed.extra["route_review_decision"]["semantic_route"]["tool_candidates"],
+            ["getShopDetail", "getBusinessStatus", "resolveShop"],
+        )
+
+    def test_tool_gate_uses_route_review_semantics_when_top_level_flag_is_stale(self) -> None:
+        routing = RoutingDecision(
+            raw_query="海底捞水晶城店现在营业吗，有券吗，离我多远？",
+            required_action="tool_call",
+            should_call_tool=False,
+            extra={
+                "route_review_decision": {
+                    "semantic_route": {
+                        "should_call_tool": True,
+                    }
+                }
+            },
+        )
+        state = self._make_state("海底捞水晶城店现在营业吗，有券吗，离我多远？", current_topic="海底捞水晶城店")
+        state["turn"] = state["turn"].model_copy(
+            update={
+                "routing_decision": routing,
+                "extra": {
+                    "route_review_decision": {
+                        "semantic_route": {
+                            "should_call_tool": True,
+                        }
+                    }
+                },
+            }
+        )
+
+        self.assertTrue(should_run_tool(routing))
+
+        planned_tool = ToolSelection(
+            tool_name="get_coupon_list",
+            should_execute=True,
+            input_payload={"shop_name": "海底捞水晶城店"},
+            reason="route_review_semantic_tool",
+        )
+        with patch("learning_agent_service.application.router.phase6_tool.synthesize_tool_selection", return_value=planned_tool):
+            updated_state = ensure_tool_plan(state)
+
+        updated_routing = updated_state["turn"].routing_decision
+        self.assertIsNotNone(updated_state["turn"].tool_plan)
+        self.assertTrue(updated_routing.should_call_tool)
+        self.assertEqual(updated_state["turn"].tool_plan.tool_name, "get_coupon_list")
+        self.assertTrue(can_enter_tool(updated_state).allowed)
+
+    def test_route_gate_sets_tool_allowed_from_route_review_semantics(self) -> None:
+        routing = RoutingDecision(
+            raw_query="海底捞水晶城店现在营业吗，有券吗，离我多远？",
+            required_action="tool_call",
+            should_call_tool=False,
+            extra={
+                "route_review_decision": {
+                    "semantic_route": {
+                        "should_call_tool": True,
+                    }
+                }
+            },
+        )
+        state = self._make_state("海底捞水晶城店现在营业吗，有券吗，离我多远？", current_topic="海底捞水晶城店")
+        state["turn"] = state["turn"].model_copy(
+            update={
+                "routing_decision": routing,
+                "extra": {
+                    "route_review_decision": {
+                        "semantic_route": {
+                            "should_call_tool": True,
+                        }
+                    }
+                },
+            }
+        )
+
+        command = route_gate(state)
+        routing_contract = command.update["turn"].routing_contract
+
+        self.assertEqual(command.goto, "tool_subgraph")
+        self.assertTrue(routing_contract.tool_allowed)
 
     def test_route_review_treats_conversation_recap_as_direct_answer(self) -> None:
         routing = build_initial_routing_decision(

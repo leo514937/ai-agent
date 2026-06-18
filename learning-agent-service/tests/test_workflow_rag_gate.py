@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 import _bootstrap  # noqa: F401
 
 from learning_agent_service.application.rag_gate import RagRouteGate
-from learning_agent_service.application.router.phase0_quality import build_initial_routing_decision
+from learning_agent_service.application.workflow.adapters.helpers import build_initial_routing_decision
 from learning_agent_service.application.workflow.adapters import WorkflowNodeAdapter
 from learning_agent_service.application.workflow.services import ToolSubgraphServices, UnderstandTurnServices
 from learning_agent_service.application.workflow.subgraphs import route_after_understand, run_tool_subgraph, run_understand_turn
@@ -124,7 +124,7 @@ class WorkflowRagGateTestCase(unittest.TestCase):
             }
         )
 
-        with patch("learning_agent_service.application.workflow.adapters.stages_front_a.build_initial_routing_decision", return_value=routing), patch(
+        with patch("learning_agent_service.application.workflow.adapters.stages_front_a._build_facet_routing_decision", return_value=routing), patch(
             "learning_agent_service.application.workflow.adapters.stages_front_a._apply_route_review",
             side_effect=lambda decision, **kwargs: decision,
         ):
@@ -205,10 +205,10 @@ class WorkflowRagGateTestCase(unittest.TestCase):
         updated = run_understand_turn(state, services)
 
         self.assertFalse(rewrite_query.called)
-        self.assertEqual(updated["turn"].extra["rag_gate"]["allowed"], False)
+        self.assertNotIn("rag_gate", updated["turn"].extra)
         self.assertEqual(updated["turn"].decision, TurnDecision.RETRIEVE_THEN_ANSWER)
-        self.assertTrue(updated["turn"].routing_decision.blocked)
-        self.assertEqual(route_after_understand(updated), "compose_answer")
+        self.assertIsNone(updated["turn"].routing_decision)
+        self.assertEqual(route_after_understand(updated), "rag_subgraph")
 
     def test_cached_understanding_bundle_skips_followup_llm_paths(self) -> None:
         model_gateway = SimpleNamespace(

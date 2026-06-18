@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+from types import SimpleNamespace
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -61,6 +63,16 @@ class AnswerContract(BaseModel):
 
     @classmethod
     def build_contract(cls, user_need, target_shop=None) -> AnswerContract:
+        def _to_namespace(value: Any) -> Any:
+            if isinstance(value, Mapping):
+                return SimpleNamespace(**{key: _to_namespace(item) for key, item in value.items()})
+            if isinstance(value, list):
+                return [_to_namespace(item) for item in value]
+            if isinstance(value, tuple):
+                return tuple(_to_namespace(item) for item in value)
+            return value
+
+        user_need = _to_namespace(user_need)
         req_facet_names = [f.name for f in getattr(user_need, "required_facets", []) or []]
         user_focused_facets = [f for f in req_facet_names if f not in ("location", "category")]
         raw_query = str(getattr(user_need, "raw_query", "") or "")
@@ -74,6 +86,13 @@ class AnswerContract(BaseModel):
         inferred_coupon = any(token in compact_query for token in ("券", "优惠", "领券", "打折", "代金券", "折扣", "有券", "团购"))
         inferred_open = any(token in compact_query for token in ("营业", "开门", "开着", "营业时间", "现在营业吗", "现在开吗", "营业吗"))
         inferred_distance = any(token in compact_query for token in ("离我多远", "距离", "有多远", "导航", "路线", "怎么走", "怎么去"))
+        inferred_phone = any(token in compact_query for token in ("电话", "联系电话", "手机", "号码"))
+        inferred_payment = any(token in compact_query for token in ("支付", "付款", "买单", "收款"))
+        inferred_refund = any(token in compact_query for token in ("退款", "退费", "退钱"))
+        inferred_delivery = any(token in compact_query for token in ("配送", "送达", "外卖", "多久到", "到店", "送到"))
+        inferred_booking = any(token in compact_query for token in ("订座", "预订", "预约", "订位"))
+        inferred_order = any(token in compact_query for token in ("下单", "订单", "取消订单"))
+        inferred_order_status = any(token in compact_query for token in ("订单状态", "订单进度", "订单查询"))
         inferred_comparison = (
             intent_name in ("restaurant_comparison", "comparison", "local_life_comparison")
             or (
@@ -105,7 +124,22 @@ class AnswerContract(BaseModel):
             allowed_facets = ["distance_eta", "distance"]
             forbidden_facets = ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "price"]
             answer_style = "distance_only"
-        elif sum(1 for flag in (inferred_coupon, inferred_open, inferred_distance) if flag) > 1:
+        elif sum(
+            1
+            for flag in (
+                inferred_coupon,
+                inferred_open,
+                inferred_distance,
+                inferred_phone,
+                inferred_payment,
+                inferred_refund,
+                inferred_delivery,
+                inferred_booking,
+                inferred_order,
+                inferred_order_status,
+            )
+            if flag
+        ) > 1:
             if target_shop and (target_shop.shop_id is not None or target_shop.shop_name is not None):
                 allowed_facets = ["environment", "taste", "service", "coupon", "open_status", "distance_eta", "distance", "price", "shop_detail", "recommendation_reason"]
                 forbidden_facets = ["recommendation"]
@@ -126,6 +160,34 @@ class AnswerContract(BaseModel):
             allowed_facets = ["distance_eta", "distance"]
             forbidden_facets = ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "price"]
             answer_style = "distance_only"
+        elif any(
+            flag
+            for flag in (inferred_phone, inferred_payment, inferred_refund, inferred_delivery, inferred_booking, inferred_order, inferred_order_status)
+        ):
+            allowed_facets = [
+                "environment",
+                "taste",
+                "service",
+                "recommendation",
+                "scene_fit",
+                "coupon",
+                "open_status",
+                "distance_eta",
+                "distance",
+                "price",
+                "shop_detail",
+                "recommendation_reason",
+                "phone",
+                "payment",
+                "refund",
+                "delivery_eta",
+                "booking",
+                "order",
+                "order_status",
+                "open_hours",
+            ]
+            forbidden_facets = []
+            answer_style = "single_shop_review" if has_explicit_shop_hint else "multi_shop_recommendation"
         elif inferred_comparison:
             allowed_facets = ["environment", "taste", "service", "recommendation", "scene_fit", "coupon", "open_status", "distance_eta", "distance", "price", "shop_detail", "recommendation_reason"]
             forbidden_facets = []
@@ -162,7 +224,7 @@ class AnswerContract(BaseModel):
             else:
                 answer_style = "multi_shop_recommendation"
 
-        realtime_facet_set = {"coupon", "open_status", "distance_eta"}
+        realtime_facet_set = {"coupon", "open_status", "distance_eta", "open_hours", "booking", "order", "order_status", "phone", "payment", "refund", "delivery_eta"}
         allowed_rag_facets = [facet for facet in allowed_facets if facet not in realtime_facet_set]
         realtime_facets = [facet for facet in allowed_facets if facet in realtime_facet_set]
         forbidden_rag_facets = list(
@@ -180,12 +242,21 @@ class AnswerContract(BaseModel):
             allowed_tools.extend(["check_open_status", "getShopDetail", "getBusinessStatus"])
         if "distance_eta" in allowed_facets:
             allowed_tools.append("get_distance_eta")
+        if any(facet in allowed_facets for facet in ("phone", "payment", "refund", "delivery_eta", "open_hours")):
+            allowed_tools.append("getShopDetail")
+        if "booking" in allowed_facets:
+            allowed_tools.append("create_booking")
+        if any(facet in allowed_facets for facet in ("order", "order_status")):
+            allowed_tools.extend(["create_order", "get_order_status"])
         if "recommendation" in allowed_facets or answer_style in {"multi_shop_recommendation", "comparison", "facet_multi"}:
             allowed_tools.extend(["search_restaurants", "getShopDetail", "recommendShops"])
         allowed_tools = list(dict.fromkeys(allowed_tools))
         allow_recommendation = answer_style in {"multi_shop_recommendation", "comparison", "facet_multi"}
         allow_extra_context = allow_recommendation or answer_style == "single_shop_review"
-        realtime_required = any(facet in {"coupon", "open_status", "distance_eta"} for facet in allowed_facets)
+        high_risk_facets = {"coupon", "open_status", "distance_eta", "open_hours", "booking", "order", "order_status", "phone", "payment", "refund", "delivery_eta"}
+        realtime_required = any(facet in high_risk_facets for facet in allowed_facets) or any(
+            flag for flag in (inferred_coupon, inferred_open, inferred_distance, inferred_phone, inferred_payment, inferred_refund, inferred_delivery, inferred_booking, inferred_order, inferred_order_status)
+        )
         evidence_policy = "strict" if not allow_extra_context else "balanced"
 
         return cls(

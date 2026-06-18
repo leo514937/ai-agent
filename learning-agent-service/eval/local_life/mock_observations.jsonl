@@ -1,0 +1,3 @@
+{"case_id":"single_shop_scene_fit_001","query":"海底捞水晶城店适合约会吗？","response":"海底捞水晶城店环境安静，氛围不错，是比较适合约会的选择。店铺内有舒适的卡座和柔和的灯光，适合两人用餐聊天。","metrics":{"retrieved_contexts":["环境安静，适合约会。","氛围不错。","海底捞水晶城店位于水晶城购物中心内，交通便利。"]}}
+{"case_id":"recommendation_after_single_shop_anchor_001","query":"附近有没有适合约会的餐厅推荐？","response":"推荐您考虑海底捞水晶城店和新白鹿运河上街店。海底捞水晶城店环境适合约会，服务周到；新白鹿运河上街店目前正在营业，菜品精致，适合两人用餐。","metrics":{"retrieved_contexts":["海底捞水晶城店适合约会。","新白鹿运河上街店现在营业，适合两人用餐。","附近还有多家适合约会的餐厅。"]}}
+{"case_id":"cross_shop_isolation_guard_001","query":"海底捞水晶城店环境怎么样？","response":"海底捞水晶城店整体环境比较稳定，店内卫生状况良好，就餐区域整洁有序。","metrics":{"retrieved_contexts":["海底捞水晶城店环境比较稳定。","店内卫生状况良好。"]}}

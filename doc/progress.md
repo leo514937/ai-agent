@@ -53,3 +53,66 @@
    - 修复了 `slot_extractor.py` 和 `tool_planner.py` 中的底层字典 `NoneType` 提取报错问题，成功让整个模块对类型系统“全绿”。
    - 彻底梳理并修复了 `memory/service.py` 中的一系列静态类型陷阱，包括 `Never` 变量收窄赋值、强类型 Enum 的属性提取、`Sequence[Any]` 对比 `Iterable[Any]` 签名的限制冲突，甚至移除了极度反模式的 `locals()` 隐式判定。
    - 修复了 `rag/local_life/orchestrator.py` 在提取 Qdrant 返回的弱类型 payload 时，由于返回值混杂 `Unknown | object` 导致 `list()` 构造函数因缺乏 `Iterable` 断言而报警的问题，全面植入了零运行开销的 `typing.cast`。
+
+6. **重构本地生活店名实体抽取与多店比较链路**
+   - 彻底贯彻了“规则优先召回候选、LLM 只做语义消歧、规则最终校验落库”的设计架构，避免了原先让 LLM 盲目生成店名可能带来的串店和上下文污染问题。
+   - 修复了因为早期重构导致的大量 `ImportError`（如 `_explicit_entity_from_query`、`_resolve_alias_from_contexts` 等历史依赖方法丢失），补充了这些函数的逻辑以确保向后兼容与测试流水线的正常收集。
+   - 为 `EntityResolver` 的 `SemanticSelector` 模块正确补齐了 `OpenAIRuntime` 运行时注入代码，重新激活了 LLM 真实的推理调用，使其能够基于用户的自然语言和历史对话精确地从候选项中“语义消歧”，杜绝了静默的逻辑逃课。
+   - 更新了 `TargetShop` 和 `ExecutionContract` 核心结构，加入了 `comparison_targets` 字段；并在路由逻辑（如 `FacetExecutionPlan` 组装和 `validate` 校验流）中打通了“多店比较”对象的下发透传，使得像“海底捞和湖畔私房菜哪个好”这种复杂的多店铺对比意图能够正确路由给执行网关。
+   - **(当前进行中) 修复未收录店名的静默回退 Bug**：在测试用例 `test_explicit_shop_beats_history_anchor` 中，发现当用户明确指定的店名（如“巴奴毛肚火锅”）不在库中时，虽然策略引擎（`TargetShopPolicy`）正确解析了该店名但 `shop_id=None`，可是 `route_review.py` 在拼接 `execution_requirements` 时因为 `target_shop.candidate_shop_ids` 为空，错误地 fallback 回了上一轮上下文（“海底捞”），导致后续节点取到了错误的数据并给出了错误回答。目前已定位并正在修复 `route_review.py` 和 `TargetShopPolicy` 中关于未知实体时的 `candidate_shop_ids` 分发逻辑。
+
+7. **引入 grounded_strict 强约束回答模式**
+   - 在 `composer.py` 中引入了 `grounded_strict` 模式，针对不同复杂意图（如对比、多店推荐等），提供了严格的结构化代码模板（如 `build_comparison_answer`），不再依赖 LLM 自由发挥补全。
+   - 在答案生成前置增加了 `_strict_preflight_check` 和 `validate_answer_against_contract`，通过强校验断言拦截，有效杜绝了由于证据不足导致的大模型幻觉（Hallucination）。
+
+## RAG 向量数据库商户简称强匹配空回问题修复 (RAG Metadata Exact Match Empty Pack Fix)
+- 引入 EntityResolver 至 synthesize_retrieval_plan 以解析提取到的商户简称为具有置信度的规范命名、别名和 shop_id。
+- 重构 qdrant_filters.py 的 shop_name 强等于匹配逻辑，分级优先采用 shop_id、官方名和 alias_names，避免名称不精准拦截数据。
+- 在 retrieval_service.py 中增加了 RAG 宽松重试机制 (Relaxed Retry)：遇到 0 hits 时卸载商户强过滤进行二次查询，并基于 Python 代码实现防串店精准后过滤。
+- 增加了检索 filter_strategy、重试次数、失败原因等结构化日志指标。
+
+## 工具链路商户别名识别与防串店机制升级 (ToolCall Entity Resolution & Anti-Spoofing Fix)
+- 发现 ToolCall 链路在处理如“海底捞水晶城店怎么样”这样的别名/简称时，如果 `shop_id` 未下发，底层工具（如 `_search_coupons`, `_check_open_status`）会静默 fallback 给假空结果或返回错误数据。
+- 将 `EntityResolver` 集成至 `routing_signals/base.py` 的 `synthesize_tool_selection` 层：
+  - 在决定工具调用和构建 payload 之前，统一提取 `shop_name` 并利用模型解析得到具有高置信度的 `shop_id`。
+  - 对于产生多候选且置信度低，或需要澄清 (`should_clarify=True`) 的商户名称，直接拒绝生成明确的 tool 工具调用，迫使上游系统进入 Clarification 追问流程。
+- 防护底层 `builtin.py` 接口：重构 `_search_coupons`, `_check_open_status`, `_get_distance_eta`，当外部直接指定 `shop_name` 且匹配不到正确的 `shop_id` 时，不盲目进行 `shop_id=0` 或错误名称查询，而是返回显式的 `error="shop_not_resolved"` 和 `empty_reason="multiple_candidates"`，以保证业务响应诚实、杜绝假空现象。
+
+## P0/P1 商户解析结果强约束与假空值修复 (Shop Resolution & Fake Empty Values Fix)
+- 引入了 `ShopResolveResult` 枚举类 (RESOLVED / NOT_FOUND / AMBIGUOUS / LOW_CONFIDENCE)，并在 `TargetShop` 和 `ResolvedTarget` 结构中透传解析结果。
+- Qdrant RAG：修改了 `qdrant_filters.py`，将 `shop_name` 无条件设为 handled_keys，彻底屏蔽由于括号后缀不一致导致的 MatchValue 强制阻断（empty_pack）。
+- ToolCall 解析对齐：修改了 `orchestrator_components.py` 中的工具执行载荷构建，使 ToolCall 完全继承由上游生成的 `resolved_shop_id`，保证 RAG 和 Tool 调用链路上的店铺实体一致性。
+- 多店歧义防串店与禁止假空：在 `builtin.py` 中，放宽 `_resolve_catalog_shop` 搜索。如果仅有名称且命中多店非精确匹配时返回 `None` 以触发追问；全面剥离在遇到多店歧义或未找到解析店铺时的误导性假空值（如 `coupons=[]`, `distance_km=0.0`, `open_status=unknown`），改由底层直接抛出明确的 `error=shop_not_resolved` 及 `empty_reason=multiple_candidates`。
+
+## 当前会话调查：商户名称匹配差异 (ToolCall vs RAG)
+- **ToolCall 链路名称匹配瓶颈**：
+  - 用户输入 `"海底捞水晶城店"` 时，通过 `_build_tool_input` 传给工具。
+  - 工具通过 `_resolve_catalog_shop` 调用 `search_shops_by_name`，后台由于 SQL 中的模糊匹配 `LIKE '%海底捞水晶城店%'` 无法匹配到数据库中的 `"海底捞火锅(水晶城购物中心店）"`，导致首轮返回空。
+  - 虽然 fallback 机制能拉回所有 `"海底捞"` 分店，但由于多店结果（`len(shops) > 1`）以及 `"海底捞水晶城店"` 不是 `"海底捞火锅(水晶城购物中心店）"` 的子串，最终校验 `search_name in first_shop_name` 失败，返回 `None`，触发 `shop_not_resolved`。
+- **RAG 链路容错能力**：
+  - RAG 链路在实体解析置信度低（`confidence < 0.5`）时，不会强加 `shop_name` 的 Metadata 强过滤，完全依赖 Qdrant 向量检索。
+  - 即使添加了强过滤导致召回为 0，`retrieval_service.py` 内部拥有 **宽松重试机制 (Relaxed Retry)**，会自动脱掉 `shop_name` 等强过滤条件，将其拼入检索文本中进行二次重试，最后在 Python 内存中对结果进行 `shop_id` 的后过滤，从而避免了硬编码名称匹配失败导致的 0 召回。
+
+## 禹墨科技教育·教案辅助设计智能体展示汇报页面开发
+- **当前阶段：已完成开发并交付**
+  - **交付文件**：[yumo_agent_presentation.html](file:///d:/javacode/hm-dianping/doc/yumo_agent_presentation.html)
+  - **核心特色与功能**：
+    - **“水墨微光”双色调主题**：支持极客极简深色主题（墨色金石）与纸张古朴浅色主题（宣纸墨香），适配汇报演示的不同光线场景。
+    - **多案例交互对话模拟器**：预置了三个典型跨学科探究案例：
+      1. *简易净水装置*（小学/初中，偏物理与观察，强化**摹略**与**逢疑/遇疑**）
+      2. *桥梁承重优化*（初中/高中，偏工程结构，强化**双故**与**过疑**）
+      3. *智能浇灌控制系统*（高中/大学，偏软硬件算法逻辑，强化**双故**与**遇疑Fail-safe**）
+    - **双栏共创工作区**：左侧动态渲染智能体向导交互过程（包括推荐策略和引导性单选按钮），右侧实时同步渲染、生成并拼接结构化教案草稿，生动还原“对话式向导”而非“一键生成器”的设计定位。
+    - **禹墨科学思想理论看板**：详尽展示了《墨经》科学思想在现代项目式教学中的转化应用，卡片式展示“四阶八法”（摹略万物、双故因果、测试研取、四疑反思）和四大核心设计原则。
+    - **多格式导出与打印适配**：支持一键导出结构化 Markdown 源码，并针对纸张打印做了 CSS 媒体查询适配，支持一键保存 PDF 或打印输出纸质教案。
+
+## 最新进展 (2026-06-18)
+1. **解决 Python 服务启动时导入错误的问题**
+   - **Stages 模块文件恢复**：定位到 `application/router/stages` 目录下的所有核心 `.py` 逻辑文件（如 `request_legality.py`, `complexity_router.py` 等 11 个文件）在本地均被误删除。使用 `git restore` 成功还原了该目录下的所有源码。
+   - **Routing Signals 模块文件恢复**：定位到 `application/routing_signals` 目录下的核心 `__init__.py` 和 `base.py` 也被误删除，同样通过 `git restore` 成功恢复。
+   - **消除重名包解析冲突**：解决了本地存在 untracked 废弃兼容桩文件 `routing_signals.py` 与正常还原的包文件夹 `routing_signals` 同名冲突、导致 Python 抛出 `is not a package` 导入错误的问题。已将冲突的临时文件 `routing_signals.py` 安全移动到 `scratch/routing_signals.py.bak` 备份并移除。
+   - **验证成功**：重新运行 `start_all.sh` 脚本和手动测试，Python 服务的 `/health` 接口成功响应 `"status": "healthy", "ready": true`，模型网关、Qdrant 向量存储、Redis 缓存、PostgreSQL 数据库等全栈依赖均返回 `ready: true` 正常态。
+2. **修复问答归因（final_answer 节点）的 `AttributeError` 崩溃**
+   - **定位问题**：当用户发送类似于“你好”的消息时，后台 LangGraph 在进入 `final_answer` 节点时，会调用 `grounding_policy.py` 的 `claim_policy_for_facet`。但由于 `answer_style` 为 `None`，导致执行 `_clean_text(answer_style).lower()` 时抛出 `AttributeError: 'NoneType' object has no attribute 'lower'` 崩溃并使会话流中断。
+   - **修复逻辑**：在 `grounding_policy.py` 中对 `answer_style` 和 `facet` 属性在调用 `.lower()` 前进行了安全性的判空（None/空字符串）防御检查。
+   - **测试验证**：编写了测试脚本 `scratch/test_policy.py`，经验证已能在 `answer_style` 为 `None` 时顺利解析返回，AI 服务完全恢复正常运转。

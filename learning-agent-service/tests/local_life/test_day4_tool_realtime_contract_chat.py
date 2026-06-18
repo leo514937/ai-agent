@@ -45,9 +45,12 @@ class Day4ToolRealtimeContractChatTestCase(unittest.TestCase):
 
         metrics = result.metrics or {}
         tool_plan = metrics.get("tool_plan") or {}
+        answer_contract = metrics.get("answer_contract") or {}
         tool_results = metrics.get("local_life_tool_results") or []
 
         self.assertTrue(result.final_answer)
+        self.assertIn("coupon", answer_contract.get("realtime_facets", []))
+        self.assertIn("open_status", answer_contract.get("realtime_facets", []))
         self.assertIn("get_coupon_list", tool_plan.get("required_tools", []))
         self.assertIn("check_open_status", tool_plan.get("required_tools", []))
         self.assertTrue(metrics.get("answer_realtime_claim_supported"))

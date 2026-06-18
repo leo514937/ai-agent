@@ -168,7 +168,6 @@ def classify_rag_rule(request: RagGateRequest) -> RagGateVote:
 
 def compose_direct_response_text(raw_query: str, response_kind: str | None, reason: str | None = None) -> str:
     kind = (response_kind or "").strip().lower()
-    compact = (raw_query or "").replace(" ", "")
 
     if kind == "greeting":
         return "你好，我在。你可以直接告诉我想查什么、想解释什么，或者把问题贴出来。"
@@ -270,14 +269,35 @@ def _aggregate_confidence(rule: RagGateVote, llm: RagGateVote | None, final_vote
 @dataclass
 class RagRouteGate:
     llm_judge: Callable[[RagGateRequest], RagGateVote] | None = None
+    enabled: bool = True
 
     def precheck(self, request: RagGateRequest) -> RagGateVote:
         return classify_rag_rule(request)
 
     def should_skip_memory_retrieval(self, request: RagGateRequest) -> bool:
+        if not self.enabled:
+            return True
         return self.precheck(request).vote == DENY
 
     def decide(self, request: RagGateRequest) -> RagGateDecision:
+        if not self.enabled:
+            rule_vote = RagGateVote(
+                vote=DENY,
+                reason="rag_disabled",
+                confidence=1.0,
+                response_kind="disabled",
+            )
+            return RagGateDecision(
+                allowed=False,
+                reason="rag_disabled",
+                rule_vote=rule_vote,
+                confidence=1.0,
+                response_kind="disabled",
+                precheck_skip_memory=True,
+                final_vote=DENY,
+                metadata={"voting_mode": "disabled", "raw_query": request.raw_query},
+            )
+
         rule_vote = self.precheck(request)
         if rule_vote.vote == DENY:
             return RagGateDecision(

@@ -1,0 +1,127 @@
+{
+  "summary": {
+    "evaluation_backend": "ragas",
+    "case_count": 3,
+    "scored_case_count": 3,
+    "metric_means": {
+      "answer_relevancy": 0.8871610521427978,
+      "faithfulness": 0.6666666666666666,
+      "context_precision": 0.99999999995,
+      "context_utilization": 0.99999999995,
+      "context_recall": 1.0,
+      "context_entity_recall": 0.6666666616666667,
+      "answer_correctness": 0.674366276585658,
+      "semantic_similarity": 0.9277876909850891,
+      "nonllm_context_precision": 0.9999999999333333,
+      "string_presence": 0.0,
+      "exact_match": 0.0
+    },
+    "metric_counts": {
+      "answer_relevancy": 3,
+      "faithfulness": 2,
+      "context_precision": 3,
+      "context_utilization": 3,
+      "context_recall": 3,
+      "context_entity_recall": 3,
+      "answer_correctness": 2,
+      "semantic_similarity": 3,
+      "nonllm_context_precision": 3,
+      "string_presence": 3,
+      "exact_match": 3
+    },
+    "lower_is_better_metrics": [
+      "noise_sensitivity"
+    ],
+    "skipped_metrics": [
+      "bleu_score:init_failed",
+      "rouge_score:init_failed",
+      "chrf_score:init_failed"
+    ]
+  },
+  "selected_metrics": [
+    "answer_relevancy",
+    "faithfulness",
+    "context_precision",
+    "context_utilization",
+    "context_recall",
+    "context_entity_recall",
+    "noise_sensitivity",
+    "answer_correctness",
+    "factual_correctness",
+    "semantic_similarity",
+    "nonllm_context_precision",
+    "bleu_score",
+    "rouge_score",
+    "string_presence",
+    "exact_match",
+    "chrf_score"
+  ],
+  "executed_metrics": [
+    "answer_relevancy",
+    "faithfulness",
+    "context_precision",
+    "context_utilization",
+    "context_recall",
+    "context_entity_recall",
+    "noise_sensitivity",
+    "answer_correctness",
+    "factual_correctness",
+    "semantic_similarity",
+    "non_llm_context_precision_with_reference",
+    "string_present",
+    "exact_match"
+  ],
+  "skipped_metrics": [
+    "bleu_score:init_failed",
+    "rouge_score:init_failed",
+    "chrf_score:init_failed"
+  ],
+  "runtime_warnings": [],
+  "score_rows": [
+    {
+      "answer_relevancy": 0.8470963886461679,
+      "faithfulness": 0.6666666666666666,
+      "context_precision": 0.99999999995,
+      "context_utilization": 0.99999999995,
+      "context_recall": 1.0,
+      "context_entity_recall": 0.9999999900000002,
+      "noise_sensitivity(mode=relevant)": NaN,
+      "answer_correctness": 0.7370242295165172,
+      "factual_correctness(mode=f1)": NaN,
+      "semantic_similarity": 0.9478450819673974,
+      "exact_match": 0.0,
+      "nonllm_context_precision": 0.99999999995,
+      "string_presence": 0.0
+    },
+    {
+      "answer_relevancy": 0.9144646563923442,
+      "faithfulness": NaN,
+      "context_precision": 0.99999999995,
+      "context_utilization": 0.99999999995,
+      "context_recall": 1.0,
+      "context_entity_recall": 0.999999995,
+      "noise_sensitivity(mode=relevant)": NaN,
+      "answer_correctness": NaN,
+      "factual_correctness(mode=f1)": NaN,
+      "semantic_similarity": 0.8884567439778388,
+      "exact_match": 0.0,
+      "nonllm_context_precision": 0.99999999995,
+      "string_presence": 0.0
+    },
+    {
+      "answer_relevancy": 0.8999221113898812,
+      "faithfulness": 0.6666666666666666,
+      "context_precision": 0.99999999995,
+      "context_utilization": 0.99999999995,
+      "context_recall": 1.0,
+      "context_entity_recall": 0.0,
+      "noise_sensitivity(mode=relevant)": 0.0,
+      "answer_correctness": 0.6117083236547985,
+      "factual_correctness(mode=f1)": 0.5,
+      "semantic_similarity": 0.947061247010031,
+      "exact_match": 0.0,
+      "nonllm_context_precision": 0.9999999999,
+      "string_presence": 0.0
+    }
+  ]
+}

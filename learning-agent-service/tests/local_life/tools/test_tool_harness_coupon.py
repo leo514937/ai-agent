@@ -67,6 +67,27 @@ class ToolHarnessCouponTestCase(unittest.TestCase):
         self.assertIn("实时优惠券信息", answer)
         self.assertIn("店铺页面", answer)
 
+    def test_coupon_tool_answer_accepts_dict_bundle(self) -> None:
+        bundle = {
+            "tool_results": [
+                normalize_tool_result(
+                    tool_name="get_coupon_list",
+                    raw_output={
+                        "shop_id": 5,
+                        "shop_name": "海底捞水晶城店",
+                        "count": 1,
+                        "coupons": [{"title": "88代100"}],
+                    },
+                    shop_id=5,
+                    shop_name="海底捞水晶城店",
+                ).model_dump(mode="json")
+            ]
+        }
+        candidate = SimpleNamespace(shop_id=5, vouchers=[{"title": "88代100"}])
+        answer = build_coupon_only_answer("海底捞水晶城店", [candidate], [], facet_result_bundle=bundle)
+        self.assertIn("当前有1张券", answer)
+        self.assertIn("88代100", answer)
+
 
 if __name__ == "__main__":
     unittest.main()

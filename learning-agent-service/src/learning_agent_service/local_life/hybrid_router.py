@@ -35,6 +35,60 @@ _SHOP_NAME_PATTERNS = (
     r'绿茶餐厅', r'新白鹿', r'弄堂里', r'楼外楼', r'知味观', r'狗不理',
 )
 
+_REALTIME_FACET_TOOL_MAP: dict[str, str] = {
+    "coupon": "get_coupon_list",
+    "open_status": "check_open_status",
+    "distance_eta": "get_distance_eta",
+}
+
+_REALTIME_FACET_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "coupon": ("券", "优惠券", "优惠", "团购", "套餐", "代金券", "有券", "有什么券"),
+    "open_status": ("营业", "开门", "开业", "关门", "歇业", "现在营业", "今天营业", "营业吗", "开门吗"),
+    "distance_eta": ("离我多远", "多远", "距离", "导航", "路线", "怎么去", "怎么走", "到店", "路程"),
+}
+
+
+def _infer_realtime_facets(
+    raw_query: str,
+    *,
+    route_type: str,
+    intent_name: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any], list[str]]:
+    normalized = re.sub(r"\s+", "", str(raw_query or "")).lower()
+    facet_names: list[str] = []
+
+    def _append_facet(name: str) -> None:
+        if name and name not in facet_names:
+            facet_names.append(name)
+
+    for facet_name, keywords in _REALTIME_FACET_KEYWORDS.items():
+        if any(keyword in normalized for keyword in keywords):
+            _append_facet(facet_name)
+
+    if intent_name == "coupon":
+        _append_facet("coupon")
+    if intent_name == "open_status":
+        _append_facet("open_status")
+    if intent_name == "navigation":
+        _append_facet("distance_eta")
+    if intent_name == "realtime" and route_type == "realtime_tool":
+        # realtime 是一个宽泛标签，保底把已经识别到的实时面保留下来。
+        for facet_name in ("open_status", "distance_eta", "coupon"):
+            if facet_name in normalized:
+                _append_facet(facet_name)
+
+    required_facets = [{"name": facet_name} for facet_name in facet_names]
+    source_constraints = {
+        facet_name: {"source": "tool", "tool_name": _REALTIME_FACET_TOOL_MAP[facet_name]}
+        for facet_name in facet_names
+        if facet_name in _REALTIME_FACET_TOOL_MAP
+    }
+    tool_candidates = [tool_name for tool_name in (_REALTIME_FACET_TOOL_MAP.get(name) for name in facet_names) if tool_name]
+    if facet_names and any(name in {"open_status", "distance_eta"} for name in facet_names):
+        tool_candidates.append("get_shop_detail")
+    tool_candidates = list(dict.fromkeys(tool_candidates))
+    return required_facets, source_constraints, tool_candidates
+
 
 @dataclass(frozen=True)
 class LLMRouteDecision:
@@ -107,13 +161,76 @@ class HybridRouter:
 
     def __init__(self, runtime: OpenAIRuntime | None = None):
         self.runtime = runtime
-        self.fallback_engine = FallbackRuleEngine()
         self._cache: dict[str, LLMRouteDecision] = {}
         self._cache_timestamps: dict[str, float] = {}
         cfg = get_settings()
         self._cache_ttl = cfg.hybrid_router.hybrid_router_cache_ttl
         self._llm_timeout = cfg.hybrid_router.hybrid_router_llm_timeout
         self._llm_max_retries = cfg.hybrid_router.hybrid_router_llm_max_retries
+
+    def _route_with_keywords(
+        self,
+        query: str,
+        session_context: dict[str, Any] | None = None,
+        client_context: dict[str, Any] | None = None,
+    ) -> LLMRouteDecision:
+        """关键词降级路由：LLM 不可用或置信度低时的兜底。"""
+        compact = query.replace(" ", "").lower()
+        has_session_shop_context = bool(
+            session_context
+            and (
+                session_context.get("current_shop")
+                or session_context.get("current_topic")
+                or session_context.get("selected_shop_name")
+                or session_context.get("selected_shop_id")
+            )
+        )
+
+        # 1. 安全检查
+        if any(kw in compact for kw in ("忽略之前的指令", "system prompt", "jailbreak")):
+            return LLMRouteDecision(intent="unsafe", domain="unsafe", confidence=0.99, route="reject", reasoning="检测到不安全输入")
+
+        # 2. 问候/告别
+        if any(kw in compact for kw in ("你好", "hello", "hi", "谢谢", "再见", "拜拜")):
+            return LLMRouteDecision(intent="greeting", domain="general", confidence=0.95, route="general_chat", reasoning="问候语")
+
+        # 3. 身份查询
+        if any(kw in compact for kw in ("你是谁", "你叫什么", "介绍一下你自己")):
+            return LLMRouteDecision(intent="identity", domain="general", confidence=0.95, route="general_chat", reasoning="身份查询")
+
+        # 4. 能力查询
+        if any(kw in compact for kw in ("你能做什么", "有什么功能", "有什么能力")):
+            return LLMRouteDecision(intent="capability", domain="general", confidence=0.90, route="general_chat", reasoning="能力查询")
+
+        # 5. 本地生活
+        local_life_keywords = ("附近", "推荐", "好吃的", "火锅", "餐厅", "饭店", "优惠", "优惠券", "券", "团购", "营业", "海底捞", "巴奴", "地址", "位置", "排队", "带小孩", "朋友聚餐", "深夜", "商务宴请", "家庭聚餐", "约会", "一个人")
+        local_life_hint = any(kw in compact for kw in local_life_keywords)
+        if not local_life_hint:
+            suitability_keywords = ("适合", "合适", "怎么样", "好不好", "行不行")
+            person_scene_keywords = ("带父母", "带家人", "带小孩", "约会", "家庭聚餐", "朋友聚餐", "商务宴请")
+            local_life_hint = any(kw in compact for kw in suitability_keywords) and (
+                has_session_shop_context or any(kw in compact for kw in person_scene_keywords)
+            )
+        if not local_life_hint and has_session_shop_context:
+            follow_up_tokens = ("怎么样", "好吃吗", "评价", "口碑", "人均", "价格", "电话", "地址", "怎么去", "营业时间", "有包间吗", "可以带小孩吗")
+            local_life_hint = any(kw in compact for kw in follow_up_tokens)
+
+        if local_life_hint:
+            realtime_kw = ("营业", "开门", "关门", "几点", "离我多远", "怎么去", "有券", "团购", "预约", "订座", "退款", "取消")
+            if any(kw in compact for kw in realtime_kw):
+                return LLMRouteDecision(intent="realtime", domain="local_life", confidence=0.85, route="realtime_tool", reasoning="实时查询")
+            address_kw = ("地址在哪", "位置在哪", "在哪", "怎么走", "在哪里", "位置")
+            if any(kw in compact for kw in address_kw):
+                return LLMRouteDecision(intent="navigation", domain="local_life", confidence=0.85, route="realtime_tool", reasoning="地址/导航查询")
+            compare_kw = ("哪个好", "哪家更好", "对比", "比较", "区别")
+            if any(kw in compact for kw in compare_kw):
+                return LLMRouteDecision(intent="compare", domain="local_life", confidence=0.80, route="compare_multi_parent", reasoning="比较查询")
+            if any(token in compact for token in ("推荐", "附近", "好吃")) or any(kw in compact for kw in ("约会", "家庭聚餐", "商务宴请", "带小孩", "带父母", "朋友聚餐")):
+                return LLMRouteDecision(intent="recommend", domain="local_life", confidence=0.75, route="structured_first", reasoning="推荐查询")
+            return LLMRouteDecision(intent="detail", domain="local_life", confidence=0.60, route="merchant_reasoning", reasoning="店铺详情查询")
+
+        # 6. 兜底
+        return LLMRouteDecision(intent="out_of_scope", domain="general", confidence=0.50, route="general_chat", reasoning="非本地生活查询")
 
     def route(
         self,
@@ -157,7 +274,7 @@ class HybridRouter:
                     ):
                         fallback_reason = "parse_error"
                         final_decision = replace(
-                            self.fallback_engine.route(query, session_context, client_context),
+                            self._route_with_keywords(query, session_context, client_context),
                             fallback_reason=fallback_reason,
                         )
                         fallback_used = True
@@ -168,7 +285,7 @@ class HybridRouter:
                         # LLM置信度低，降级到规则
                         fallback_reason = "low_confidence"
                         final_decision = replace(
-                            self.fallback_engine.route(query, session_context, client_context),
+                            self._route_with_keywords(query, session_context, client_context),
                             fallback_reason=fallback_reason,
                         )
                         fallback_used = True
@@ -177,7 +294,7 @@ class HybridRouter:
                     # LLM超时，降级到规则
                     fallback_reason = "timeout"
                     final_decision = replace(
-                        self.fallback_engine.route(query, session_context, client_context),
+                        self._route_with_keywords(query, session_context, client_context),
                         fallback_reason=fallback_reason,
                     )
                     fallback_used = True
@@ -186,7 +303,7 @@ class HybridRouter:
                     # LLM调用失败，降级到规则
                     fallback_reason = type(e).__name__
                     final_decision = replace(
-                        self.fallback_engine.route(query, session_context, client_context),
+                        self._route_with_keywords(query, session_context, client_context),
                         fallback_reason=fallback_reason,
                     )
                     fallback_used = True
@@ -195,7 +312,7 @@ class HybridRouter:
                 # 流量控制：未命中的流量使用规则引擎
                 fallback_reason = "rollout_excluded"
                 final_decision = replace(
-                    self.fallback_engine.route(query, session_context, client_context),
+                    self._route_with_keywords(query, session_context, client_context),
                     fallback_reason=fallback_reason,
                     rollout_stage=rollout_stage,
                     rollout_key=rollout_key,
@@ -206,7 +323,7 @@ class HybridRouter:
             # 禁用LLM，直接使用规则
             fallback_reason = "llm_disabled" if not use_llm or not cfg.hybrid_router.enable_hybrid_router_llm else "fallback_only"
             final_decision = replace(
-                self.fallback_engine.route(query, session_context, client_context),
+                self._route_with_keywords(query, session_context, client_context),
                 fallback_reason=fallback_reason,
             )
             fallback_used = True
@@ -336,58 +453,24 @@ class HybridRouter:
 
         return decision
 
-    SYSTEM_PROMPT = """你是一个本地生活服务的路由助手。根据用户查询和上下文，判断意图并输出JSON格式的路由决策。
+    # DEPRECATED: 完整路由将被 application/router/facet_planner.py 替代。
+    # 当前保留用作兼容层，新功能请直接使用 facet_planner。
+    SYSTEM_PROMPT = """You are a routing assistant for a local-life Q&A system. Output route decision as JSON.
 
-## 意图类型（intent）
+Intent: greeting, detail, recommend, compare, coupon, open_status, navigation, booking, refund, clarification, out_of_scope
+Route: realtime_tool, compare_multi_parent, structured_first, merchant_reasoning, guide_rule_rag, general_chat
 
-| 意图 | 说明 | 示例 |
-|------|------|------|
-| greeting | 问候/告别/感谢/闲聊 | "你好"、"谢谢"、"再见" |
-| detail | 单店详情查询 | "海底捞怎么样"、"这家店好吃吗" |
-| recommend | 多店推荐/场景推荐 | "附近有什么火锅"、"适合约会的餐厅" |
-| compare | 比较两家或多家店 | "海底捞和巴奴哪个好" |
-| coupon | 优惠券/团购查询 | "有券吗"、"有什么优惠" |
-| open_status | 营业状态/时间查询 | "现在开门吗"、"几点关门" |
-| navigation | 距离/导航查询 | "离我多远"、"怎么去" |
-| booking | 预约/订座 | "帮我订个位"、"能预约吗" |
-| refund | 退款/取消/订单问题 | "我想退款"、"订单取消" |
-| clarification | 信息不足需要追问 | "哪家店"、"你在哪个城市" |
-| out_of_scope | 非本地生活查询 | "今天天气"、"帮我写代码" |
+Route mapping:
+- greeting/clarification/out_of_scope -> general_chat
+- coupon/open_status/navigation/booking/refund -> realtime_tool
+- compare -> compare_multi_parent
+- recommend -> structured_first
+- detail -> merchant_reasoning
 
-## 路由类型（route）
+Extract slots if present: city, district, shop_name, shop_id, category, scene, price_range
 
-| 路由 | 说明 | 触发条件 |
-|------|------|---------|
-| realtime_tool | 调用实时工具 | 营业状态/距离/券/预约/退款 |
-| compare_multi_parent | 多店比较检索 | 比较查询 |
-| structured_first | 结构化筛选优先 | 推荐/场景/附近 |
-| merchant_reasoning | 单店详情推理 | 单店评价/详情 |
-| guide_rule_rag | 攻略规则检索 | 攻略/避坑/流程 |
-| general_chat | 直接回答 | 问候/闲聊/非本地生活 |
-
-## 槽位提取（slots）
-
-提取以下结构化信息（如有）：
-- city: 城市名
-- district: 区域名（如"朝阳区"）
-- shop_name: 店铺名（如"海底捞"）
-- shop_id: 店铺ID（如有）
-- category: 品类（如"火锅"、"烧烤"）
-- scene: 场景（如"约会"、"家庭聚餐"、"商务宴请"）
-- price_range: 价格范围（如"人均100"）
-- preferences: 用户偏好（如"安静"、"有包间"）
-
-## 输出格式
-
-严格输出JSON，不要输出其他内容：
-{
-  "intent": "意图类型",
-  "domain": "local_life 或 general",
-  "confidence": 0.0-1.0之间的浮点数,
-  "route": "路由类型",
-  "slots": {"city": "北京", "shop_name": "海底捞"},
-  "reasoning": "一句话说明判断依据"
-}
+Output strict JSON:
+{"intent": "coupon", "domain": "local_life", "confidence": 0.95, "route": "realtime_tool", "slots": {}, "reasoning": "brief analysis"}
 """
 
     def _call_llm(self, user_message: str) -> str:
@@ -551,195 +634,6 @@ class HybridRouter:
         self._cache_timestamps[key] = time.time()
 
 
-class FallbackRuleEngine:
-    """降级规则引擎：LLM不可用时使用"""
-
-    # 确定性100%的关键词
-    _UNSAFE_KEYWORDS = ("忽略之前的指令", "system prompt", "jailbreak")
-    _GREETING_KEYWORDS = ("你好", "hello", "hi", "谢谢", "再见", "拜拜")
-    _IDENTITY_KEYWORDS = ("你是谁", "你叫什么", "介绍一下你自己")
-    _CAPABILITY_KEYWORDS = ("你能做什么", "有什么功能", "有什么能力")
-
-    # 本地生活领域关键词（精简版）
-    _LOCAL_LIFE_KEYWORDS = ("附近", "推荐", "好吃的", "火锅", "餐厅", "饭店", "优惠", "优惠券", "券", "团购", "营业", "海底捞", "巴奴", "地址", "位置", "排队", "带小孩", "朋友聚餐", "深夜", "商务宴请", "家庭聚餐", "约会", "一个人")
-
-    # 适配/场景类追问关键词
-    _SUITABILITY_KEYWORDS = ("适合", "合适", "怎么样", "好不好", "行不行")
-    _PERSON_SCENE_KEYWORDS = ("带父母", "带家人", "带小孩", "约会", "家庭聚餐", "朋友聚餐", "商务宴请")
-
-    # 实时工具关键词
-    _REALTIME_KEYWORDS = ("营业", "开门", "关门", "几点", "离我多远", "怎么去", "有券", "团购", "预约", "订座", "退款", "取消")
-
-    # 比较关键词
-    _COMPARE_KEYWORDS = ("哪个好", "哪家更好", "对比", "比较", "区别")
-
-    # 场景关键词
-    _SCENE_KEYWORDS = ("约会", "家庭聚餐", "商务宴请", "带小孩", "带父母", "朋友聚餐")
-
-    # 地址关键词
-    _ADDRESS_KEYWORDS = ("地址在哪", "位置在哪", "在哪", "怎么走", "在哪里", "位置")
-
-    def _extract_shop_names(self, query: str) -> list[str]:
-        """从查询中提取店铺名称"""
-        found = []
-        for pattern in _SHOP_NAME_PATTERNS:
-            match = re.search(pattern, query)
-            if match:
-                found.append(match.group())
-        return found
-
-    def _has_session_shop_context(self, session_context: dict[str, Any] | None) -> bool:
-        if not session_context:
-            return False
-        return bool(
-            session_context.get("current_shop")
-            or session_context.get("current_topic")
-            or session_context.get("selected_shop_name")
-            or session_context.get("selected_shop_id")
-        )
-
-    def route(
-        self,
-        query: str,
-        session_context: dict[str, Any] | None = None,
-        client_context: dict[str, Any] | None = None,
-    ) -> LLMRouteDecision:
-        """使用规则进行路由"""
-        compact = query.replace(" ", "").lower()
-        has_session_shop_context = self._has_session_shop_context(session_context)
-
-        # 1. 安全检查
-        if any(kw in compact for kw in self._UNSAFE_KEYWORDS):
-            return LLMRouteDecision(
-                intent="unsafe",
-                domain="unsafe",
-                confidence=0.99,
-                route="reject",
-                reasoning="检测到不安全输入",
-            )
-
-        # 2. 问候/告别
-        if any(kw in compact for kw in self._GREETING_KEYWORDS):
-            return LLMRouteDecision(
-                intent="greeting",
-                domain="general",
-                confidence=0.95,
-                route="general_chat",
-                reasoning="问候语",
-            )
-
-        # 3. 身份查询
-        if any(kw in compact for kw in self._IDENTITY_KEYWORDS):
-            return LLMRouteDecision(
-                intent="identity",
-                domain="general",
-                confidence=0.95,
-                route="general_chat",
-                reasoning="身份查询",
-            )
-
-        # 4. 能力查询
-        if any(kw in compact for kw in self._CAPABILITY_KEYWORDS):
-            return LLMRouteDecision(
-                intent="capability",
-                domain="general",
-                confidence=0.90,
-                route="general_chat",
-                reasoning="能力查询",
-            )
-
-        # 5. ????????
-        local_life_hint = any(kw in compact for kw in self._LOCAL_LIFE_KEYWORDS)
-        if not local_life_hint:
-            local_life_hint = any(kw in compact for kw in self._SUITABILITY_KEYWORDS) and (
-                has_session_shop_context or any(kw in compact for kw in self._PERSON_SCENE_KEYWORDS)
-            )
-        if not local_life_hint and has_session_shop_context:
-            local_life_hint = any(
-                kw in compact
-                for kw in (
-                    "??",
-                    "??",
-                    "???",
-                    "???",
-                    "???",
-                    "???",
-                    "???",
-                    "??",
-                    "????",
-                    "????",
-                    "????",
-                    "??",
-                    "??",
-                    "?",
-                )
-            )
-
-        if local_life_hint:
-            # 5.1 ????
-            if any(kw in compact for kw in self._REALTIME_KEYWORDS):
-                shop_names = self._extract_shop_names(query)
-                return LLMRouteDecision(
-                    intent="realtime",
-                    domain="local_life",
-                    confidence=0.85,
-                    route="realtime_tool",
-                    slots={"shop_name": ",".join(shop_names)} if shop_names else {},
-                    reasoning="??????",
-                )
-
-            # 5.1.1 ??????????
-            if any(kw in compact for kw in self._ADDRESS_KEYWORDS):
-                shop_names = self._extract_shop_names(query)
-                return LLMRouteDecision(
-                    intent="navigation",
-                    domain="local_life",
-                    confidence=0.85,
-                    route="realtime_tool",
-                    slots={"shop_name": ",".join(shop_names)} if shop_names else {},
-                    reasoning="??/????",
-                )
-
-            # 5.2 ????
-            if any(kw in compact for kw in self._COMPARE_KEYWORDS):
-                shop_names = self._extract_shop_names(query)
-                return LLMRouteDecision(
-                    intent="compare",
-                    domain="local_life",
-                    confidence=0.80,
-                    route="compare_multi_parent",
-                    slots={"shop_name": ",".join(shop_names)} if shop_names else {},
-                    reasoning="????",
-                )
-
-            # 5.3 ????
-            if any(token in compact for token in ("推荐", "附近", "好吃")) or any(kw in compact for kw in self._SCENE_KEYWORDS):
-                return LLMRouteDecision(
-                    intent="recommend",
-                    domain="local_life",
-                    confidence=0.75,
-                    route="structured_first",
-                    reasoning="????",
-                )
-
-            # 5.4 ???merchant_reasoning
-            return LLMRouteDecision(
-                intent="detail",
-                domain="local_life",
-                confidence=0.60,
-                route="merchant_reasoning",
-                reasoning="????????????",
-            )
-
-        # 6. 兜底：out_of_scope
-        return LLMRouteDecision(
-            intent="out_of_scope",
-            domain="general",
-            confidence=0.50,
-            route="general_chat",
-            reasoning="非本地生活查询",
-        )
-
 
 # 全局 HybridRouter 实例
 _global_hybrid_router: HybridRouter | None = None
@@ -751,182 +645,3 @@ def get_hybrid_router() -> HybridRouter:
     if _global_hybrid_router is None:
         _global_hybrid_router = HybridRouter()
     return _global_hybrid_router
-
-
-def build_routing_decision_from_hybrid_router(
-    raw_query: str,
-    persistent: PersistentSessionContext,
-    *,
-    client_context: Mapping[str, Any] | None = None,
-) -> RoutingDecision:
-    """新的路由入口：直接使用 HybridRouter 创建 RoutingDecision
-    
-    这是新的单一入口点，替代旧的 route_top_level_intent() 和 build_initial_routing_decision()
-    """
-    from ..application.routing_primitives import (
-        _context_has_anchor,
-        _context_has_candidate_anchor,
-        build_input_quality,
-        normalize_query,
-    )
-    
-    normalized_query = normalize_query(raw_query)
-    input_quality = build_input_quality(raw_query)
-    
-    # 直接使用 HybridRouter
-    router = get_hybrid_router()
-    session_context = None
-    if persistent is not None:
-        session_context = {
-            "session_id": getattr(persistent, "session_id", None),
-            "current_shop": getattr(persistent, "current_shop", None),
-            "recent_shops": getattr(persistent, "recent_entities", []) or [],
-            "last_intent": getattr(persistent, "last_intent", None),
-        }
-    
-    decision, trace = router.route(
-        raw_query,
-        session_context=session_context,
-        client_context=dict(client_context or {}),
-    )
-    
-    # 映射到 RoutingDecision 格式
-    route_type = decision.route
-    intent_name = decision.intent
-    confidence = decision.confidence
-    reason = decision.reasoning
-    slots = decision.slots
-    low_info_clarify = input_quality.kind in {"empty_input", "pure_punctuation", "low_information"} and intent_name == "out_of_scope"
-    if low_info_clarify:
-        route_type = "general_chat"
-        intent_name = "clarification"
-        confidence = max(confidence, 0.6)
-        reason = input_quality.reason or "low_information"
-        slots = {}
-    
-    # 根据 route_type 决定路由行为
-    route_mapping = {
-        "realtime_tool": ("tool_call", True, False),
-        "compare_multi_parent": ("rag_retrieval", True, False),
-        "structured_first": ("rag_retrieval", True, False),
-        "merchant_reasoning": ("rag_retrieval", True, False),
-        "guide_rule_rag": ("rag_retrieval", True, False),
-        "general_chat": ("direct_answer", False, False),
-        "reject": ("reject", False, False),
-    }
-    
-    required_action, should_retrieve, should_call_tool = route_mapping.get(
-        route_type, ("rag_retrieval", True, False)
-    )
-    
-    # 判断是否需要澄清
-    missing_slots = []
-    clarification_question = None
-    if low_info_clarify:
-        missing_slots = ["shop_name"]
-        clarification_question = "请补充一下店名或你想问的具体信息。"
-        required_action = "clarify"
-        should_retrieve = False
-        should_call_tool = False
-
-    # 对于 realtime_tool 类型的查询，如果没有 shop_name 且没有 current_shop，需要澄清
-    if (
-        route_type == "realtime_tool"
-        and not slots.get("shop_name")
-        and not persistent.current_shop
-        and not persistent.selected_shop_id
-    ):
-        missing_slots = ["shop_name"]
-        clarification_question = "你想查哪家店？请告诉我具体店名。"
-        required_action = "clarify"
-    
-    # 构建 allowed_routes / forbidden_routes
-    allowed_routes = []
-    forbidden_routes = []
-    if required_action in {"rag_retrieval", "tool_call"}:
-        allowed_routes = [required_action]
-    elif required_action == "rag_plus_tool":
-        allowed_routes = ["rag_retrieval", "tool_call", "rag_plus_tool"]
-    elif required_action == "clarify":
-        allowed_routes = ["clarify"]
-        forbidden_routes = ["rag_retrieval", "tool_call"]
-    elif required_action == "direct_answer":
-        allowed_routes = ["direct_answer"]
-        forbidden_routes = ["rag_retrieval", "tool_call"]
-    
-    # 处理 intent 映射
-    intent_mapping = {
-        "greeting": "greeting",
-        "detail": "local_life",
-        "recommend": "local_life",
-        "compare": "local_life",
-        "coupon": "package_or_coupon",
-        "open_status": "local_life",
-        "navigation": "local_life",
-        "booking": "local_life",
-        "refund": "local_life",
-        "clarification": "local_life",
-        "out_of_scope": "out_of_scope",
-        "unsafe": "unsafe",
-        "identity": "identity",
-        "capability": "capability",
-        "realtime": "local_life",
-    }
-    
-    mapped_intent = intent_mapping.get(intent_name, "local_life")
-    compact_query = normalized_query.replace(" ", "")
-    if (
-        required_action == "clarify"
-        and mapped_intent == "local_life"
-        and any(token in compact_query for token in ("券", "优惠", "团购", "套餐"))
-    ):
-        mapped_intent = "package_or_coupon"
-    route_candidate = "local_life.package_or_coupon" if mapped_intent == "package_or_coupon" else mapped_intent
-    
-    # 创建 RoutingDecision
-    route = RoutingDecision(
-        raw_query=str(raw_query or ""),
-        normalized_query=normalized_query,
-        domain=decision.domain,
-        confidence=confidence,
-        input_quality=input_quality,
-        intent=IntentRoutingDecision(
-            name=mapped_intent,
-            confidence=confidence,
-            required_slots=list(slots.keys()) + missing_slots,
-            missing_slots=missing_slots,
-            allowed_routes=allowed_routes,
-            forbidden_routes=forbidden_routes,
-        ),
-        required_action=required_action,
-        blocked=False,
-        should_rewrite_query=should_retrieve or should_call_tool,
-        should_retrieve=should_retrieve,
-        should_call_tool=should_call_tool,
-        should_use_memory=required_action not in {"clarify", "reject", "no_op"},
-        should_persist_memory=required_action not in {"clarify", "reject", "no_op"},
-        should_vectorize_memory=required_action not in {"clarify", "reject", "no_op"},
-        should_emit_retrieval_events=should_retrieve,
-        missing_slots=missing_slots,
-        resolved_references=[],
-        route_reason=reason or f"hybrid_router:{route_type}",
-        safeguards_triggered=[],
-        route_candidate=route_candidate,
-        preferred_chunk_roles=[],
-        tool_candidates=[],
-        clarification_question=clarification_question,
-        extra={
-            "client_context": dict(client_context or {}),
-            "context_has_anchor": _context_has_anchor(persistent),
-            "context_has_candidate_anchor": _context_has_candidate_anchor(persistent),
-            "top_level_intent": mapped_intent,
-            "top_level_intent_reason": reason,
-            "hybrid_router_route": route_type,
-        "hybrid_router_slots": slots,
-        "trace_id": trace.trace_id,
-        "fallback_used": trace.fallback_used,
-        "hybrid_router_llm_error_type": trace.llm_error_type,
-    },
-)
-    
-    return route

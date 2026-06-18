@@ -9,6 +9,7 @@ from ..sse import build_sse_response
 
 
 def register_chat_routes(router: APIRouter, service: LearningAgentService) -> None:
+    # 这里是 chat 流式接口入口，所有端到端问答都会从这里进入 SSE 输出。
     @router.post("/internal/v1/chat/stream")
     async def chat_stream(
         request: ChatStreamRequest,

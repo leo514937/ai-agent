@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from learning_agent_service.application.dependencies_impl import AppDependencies, build_dependencies
-from learning_agent_service.application.router.phase0_quality import build_initial_routing_decision
+from learning_agent_service.application.workflow.adapters.helpers import build_initial_routing_decision
 from learning_agent_service.application.routing_primitives import _looks_like_unserviceable_location, build_input_quality, normalize_query
 from learning_agent_service.domain.contracts import PersistentSessionContext
 
@@ -16,8 +16,8 @@ def test_routing_primitives_still_work() -> None:
     persistent = PersistentSessionContext.model_construct(current_topic="\u6e56\u7554\u79c1\u623f\u83dc", extra={})
     routing = build_initial_routing_decision(text, persistent)
 
-    assert routing.required_action == "rag_retrieval"
-    assert routing.should_retrieve is True
+    assert routing.required_action == "tool_call"
+    assert routing.should_retrieve is False
 
 
 def test_dependency_module_exports_public_entrypoint() -> None:

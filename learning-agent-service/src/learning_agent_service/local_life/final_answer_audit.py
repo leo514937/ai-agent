@@ -8,6 +8,7 @@ from learning_agent_service.domain.utils import as_mapping as _as_mapping
 
 from .answer_contract import AnswerContract
 from .answer_linter import AnswerLintResult, lint_answer
+from .claim_grounding import build_claim_bindings, summarize_claim_bindings
 
 
 @dataclass(frozen=True)
@@ -25,6 +26,15 @@ class FinalAnswerAudit:
     source_contract: dict[str, Any] = field(default_factory=dict)
     review_report: dict[str, Any] = field(default_factory=dict)
     answer_lint: dict[str, Any] = field(default_factory=dict)
+    claim_bindings: list[dict[str, Any]] = field(default_factory=list)
+    claim_count: int = 0
+    supported_claim_count: int = 0
+    partial_claim_count: int = 0
+    unsupported_claim_count: int = 0
+    conflicted_claim_count: int = 0
+    unsupported_claim_rate: float = 0.0
+    unsupported_claim_ids: list[str] = field(default_factory=list)
+    partial_claim_ids: list[str] = field(default_factory=list)
 
 
 def _answer_lint_payload(
@@ -35,6 +45,8 @@ def _answer_lint_payload(
     evidence_claims: Sequence[Mapping[str, Any] | Any],
     facet_result_bundle: Any | None = None,
     user_need: Any | None = None,
+    answer_context: Any | None = None,
+    claim_bindings: Sequence[Mapping[str, Any] | Any] | None = None,
 ) -> AnswerLintResult:
     return lint_answer(
         answer_text=answer_text,
@@ -44,6 +56,8 @@ def _answer_lint_payload(
         evidence_claims=evidence_claims,
         facet_result_bundle=facet_result_bundle,
         user_need=user_need,
+        answer_context=answer_context,
+        claim_bindings=claim_bindings,
     )
 
 
@@ -60,7 +74,23 @@ def audit_final_answer(
     source_contract: Mapping[str, Any] | None = None,
     review_report: Mapping[str, Any] | None = None,
     tool_results: Sequence[Mapping[str, Any] | Any] | None = None,
+    answer_context: Mapping[str, Any] | None = None,
+    claim_bindings: Sequence[Mapping[str, Any] | Any] | None = None,
 ) -> FinalAnswerAudit:
+    claim_bindings = list(
+        claim_bindings
+        or build_claim_bindings(
+            answer_text=answer_text,
+            answer_contract=answer_contract,
+            ranked_candidates=ranked_candidates,
+            evidence_claims=evidence_claims,
+            facet_result_bundle=facet_result_bundle,
+            tool_results=tool_results,
+            answer_context=answer_context,
+            route_gate=route_gate,
+            review_report=review_report,
+        )
+    )
     lint_result = _answer_lint_payload(
         answer_text,
         answer_contract=answer_contract,
@@ -68,12 +98,16 @@ def audit_final_answer(
         evidence_claims=evidence_claims,
         facet_result_bundle=facet_result_bundle,
         user_need=user_need,
+        answer_context=answer_context,
+        claim_bindings=claim_bindings,
     )
     tool_failure_categories = sorted(
         {
-            str(_as_mapping(result).get("failure_category") or _as_mapping(result).get("status") or "").strip().lower()
+            str(_as_mapping(result).get("failure_category") or "").strip().lower()
+            or str(_as_mapping(result).get("status") or "").strip().lower()
             for result in (tool_results or [])
-            if str(_as_mapping(result).get("failure_category") or _as_mapping(result).get("status") or "").strip()
+            if str(_as_mapping(result).get("failure_category") or "").strip()
+            or str(_as_mapping(result).get("status") or "").strip().lower() not in {"", "success", "passed", "ok"}
         }
     )
     pack_map = _as_mapping(evidence_pack)
@@ -84,6 +118,21 @@ def audit_final_answer(
     issues = list(lint_result.issues)
     if tool_failure_categories:
         issues.append("tool_failure_observed")
+    claim_summary = summarize_claim_bindings(claim_bindings)
+    unsupported_claim_ids = [
+        str(_as_mapping(binding).get("claim_id") or "").strip()
+        for binding in claim_bindings
+        if str(_as_mapping(binding).get("support_status") or "").strip().lower() in {"unsupported", "conflicted"}
+        and str(_as_mapping(binding).get("claim_id") or "").strip()
+    ]
+    partial_claim_ids = [
+        str(_as_mapping(binding).get("claim_id") or "").strip()
+        for binding in claim_bindings
+        if str(_as_mapping(binding).get("support_status") or "").strip().lower() == "partial"
+        and str(_as_mapping(binding).get("claim_id") or "").strip()
+    ]
+    if unsupported_claim_ids:
+        issues.append("unsupported_claim_observed")
     return FinalAnswerAudit(
         passed=lint_result.passed and not tool_failure_categories,
         severity=str(lint_result.severity),
@@ -98,6 +147,15 @@ def audit_final_answer(
         source_contract=source_contract_map,
         review_report=review_report_map,
         answer_lint=lint_result.model_dump(mode="json"),
+        claim_bindings=claim_bindings,
+        claim_count=int(claim_summary.get("claim_count") or 0),
+        supported_claim_count=int(claim_summary.get("supported_claim_count") or 0),
+        partial_claim_count=int(claim_summary.get("partial_claim_count") or 0),
+        unsupported_claim_count=int(claim_summary.get("unsupported_claim_count") or 0),
+        conflicted_claim_count=int(claim_summary.get("conflicted_claim_count") or 0),
+        unsupported_claim_rate=float(claim_summary.get("unsupported_claim_rate") or 0.0),
+        unsupported_claim_ids=unsupported_claim_ids,
+        partial_claim_ids=partial_claim_ids,
     )
 
 

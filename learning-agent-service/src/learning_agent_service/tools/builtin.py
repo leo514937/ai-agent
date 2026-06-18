@@ -67,6 +67,12 @@ class CouponListToolInput(BaseModel):
     limit: int = Field(default=10)
 
 
+class CouponListToolInput(BaseModel):
+    shop_id: int | None = None
+    shop_name: str | None = None
+    limit: int = Field(default=10)
+
+
 class BlogListToolInput(BaseModel):
     shop_id: int | None = None
     user_id: int | None = None
@@ -307,7 +313,32 @@ def _resolve_catalog_shop(
     shop_name: str | None = None,
     query: str = "",
     current: int = 1,
+    intent_type: str | None = None,
 ) -> ShopRecord | None:
+    """
+    统一店铺解析 - 使用 BusinessObjectResolver
+    
+    优先使用 shop_id，其次通过名称解析。
+    """
+    from ..local_life.business_object_resolver import BusinessObjectResolver
+    
+    resolver = BusinessObjectResolver(client=client, catalog=catalog)
+    result = resolver.resolve(
+        raw_query=query or shop_name or "",
+        shop_id=shop_id,
+        shop_name=shop_name,
+        brand=None,
+        area=None,
+        intent_type=intent_type,
+    )
+    
+    if result.id is not None:
+        try:
+            return client.get_shop_detail(result.id) if client else catalog.get_shop(result.id)
+        except Exception:
+            return catalog.get_shop(result.id) if catalog else None
+    
+    # 降级到原有逻辑
     if shop_id is not None:
         try:
             resolved_id = int(shop_id)
@@ -328,22 +359,52 @@ def _resolve_catalog_shop(
     if search_name:
         if client is not None and hasattr(client, "search_shops_by_name"):
             try:
-                shops = client.search_shops_by_name(name=search_name, current=int(current))
+                try:
+                    shops = client.search_shops_by_name(name=search_name, current=int(current), limit=2)
+                except TypeError:
+                    shops = client.search_shops_by_name(name=search_name, current=int(current))
                 if shops:
-                    return shops[0]
+                    first_shop_name = getattr(shops[0], "name", "")
+                    if first_shop_name == search_name:
+                        return shops[0]
+                    if len(shops) == 1 and (search_name in first_shop_name or first_shop_name in search_name):
+                        return shops[0]
+                    return None
             except Exception:
                 if not _catalog_fallback_allowed(client):
                     raise
-        shops = catalog.search_shops(query=search_name, slots=LocalLifeSlots(shop_query=search_name), limit=1)
+        shops = catalog.search_shops(query=search_name, slots=LocalLifeSlots(shop_query=search_name), limit=2)
         if shops:
-            return shops[0]
+            first_shop_name = getattr(shops[0], "name", "")
+            if first_shop_name == search_name:
+                return shops[0]
+            if len(shops) == 1 and (search_name in first_shop_name or first_shop_name in search_name):
+                return shops[0]
+            return None
     return None
 
 
-def _detect_source(client: Any) -> str:
+def _detect_source(client: Any, fallback_source: str | None = None) -> str:
+    if fallback_source is not None:
+        text = str(fallback_source).strip()
+        if text:
+            return text
     if client is not None and bool(getattr(client, "enabled", False)):
         return "java"
     return "catalog"
+
+
+def _first_record_source(records: Sequence[Any]) -> str | None:
+    for record in records:
+        if isinstance(record, Mapping):
+            source = record.get("source")
+        else:
+            source = getattr(record, "source", None)
+        if source:
+            text = str(source).strip()
+            if text:
+                return text
+    return None
 
 
 def _catalog_fallback_allowed(client: Any) -> bool:
@@ -402,6 +463,44 @@ def build_builtin_tool_registry(
         }
         return _tool_output(data)
 
+    def _search_coupons(payload: CouponListToolInput) -> dict[str, Any]:
+        shop = _resolve_catalog_shop(
+            client=local_life_client,
+            catalog=catalog,
+            shop_id=payload.shop_id,
+            shop_name=payload.shop_name,
+        )
+        shop_id = int(getattr(shop, 'id', 0) or 0) if shop is not None else int(payload.shop_id or 0)
+        
+        if not shop_id and payload.shop_name:
+            return _tool_output({
+                "error": "shop_not_resolved",
+                "empty_reason": "multiple_candidates"
+            })
+            
+        if shop_id:
+            if local_life_client is not None and hasattr(local_life_client, "get_coupon_list"):
+                try:
+                    coupons = list(local_life_client.get_coupon_list(shop_id))
+                except Exception:
+                    if not _catalog_fallback_allowed(local_life_client):
+                        raise
+                    coupons = catalog.list_vouchers(shop_id)
+            else:
+                coupons = catalog.list_vouchers(shop_id)
+        else:
+            coupons = []
+        coupons = coupons[: max(0, int(payload.limit))]
+        return _tool_output(
+            {
+                "shop_id": shop_id or None,
+                "count": len(coupons),
+                "coupons": [_voucher_payload(voucher) for voucher in coupons],
+                "shop_source": getattr(shop, "source", None) if shop is not None else None,
+                "source": _detect_source(local_life_client, fallback_source=_first_record_source(coupons) or getattr(shop, "source", None)),
+            }
+        )
+
     def _search_shop_types(payload: ShopTypeListToolInput) -> dict[str, Any]:
         if local_life_client is not None and hasattr(local_life_client, "list_shop_types"):
             try:
@@ -449,36 +548,6 @@ def build_builtin_tool_registry(
                 "shop": _shop_payload(shop),
                 "open_status": open_status,
                 "distance_eta": distance_eta,
-                "source": _detect_source(local_life_client),
-            }
-        )
-
-    def _search_coupons(payload: CouponListToolInput) -> dict[str, Any]:
-        shop = _resolve_catalog_shop(
-            client=local_life_client,
-            catalog=catalog,
-            shop_id=payload.shop_id,
-            shop_name=payload.shop_name,
-        )
-        shop_id = int(shop.id) if shop is not None else int(payload.shop_id or 0)
-        if shop_id:
-            if local_life_client is not None and hasattr(local_life_client, "get_coupon_list"):
-                try:
-                    coupons = list(local_life_client.get_coupon_list(shop_id))
-                except Exception:
-                    if not _catalog_fallback_allowed(local_life_client):
-                        raise
-                    coupons = catalog.list_vouchers(shop_id)
-            else:
-                coupons = catalog.list_vouchers(shop_id)
-        else:
-            coupons = []
-        coupons = coupons[: max(0, int(payload.limit))]
-        return _tool_output(
-            {
-                "shop_id": shop_id or None,
-                "count": len(coupons),
-                "coupons": [_voucher_payload(voucher) for voucher in coupons],
                 "source": _detect_source(local_life_client),
             }
         )
@@ -552,6 +621,11 @@ def build_builtin_tool_registry(
             shop_id=shop_id,
             shop_name=shop_name,
         )
+        
+        resolved_shop_id = int(getattr(resolved_shop, 'id', 0) or 0) if resolved_shop else int(shop_id or 0)
+        if not resolved_shop_id and shop_name:
+            return {"error": "shop_not_resolved", "empty_reason": "multiple_candidates"}
+            
         if resolved_shop is None and not open_hours:
             return {"open_status": "unknown", "open_now": None}
         if client is not None and hasattr(client, "check_open_status"):
@@ -593,6 +667,11 @@ def build_builtin_tool_registry(
             shop_id=shop_id,
             shop_name=shop_name,
         )
+        
+        resolved_shop_id = int(getattr(resolved_shop, 'id', 0) or 0) if resolved_shop else int(shop_id or 0)
+        if not resolved_shop_id and shop_name:
+            return {"error": "shop_not_resolved", "empty_reason": "multiple_candidates"}
+            
         if client is not None and hasattr(client, "get_distance_eta"):
             try:
                 return dict(
@@ -831,7 +910,7 @@ def build_builtin_tool_registry(
         RegisteredTool(
             spec=ToolSpec(
                 name="get_shop_detail",
-                description="查询单个商户详情",
+                description="查询单一商户详情",
                 input_model=ShopDetailToolInput,
                 output_model=GenericToolOutput,
                 idempotent=True,
@@ -931,7 +1010,7 @@ def build_builtin_tool_registry(
                 input_model=BookingToolInput,
                 output_model=GenericToolOutput,
                 idempotent=False,
-                retryable=True,
+                retryable=False,
                 side_effect_level=SideEffectLevel.HIGH,
                 risk_level="medium",
                 allowed_execution_modes=("plan_execute",),
@@ -948,7 +1027,7 @@ def build_builtin_tool_registry(
                 input_model=OrderToolInput,
                 output_model=GenericToolOutput,
                 idempotent=False,
-                retryable=True,
+                retryable=False,
                 side_effect_level=SideEffectLevel.HIGH,
                 risk_level="medium",
                 allowed_execution_modes=("plan_execute",),
@@ -965,7 +1044,7 @@ def build_builtin_tool_registry(
                 input_model=CancelOrderToolInput,
                 output_model=GenericToolOutput,
                 idempotent=False,
-                retryable=True,
+                retryable=False,
                 side_effect_level=SideEffectLevel.HIGH,
                 risk_level="high",
                 allowed_execution_modes=("plan_execute",),
@@ -982,7 +1061,7 @@ def build_builtin_tool_registry(
                 input_model=RefundOrderToolInput,
                 output_model=GenericToolOutput,
                 idempotent=False,
-                retryable=True,
+                retryable=False,
                 side_effect_level=SideEffectLevel.HIGH,
                 risk_level="high",
                 allowed_execution_modes=("plan_execute",),

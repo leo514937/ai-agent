@@ -14,6 +14,7 @@ from learning_agent_service.application.rag_gate import (
     classify_rag_rule,
     compose_direct_response_text,
 )
+from learning_agent_service.config import Settings
 from learning_agent_service.domain.enums import IntentType
 
 
@@ -103,6 +104,25 @@ class RagGateTestCase(unittest.TestCase):
 
         self.assertIn("不太适合本地生活推荐", text)
         self.assertIn("具体城市", text)
+
+    def test_settings_default_disables_rag(self) -> None:
+        self.assertFalse(Settings.model_fields["enable_rag"].default)
+
+    def test_gate_short_circuits_when_rag_is_disabled(self) -> None:
+        calls: list[str] = []
+
+        def judge(request: RagGateRequest) -> RagGateVote:
+            calls.append(request.raw_query)
+            return RagGateVote(vote=ALLOW, reason="llm_allow", confidence=0.99)
+
+        gate = RagRouteGate(llm_judge=judge, enabled=False)
+        decision = gate.decide(RagGateRequest(raw_query="解释一下 Spring AOP 原理"))
+
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.final_vote, DENY)
+        self.assertEqual(decision.reason, "rag_disabled")
+        self.assertEqual(decision.metadata.get("voting_mode"), "disabled")
+        self.assertEqual(calls, [])
 
 
 if __name__ == "__main__":

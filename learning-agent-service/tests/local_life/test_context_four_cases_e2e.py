@@ -4,7 +4,7 @@ import unittest
 
 import _bootstrap  # noqa: F401
 
-from learning_agent_service.application.router.stages.query_merge import merge_local_life_query_context
+from learning_agent_service.application.workflow.adapters.helpers import merge_local_life_query_context
 from learning_agent_service.domain.contracts import PersistentSessionContext
 from learning_agent_service.local_life.query_rewriter import normalize_query
 from learning_agent_service.local_life.slot_extractor import extract_slots

@@ -11,6 +11,12 @@ from typing import Any
 from .models import RetrievalFilters, RetrievalPlan, coerce_tuple
 from .rewrite_guard import QueryRewriteGuard, QueryRewriteGuardConfig
 
+# Lazy import to avoid circular dependency; FacetPlan is a Pydantic model from contracts
+try:
+    from ..domain.contracts import FacetPlan
+except ImportError:
+    from typing import Any as FacetPlan  # type: ignore[assignment]
+
 _TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_+#.:-]+|[\u4e00-\u9fff]+")
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,6 +51,7 @@ class QueryRewriteContext:
     user_preferences: Mapping[str, Any] = field(default_factory=dict)
     extra: Mapping[str, Any] = field(default_factory=dict)
     intent_confidence: float = 0.0
+    facet_plan: tuple[FacetPlan, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -457,6 +464,26 @@ class QueryRewriteService:
         return " ".join(ordered[:10])
 
     def _preferred_chunk_types(self, context: QueryRewriteContext) -> tuple[str, ...]:
+        # 新路径：当 facet_plan 非空时，从 rag facet 的 preferred_roles 映射到 chunk types
+        if context.facet_plan:
+            role_to_chunk: dict[str, str] = {
+                "merchant_review_summary": "review",
+                "merchant_profile": "profile",
+                "merchant_scene_fit": "scene",
+                "merchant_pitfall_summary": "pitfall",
+                "package_description": "package",
+            }
+            types: set[str] = set()
+            for fp in context.facet_plan:
+                if fp.source not in ("rag", "recommendation"):
+                    continue
+                for role in (fp.preferred_roles or []):
+                    mapped = role_to_chunk.get(role)
+                    if mapped:
+                        types.add(mapped)
+            if types:
+                return tuple(sorted(types))
+        # 旧路径：查 INTENT_CHUNK_MAP（intent 硬编码）
         intent = (context.intent or "").strip().lower()
         return INTENT_CHUNK_MAP.get(intent, INTENT_CHUNK_MAP["explain"])
 

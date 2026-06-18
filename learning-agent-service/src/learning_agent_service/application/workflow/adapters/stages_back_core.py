@@ -10,7 +10,7 @@ from learning_agent_service.domain.contracts import (
     AnswerComposeResult,
     PersistSessionCommand,
 )
-from learning_agent_service.application.router.base import (
+from .helpers import (
     routing_trace_payload,
     _update_phase0_trace,
     _update_phase1_trace,
@@ -18,7 +18,7 @@ from learning_agent_service.application.router.base import (
     _update_phase3_trace,
     _update_phase4_trace,
 )
-from learning_agent_service.application.router.phase7_compose import (
+from .helpers import (
     _build_answer_contract,
     _build_answer_verifier_result,
     _build_entity_join_result,
@@ -32,6 +32,13 @@ from learning_agent_service.local_life.final_answer_audit import audit_final_ans
 from learning_agent_service.local_life.final_answer_safety import apply_final_answer_safety
 from learning_agent_service.local_life.response_builder import build_coupon_only_answer
 from learning_agent_service.memory import MemoryCapabilityError as _MemoryCapabilityError
+
+_GROUND_STRICT_STYLES = {
+    "coupon_only",
+    "open_status_only",
+    "distance_only",
+    "single_shop_review",
+}
 
 
 def _ranked_candidate_context(candidate: Any) -> dict[str, Any]:
@@ -131,6 +138,11 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                 final_response_mode = "partial_grounded"
             entity_join_result = _build_entity_join_result(turn)
             answer_contract = _build_answer_contract(turn, routing, evidence_quality, entity_join_result)
+            if (
+                str(final_response_mode or "").strip().lower() == "grounded"
+                and str(getattr(answer_contract, "answer_style", "") or "").strip().lower() in _GROUND_STRICT_STYLES
+            ):
+                final_response_mode = "grounded_strict"
             client_context = dict(runtime.client_context)
             current_shop = str(
                 turn.extra.get("current_shop")
@@ -164,7 +176,10 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                 "forbidden_facets": list(getattr(answer_contract, "forbidden_facets", []) or []),
                 "allow_recommendation": bool(getattr(answer_contract, "allow_recommendation", False)),
                 "allow_extra_context": bool(getattr(answer_contract, "allow_extra_context", False)),
-                "realtime_required": bool(getattr(answer_contract, "realtime_required", False)),
+                "realtime_required": bool(
+                    getattr(answer_contract, "realtime_required", False)
+                    or str(getattr(answer_contract, "answer_style", "") or "").strip().lower() in {"coupon_only", "open_status_only", "distance_only"}
+                ),
                 "current_topic": str(getattr(turn, "current_topic", "") or getattr(state["persistent"], "current_topic", "") or "").strip() or None,
                 "current_shop": current_shop,
                 "selected_shop_id": selected_shop_id,
@@ -368,8 +383,10 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
     
                     catalog = get_default_catalog()
                     shop_record = catalog.get_shop(selected_shop_id)
-                    if shop_record is not None and str(getattr(shop_record, "name", "") or "").strip():
-                        selected_shop_name = str(shop_record.name).strip()
+                    if shop_record is not None:
+                        if str(getattr(shop_record, "name", "") or "").strip():
+                            selected_shop_name = str(shop_record.name).strip()
+                        answer_context["target_shop_info"] = shop_record.model_dump(mode="json") if hasattr(shop_record, "model_dump") else dict(shop_record) if hasattr(shop_record, "keys") else None
                 except Exception:
                     selected_shop_name = None
 
@@ -408,7 +425,14 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                     "shop_name": candidate_name
                 }
                 persistent_updates["last_candidates"] = [candidate_dict] + current_candidates
-    
+
+            if recommendation_like_query and ranked_candidates and "last_candidates" not in persistent_updates:
+                persistent_updates["last_candidates"] = [
+                    {"shop_id": c.get("shop_id"), "name": c.get("name"), "shop_name": c.get("name")}
+                    for c in ranked_candidates
+                    if c.get("shop_id") is not None
+                ]
+
             if persistent_updates:
                 state["persistent"] = state["persistent"].model_copy(update=persistent_updates)
             if out_of_scope_route:
@@ -570,14 +594,6 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                 },
             )
             result = composer.compose(request)
-            if not out_of_scope_route and explicit_query_shop and explicit_query_shop not in str(result.answer_text or "") and not any(
-                token in raw_query_text for token in ("券", "优惠", "团购", "代金券", "营业", "开门", "开着", "营业时间", "距离", "有多远", "导航", "路线", "怎么走", "怎么去")
-            ):
-                answer_text = f"{explicit_query_shop}：目前只能先给你一个部分判断。整体来看，这家店值得继续关注。"
-                result = result.model_copy(update={"answer_text": answer_text})
-                if any(token in raw_query_text for token in ("?", "??", "??", "???")):
-                    coupon_line = f"{recommendation_names[0] if recommendation_names else '???'}????????/?????"
-                    result = result.model_copy(update={"answer_text": f"{result.answer_text}\n{coupon_line}" if result.answer_text else coupon_line})
             raw_query_compact = str(turn.raw_query or "").replace(" ", "")
             coupon_tokens = ("券", "优惠", "团购", "代金券")
             open_tokens = ("营业", "开门", "开业")
@@ -664,7 +680,22 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
             answer_verifier_mode = str(verifier_result.extra.get("phase4_mode") or "").strip().lower()
             if answer_verifier_mode == "enforce" and not verifier_result.passed:
                 enforced_mode = str(verifier_result.suggested_response_mode or final_response_mode or "").strip().lower()
-                if enforced_mode and enforced_mode != (final_response_mode or ""):
+                if str(final_response_mode or "").strip().lower() == "grounded_strict":
+                    strict_fallback_mode = enforced_mode if enforced_mode in {"ask_clarification", "no_answer", "partial_grounded"} else "no_answer"
+                    if strict_fallback_mode == "ask_clarification":
+                        result = result.model_copy(update={"answer_text": composer._compose_clarify_response(request, routing)})
+                    elif strict_fallback_mode == "partial_grounded":
+                        result = result.model_copy(update={"answer_text": composer._compose_partial_grounded_answer(request)})
+                    else:
+                        result = result.model_copy(update={"answer_text": composer._compose_no_answer(request, evidence_quality)})
+                    final_response_mode = strict_fallback_mode
+                    verifier_result = _build_answer_verifier_result(
+                        request,
+                        result.answer_text,
+                        entity_join_result,
+                        answer_contract,
+                    )
+                elif enforced_mode and enforced_mode != (final_response_mode or ""):
                     enforced_request = request.model_copy(update={"final_response_mode": enforced_mode})
                     result = composer.compose(enforced_request)
                     verifier_result = _build_answer_verifier_result(
@@ -751,47 +782,7 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                     )
                     verifier_result = _build_answer_verifier_result(request, result.answer_text, entity_join_result, answer_contract)
             answer_text = str(result.answer_text or "").strip()
-            if recommendation_like_query and not all(token in answer_text for token in ("推荐理由", "适合场景", "综合建议")):
-                candidate_names = [
-                    _clean_text(candidate.get("name") or candidate.get("shop_name") or candidate.get("title"))
-                    for candidate in ranked_candidates
-                    if _clean_text(candidate.get("name") or candidate.get("shop_name") or candidate.get("title"))
-                ]
-                if not candidate_names:
-                    candidate_names = ["候选店A", "候选店B", "候选店C"]
-                scene_hint = None
-                focus_hint = None
-                if "商务" in raw_query_compact:
-                    scene_hint = "适合商务宴请"
-                elif "家庭" in raw_query_compact:
-                    scene_hint = "适合家庭聚餐"
-                elif "约会" in raw_query_compact:
-                    scene_hint = "适合约会"
-                elif "带小孩" in raw_query_compact:
-                    scene_hint = "适合带小孩"
-                elif "朋友聚餐" in raw_query_compact:
-                    scene_hint = "适合朋友聚餐"
-                if any(token in raw_query_compact for token in ("最近", "距离", "离我多远", "有多远", "导航", "路线", "怎么走", "怎么去")):
-                    focus_hint = "优先看距离"
-                elif "评分" in raw_query_compact:
-                    focus_hint = "优先看评分"
-                result = result.model_copy(
-                    update={
-                        "answer_text": _build_recommendation_answer_text(
-                            candidate_names,
-                            limit=3,
-                            scene_hint=scene_hint,
-                            focus_hint=focus_hint,
-                            fallback_text=(
-                                f"{current_topic or '你附近'}暂时还没有足够信息，我先给你列出几家候选店，供你继续筛选。"
-                                if recommendation_like_query
-                                else (answer_text or current_topic or "这家店")
-                            ),
-                        )
-                    }
-                )
-                verifier_result = _build_answer_verifier_result(request, result.answer_text, entity_join_result, answer_contract)
-            elif explicit_query_shop and explicit_query_shop not in answer_text and "这家店" in answer_text:
+            if explicit_query_shop and explicit_query_shop not in answer_text and "这家店" in answer_text:
                 result = result.model_copy(
                     update={
                         "answer_text": answer_text.replace("这家店", explicit_query_shop)
@@ -876,6 +867,7 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                 for candidate in ranked_candidates
                 if getattr(candidate, "shop_id", None) not in (None, "") and getattr(candidate, "name", None)
             }
+            answer_context["final_response_mode"] = final_response_mode
             final_answer_safety = apply_final_answer_safety(
                 answer_text=str(result.answer_text or ""),
                 answer_contract=answer_contract,
@@ -889,11 +881,14 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                 review_report=review_report.model_dump(mode="json"),
                 tool_results=tool_results_payload,
                 shop_lookup=shop_lookup,
+                answer_context=answer_context,
             )
             if hasattr(result, "model_copy"):
                 result = result.model_copy(update={"answer_text": final_answer_safety.answer_text})
             else:
                 result = result.__class__(**{**getattr(result, "__dict__", {}), "answer_text": final_answer_safety.answer_text})
+            if str(final_answer_safety.suggested_response_mode or "").strip().lower():
+                final_response_mode = str(final_answer_safety.suggested_response_mode or final_response_mode or "").strip().lower()
             plan_summary = getattr(turn, "final_task_summary", None)
             result_answer_text = str(getattr(result, "answer_text", "") or "").strip()
             if plan_summary is not None and "Plan execution" not in result_answer_text:
@@ -925,12 +920,15 @@ class WorkflowNodeAdapterStagesBackCoreMixin:
                 source_contract=source_contract.model_dump(mode="json"),
                 review_report=review_report.model_dump(mode="json"),
                 tool_results=tool_results_payload or ([coupon_tool_result.model_dump(mode="json")] if coupon_tool_result is not None and hasattr(coupon_tool_result, "model_dump") else []),
+                answer_context=answer_context,
+                claim_bindings=final_answer_safety.claim_bindings,
             )
             turn_extra = {**dict(turn.extra), "answer_confidence": result.confidence}
             if current_shop:
                 turn_extra["current_shop"] = current_shop
             if explicit_query_shop:
                 turn_extra["explicit_query_shop"] = explicit_query_shop
+            turn_extra["claim_bindings"] = final_answer_safety.claim_bindings
             response_origin = _response_origin_for_turn(turn, allow_direct_response=allow_direct_response)
             if routing is not None:
                 turn_extra["routing_decision"] = routing.model_dump(mode="json")

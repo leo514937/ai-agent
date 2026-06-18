@@ -320,15 +320,17 @@ class PlanExecutionSummaryPayload(BaseModel):
 
 
 class ChatStreamRequest(BaseModel):
+    # 这是 chat 流式请求的入口模型，前端或测试会把本轮 query 直接送到这里。
     user_id: str = Field(min_length=1)
     session_id: str = Field(min_length=1)
     trace_id: str = Field(min_length=1)
-    message: str
+    message: str = Field(min_length=1)
     turn_id: str | None = None
     page: str | None = None
     response_mode: str | None = None
     topic_hint: str | None = None
     history_summary: str | None = None
+    # client_context 会携带门店、城市、定位、来源等上下文，后续路由和记忆恢复都依赖它。
     client_context: dict[str, Any] = Field(default_factory=dict, validation_alias=AliasChoices("context", "client_context"))
 
 

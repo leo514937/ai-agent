@@ -6,8 +6,8 @@ from types import SimpleNamespace
 import _bootstrap  # noqa: F401
 
 from learning_agent_service.application.workflow.adapters import WorkflowNodeAdapter
-from learning_agent_service.application.router.phase5_retrieval import ensure_retrieval_plan
-from learning_agent_service.application.router.phase6_tool import ensure_tool_plan
+from learning_agent_service.application.workflow.adapters.helpers import ensure_retrieval_plan
+from learning_agent_service.application.workflow.adapters.helpers import ensure_tool_plan
 from learning_agent_service.domain import (
     ChatTurnCommand,
     EvidencePack,

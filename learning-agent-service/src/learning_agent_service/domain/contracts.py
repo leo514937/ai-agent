@@ -6,7 +6,17 @@ from typing import Any, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .enums import IntentType, OutputStyle, RagStatus, ToolExecutionStatus, TurnDecision
+from .enums import (
+    IntentType,
+    LocalRouteType,
+    NegativeScopeType,
+    OutputStyle,
+    PolarityType,
+    RagStatus,
+    TargetType,
+    ToolExecutionStatus,
+    TurnDecision,
+)
 from .errors import ErrorInfo, TerminalEvent, WorkflowErrorCode
 from .memory import (
     MemoryCandidate,
@@ -61,6 +71,7 @@ class ChatTurnCommand(CoreModel):
     response_mode: str | None = None
     topic_hint: str | None = None
     history_summary: str | None = None
+    # 这一层把外部上下文带进单轮对话，门店锚点、城市和来源都会从这里继续传下去。
     client_context: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -186,9 +197,21 @@ class SemanticParseResult(CoreModel):
     primary_intent: str | None = None
     top_level_intent: str | None = None
     sub_intents: list[str] = Field(default_factory=list)
+    polarity: PolarityType = PolarityType.NEUTRAL
+    negative_scope: NegativeScopeType = NegativeScopeType.ACTION
+    target_type: TargetType = TargetType.AMBIGUOUS
+    local_route: LocalRouteType = LocalRouteType.CLARIFY
+    target_shops: list[str] = Field(default_factory=list)
+    target_categories: list[str] = Field(default_factory=list)
+    excluded_shops: list[str] = Field(default_factory=list)
+    excluded_categories: list[str] = Field(default_factory=list)
+    excluded_features: list[str] = Field(default_factory=list)
     required_facets: list[str] = Field(default_factory=list)
     optional_facets: list[str] = Field(default_factory=list)
     forbidden_facets: list[str] = Field(default_factory=list)
+    facets: list[str] = Field(default_factory=list)
+    required_sources: list[str] = Field(default_factory=list)
+    needs_context: bool = False
     constraints: dict[str, Any] = Field(default_factory=dict)
     target_reference: str | None = None
     confidence: float = 0.0
@@ -206,6 +229,46 @@ class SourceContract(CoreModel):
     comparison_shop_ids: list[int] = Field(default_factory=list)
     scope_kind: str | None = None
     target_reference_source: str | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+
+class ClaimSourceRef(CoreModel):
+    source_type: Literal[
+        "tool_structured",
+        "realtime_tool",
+        "rag_evidence",
+        "rerank_reason",
+        "user_context",
+        "template",
+        "llm_generated",
+    ] = "llm_generated"
+    source_id: str = ""
+    source_label: str | None = None
+    confidence: float = 0.0
+    detail: dict[str, Any] = Field(default_factory=dict)
+
+
+class ClaimBinding(CoreModel):
+    claim_id: str = ""
+    claim_type: str = "generic"
+    facet: str = ""
+    text: str = ""
+    risk_level: Literal["high", "medium", "low"] = "low"
+    entity_id: str | None = None
+    shop_id: int | None = None
+    entity_name: str | None = None
+    primary_source_type: Literal[
+        "tool_structured",
+        "realtime_tool",
+        "rag_evidence",
+        "rerank_reason",
+        "user_context",
+        "template",
+        "llm_generated",
+    ] = "llm_generated"
+    source_ids: list[str] = Field(default_factory=list)
+    supporting_sources: list[ClaimSourceRef] = Field(default_factory=list)
+    support_status: Literal["supported", "partial", "unsupported", "conflicted"] = "unsupported"
     extra: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -231,11 +294,14 @@ class LoopCounter(CoreModel):
 
 
 class AnswerContract(CoreModel):
+    # 这些字段共同定义本轮回答边界：回答什么、依赖什么证据、能不能用工具。
     original_query: str = ""
     allowed_facets: list[str] = Field(default_factory=list)
     optional_facets: list[str] = Field(default_factory=list)
     forbidden_facets: list[str] = Field(default_factory=list)
     required_facets: list[dict[str, Any]] = Field(default_factory=list)
+    # 需要走实时工具的面，tool_planner 会靠这个字段决定是否下发工具调用。
+    realtime_facets: list[str] = Field(default_factory=list)
     evidence_requirements: dict[str, Any] = Field(default_factory=dict)
     tool_requirements: dict[str, Any] = Field(default_factory=dict)
     forbidden_without_evidence: list[str] = Field(default_factory=list)
@@ -258,6 +324,7 @@ class AnswerVerifierResult(CoreModel):
 
 
 class PlanStep(CoreModel):
+    # 单个执行步，既给规划器读，也给后续执行节点直接消费。
     step_id: str = ""
     goal: str = ""
     expected_output: str | None
@@ -268,6 +335,7 @@ class PlanStep(CoreModel):
 
 
 class TaskPlan(CoreModel):
+    # 复杂链路的显式执行计划，plan_execute 这条路会直接依赖它。
     enabled: bool = False
     trigger_reason: str = ""
     summary: str = ""
@@ -370,8 +438,8 @@ class IntentRoutingDecision(CoreModel):
     confidence: float = 0.0
     required_slots: list[str] = Field(default_factory=list)
     missing_slots: list[str] = Field(default_factory=list)
-    allowed_routes: list[str] = Field(default_factory=list)
-    forbidden_routes: list[str] = Field(default_factory=list)
+    allowed_routes: list[str] = Field(default_factory=list)  # DEPRECATED: 由 facet_plan.source 替代
+    forbidden_routes: list[str] = Field(default_factory=list)  # DEPRECATED: 由 facet_plan 替代
 
 
 class RewriteDecision(CoreModel):
@@ -427,18 +495,24 @@ class RetrievalEligibility(CoreModel):
 
 
 class RoutingDecision(CoreModel):
+    # 路由器的综合输出，决定本轮是直答、检索、工具、澄清还是拒答。
     raw_query: str = ""
     normalized_query: str = ""
     domain: str = "general"
     confidence: float = 0.0
     input_quality: InputQualityDecision = Field(default_factory=InputQualityDecision)
     intent: IntentRoutingDecision = Field(default_factory=IntentRoutingDecision)
+
+    # v4 能力线路
+    capability_line: Literal["direct", "single_shop_tool", "recommendation_tool", "comparison_tool", "transaction_tool", "jailbreak", "clarify"] = "direct"
+
     required_action: str = "no_op"
     blocked: bool = False
     blocked_reason: str | None = None
     should_rewrite_query: bool = False
     should_retrieve: bool = False
     should_call_tool: bool = False
+    resolved_shop_id: int | None = None
     should_use_memory: bool = True
     should_persist_memory: bool = True
     should_vectorize_memory: bool = True
@@ -450,21 +524,64 @@ class RoutingDecision(CoreModel):
     safeguards_triggered: list[str] = Field(default_factory=list)
     fallback_reason: str | None = None
     route_candidate: str | None = None
-    execution_mode: Literal["clarify", "simple", "standard", "complex"] = "simple"
-    preferred_chunk_roles: list[str] = Field(default_factory=list)
-    tool_candidates: list[str] = Field(default_factory=list)
+    canonical_route: str | None = None
+    required_sources: list[str] = Field(default_factory=list)
+    semantic_parse_result: SemanticParseResult | None = None
+    execution_mode: Literal["clarify", "simple", "standard", "complex"] = "simple"  # DEPRECATED: facet_planner 路径固定设为 "simple"，仅旧路径使用
+    preferred_chunk_roles: list[str] = Field(default_factory=list)  # DEPRECATED: 由 facet_plan.preferred_roles 替代
+    tool_candidates: list[str] = Field(default_factory=list)  # DEPRECATED: 由 facet_plan 替代
     clarification_question: str | None = None
     rewrite_decision: RewriteDecision | None = None
     evidence_quality: EvidenceQualityDecision | None = None
+    facet_plan: list["FacetPlan"] = Field(default_factory=list)
     extra: dict[str, Any] = Field(default_factory=dict)
 
 
+class FacetPlan(CoreModel):
+    """一个信息面及其数据源。
+
+    由 facet_planner 输出，指定需要获取什么信息、从哪里获取。
+    """
+    name: str = ""
+    source: Literal["rag", "tool", "recommendation", "direct"] = "rag"
+    tool_name: str | None = None
+    preferred_roles: list[str] = Field(default_factory=list)
+    required: bool = True
+    parallel_group: int = 0
+
+    # v4 路由扩展字段
+    execution_mode: Literal["direct", "single_shop_tool", "recommendation_tool", "comparison_tool", "transaction_tool", "clarify", "jailbreak"] = "direct"
+    required_target: Literal["single_shop", "multi_shop", "any", "none"] = "any"
+    required_inputs: list[str] = Field(default_factory=list)
+    allowed_claim_types: list[str] = Field(default_factory=list)
+    ambiguity_policy: Literal["clarify", "candidate_list", "skip"] = "clarify"
+    fallback_action: str | None = None
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+
+class FacetPlannerOutput(CoreModel):
+    """facet_planner 的输出，替代原有的多层路由结果。"""
+    facets: list[FacetPlan] = Field(default_factory=list)
+    simple_response: str | None = None
+    clarification_needed: bool = False
+    clarification_question: str | None = None
+    reject: bool = False
+    reject_reason: str | None = None
+    target_shop_id: int | None = None
+    candidate_shop_ids: list[int] = Field(default_factory=list)
+    recommendation_mode: bool = False
+
+
 class RoutingContract(CoreModel):
+    # 把路由判断收敛成执行契约，下游节点主要看这里来决定怎么做。
     required_action: str = "no_op"
+    canonical_route: str | None = None
+    required_sources: list[str] = Field(default_factory=list)
     required_facets: list[str] = Field(default_factory=list)
     optional_facets: list[str] = Field(default_factory=list)
     forbidden_facets: list[str] = Field(default_factory=list)
     facet_source_map: dict[str, Any] = Field(default_factory=dict)
+    facet_plan: list[FacetPlan] = Field(default_factory=list)
 
     target_shop_id: int | None = None
     candidate_shop_ids: list[int] = Field(default_factory=list)
@@ -734,6 +851,7 @@ class AnswerComposeResult(CoreModel):
 
 
 class PersistentSessionContext(CoreModel):
+    # 当前会话锚点：用于把上一轮选中的店、城市和比较对象延续到下一轮追问。
     current_topic: str | None = None
     current_shop: str | None = None
     current_shop_anchor: dict[str, Any] = Field(default_factory=dict)
@@ -753,6 +871,7 @@ class PersistentSessionContext(CoreModel):
     current_location: dict[str, Any] = Field(default_factory=dict)
     current_constraints: dict[str, Any] = Field(default_factory=dict)
     last_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    # 这些字段表示当前轮已经锚定到哪家店，后续“有券吗”“营业吗”都会沿用这里的门店。
     selected_shop_id: int | None = None
     selected_shop_name: str | None = None
     local_life_preferences: list[str] = Field(default_factory=list)
@@ -762,12 +881,12 @@ class PersistentSessionContext(CoreModel):
     page: str | None = None
     route_decision: str | None = None
     route_reason: str | None = None
+    # current_stage 和 stage_status 记录单轮流程处于哪个节点，便于调试和回放。
     current_stage: str | None = None
     stage_status: str | None = None
     stage_timeline: list[dict[str, Any]] = Field(default_factory=list)
     extra: dict[str, Any] = Field(default_factory=dict)
-    
-    # Dialog state machine fields
+    # 下面这些字段是对话状态机的显式状态，负责承接“有券吗”“离我多远”这类追问。
     dialog_state: str | None = None  # DialogState value
     dialog_task: str | None = None  # current_task
     dialog_intent: str | None = None  # active_intent
@@ -777,6 +896,7 @@ class PersistentSessionContext(CoreModel):
 
 
 class TurnRuntimeState(CoreModel):
+    # 单轮执行上下文，路由、检索、规划和最终回答都会写在这里。
     raw_query: str
     decision: str = "direct_answer"
     intent: IntentType | None = None
@@ -810,6 +930,7 @@ class TurnRuntimeState(CoreModel):
     answer_contract: AnswerContract | None = None
     answer_verifier_result: AnswerVerifierResult | None = None
     tool_plan: ToolSelection | None = None
+    # task_plan / plan / final_task_summary 只在复杂链路里真正起作用。
     task_plan: TaskPlan | None = None
     raw_tool_result: ToolExecutionResult | None = None
     tool_result: NormalizedToolResult | None = None
@@ -828,12 +949,14 @@ class TurnRuntimeState(CoreModel):
     memory_candidates: list[MemoryCandidate] = Field(default_factory=list)
     memory_write_plan: MemoryWritePlan | None = None
     memory_injection_plan: MemoryInjectionPlan | None = None
+    # final_answer 和 rag_result 是最终输出前最关键的两类结果。
     final_answer: str | None = None
     rag_result: RagResult | None = None
     extra: dict[str, Any] = Field(default_factory=dict)
 
 
 class GraphRuntimeMeta(CoreModel):
+    # client_context 贯穿整条链路，决定路由、记忆和调试指标的上下文输入。
     trace_id: str
     session_id: str
     turn_id: str
@@ -845,6 +968,7 @@ class GraphRuntimeMeta(CoreModel):
     topic_hint: str | None = None
     history_summary: str | None = None
     client_context: dict[str, Any] = Field(default_factory=dict)
+    # metrics、emitted_events 和 memory_updates 主要服务于可观测性和端到端断言。
     metrics: dict[str, Any] = Field(default_factory=dict)
     errors: list[ErrorInfo] = Field(default_factory=list)
     degrade_to: str | None = None
@@ -857,8 +981,10 @@ class GraphRuntimeMeta(CoreModel):
 
 
 class FinalPayload(CoreModel):
+    # 最终 SSE/HTTP 输出需要的摘要、来源和会话轨迹都集中在这里。
     answer_text: str
     citations: list[Citation] = Field(default_factory=list)
+    claim_bindings: list[ClaimBinding] = Field(default_factory=list)
     source_mode: str | None = None
     degraded_reason: str | None = None
     knowledge_freshness: dict[str, Any] = Field(default_factory=dict)
@@ -869,6 +995,7 @@ class FinalPayload(CoreModel):
     source: str = "local-life-agent"
     page: str | None = None
     selected_shop_id: int | None = None
+    # 这些字段把本轮最终走到了哪条路、卡在哪个节点一起带回给前端和调试工具。
     route_decision: str | None = None
     route_reason: str | None = None
     current_stage: str | None = None
@@ -881,12 +1008,16 @@ class FinalPayload(CoreModel):
     next_steps: list[str] = Field(default_factory=list)
     task_chain: list[dict[str, Any]] = Field(default_factory=list)
     ranked_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    last_candidates: list[dict[str, Any]] = Field(default_factory=list)
     fallback: bool = False
     retrieval_strategy: str | None = None
     grounding_status: Literal['grounded', 'weakly_grounded', 'not_grounded'] = "not_grounded"
     retrieval_summary: RetrievalSummary | None = None
     memory_used_summary: MemoryUsedSummary | None = None
     memory_updates: dict[str, Any] = Field(default_factory=dict)
+    answer_style: str | None = None
+    final_response_mode: str | None = None
+    route_gate: dict[str, Any] = Field(default_factory=dict)
     confidence: float = 0.0
     approval_required: bool = False
     approval_request: dict[str, Any] = Field(default_factory=dict)
@@ -936,6 +1067,8 @@ RagResult.model_rebuild()
 AnswerPlan.model_rebuild()
 SemanticParseResult.model_rebuild()
 SourceContract.model_rebuild()
+ClaimSourceRef.model_rebuild()
+ClaimBinding.model_rebuild()
 ReviewReport.model_rebuild()
 LoopCounter.model_rebuild()
 EntityJoinResult.model_rebuild()

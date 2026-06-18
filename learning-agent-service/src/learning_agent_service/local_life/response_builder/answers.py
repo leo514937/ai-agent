@@ -24,14 +24,77 @@ from learning_agent_service.local_life.schemas import (
 )
 
 
+def _coerce_facet_result_bundle(
+    facet_result_bundle: Any | None,
+) -> FacetResultBundle | None:
+    if facet_result_bundle is None:
+        return None
+    if isinstance(facet_result_bundle, FacetResultBundle):
+        return facet_result_bundle
+    bundle_map = _as_mapping(facet_result_bundle)
+    if not bundle_map:
+        return None
+    try:
+        return FacetResultBundle.model_validate(bundle_map)
+    except Exception:
+        return None
+
+
 def _tool_result_for_facet(
-    facet_result_bundle: FacetResultBundle | None,
+    facet_result_bundle: Any | None,
     facet: str,
     shop_id: int | None = None,
 ):
-    if facet_result_bundle is None:
+    facet_bundle = _coerce_facet_result_bundle(facet_result_bundle)
+    if facet_bundle is None:
         return None
-    return facet_result_bundle.find_tool_result(facet, shop_id=shop_id)
+    return facet_bundle.find_tool_result(facet, shop_id=shop_id)
+
+
+def _tool_result_source(tool_result: Any) -> str:
+    if tool_result is None:
+        return ""
+    source = _clean_text(getattr(tool_result, "source", None))
+    if not source and isinstance(tool_result, Mapping):
+        source = _clean_text(tool_result.get("source"))
+    return str(source or "").lower().strip()
+
+
+def _tool_result_data(tool_result: Any) -> dict[str, Any]:
+    if tool_result is None:
+        return {}
+    data = _as_mapping(getattr(tool_result, "data", None))
+    if data:
+        return dict(data)
+    normalized_output = _as_mapping(getattr(tool_result, "normalized_output", None))
+    if normalized_output:
+        nested_data = _as_mapping(normalized_output.get("data"))
+        if nested_data:
+            return dict(nested_data)
+        return dict(normalized_output)
+    if isinstance(tool_result, Mapping):
+        return dict(tool_result)
+    return {}
+
+
+def _strict_tool_result_is_trusted(tool_result: Any) -> bool:
+    return _tool_result_source(tool_result) not in {"catalog", "fallback"}
+
+
+def _coupon_titles_from_tool_result(tool_result: Any) -> list[str]:
+    if not _strict_tool_result_is_trusted(tool_result):
+        return []
+    data = _tool_result_data(tool_result)
+    coupons = list(data.get("coupons") or data.get("items") or [])
+    titles: list[str] = []
+    for coupon in coupons[:3]:
+        coupon_map = _as_mapping(coupon)
+        if str(_clean_text(coupon_map.get("source")) or "").lower().strip() in {"catalog", "fallback"}:
+            return []
+        title = coupon_map.get("title") or coupon_map.get("name")
+        if title:
+            titles.append(str(title))
+    return titles
 
 
 def _coupon_tool_count(
@@ -74,44 +137,35 @@ def build_coupon_only_answer(
     evidence_claims: Sequence[EvidenceClaim],
     facet_result_bundle: FacetResultBundle | None = None
 ) -> str:
+    facet_bundle = _coerce_facet_result_bundle(facet_result_bundle)
     shop_id = ranked_candidates[0].shop_id if ranked_candidates else None
-    tool_result = _tool_result_for_facet(facet_result_bundle, "coupon", shop_id=shop_id)
-    if tool_result is not None and tool_result.status in {"timeout", "error", "degraded", "unsupported"}:
+    tool_result = _tool_result_for_facet(facet_bundle, "coupon", shop_id=shop_id)
+    coupon_data = _tool_result_data(tool_result)
+    if tool_result is None or not _strict_tool_result_is_trusted(tool_result):
+        fallback_text = fallback_message_for_facet("coupon", topic_name)
+        if fallback_text:
+            return f"实时优惠券信息：{fallback_text}"
+        return f"{topic_name}实时优惠券信息暂时无法确认，建议以店铺页面显示为准。"
+    if str(_clean_text(coupon_data.get("shop_source")) or "").lower().strip() in {"catalog", "fallback"}:
+        fallback_text = fallback_message_for_facet("coupon", topic_name)
+        if fallback_text:
+            return f"实时优惠券信息：{fallback_text}"
+        return f"{topic_name}实时优惠券信息暂时无法确认，建议以店铺页面显示为准。"
+    if tool_result.status in {"timeout", "error", "degraded", "unsupported"}:
         fallback_text = fallback_message_for_facet("coupon", topic_name)
         if fallback_text:
             return f"实时优惠券信息：{fallback_text}"
         return f"{topic_name}实时优惠券信息暂时无法确认，建议以店铺页面显示为准。"
 
-    coupon_count = _coupon_tool_count(facet_result_bundle, shop_id=shop_id)
+    coupon_count = _coupon_tool_count(facet_bundle, shop_id=shop_id)
     if coupon_count is None:
-        if facet_result_bundle and facet_result_bundle.coupon_result:
-            coupon_count = facet_result_bundle.coupon_result.realtime_available_count
-        else:
-            vouchers = ranked_candidates[0].vouchers if ranked_candidates else []
-            coupon_count = len(vouchers)
+        if facet_bundle and facet_bundle.coupon_result and _clean_text(getattr(facet_bundle.coupon_result, "source", None)).lower() in {"realtime_tool", "java"}:
+            coupon_count = facet_bundle.coupon_result.realtime_available_count
 
     if coupon_count > 0:
-        vouchers = []
-        if ranked_candidates:
-            vouchers = ranked_candidates[0].vouchers
-        
-        titles = []
-        total_stock = 0
-        for v in vouchers[:3]:
-            title = v.get("title") or v.get("name")
-            if title:
-                titles.append(str(title))
-            stock = v.get("stock")
-            if stock is not None:
-                try:
-                    total_stock += int(stock)
-                except (TypeError, ValueError):
-                    pass
-        
+        titles = _coupon_titles_from_tool_result(tool_result)
         title_text = "、".join(titles)
         if title_text:
-            if total_stock > 0:
-                return f"{topic_name}当前有{coupon_count}张券：{title_text}。"
             return f"{topic_name}当前有{coupon_count}张券：{title_text}。"
         return f"{topic_name}当前有{coupon_count}张券。"
     
@@ -127,9 +181,12 @@ def build_open_status_only_answer(
     evidence_claims: Sequence[EvidenceClaim],
     facet_result_bundle: FacetResultBundle | None = None,
 ) -> str:
+    facet_bundle = _coerce_facet_result_bundle(facet_result_bundle)
     shop_id = ranked_candidates[0].shop_id if ranked_candidates else None
-    tool_result = _tool_result_for_facet(facet_result_bundle, "open_status", shop_id=shop_id)
-    if tool_result is None:
+    tool_result = _tool_result_for_facet(facet_bundle, "open_status", shop_id=shop_id)
+    if tool_result is None or not _strict_tool_result_is_trusted(tool_result):
+        return fallback_message_for_facet("open_status", topic_name) or f"{topic_name}暂时无法确认当前营业状态。"
+    if str(_clean_text(_tool_result_data(tool_result).get("shop_source")) or "").lower().strip() in {"catalog", "fallback"}:
         return fallback_message_for_facet("open_status", topic_name) or f"{topic_name}暂时无法确认当前营业状态。"
     if tool_result.status in {"timeout", "error", "degraded", "unsupported"}:
         return fallback_message_for_facet("open_status", topic_name) or f"{topic_name}暂时无法确认当前营业状态。"
@@ -153,15 +210,16 @@ def build_distance_only_answer(
     evidence_claims: Sequence[EvidenceClaim],
     facet_result_bundle: FacetResultBundle | None = None,
 ) -> str:
+    facet_bundle = _coerce_facet_result_bundle(facet_result_bundle)
     shop_id = ranked_candidates[0].shop_id if ranked_candidates else None
-    tool_result = _tool_result_for_facet(facet_result_bundle, "distance_eta", shop_id=shop_id)
-    if tool_result is not None and tool_result.status in {"timeout", "error", "degraded", "unsupported"}:
+    tool_result = _tool_result_for_facet(facet_bundle, "distance_eta", shop_id=shop_id)
+    if tool_result is None or not _strict_tool_result_is_trusted(tool_result):
         return fallback_message_for_facet("distance_eta", topic_name) or f"抱歉，暂时无法确认与{topic_name}的距离。"
-    distance_km = None
-    if tool_result is not None:
-        distance_km = tool_result.data.get("distance_km")
-    elif ranked_candidates:
-        distance_km = ranked_candidates[0].structured_features.get("distance_km")
+    if str(_clean_text(_tool_result_data(tool_result).get("shop_source")) or "").lower().strip() in {"catalog", "fallback"}:
+        return fallback_message_for_facet("distance_eta", topic_name) or f"抱歉，暂时无法确认与{topic_name}的距离。"
+    if tool_result.status in {"timeout", "error", "degraded", "unsupported"}:
+        return fallback_message_for_facet("distance_eta", topic_name) or f"抱歉，暂时无法确认与{topic_name}的距离。"
+    distance_km = _tool_result_data(tool_result).get("distance_km")
     if distance_km is not None:
         return f"{topic_name}距离你约{_format_distance(distance_km)}。"
     return fallback_message_for_facet("distance_eta", topic_name) or f"抱歉，暂时无法确认与{topic_name}的距离。"
@@ -230,7 +288,8 @@ def validate_answer_against_contract(
     ranked_candidates: Sequence[RankedCandidate], 
     evidence_claims: Sequence[EvidenceClaim],
     facet_result_bundle: FacetResultBundle | None = None,
-    user_need: Any | None = None
+    user_need: Any | None = None,
+    answer_context: Any | None = None,
 ) -> str:
     if not answer_contract:
         return answer_text or ""
@@ -245,6 +304,7 @@ def validate_answer_against_contract(
         evidence_claims=evidence_claims,
         facet_result_bundle=facet_result_bundle,
         user_need=user_need,
+        answer_context=answer_context,
     )
 
     cleaned_lines = []
@@ -575,6 +635,7 @@ def _build_coupon_environment_answer(
     user_need: Any | None = None,
     facet_result_bundle: FacetResultBundle | None = None,
 ) -> str:
+    facet_bundle = _coerce_facet_result_bundle(facet_result_bundle)
     _raw_shop_name = _clean_text(current_topic) or (ranked_candidates[0].name if ranked_candidates else None) or "这家店"
     # 防止 "shop:5" 等内部 ID 泄露到最终答案中
     import re as _re
@@ -588,8 +649,8 @@ def _build_coupon_environment_answer(
     # Voucher Section
     if user_need is None or "coupon" in req_facet_names:
         coupon_count = 0
-        if facet_result_bundle and facet_result_bundle.coupon_result:
-            coupon_count = facet_result_bundle.coupon_result.realtime_available_count
+        if facet_bundle and facet_bundle.coupon_result:
+            coupon_count = facet_bundle.coupon_result.realtime_available_count
         else:
             coupon_count = len(ranked_candidates[0].vouchers) if (ranked_candidates and ranked_candidates[0].vouchers) else 0
 
@@ -617,7 +678,7 @@ def _build_coupon_environment_answer(
     # Open Status Section
     if user_need is not None and "open_status" in req_facet_names:
         shop_id = ranked_candidates[0].shop_id if ranked_candidates else None
-        tool_result = _tool_result_for_facet(facet_result_bundle, "open_status", shop_id=shop_id)
+        tool_result = _tool_result_for_facet(facet_bundle, "open_status", shop_id=shop_id)
         if tool_result is None or tool_result.status in {"timeout", "error", "degraded", "unsupported"}:
             sections.append(f"营业状态：{fallback_message_for_facet('open_status', shop_name) or f'{shop_name}暂时无法确认当前营业状态。'}")
         else:
@@ -648,6 +709,7 @@ def _build_facet_driven_answer(
     user_need: Any | None = None,
     facet_result_bundle: FacetResultBundle | None = None,
 ) -> str:
+    facet_bundle = _coerce_facet_result_bundle(facet_result_bundle)
     req_facet_names = [f.name for f in getattr(user_need, "required_facets", []) or []] if user_need is not None else []
     if not req_facet_names:
         return _build_coupon_environment_answer(
@@ -655,7 +717,7 @@ def _build_facet_driven_answer(
             ranked_candidates=ranked_candidates,
             evidence_claims=evidence_claims,
             user_need=user_need,
-            facet_result_bundle=facet_result_bundle,
+            facet_result_bundle=facet_bundle,
         )
 
     top_candidate = ranked_candidates[0] if ranked_candidates else None
@@ -682,7 +744,7 @@ def _build_facet_driven_answer(
             evidence_claims=list(evidence_claims),
             answer_depth_policy=policy,
             user_need=user_need,
-            facet_result_bundle=facet_result_bundle,
+            facet_result_bundle=facet_bundle,
         )
         if composed.answer_text:
             return composed.answer_text
@@ -701,14 +763,14 @@ def _build_facet_driven_answer(
 
     if "coupon" in req_facet_names:
         shop_id = top_candidate.shop_id if top_candidate is not None else None
-        tool_result = _tool_result_for_facet(facet_result_bundle, "coupon", shop_id=shop_id)
+        tool_result = _tool_result_for_facet(facet_bundle, "coupon", shop_id=shop_id)
         if tool_result is not None and tool_result.status in {"timeout", "error", "degraded", "unsupported"}:
             sections.append(f"券信息：{fallback_message_for_facet('coupon', topic_name) or f'{topic_name}暂时无法确认实时优惠券信息。'}")
         else:
-            coupon_count = _coupon_tool_count(facet_result_bundle, shop_id=shop_id)
+            coupon_count = _coupon_tool_count(facet_bundle, shop_id=shop_id)
             if coupon_count is None:
-                if facet_result_bundle and facet_result_bundle.coupon_result:
-                    coupon_count = facet_result_bundle.coupon_result.realtime_available_count
+                if facet_bundle and facet_bundle.coupon_result:
+                    coupon_count = facet_bundle.coupon_result.realtime_available_count
                 else:
                     coupon_count = len(top_candidate.vouchers) if (top_candidate and top_candidate.vouchers) else 0
 
@@ -729,7 +791,7 @@ def _build_facet_driven_answer(
 
     if "open_status" in req_facet_names:
         shop_id = top_candidate.shop_id if top_candidate is not None else None
-        tool_result = _tool_result_for_facet(facet_result_bundle, "open_status", shop_id=shop_id)
+        tool_result = _tool_result_for_facet(facet_bundle, "open_status", shop_id=shop_id)
         if tool_result is None or tool_result.status in {"timeout", "error", "degraded", "unsupported"}:
             sections.append(f"营业状态：{fallback_message_for_facet('open_status', topic_name) or f'{topic_name}暂时无法确认当前营业状态。'}")
         else:
@@ -743,7 +805,7 @@ def _build_facet_driven_answer(
                 sections.append(f"营业状态：{fallback_message_for_facet('open_status', topic_name) or f'{topic_name}暂时无法确认当前营业状态。'}")
 
     if "distance_eta" in req_facet_names and top_candidate is not None:
-        tool_result = _tool_result_for_facet(facet_result_bundle, "distance_eta", shop_id=top_candidate.shop_id)
+        tool_result = _tool_result_for_facet(facet_bundle, "distance_eta", shop_id=top_candidate.shop_id)
         if tool_result is None or tool_result.status in {"timeout", "error", "degraded", "unsupported"}:
             sections.append(f"距离信息：{fallback_message_for_facet('distance_eta', topic_name) or f'{topic_name}暂时无法确认距离信息。'}")
         else:
@@ -767,7 +829,7 @@ def _build_facet_driven_answer(
         ranked_candidates=ranked_candidates,
         evidence_claims=evidence_claims,
         user_need=user_need,
-        facet_result_bundle=facet_result_bundle,
+        facet_result_bundle=facet_bundle,
     )
 
 
@@ -783,6 +845,9 @@ def build_single_shop_review_answer(topic_name: str, ranked_candidates: Sequence
         price_text = _format_price(top_candidate.structured_features.get("avg_price"))
         distance_text = _format_distance(top_candidate.structured_features.get("distance_km"))
         sections.append(f"{name}\uff1a\u8bc4\u5206 {score_text}\uff0c\u4eba\u5747\u7ea6 {price_text}\uff0c\u8ddd\u4f60\u7ea6 {distance_text}\u3002")
+        address_text = _clean_text(top_candidate.structured_features.get("address"))
+        if address_text:
+            sections.append(f"\u5730\u5740\uff1a{address_text}\u3002")
         reason = _candidate_reason(top_candidate)
         if reason:
             sections.append(f"\u63a8\u8350\u7406\u7531\uff1a{reason}\u3002")

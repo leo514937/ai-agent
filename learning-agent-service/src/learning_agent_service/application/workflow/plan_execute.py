@@ -35,6 +35,7 @@ class ReactStepExecutor:
     policy: PlanExecutionPolicy = field(default_factory=PlanExecutionPolicy)
 
     def plan_planner(self, state: GraphState) -> GraphState:
+        # 计划生成是规则编排：优先复用现成 plan，再从 TaskPlan 或默认模板补齐步骤。
         turn = state["turn"]
         plan = self._normalize_plan(turn.plan, limit=self.policy.max_steps)
         task_plan = getattr(turn, "task_plan", None)
@@ -70,6 +71,7 @@ class ReactStepExecutor:
         return state
 
     def plan_validator(self, state: GraphState) -> GraphState:
+        # 计划校验是规则校验，不靠 LLM 自己决定能不能执行。
         turn = state["turn"]
         plan = self._normalize_plan(turn.plan, limit=self.policy.max_steps)
         if not plan:
@@ -111,6 +113,7 @@ class ReactStepExecutor:
         return state
 
     def step_executor(self, state: GraphState) -> GraphState:
+        # 每个 step 的执行也是规则调度：按工具、审批和重试条件逐步推进。
         turn = state["turn"]
         plan = self._normalize_plan(turn.plan)
         if not plan:
@@ -250,6 +253,7 @@ class ReactStepExecutor:
         return state
 
     def progress_checker(self, state: GraphState) -> GraphState:
+        # 进度检查只统计步骤完成情况，用来判断是否可以进入 complex_review。
         turn = state["turn"]
         plan = self._normalize_plan(turn.plan)
         completed = len([result for result in turn.step_results if result.status == "success"])
@@ -278,6 +282,7 @@ class ReactStepExecutor:
         return state
 
     def plan_reviewer(self, state: GraphState) -> GraphState:
+        # 复杂任务复盘是规则汇总，把 step 结果压缩成最终 summary。
         turn = state["turn"]
         summary = self._build_summary(turn)
         state["turn"] = turn.model_copy(update={"final_task_summary": summary})
@@ -305,6 +310,7 @@ class ReactStepExecutor:
         return state
 
     def human_approval_stub(self, state: GraphState) -> GraphState:
+        # 这里是人工审批占位节点，不是模型决策；真正效果由审批结果驱动。
         turn = state["turn"]
         request = dict(turn.approval_request)
         if not request and turn.current_step is not None:
@@ -329,6 +335,7 @@ class ReactStepExecutor:
         return state
 
     def replanner(self, state: GraphState) -> GraphState:
+        # 重规划也属于规则回退：超过上限就终止，否则生成恢复计划。
         turn = state["turn"]
         turn_extra = dict(turn.extra)
         replan_count = int(turn_extra.get("plan_replan_count", 0) or 0)
@@ -533,6 +540,7 @@ class ReactStepExecutor:
         )
 
     def _build_default_plan(self, state: GraphState) -> List[PlanStep]:
+        # 默认计划是兜底模板，避免没有显式计划时复杂链路直接失去执行入口。
         turn = state["turn"]
         intent = turn.intent
         topic = self._topic_from_state(state)
@@ -669,6 +677,7 @@ class ReactStepExecutor:
         return turn.raw_query or "general-topic"
 
     def _normalize_plan(self, plan: List[PlanStep], limit: int | None = None) -> List[PlanStep]:
+        # 这里做纯规则归一化：清洗 step 结构、裁剪长度、补默认字段。
         normalized: List[PlanStep] = []
         for _index, item in enumerate(plan):
             if isinstance(item, PlanStep):

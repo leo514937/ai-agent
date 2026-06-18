@@ -401,6 +401,56 @@ class MemoryPolicyTestCase(unittest.TestCase):
         self.assertEqual(plan.top_k, 3)
         self.assertEqual(plan.token_budget, 256)
 
+    def test_retrieval_policy_skips_long_term_search_when_recall_plan_disabled(self) -> None:
+        class _FakeLongTermStore:
+            def __init__(self) -> None:
+                self.search_calls: list[dict[str, object]] = []
+                self.collection_name = "user_semantic_memory"
+
+            def search(self, *args, **kwargs):
+                self.search_calls.append({"args": args, "kwargs": kwargs})
+                return []
+
+            def list_by_scope(self, *args, **kwargs):
+                return []
+
+        policy = MemoryRetrievalPolicy(
+            config=RetrievalPolicyConfig(
+                prompt_limit=1,
+                state_limit=1,
+                rag_limit=1,
+                tool_limit=1,
+                token_budget=128,
+                semantic_top_k=1,
+                episodic_threshold=0.5,
+                procedural_threshold=0.45,
+            )
+        )
+        long_term_store = _FakeLongTermStore()
+
+        pack = policy.retrieve(
+            user_id="user-1",
+            session_id="session-1",
+            project_id=None,
+            raw_query="海底捞怎么样",
+            intent="local_life",
+            current_topic=None,
+            recent_entities=(),
+            active_plan_id=None,
+            response_mode="analysis",
+            history_summary=None,
+            session_store=None,
+            short_term_store=None,
+            entity_store=None,
+            mastery_store=None,
+            long_term_store=long_term_store,
+        )
+
+        self.assertFalse(long_term_store.search_calls)
+        self.assertEqual(pack.semantic_memories, [])
+        self.assertIn("long-term_skipped", pack.retrieval_reason)
+        self.assertEqual(pack.collection_name, "user_semantic_memory")
+
     def test_vectorization_gate_blocks_low_value_and_session_noise(self) -> None:
         gate = MemoryVectorizationGate()
 

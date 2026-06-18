@@ -415,6 +415,8 @@ def _looks_like_local_life_domain(command, message: str, lowered: str, persisten
             return True
         if _contains_any(message, _LOCAL_LIFE_DOMAIN_TOKENS):
             return True
+    if _looks_like_nearby_recommendation(message, lowered):
+        return True
 
     if any(key in context for key in _LOCAL_LIFE_CONTEXT_KEYS):
         return True
@@ -442,6 +444,8 @@ def _detect_local_life_intent(message: str, lowered: str, has_topic: bool) -> st
         return "coupon_and_detail"
     if any(token in lowered for token in ("compare", "vs", "difference")) or _contains_any(message, _rule_tokens("compare_tokens")):
         return "compare"
+    if _contains_any(message, _rule_tokens("booking_tokens")):
+        return "booking"
     if has_topic:
         return "detail"
     return None

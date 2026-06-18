@@ -145,6 +145,178 @@ def _build_llm_evidence_context(
             lines.append("评价信息: " + "; ".join(claim_texts))
     return "\n".join(lines) if lines else "暂无详细信息"
 
+
+def _facet_tool_results(facet_result_bundle: FacetResultBundle | None) -> list[dict[str, Any]]:
+    bundle = _as_mapping(facet_result_bundle)
+    tool_results: list[dict[str, Any]] = []
+    for result in list(bundle.get("tool_results") or []):
+        result_map = _as_mapping(result)
+        if result_map:
+            tool_results.append(dict(result_map))
+    return tool_results
+
+
+def _coerce_int(value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        return int(str(value))
+    except Exception:
+        return None
+
+
+def _synthesize_ranked_candidates_from_tool_results(
+    *,
+    current_shop: str | None,
+    current_topic: str | None,
+    selected_shop_id: int | None,
+    user_need: Any | None,
+    facet_result_bundle: FacetResultBundle | None,
+    ranked_candidates: Sequence[RankedCandidate],
+) -> list[RankedCandidate]:
+    """当只有实时工具结果、没有候选店铺时，补一个可用于卡片组装的单店候选。"""
+    candidates = list(ranked_candidates)
+    if candidates:
+        return candidates
+
+    tool_results = _facet_tool_results(facet_result_bundle)
+    if not tool_results and selected_shop_id is None and not current_shop:
+        return candidates
+
+    req_facet_names = [f.name for f in getattr(user_need, "required_facets", []) or []] if user_need is not None else []
+    shop_id = _coerce_int(selected_shop_id)
+    shop_name = _clean_text(current_shop)
+    if shop_name and re.match(r"^shop:\d+$", shop_name):
+        shop_name = ""
+    if not shop_name:
+        shop_name = _clean_text(current_topic) or "这家店"
+
+    structured_features: dict[str, Any] = {}
+    evidence_features: dict[str, float] = {}
+    vouchers: list[dict[str, Any]] = []
+    matched_requirements: list[str] = []
+    explainable_reasons: list[str] = []
+
+    for result in tool_results:
+        facet = str(result.get("facet") or "").strip().lower()
+        if facet and facet not in matched_requirements:
+            matched_requirements.append(facet)
+        data = _as_mapping(result.get("data"))
+        if not data:
+            data = _as_mapping(result.get("normalized_output"))
+        shop_payload = _as_mapping(data.get("shop"))
+
+        if shop_id is None:
+            shop_id = _coerce_int(
+                result.get("shop_id")
+                or data.get("shop_id")
+                or shop_payload.get("id")
+            )
+        if not _clean_text(shop_name):
+            shop_name = (
+                _clean_text(result.get("shop_name"))
+                or _clean_text(data.get("shop_name"))
+                or _clean_text(shop_payload.get("name"))
+                or shop_name
+            )
+
+        if shop_payload:
+            for source_key, target_key in (
+                ("area", "area"),
+                ("address", "address"),
+                ("avg_price", "avg_price"),
+                ("score", "score"),
+                ("comments", "comments"),
+                ("open_hours", "open_hours"),
+                ("image", "image"),
+                ("distance_km", "distance_km"),
+                ("shop_type", "shop_type"),
+            ):
+                value = shop_payload.get(source_key)
+                if value not in (None, ""):
+                    structured_features[target_key] = value
+
+        if facet == "coupon":
+            coupons = list(data.get("coupons") or [])
+            if coupons:
+                for index, coupon in enumerate(coupons, 1):
+                    coupon_map = _as_mapping(coupon)
+                    if not coupon_map:
+                        continue
+                    voucher = {
+                        "id": coupon_map.get("id") or index,
+                        "title": coupon_map.get("title") or coupon_map.get("name") or "优惠券",
+                        "sub_title": coupon_map.get("sub_title") or coupon_map.get("subTitle"),
+                        "pay_value": coupon_map.get("pay_value") or coupon_map.get("payValue"),
+                        "actual_value": coupon_map.get("actual_value") or coupon_map.get("actualValue"),
+                        "stock": coupon_map.get("stock"),
+                        "begin_time": coupon_map.get("begin_time") or coupon_map.get("beginTime"),
+                        "end_time": coupon_map.get("end_time") or coupon_map.get("endTime"),
+                        "rules": coupon_map.get("rules"),
+                    }
+                    vouchers.append(voucher)
+            count = data.get("count")
+            if count not in (None, ""):
+                structured_features["coupon_count"] = count
+            elif coupons:
+                structured_features["coupon_count"] = len(coupons)
+            if coupons and "coupon" not in matched_requirements:
+                matched_requirements.append("coupon")
+            if coupons:
+                explainable_reasons.append("实时接口已查到可用券")
+
+        elif facet == "open_status":
+            open_status = _clean_text(data.get("open_status"))
+            open_now = data.get("open_now")
+            open_hours = data.get("open_hours") or data.get("openHours") or structured_features.get("open_hours")
+            if open_status:
+                structured_features["open_status"] = open_status
+            if open_now is not None:
+                structured_features["open_now"] = open_now
+            if open_hours not in (None, ""):
+                structured_features["open_hours"] = open_hours
+            if open_status or open_now is not None:
+                explainable_reasons.append("实时接口已查到营业状态")
+
+        elif facet == "distance_eta":
+            distance_km = data.get("distance_km")
+            eta_minutes = data.get("eta_minutes")
+            mode = data.get("mode")
+            if distance_km is not None:
+                structured_features["distance_km"] = distance_km
+            if eta_minutes is not None:
+                structured_features["eta_minutes"] = eta_minutes
+            if mode not in (None, ""):
+                structured_features["distance_mode"] = mode
+            if distance_km is not None or eta_minutes is not None:
+                explainable_reasons.append("实时接口已查到距离信息")
+
+    if shop_id is None:
+        return candidates
+
+    if not matched_requirements and req_facet_names:
+        matched_requirements = list(dict.fromkeys(req_facet_names))
+
+    if not explainable_reasons:
+        explainable_reasons.append("已基于实时工具结果补齐店铺信息")
+
+    candidates.append(
+        RankedCandidate(
+            shop_id=shop_id,
+            name=shop_name,
+            matched_requirements=matched_requirements,
+            structured_features=structured_features,
+            evidence_features=evidence_features,
+            risk_flags=[],
+            explainable_reasons=explainable_reasons,
+            vouchers=vouchers,
+            blog_snippets=[],
+            score_breakdown={},
+            rank_score=1.0,
+        )
+    )
+    return candidates
+
 def build_response_bundle(
     *,
     raw_query: str,
@@ -195,6 +367,7 @@ def build_response_bundle(
     route_reason = route_reason or _clean_text(model_hint.get("route_reason"))
     knowledge_freshness = dict(knowledge_freshness or _as_mapping(model_hint.get("knowledge_freshness")))
     graph_trace = _as_mapping(graph_trace)
+    facet_tool_results = _facet_tool_results(facet_result_bundle)
     graph_input_context: dict[str, Any] = {}
     graph_perception_context: dict[str, Any] = {}
     graph_memory_arbitration: dict[str, Any] = {}
@@ -205,6 +378,15 @@ def build_response_bundle(
     model_illegal_state_mutation: list[dict[str, Any]] = []
     model_node_writes: list[dict[str, Any]] = []
     ranked_candidates = list(ranked_candidates)
+    selected_shop_id = _coerce_int(selected_shop_id)
+    ranked_candidates = _synthesize_ranked_candidates_from_tool_results(
+        current_shop=current_shop,
+        current_topic=current_topic,
+        selected_shop_id=selected_shop_id,
+        user_need=user_need,
+        facet_result_bundle=facet_result_bundle,
+        ranked_candidates=ranked_candidates,
+    )
     answer_plan_model = _as_plan(answer_plan) or _as_plan(model_hint.get("answer_plan"))
     verification_model = _as_verification(verification_result) or _as_verification(model_hint.get("verification_result"))
     evidence_pack_model = _as_evidence_pack(evidence_pack) or _as_evidence_pack(model_hint.get("evidence_pack"))
@@ -388,6 +570,9 @@ def build_response_bundle(
         and not multi_dynamic_facet_query
     )
     allowed_shop_ids = EvidenceScopeGuard.allowed_shop_ids(ranked_candidates=ranked_candidates, evidence_pack=evidence_pack_model)
+    # 这轮已经明确选中了门店时，不要被证据域过滤误删，否则工具结果能回来但卡片会被清空。
+    if selected_shop_id is not None:
+        allowed_shop_ids.add(selected_shop_id)
     if allowed_shop_ids:
         ranked_candidates = [
             candidate
@@ -399,6 +584,63 @@ def build_response_bundle(
             for claim in evidence_claims
             if getattr(claim, "shop_id", None) in allowed_shop_ids
         ]
+    if not ranked_candidates and selected_shop_id is not None:
+        fallback_shop_name = _clean_text(current_shop) or _clean_text(current_topic) or f"shop:{selected_shop_id}"
+        fallback_candidate = RankedCandidate(
+            shop_id=selected_shop_id,
+            name=fallback_shop_name,
+            matched_requirements=[],
+            structured_features={},
+            evidence_features={},
+            risk_flags=[],
+            explainable_reasons=[],
+            vouchers=[],
+            blog_snippets=[],
+            score_breakdown={},
+            rank_score=0.0,
+        )
+        for result in facet_tool_results:
+            result_map = _as_mapping(result)
+            data = _as_mapping(result_map.get("data"))
+            result_shop_id = _coerce_int(result_map.get("shop_id") or data.get("shop_id"))
+            if result_shop_id not in (None, selected_shop_id):
+                continue
+            shop_payload = _as_mapping(data.get("shop"))
+            if shop_payload:
+                for source_key, target_key in (
+                    ("area", "area"),
+                    ("address", "address"),
+                    ("avg_price", "avg_price"),
+                    ("score", "score"),
+                    ("comments", "comments"),
+                    ("open_hours", "open_hours"),
+                    ("image", "image"),
+                    ("distance_km", "distance_km"),
+                    ("shop_type", "shop_type"),
+                ):
+                    value = shop_payload.get(source_key)
+                    if value not in (None, ""):
+                        fallback_candidate.structured_features[target_key] = value
+                fallback_candidate.name = _clean_text(shop_payload.get("name")) or fallback_candidate.name
+            coupons = list(data.get("coupons") or [])
+            if coupons:
+                fallback_candidate.vouchers = [
+                    {
+                        "id": coupon_map.get("id") or index,
+                        "title": coupon_map.get("title") or coupon_map.get("name") or "优惠券",
+                        "sub_title": coupon_map.get("sub_title") or coupon_map.get("subTitle"),
+                        "pay_value": coupon_map.get("pay_value") or coupon_map.get("payValue"),
+                        "actual_value": coupon_map.get("actual_value") or coupon_map.get("actualValue"),
+                        "stock": coupon_map.get("stock"),
+                        "begin_time": coupon_map.get("begin_time") or coupon_map.get("beginTime"),
+                        "end_time": coupon_map.get("end_time") or coupon_map.get("endTime"),
+                        "rules": coupon_map.get("rules"),
+                    }
+                    for index, coupon in enumerate(coupons[:3], 1)
+                    if (coupon_map := _as_mapping(coupon))
+                ]
+            break
+        ranked_candidates = [fallback_candidate]
     if model_answer:
         answer_text = model_answer
     if plan_usable and answer_plan_model is not None and not model_answer:
@@ -950,6 +1192,16 @@ def build_response_bundle(
             {"shop_id": sid, "evidence_count": evidence_shop_ids.count(sid)}
             for sid in list(dict.fromkeys(evidence_shop_ids))
         ]
+    safety_answer_context = {
+        "raw_query": raw_query,
+        "current_topic": current_topic,
+        "current_shop": current_shop,
+        "selected_shop_id": selected_shop_id,
+        "approval_required": approval_required,
+        "answer_style": getattr(answer_contract, "answer_style", None) if answer_contract is not None else None,
+        "realtime_required": bool(getattr(answer_contract, "realtime_required", False) if answer_contract is not None else False),
+        "tool_results": facet_tool_results,
+    }
     pruning_result = prune_context_for_contract(
         answer_contract,
         ranked_candidates=ranked_candidates,
@@ -987,6 +1239,7 @@ def build_response_bundle(
         evidence_claims=evidence_claims,
         facet_result_bundle=facet_result_bundle,
         user_need=user_need,
+        answer_context=safety_answer_context,
     ) if answer_contract is not None else None
     metrics["context_pruning"] = dict(_as_mapping(pruning_result.get("summary")))
     metrics["answer_lint"] = lint_result.model_dump(mode="json") if lint_result is not None else {
@@ -1025,13 +1278,22 @@ def build_response_bundle(
         route_gate={"route_decision": route_decision, "route_reason": route_reason} if route_decision or route_reason else None,
         source_contract=None,
         review_report=None,
-        tool_results=[],
+        tool_results=facet_tool_results,
+        answer_context={**safety_answer_context, "final_response_mode": str(safety_result.get("final_response_mode") or mode or "").strip() or None},
     )
     answer_text = final_answer_safety.answer_text
     safety_result = final_answer_safety.to_dict()
     metrics["final_answer_safety"] = safety_result
     metrics["final_answer_audit"] = final_answer_safety.final_answer_audit
     metrics["answer_lint"] = final_answer_safety.answer_lint
+    metrics["claim_bindings"] = final_answer_safety.claim_bindings
+    metrics["claim_binding_summary"] = {
+        "claim_count": final_answer_safety.claim_count,
+        "supported_claim_count": final_answer_safety.supported_claim_count,
+        "partial_claim_count": final_answer_safety.partial_claim_count,
+        "unsupported_claim_count": final_answer_safety.unsupported_claim_count,
+        "conflicted_claim_count": final_answer_safety.conflicted_claim_count,
+    }
     metrics["contract_block_fallback"] = bool(safety_result.get("blocked"))
     metrics["llm_primary_output"] = bool(model_answer) and not template_fallback_used and not bool(safety_result.get("blocked"))
     bundle = LocalLifeResponseBundle(
@@ -1041,6 +1303,7 @@ def build_response_bundle(
         source_mode=source_mode,
         degraded_reason=degraded_reason,
         knowledge_freshness=knowledge_freshness,
+        claim_bindings=final_answer_safety.claim_bindings,
         fallback=fallback,
         page=page,
         current_topic=current_topic,
@@ -1097,6 +1360,7 @@ def build_response_bundle(
             "task_chain": list(task_chain),
             "context_pruning": pruning_result["summary"],
             "answer_lint": metrics["answer_lint"],
+            "claim_bindings": metrics["claim_bindings"],
         },
     )
     shop_lookup = {

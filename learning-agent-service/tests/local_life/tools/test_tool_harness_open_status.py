@@ -51,6 +51,21 @@ class ToolHarnessOpenStatusTestCase(unittest.TestCase):
         self.assertIn("实时状态", answer)
         self.assertNotIn("营业中", answer)
 
+    def test_open_status_tool_answer_accepts_dict_bundle(self) -> None:
+        bundle = {
+            "tool_results": [
+                normalize_tool_result(
+                    tool_name="check_open_status",
+                    raw_output={"shop_id": 5, "shop_name": "海底捞水晶城店", "open_status": "open", "open_now": True},
+                    shop_id=5,
+                    shop_name="海底捞水晶城店",
+                ).model_dump(mode="json")
+            ]
+        }
+        candidate = SimpleNamespace(shop_id=5, structured_features={})
+        answer = build_open_status_only_answer("海底捞水晶城店", [candidate], [], facet_result_bundle=bundle)
+        self.assertIn("营业中", answer)
+
 
 if __name__ == "__main__":
     unittest.main()

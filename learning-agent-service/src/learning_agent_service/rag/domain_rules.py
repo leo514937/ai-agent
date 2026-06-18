@@ -125,7 +125,7 @@ _BUILTIN_DOMAIN_RULES = DomainRulesConfig(
         "计划", "路线规划", "安排", "路程",
     ),
     coupon_tokens=("优惠券", "团购", "券", "折扣", "voucher", "coupon", "discount"),
-    booking_tokens=("预订", "预约", "订位", "订桌", "booking", "reserve", "book"),
+    booking_tokens=("订", "预订", "预约", "订位", "订桌", "booking", "reserve", "book"),
     navigation_tokens=("导航", "路线", "距离", "怎么去", "navigation", "route", "distance"),
     order_tokens=("下单", "支付", "订单", "退款", "order", "pay", "refund"),
     status_tokens=(

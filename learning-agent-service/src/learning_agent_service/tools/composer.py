@@ -152,7 +152,7 @@ def _coupon_source_is_trusted(coupon_result: Any) -> bool:
         return False
     items = list(coupon_map.get("items") or [])
     if not items and hasattr(coupon_result, "items"):
-        items = list(getattr(coupon_result, "items") or [])
+        items = list(coupon_result.items or [])
     for item in items:
         item_source = str(_clean_text(_as_mapping(item).get("source")) or "").lower().strip()
         if item_source in {"catalog", "fallback"}:
@@ -1628,7 +1628,7 @@ class AnswerComposer:
             return self._compose_no_answer(request, request.evidence_quality)
         lead = "根据知识库中的证据，可以得到以下结论："
         bullets: list[str] = []
-        for item, _citation in zip(items[: self.max_citations], citations or items):
+        for item, _citation in zip(items[: self.max_citations], citations or items, strict=False):
             snippet = item.content.strip().replace("\n", " ")
             if len(snippet) > 140:
                 snippet = snippet[:137].rstrip() + "..."

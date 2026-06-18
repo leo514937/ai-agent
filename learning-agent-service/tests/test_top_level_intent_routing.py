@@ -4,11 +4,16 @@ import unittest
 
 import _bootstrap  # noqa: F401
 
+from types import SimpleNamespace
+
+from learning_agent_service.application.workflow.adapters.core import WorkflowNodeAdapter
 from learning_agent_service.local_life.hybrid_router import get_hybrid_router
 from learning_agent_service.application.workflow.builder import _top_level_intent_route
 from learning_agent_service.domain import (
     ChatTurnCommand,
+    IntentRoutingDecision,
     PersistentSessionContext,
+    RoutingDecision,
     build_initial_state,
 )
 
@@ -240,6 +245,45 @@ class TestTopLevelIntentRouter(unittest.TestCase):
                 f"Query '{query}' should be identified as local_life, got {result.get('intent')}",
             )
 
+    def test_main_graph_top_level_router_uses_llm_intent_payload(self):
+        adapter = WorkflowNodeAdapter(SimpleNamespace())
+        command = ChatTurnCommand(
+            trace_id="test_trace",
+            session_id="test_session",
+            turn_id="test_turn",
+            user_id="test_user",
+            message="请随便分流",
+        )
+        state = build_initial_state(
+            command=command,
+            workflow_version="test",
+            persistent=PersistentSessionContext(),
+        )
+        state["turn"] = state["turn"].model_copy(
+            update={
+                "routing_decision": RoutingDecision(
+                    required_action="direct_answer",
+                    intent=IntentRoutingDecision(name="query", confidence=0.1),
+                ),
+                "extra": {
+                    **dict(state["turn"].extra),
+                    "top_level_intent": {
+                        "intent": "identity",
+                        "confidence": 0.94,
+                        "reason": "llm_identity",
+                        "source": "llm",
+                        "matched_signals": ["self_intro"],
+                    },
+                },
+            }
+        )
+
+        updated = adapter.top_level_intent_router(state)
+        intent_info = updated["turn"].extra.get("top_level_intent_router", {})
+
+        self.assertEqual(intent_info.get("route"), "identity_answer")
+        self.assertEqual(intent_info.get("intent"), "identity")
+
 
 class TestTopLevelIntentRoute(unittest.TestCase):
     def _make_state(self, raw_query: str):
@@ -333,7 +377,7 @@ class TestTopLevelIntentRoute(unittest.TestCase):
     def test_local_life_route(self):
         state = self._make_state("海底捞怎么样")
         route = _top_level_intent_route(state)
-        self.assertEqual(route, "resolve_target_shop")
+        self.assertEqual(route, "query_merge_for_local_life")
 
     def test_identity_route(self):
         state = self._make_state("你是谁")
@@ -358,7 +402,7 @@ class TestTopLevelIntentRoute(unittest.TestCase):
     def test_domain_query_not_capability(self):
         state = self._make_state("海底捞有什么作用")
         route = _top_level_intent_route(state)
-        self.assertEqual(route, "resolve_target_shop")
+        self.assertEqual(route, "query_merge_for_local_life")
 
         turn_extra = state["turn"].extra
         intent_info = turn_extra.get("top_level_intent_router", {})
@@ -367,7 +411,7 @@ class TestTopLevelIntentRoute(unittest.TestCase):
     def test_comparison_route(self):
         state = self._make_state("海底捞和巴奴哪个好")
         route = _top_level_intent_route(state)
-        self.assertEqual(route, "resolve_target_shop")
+        self.assertEqual(route, "query_merge_for_local_life")
 
         turn_extra = state["turn"].extra
         intent_info = turn_extra.get("top_level_intent_router", {})
@@ -387,8 +431,8 @@ class TestTopLevelIntentRoute(unittest.TestCase):
             route = _top_level_intent_route(state)
             self.assertIn(
                 route,
-                ("resolve_target_shop", "clarification_node"),
-                f"Query '{query}' should go to resolve_target_shop or clarification_node, got {route}",
+                ("query_merge_for_local_life", "clarification_node"),
+                f"Query '{query}' should go to query_merge_for_local_life or clarification_node, got {route}",
             )
 
     def test_comparison_pronoun_with_candidates_goes_to_resolve(self):
@@ -403,8 +447,8 @@ class TestTopLevelIntentRoute(unittest.TestCase):
             route = _top_level_intent_route(state)
             self.assertIn(
                 route,
-                ("resolve_target_shop", "clarification_node"),
-                f"Query '{query}' with last_candidates should go to resolve_target_shop or clarification_node, got {route}",
+                ("query_merge_for_local_life", "clarification_node"),
+                f"Query '{query}' with last_candidates should go to query_merge_for_local_life or clarification_node, got {route}",
             )
 
     def test_comparison_explicit_shops_always_resolve(self):
@@ -419,8 +463,8 @@ class TestTopLevelIntentRoute(unittest.TestCase):
             route = _top_level_intent_route(state)
             self.assertEqual(
                 route,
-                "resolve_target_shop",
-                f"Query '{query}' with explicit shops should go to resolve_target_shop, got {route}",
+                "query_merge_for_local_life",
+                f"Query '{query}' with explicit shops should go to query_merge_for_local_life, got {route}",
             )
 
     def test_bare_followup_no_current_shop_goes_to_clarification(self):
@@ -437,8 +481,8 @@ class TestTopLevelIntentRoute(unittest.TestCase):
             route = _top_level_intent_route(state)
             self.assertIn(
                 route,
-                ("resolve_target_shop", "clarification_node"),
-                f"Query '{query}' without current_shop should go to resolve_target_shop or clarification_node, got {route}",
+                ("query_merge_for_local_life", "clarification_node"),
+                f"Query '{query}' without current_shop should go to query_merge_for_local_life or clarification_node, got {route}",
             )
 
     def test_bare_followup_with_current_shop_goes_to_resolve(self):
@@ -455,8 +499,8 @@ class TestTopLevelIntentRoute(unittest.TestCase):
             route = _top_level_intent_route(state)
             self.assertIn(
                 route,
-                ("resolve_target_shop", "clarification_node"),
-                f"Query '{query}' with current_shop should go to resolve_target_shop or clarification_node, got {route}",
+                ("query_merge_for_local_life", "clarification_node"),
+                f"Query '{query}' with current_shop should go to query_merge_for_local_life or clarification_node, got {route}",
             )
 
     def test_capability_route(self):

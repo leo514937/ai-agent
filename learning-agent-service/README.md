@@ -747,7 +747,7 @@ The current truth boundaries are:
 ### Memory collection rebuild
 
 - Durable memory collection 的 vector size 现在固定来自 settings，默认是 4096。
-- memory embedding 也来自 settings：`embedding.memory_model=qwen-embedding-8b`，`embedding.memory_provider=openai`。
+- memory embedding 也来自 settings：优先读取 `embedding.memory_model` / `LEARNING_AGENT_MEMORY_EMBEDDING_MODEL`，未显式配置时回退到 `LEARNING_AGENT_OPENAI_EMBEDDING_MODEL`。
 - 64 维只用于测试里的 FakeEmbedding 或显式构造的测试夹具，生产 durable backend 不允许默认回退到 64。
 - Qdrant collection 不能原地修改维度，旧的 64 维 collection 必须删除后重建。
 - 删除 memory collection 只会删除 Qdrant 索引，不会删除 PostgreSQL 里的 memory records，Postgres 仍然是 source of truth。

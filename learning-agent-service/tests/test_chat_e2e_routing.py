@@ -13,7 +13,7 @@ if src_path not in sys.path:
 
 import _bootstrap  # noqa: F401
 
-from learning_agent_service.application.router.phase0_quality import build_initial_routing_decision
+from learning_agent_service.application.workflow.adapters.helpers import build_initial_routing_decision
 from learning_agent_service.domain.contracts import PersistentSessionContext
 
 
@@ -27,10 +27,10 @@ class RoutingTestCase:
 
 def run_tests():
     test_cases = [
-        # 本地生活查询 - 应该路由到 rag_retrieval 或 tool_call
-        RoutingTestCase("海底捞怎么样？", "rag_retrieval", "单店详情查询"),
-        RoutingTestCase("附近有什么好吃的火锅？", "rag_retrieval", "推荐查询"),
-        RoutingTestCase("海底捞和巴奴哪个好？", "rag_retrieval", "比较查询"),
+        # 本地生活查询 - 应该路由到 recommendation / tool_call
+        RoutingTestCase("海底捞怎么样？", "tool_call", "单店详情查询"),
+        RoutingTestCase("附近有什么好吃的火锅？", "recommendation", "推荐查询"),
+        RoutingTestCase("海底捞和巴奴哪个好？", "recommendation", "比较查询"),
         RoutingTestCase("海底捞有券吗？", "tool_call", "优惠券查询"),
         RoutingTestCase("海底捞营业时间是什么？", "tool_call", "营业时间查询"),
         RoutingTestCase("海底捞离我多远？", "tool_call", "距离查询"),

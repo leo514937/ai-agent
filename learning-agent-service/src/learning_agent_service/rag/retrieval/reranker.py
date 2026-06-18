@@ -21,6 +21,12 @@ from .shared import (
 from ..protocols import Reranker
 from ...domain.utils import coerce_float as _coerce_float
 
+# Lazy import: FacetPlan from domain contracts (avoid circular import at module level)
+try:
+    from ...domain.contracts import FacetPlan
+except ImportError:
+    from typing import Any as FacetPlan  # type: ignore[assignment]
+
 class HeuristicReranker:
     def rerank(self, plan: RetrievalPlan, hits: Sequence[RecallHit]) -> Sequence[RecallHit]:
         if not hits:
@@ -310,27 +316,42 @@ class ReciprocalRankFusion:
         *,
         query_intent: str | None = None,
         query_slots: dict[str, Any] | None = None,
+        facet_plans: list[FacetPlan] | None = None,
     ) -> dict[str, float]:
         base_weights = dict(self._config.route_weights)
         weights = dict(base_weights)
 
-        intent = (query_intent or "").lower()
         slots = query_slots or {}
 
-        if intent in ("compare", "recommend"):
-            weights["dense"] = weights.get("dense", 1.0) * 1.2
-            weights["metadata"] = weights.get("metadata", 0.6) * 0.8
-        elif intent in ("follow_up", "detail"):
-            has_shop = bool(slots.get("shop_name") or slots.get("shop_id"))
-            if has_shop:
-                weights["metadata"] = weights.get("metadata", 0.6) * 1.5
-                weights["sparse"] = weights.get("sparse", 1.0) * 1.2
-                weights["dense"] = weights.get("dense", 1.0) * 0.8
-        elif intent == "explain":
-            weights["dense"] = weights.get("dense", 1.0) * 1.1
-        elif intent in ("booking", "coupon", "navigation"):
-            weights["metadata"] = weights.get("metadata", 0.6) * 1.3
-            weights["sparse"] = weights.get("sparse", 1.0) * 1.1
+        # facet_plan 路径：从面名推导权重，不依赖 intent 字符串
+        if facet_plans:
+            facet_names = {fp.name for fp in facet_plans if fp.required}
+            if "compare" in facet_names:
+                weights["dense"] = weights.get("dense", 1.0) * 1.2
+                weights["metadata"] = weights.get("metadata", 0.6) * 0.8
+            elif "coupon" in facet_names or "open_status" in facet_names:
+                weights["metadata"] = weights.get("metadata", 0.6) * 1.3
+                weights["sparse"] = weights.get("sparse", 1.0) * 1.1
+            elif any(name in facet_names for name in ("taste", "environment", "service", "shop_detail")):
+                weights["dense"] = weights.get("dense", 1.0) * 1.15
+            # facet_plan 路径已推导权重，跳过 intent 分支
+        else:
+            # 旧路径：从 intent 字符串推导权重
+            intent = (query_intent or "").lower()
+            if intent in ("compare", "recommend"):
+                weights["dense"] = weights.get("dense", 1.0) * 1.2
+                weights["metadata"] = weights.get("metadata", 0.6) * 0.8
+            elif intent in ("follow_up", "detail"):
+                has_shop = bool(slots.get("shop_name") or slots.get("shop_id"))
+                if has_shop:
+                    weights["metadata"] = weights.get("metadata", 0.6) * 1.5
+                    weights["sparse"] = weights.get("sparse", 1.0) * 1.2
+                    weights["dense"] = weights.get("dense", 1.0) * 0.8
+            elif intent == "explain":
+                weights["dense"] = weights.get("dense", 1.0) * 1.1
+            elif intent in ("booking", "coupon", "navigation"):
+                weights["metadata"] = weights.get("metadata", 0.6) * 1.3
+                weights["sparse"] = weights.get("sparse", 1.0) * 1.1
 
         if any(kw in str(slots.get("query", "")).lower() for kw in ("附近", "推荐", "好吃")):
             weights["dense"] = weights.get("dense", 1.0) * 1.15
