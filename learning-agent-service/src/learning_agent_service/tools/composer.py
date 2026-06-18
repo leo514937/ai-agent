@@ -848,6 +848,32 @@ class AnswerComposer:
         topic_name = _resolved_strict_topic_name(request, ranked_candidates)
         evidence_claims = _build_evidence_claims(request)
         user_need = _build_user_need_proxy(request, ranked_candidates)
+        
+        # 添加 claim 校验：确保 realtime facts 只信 ToolResult
+        if facet_bundle is not None:
+            tool_results = getattr(facet_bundle, "tool_results", []) or []
+            realtime_claims: list[Claim] = []
+            for tool_result in tool_results:
+                source = str(getattr(tool_result, "source", "") or "").lower().strip()
+                if source in {"catalog", "fallback"}:
+                    continue
+                # 从 tool_result 提取 claims
+                if hasattr(tool_result, "tool_name") and hasattr(tool_result, "data"):
+                    claims_from_tool = self._extract_claims_from_tool_result(tool_result)
+                    realtime_claims.extend(claims_from_tool)
+            
+            if realtime_claims:
+                validator = ClaimValidator()
+                validation_result = validator.validate(realtime_claims)
+                if validation_result.rejected_claims:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        f"Realtime claim validation rejected {len(validation_result.rejected_claims)} claims: "
+                        f"{validation_result.reasons}"
+                    )
+                    # 返回错误信息，不进入 LLM answerer 输入
+                    return "查询结果中包含无法验证的实时信息，暂时无法给出可靠答案。请稍后重试或补充更多信息。"
+        
         template_answer = self._build_strict_template_answer(
             local_contract=local_contract,
             topic_name=topic_name,
@@ -897,6 +923,32 @@ class AnswerComposer:
         topic_name = _resolved_strict_topic_name(request, ranked_candidates)
         evidence_claims = _build_evidence_claims(request)
         user_need = _build_user_need_proxy(request, ranked_candidates)
+        
+        # 添加 claim 校验：确保 realtime facts 只信 ToolResult
+        if facet_bundle is not None:
+            tool_results = getattr(facet_bundle, "tool_results", []) or []
+            realtime_claims: list[Claim] = []
+            for tool_result in tool_results:
+                source = str(getattr(tool_result, "source", "") or "").lower().strip()
+                if source in {"catalog", "fallback"}:
+                    continue
+                # 从 tool_result 提取 claims
+                if hasattr(tool_result, "tool_name") and hasattr(tool_result, "data"):
+                    claims_from_tool = self._extract_claims_from_tool_result(tool_result)
+                    realtime_claims.extend(claims_from_tool)
+            
+            if realtime_claims:
+                validator = ClaimValidator()
+                validation_result = validator.validate(realtime_claims)
+                if validation_result.rejected_claims:
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        f"Realtime claim validation rejected {len(validation_result.rejected_claims)} claims: "
+                        f"{validation_result.reasons}"
+                    )
+                    # 返回错误信息，不进入 LLM answerer 输入
+                    return "查询结果中包含无法验证的实时信息，暂时无法给出可靠答案。请稍后重试或补充更多信息。"
+        
         clean_count = len(evidence_claims)
         strong_count = sum(1 for claim in evidence_claims if str(getattr(claim, "source_type", "") or "").strip().lower() in {"tool", "realtime_tool"})
         medium_count = max(0, clean_count - strong_count)
@@ -1177,6 +1229,14 @@ class AnswerComposer:
                     shop_id=data.get("shop_id"),
                     source=DataSource.TOOL,
                 ))
+        elif tool_name == "get_inventory":
+            if data.get("inventory_count") is not None:
+                claims.append(Claim(
+                    type=ClaimType.INVENTORY,
+                    content=f"库存: {data.get('inventory_count', 0)}件",
+                    shop_id=data.get("shop_id"),
+                    source=DataSource.TOOL,
+                ))
         
         return claims
 
@@ -1214,13 +1274,31 @@ class AnswerComposer:
                 evidence_pack = rag_result.evidence_pack
                 if evidence_pack:
                     items = list(evidence_pack.items or [])
+                    rag_claims: list[Claim] = []
                     for item in items:
                         item_shop_id = getattr(item, "shop_id", None)
-                        if item_shop_id and int(item_shop_id) != shop_id:
+                        content = str(getattr(item, "content", "") or "").strip()
+                        if content and item_shop_id:
+                            # 创建 RAG claim 进行验证
+                            rag_claims.append(Claim(
+                                type=ClaimType.REVIEW,
+                                content=content[:100],
+                                shop_id=int(item_shop_id) if item_shop_id else None,
+                                source=DataSource.RAG,
+                            ))
+                    
+                    # 使用 ClaimValidator 验证 RAG claims
+                    if rag_claims:
+                        validator = ClaimValidator()
+                        validation_result = validator.validate(rag_claims, shop_id=shop_id)
+                        if validation_result.rejected_claims:
                             import logging
                             logging.getLogger(__name__).warning(
-                                f"RAG evidence shop_id mismatch: expected {shop_id}, got {item_shop_id}"
+                                f"RAG claim validation rejected {len(validation_result.rejected_claims)} claims: "
+                                f"{validation_result.reasons}"
                             )
+                            # 返回错误信息，不进入 LLM answerer 输入
+                            return "查询结果中包含无法验证的评价信息，暂时无法给出可靠答案。请稍后重试或补充更多信息。"
         
         return "\n".join(sections)
 
