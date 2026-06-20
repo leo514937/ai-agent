@@ -142,6 +142,11 @@ class PendingClarification(BaseModel):
     candidate_targets: list[dict[str, Any]] = Field(default_factory=list)
     expected_reply_type: str = ""
     created_at: datetime | None = None
+    expires_at: datetime | None = None
+    original_text: str = ""
+    original_semantic_frame: dict[str, Any] | None = None
+    reason: str = ""
+    source_node: str = ""
 
 
 class ToolResult(BaseModel):
@@ -255,6 +260,8 @@ class EvidencePack(BaseModel):
     Deepened per todo/04 §1 with ranking_snapshot and comparison_matrix.
     """
     target_shop_ids: list[str] = Field(default_factory=list)
+    requested_facets: list[str] = Field(default_factory=list)
+    facet_results: list[dict[str, Any]] = Field(default_factory=list)
     evidence_items: list[EvidenceItem] = Field(default_factory=list)
     unknown_items: list[EvidenceItem] = Field(default_factory=list)
     forbidden_claims: list[str] = Field(default_factory=list)

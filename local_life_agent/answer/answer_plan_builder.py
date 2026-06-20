@@ -22,8 +22,8 @@ def build_answer_plan(task_type: str, evidence: dict, clarification: dict | None
     evidence = _to_dict(evidence)
     clarification = _to_dict(clarification)
     snapshot = evidence.get("ranking_snapshot") or {}
-    facet_results = snapshot.get("facet_results") or []
-    requested_facets = snapshot.get("requested_facets") or evidence.get("requested_facets") or []
+    facet_results = evidence.get("facet_results") or snapshot.get("facet_results") or []
+    requested_facets = evidence.get("requested_facets") or snapshot.get("requested_facets") or []
     status = snapshot.get("status", "unknown")
     shop_id = snapshot.get("shop_id", "")
     shop_name = snapshot.get("shop_name", "")

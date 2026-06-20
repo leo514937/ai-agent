@@ -70,6 +70,30 @@ def _facet_status_summary(result_status: str, data: Any) -> str:
     return "unknown"
 
 
+def _facet_result_payload(facet: str, result_status: str, data: Any) -> dict[str, Any]:
+    payload = {
+        "facet": facet,
+        "status": _facet_status_summary(result_status, data),
+        "result_status": result_status,
+        "value": None,
+    }
+    if facet == "coupon":
+        if result_status == "ok" and isinstance(data, list):
+            payload["value"] = [coupon.get("title", "") for coupon in data if isinstance(coupon, dict) and coupon.get("title")]
+        elif result_status == "empty":
+            payload["value"] = "empty"
+    elif facet == "open_status":
+        if result_status == "ok" and isinstance(data, dict):
+            payload["value"] = data.get("open_status", "unknown")
+    elif facet == "distance":
+        if result_status == "ok" and isinstance(data, dict):
+            payload["value"] = {
+                "distance_km": data.get("distance_km"),
+                "eta_minutes": data.get("eta_minutes"),
+            }
+    return payload
+
+
 def build_evidence(tool_results: dict, resolved_target: dict, execution_plan: Any | None = None) -> dict:
     """Build an evidence pack from tool results."""
     resolved_target = _to_dict(resolved_target)
@@ -115,6 +139,7 @@ def build_evidence(tool_results: dict, resolved_target: dict, execution_plan: An
                 "call_id": call_id,
                 "error_code": result.get("error_code", ""),
                 "error_message": result.get("error_message", ""),
+                **_facet_result_payload(facet, result_status, data),
             }
         )
         error_code = result.get("error_code") or error_code
@@ -146,6 +171,22 @@ def build_evidence(tool_results: dict, resolved_target: dict, execution_plan: An
                     )
             elif result_status == "empty":
                 coupon_count = 0
+                evidence_items.append(
+                    {
+                        "evidence_id": "evi_coupon_empty",
+                        "shop_id": shop_id,
+                        "shop_name": shop_name,
+                        "facet": "coupon",
+                        "tool_name": "get_coupon_list",
+                        "call_id": call_id,
+                        "result_status": "empty",
+                        "field_path": "data",
+                        "value": "empty",
+                        "confidence": 1.0,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "source_type": "tool",
+                    }
+                )
             else:
                 unknown_items.append(
                     {
@@ -284,6 +325,7 @@ def build_evidence(tool_results: dict, resolved_target: dict, execution_plan: An
     return {
         "target_shop_ids": [shop_id] if shop_id else [],
         "requested_facets": requested_facets,
+        "facet_results": facet_results,
         "evidence_items": evidence_items,
         "unknown_items": unknown_items,
         "forbidden_claims": forbidden_claims,

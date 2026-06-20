@@ -8,6 +8,7 @@ first-class rule in the transition table, not ad-hoc if/else.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 from . import config
 from .domain.state import SessionState, SessionWriteDirective
@@ -20,14 +21,28 @@ from .engine import (
 )
 
 
-def _debug_dump(value: Any) -> Any:
+_GRAPH_CACHE: Any = None
+
+
+def _debug_dump(value: Any, _seen: set[int] | None = None) -> Any:
+    if isinstance(value, Enum):
+        return value.value
+    if _seen is None:
+        _seen = set()
+    if isinstance(value, (dict, list)) or hasattr(value, "__dict__"):
+        obj_id = id(value)
+        if obj_id in _seen:
+            return "<recursive>"
+        _seen.add(obj_id)
     model_dump = getattr(value, "model_dump", None)
     if callable(model_dump):
-        return model_dump()
+        return _debug_dump(model_dump(), _seen)
     if isinstance(value, dict):
-        return {k: _debug_dump(v) for k, v in value.items()}
+        return {k: _debug_dump(v, _seen) for k, v in value.items()}
     if isinstance(value, list):
-        return [_debug_dump(item) for item in value]
+        return [_debug_dump(item, _seen) for item in value]
+    if hasattr(value, "__dict__"):
+        return {k: _debug_dump(v, _seen) for k, v in vars(value).items() if not str(k).startswith("_")}
     return value
 
 
@@ -37,6 +52,9 @@ class DebugInfo:
     semantic_frame: dict = field(default_factory=dict)
     execution_plan: dict = field(default_factory=dict)
     tool_results: dict = field(default_factory=dict)
+    session_state_before: dict = field(default_factory=dict)
+    session_state_after: dict = field(default_factory=dict)
+    state_update_plan: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -62,6 +80,9 @@ class AgentResponse:
                 "semantic_frame": _debug_dump(self.debug.semantic_frame),
                 "execution_plan": _debug_dump(self.debug.execution_plan),
                 "tool_results": _debug_dump(self.debug.tool_results),
+                "session_state_before": _debug_dump(self.debug.session_state_before),
+                "session_state_after": _debug_dump(self.debug.session_state_after),
+                "state_update_plan": _debug_dump(self.debug.state_update_plan),
             }
         else:
             result["debug"] = {}
@@ -294,7 +315,7 @@ def _field_default(state: SessionState, name: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
-def run_agent(input_text: str, session_id: str = "") -> AgentResponse:
+def _run_agent_legacy(input_text: str, session_id: str = "") -> AgentResponse:
     """Execute one full turn of the local life agent.
 
     The turn is driven by the state machine defined in
@@ -374,6 +395,11 @@ def run_agent(input_text: str, session_id: str = "") -> AgentResponse:
 # ---------------------------------------------------------------------------
 
 
+def run_agent(input_text: str, session_id: str = "") -> AgentResponse:
+    """Public entry point; thin wrapper around the LangGraph runtime."""
+    return run_agent_graph(input_text, session_id=session_id)
+
+
 def run_agent_graph(input_text: str, session_id: str = "") -> AgentResponse:
     """Execute one full turn via ``StateGraph`` (todo/05 LangGraph entry).
 
@@ -384,7 +410,10 @@ def run_agent_graph(input_text: str, session_id: str = "") -> AgentResponse:
     from .domain.graph_state import GraphState
     from .engine.graph_builder import build_graph
 
-    graph = build_graph()
+    global _GRAPH_CACHE
+    if _GRAPH_CACHE is None:
+        _GRAPH_CACHE = build_graph()
+    graph = _GRAPH_CACHE
 
     initial = {
         "raw_text": input_text,
@@ -413,11 +442,13 @@ def run_agent_graph(input_text: str, session_id: str = "") -> AgentResponse:
         "final_response": "",
         "state_update_plan": None,
         "session_state_before": None,
+        "session_state_after": None,
         "event_log": [],
         "metrics_tags": {},
         "trace_spans": [],
         "rewrite_count": 0,
         "session_state": None,
+        "pending_check_result": "pass",
         "error_code": "",
         "guard_result": "",
         "verify_result": "",
@@ -440,6 +471,9 @@ def run_agent_graph(input_text: str, session_id: str = "") -> AgentResponse:
             semantic_frame=_debug_dump(final_state.get("semantic_frame") or {}),
             execution_plan=_debug_dump(final_state.get("execution_plan") or {}),
             tool_results=_debug_dump(final_state.get("tool_result_set") or final_state.get("tool_results") or {}),
+            session_state_before=_debug_dump(final_state.get("session_state_before") or {}),
+            session_state_after=_debug_dump(final_state.get("session_state_after") or {}),
+            state_update_plan=_debug_dump(final_state.get("state_update_plan") or {}),
         ) if config.DEBUG_ENABLED else None,
     )
     return response

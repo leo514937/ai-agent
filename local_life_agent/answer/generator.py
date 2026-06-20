@@ -84,9 +84,9 @@ def generate_answer(answer_plan: dict, evidence: dict) -> str:
     answer_plan = _to_dict(answer_plan)
     evidence = _to_dict(evidence)
     snapshot = evidence.get("ranking_snapshot") or {}
+    facet_results = evidence.get("facet_results") or snapshot.get("facet_results") or []
     shop_name = _shop_display_name(evidence)
     status = snapshot.get("status", "unknown")
-    facet_results = snapshot.get("facet_results") or []
 
     if facet_results:
         parts = []

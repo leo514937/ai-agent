@@ -131,8 +131,6 @@ def _facet_positions(text: str) -> list[tuple[int, Facet]]:
 
 def _build_facet_specs(text: str) -> list[dict[str, object]]:
     ordered = _facet_positions(text)
-    if not ordered and _looks_like_coupon_query(text):
-        ordered = [(0, Facet.coupon)]
 
     optional = any(hint in text for hint in _OPTIONAL_HINTS)
     specs: list[dict[str, object]] = []

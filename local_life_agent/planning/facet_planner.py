@@ -44,7 +44,4 @@ def plan_facets(task_type: str, semantic_frame: dict) -> list[dict[str, Any]]:
         seen.add(name)
         ordered.append({"name": name, "required": _facet_required(item)})
 
-    if not ordered and task_type in {"coupon_query", "single_shop_query"}:
-        ordered.append({"name": Facet.coupon.value, "required": True})
-
     return ordered

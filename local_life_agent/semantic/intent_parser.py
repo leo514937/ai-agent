@@ -245,6 +245,20 @@ def parse_semantic_frame(
             if not frame.primary_task:
                 frame.primary_task = fallback_frame.primary_task
             frame.need_context = frame.need_context or fallback_frame.need_context
+        if not frame.facets and frame.task_type in {TaskType.single_shop_query, TaskType.coupon_query}:
+            return {
+                "semantic_frame": frame,
+                "error_code": "MISSING_FACET",
+                "error_message": "请补充你要查询的优惠、营业状态或距离。",
+                "raw": result.get("raw", ""),
+            }
+        if not frame.merchant_mentions and frame.need_context:
+            return {
+                "semantic_frame": frame,
+                "error_code": "",
+                "error_message": "",
+                "raw": result.get("raw", ""),
+            }
         return {
             "semantic_frame": frame,
             "error_code": "",

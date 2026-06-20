@@ -7,6 +7,7 @@ per 搂2 Node Table; conditional edges follow 搂3 Conditional Edge Table.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
@@ -33,6 +34,7 @@ from ..domain.state import SessionState, SessionWriteDirective
 from ..answer.answer_plan_builder import build_answer_plan
 from ..answer.evidence_builder import build_evidence
 from ..answer.generator import generate_answer
+from ..answer.state_update_planner import plan_state_update
 from ..answer.verifier import verify_answer
 from ..input.hard_guard import check_hard_guard
 from ..input.normalizer import normalize_text as input_normalize_text
@@ -44,9 +46,14 @@ from ..planning.facet_planner import plan_facets
 from ..planning.task_router import route_task
 from ..semantic.frame_validator import validate_frame
 from ..semantic.intent_parser import parse_semantic_frame, parse_top_intent
+from ..llm.client import call_llm, has_llm_backend
 from ..tools.gateway import dispatch_tool_call
-from ..tools.mock_tools import resolve_shop
 from ..tools.gateway import BatchToolExecutor
+from ..tools.mock_tools import resolve_shop as mock_resolve_shop
+from ..target.shop_resolver import resolve_shop
+from ..target.clarification import build_pending_clarification, format_pending_prompt, handle_clarification_reply
+from ..target.context_recovery import recover_context
+from ..session.store import get_session_store
 from .nodes import ExecutionNode
 from .session_write import get_directive, resolve_scenario
 
@@ -133,6 +140,75 @@ def _resolved_shop_ids_from_state(state: GraphState) -> set[str]:
     return resolved_ids
 
 
+def _unwrap_resolve_shop_result(raw: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    data = raw.get("data")
+    if isinstance(data, dict) and "status" in data:
+        return data
+    return raw
+
+
+def _plan_required_by_call_id(plan: Any | None) -> dict[str, bool]:
+    result: dict[str, bool] = {}
+    if plan is None:
+        return result
+    plan_dict = _to_dict(plan)
+    for call in plan_dict.get("tool_calls", []) or []:
+        call_dict = _to_dict(call)
+        call_id = str(call_dict.get("call_id", "")).strip()
+        if call_id:
+            result[call_id] = bool(call_dict.get("required", True))
+    return result
+
+
+def _session_state_dict(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump()
+        return dumped if isinstance(dumped, dict) else {}
+    return dict(getattr(value, "__dict__", {}) or {})
+
+
+def _shop_dict(value: Any) -> dict[str, Any]:
+    data = _session_state_dict(value)
+    if data:
+        return data
+    if hasattr(value, "resolved_shop"):
+        return _session_state_dict(getattr(value, "resolved_shop"))
+    if hasattr(value, "shop"):
+        return _session_state_dict(getattr(value, "shop"))
+    return {}
+
+
+def _session_store_state(state: GraphState) -> SessionState:
+    loaded = state.get("session_state")
+    if isinstance(loaded, SessionState):
+        return loaded
+    return SessionState()
+
+
+def _session_shop_ids(state: GraphState) -> list[str]:
+    ids: list[str] = []
+    current_shop = _session_state_dict(state.get("current_shop"))
+    if current_shop.get("shop_id"):
+        ids.append(str(current_shop.get("shop_id")))
+    for item in state.get("last_recommendation_list", []) or []:
+        shop = _session_state_dict(item)
+        sid = str(shop.get("shop_id", "")).strip()
+        if sid:
+            ids.append(sid)
+    deduped: list[str] = []
+    for sid in ids:
+        if sid and sid not in deduped:
+            deduped.append(sid)
+    return deduped
+
+
 # ===================================================================
 # 26 Node Handlers  (todo/05 搂2 Node Table)
 # ===================================================================
@@ -156,17 +232,20 @@ def _h_receive_input(state: GraphState) -> dict:
 # 搂1 input:  session_id
 # 搂1 output: current_shop, last_recommendation_list, pending_clarification, session_state_before
 def _h_load_session(state: GraphState) -> dict:
-    existing = state.get("session_state")
-    if existing is None:
-        existing = SessionState()
+    session_id = str(state.get("session_id", "") or "")
+    store = get_session_store()
+    existing = store.load(session_id)
+    snapshot = existing.model_copy(deep=True)
     return {
         "session_state": existing,
-        "session_state_before": existing,  # 搂1: 浼氳瘽蹇収渚涗笅娓歌妭鐐硅鍙?
+        "session_state_before": snapshot,  # 会话快照供后续节点读取
+        "session_state_after": None,
         "current_shop": existing.current_shop,
         "last_recommendation_list": existing.last_recommendation_list,
         "active_constraints": existing.active_constraints,
         "pending_clarification": existing.pending_clarification,
         "comparison_targets": existing.comparison_targets,
+        "pending_check_result": "pass",
         **_log(state, "load_session_state"),
     }
 
@@ -177,8 +256,72 @@ def _h_load_session(state: GraphState) -> dict:
 def _h_check_pending(state: GraphState) -> dict:
     pending = state.get("pending_clarification")
     if pending is None:
-        return _log(state, "check_pending_clarification", has_pending=False)
-    return _log(state, "check_pending_clarification", has_pending=True)
+        return {
+            "pending_check_result": "pass",
+            **_log(state, "check_pending_clarification", has_pending=False),
+        }
+
+    reply = str(state.get("raw_text", "") or state.get("normalized_text", "") or "")
+    result = handle_clarification_reply(reply, pending, state.get("session_state"))
+    action = str(result.get("status", "invalid"))
+
+    updates: dict[str, Any] = {
+        "pending_check_result": action,
+    }
+
+    if action == "restore":
+        if result.get("pending_clarification") is None:
+            updates["pending_clarification"] = None
+        if result.get("semantic_frame") is not None:
+            restored_frame = result.get("semantic_frame")
+            if isinstance(restored_frame, dict):
+                try:
+                    restored_frame = SemanticFrame.model_validate(restored_frame)
+                except Exception:
+                    pass
+            updates["semantic_frame"] = restored_frame
+        if result.get("task_type"):
+            task_type_value = result.get("task_type")
+            try:
+                updates["task_type"] = TaskType(task_type_value)
+            except Exception:
+                updates["task_type"] = task_type_value
+        if result.get("resolved_target") is not None:
+            updates["resolved_target"] = result.get("resolved_target")
+            updates["resolve_shop_result"] = result.get("resolved_target")
+        updates["final_response"] = ""
+        return {
+            **updates,
+            **_log(state, "check_pending_clarification", has_pending=True, action=action),
+        }
+
+    if action == "topic_switch":
+        updates["pending_clarification"] = None
+        updates["final_response"] = ""
+        return {
+            **updates,
+            **_log(state, "check_pending_clarification", has_pending=True, action=action),
+        }
+
+    if action == "expired":
+        updates["pending_clarification"] = None
+        updates["final_response"] = result.get("final_response", "")
+        return {
+            **updates,
+            **_log(state, "check_pending_clarification", has_pending=True, action=action),
+        }
+
+    if action in {"invalid", "out_of_range"}:
+        updates["final_response"] = result.get("final_response", "")
+        return {
+            **updates,
+            **_log(state, "check_pending_clarification", has_pending=True, action=action),
+        }
+
+    return {
+        "pending_check_result": "pass",
+        **_log(state, "check_pending_clarification", has_pending=True, action="pass"),
+    }
 
 
 # --- 4. basic_input_validate ---
@@ -269,7 +412,7 @@ def _h_semantic_parse(state: GraphState) -> dict:
     txt = state.get("normalized_text", "")
     top_intent = state.get("top_intent")
     top_intent_value = top_intent.value if isinstance(top_intent, TopIntent) else str(top_intent or "")
-    parsed = parse_semantic_frame(txt, top_intent_value)
+    parsed = parse_semantic_frame(txt, top_intent_value, llm_call=call_llm if has_llm_backend() else None)
     frame = parsed.get("semantic_frame")
     error_code = parsed.get("error_code", "")
     error_message = parsed.get("error_message", "")
@@ -289,12 +432,12 @@ def _h_semantic_parse(state: GraphState) -> dict:
             issues = validation.get("issues", [])
             if "missing_task_type" in issues:
                 error_code = "MISSING_TASK_TYPE"
-            elif "missing_merchant_mentions" in issues:
-                error_code = "MISSING_MERCHANT_MENTION"
             elif any(issue.startswith("forbidden_field:") for issue in issues):
                 error_code = "SCHEMA_VALIDATION_FAILED"
             elif "invalid_task_type" in issues:
                 error_code = "INVALID_ARGUMENT"
+            elif "missing_merchant_mentions" in issues or "needs_context" in issues:
+                error_code = ""
             else:
                 error_code = "SEMANTIC_FRAME_INVALID"
             error_message = validation.get("clarification", "")
@@ -354,22 +497,64 @@ def _h_frame_validator(state: GraphState) -> dict:
 # 搂1 input:  session_state_before, semantic_frame
 # 搂1 output: resolved_target (candidates)
 def _h_context_recovery(state: GraphState) -> dict:
-    return _log(state, "context_recovery")
+    sf = state.get("semantic_frame")
+    recovered = recover_context(
+        state.get("session_state_before") or state.get("session_state"),
+        sf.model_dump() if hasattr(sf, "model_dump") else _session_state_dict(sf),
+        text=str(state.get("normalized_text", "") or state.get("raw_text", "") or ""),
+    )
+    updates: dict[str, Any] = {}
+    if recovered.get("resolved_target") is not None:
+        updates["resolved_target"] = recovered.get("resolved_target")
+    return {
+        **updates,
+        **_log(
+            state,
+            "context_recovery",
+            status=str((recovered.get("context_resolution") or {}).get("status", "")),
+        ),
+    }
 
 
 # --- 12. target_resolve ---
 # 搂1 input:  merchant_mentions, reference_mentions, session_state_before
 # 搂1 output: resolve_shop_result
 def _h_target_resolve(state: GraphState) -> dict:
+    existing_target = state.get("resolved_target")
+    if existing_target is not None:
+        existing_dict = _session_state_dict(existing_target)
+        if existing_dict.get("status") == "RESOLVED":
+            return {
+                "resolve_shop_result": existing_target,
+                "resolved_target": existing_target,
+                **_log(state, "target_resolve", status="RESOLVED", query="context_recovered"),
+            }
+
     sf = state.get("semantic_frame")
     mentions = []
     if sf is not None:
         mentions = list(getattr(sf, "merchant_mentions", []) or [])
     query = mentions[0] if mentions else ""
-    raw = resolve_shop(query, location=MOCK_LOCATION, session_shop_ids=[])
-    status = raw.get("status", "NOT_FOUND")
+    if not query:
+        return {
+            "resolve_shop_result": ResolveShopResult(
+                status="NOT_FOUND",
+                confidence=0.0,
+                reason="missing_shop_name",
+            ),
+            "final_response": "请提供完整店名。",
+            **_log(state, "target_resolve", status="NOT_FOUND", query=query),
+        }
+    raw = resolve_shop(query, location=MOCK_LOCATION, session_shop_ids=_session_shop_ids(state))
+    payload = _unwrap_resolve_shop_result(raw)
+    if query and payload.get("status") == "NOT_FOUND":
+        fallback_raw = mock_resolve_shop(query, location=MOCK_LOCATION, session_shop_ids=_session_shop_ids(state))
+        fallback_payload = _unwrap_resolve_shop_result(fallback_raw)
+        if fallback_payload.get("status") in {"RESOLVED", "AMBIGUOUS", "LOW_CONFIDENCE"}:
+            payload = fallback_payload
+    status = payload.get("status", "NOT_FOUND")
     if status == "RESOLVED":
-        shop = raw.get("shop") or {}
+        shop = payload.get("shop") or {}
         if hasattr(shop, "model_dump"):
             shop = shop.model_dump()
         resolved_result = ResolveShopResult(
@@ -378,7 +563,7 @@ def _h_target_resolve(state: GraphState) -> dict:
                 shop_id=shop.get("shop_id", ""),
                 shop_name=shop.get("shop_name", ""),
             ),
-            confidence=float(raw.get("confidence", 0.0)),
+            confidence=float(payload.get("confidence", 0.0)),
             reason="resolved_by_target_resolve",
         )
         return {
@@ -387,36 +572,67 @@ def _h_target_resolve(state: GraphState) -> dict:
             **_log(state, "target_resolve", status="RESOLVED", query=query),
         }
 
-    if status == "AMBIGUOUS":
+    if status in ("AMBIGUOUS", "LOW_CONFIDENCE"):
         candidates = []
-        for candidate in raw.get("candidates", []):
+        pending_candidates = []
+        for candidate in payload.get("candidates", []):
             candidate = candidate if isinstance(candidate, dict) else {}
+            shop_ref = candidate.get("shop") or {}
+            if hasattr(shop_ref, "model_dump"):
+                shop_ref = shop_ref.model_dump()
+            shop_id = candidate.get("shop_id") or (shop_ref.get("shop_id", "") if isinstance(shop_ref, dict) else "")
+            shop_name = candidate.get("shop_name") or (shop_ref.get("shop_name", "") if isinstance(shop_ref, dict) else "")
+            address = candidate.get("address") or (shop_ref.get("address", "") if isinstance(shop_ref, dict) else "")
             candidates.append(
                 ShopCandidate(
                     shop=ShopRef(
-                        shop_id=candidate.get("shop_id", ""),
-                        shop_name=candidate.get("shop_name", ""),
+                        shop_id=shop_id,
+                        shop_name=shop_name,
                     )
                 )
             )
+            if shop_id and shop_name:
+                pending_candidates.append(
+                    {
+                        "shop_id": shop_id,
+                        "shop_name": shop_name,
+                        "address": address,
+                    }
+                )
         resolved_result = ResolveShopResult(
-            status="AMBIGUOUS",
+            status=status,
             candidates=candidates,
-            confidence=float(raw.get("confidence", 0.0)),
-            reason="ambiguous_shop",
+            confidence=float(payload.get("confidence", 0.0)),
+            reason="ambiguous_shop" if status == "AMBIGUOUS" else "low_confidence_shop",
         )
+        pending = build_pending_clarification(
+            original_text=str(state.get("raw_text", "") or ""),
+            original_semantic_frame=sf.model_dump(mode="json") if hasattr(sf, "model_dump") else _session_state_dict(sf),
+            original_task_type=(
+                getattr(sf, "task_type", "")
+                if getattr(sf, "task_type", None) is not None
+                else state.get("task_type", "")
+            ),
+            candidate_targets=pending_candidates,
+            reason=resolved_result.reason,
+            source_node="target_resolve",
+        )
+        prompt = format_pending_prompt(pending)
         return {
             "resolve_shop_result": resolved_result,
+            "pending_clarification": pending,
+            "final_response": prompt,
             **_log(state, "target_resolve", status="AMBIGUOUS", query=query),
         }
 
     resolved_result = ResolveShopResult(
         status="NOT_FOUND",
         confidence=0.0,
-        reason=raw.get("error_code", "SHOP_NOT_FOUND") or "SHOP_NOT_FOUND",
+        reason=payload.get("error_code", "SHOP_NOT_FOUND") or "SHOP_NOT_FOUND",
     )
     return {
         "resolve_shop_result": resolved_result,
+        "final_response": "没有找到这家店，请提供完整店名。",
         **_log(state, "target_resolve", status="NOT_FOUND", query=query),
     }
 
@@ -425,7 +641,7 @@ def _h_target_resolve(state: GraphState) -> dict:
 # 搂1 input:  resolve_shop_result, semantic_frame
 # 搂1 output: pending_clarification 鎴?resolved_target (鍙墽琛岀洰鏍?
 def _h_clarify_decide(state: GraphState) -> dict:
-    rs = state.get("resolve_shop_result")
+    rs = state.get("resolved_target") or state.get("resolve_shop_result")
     if rs is not None:
         status = rs.status
         if status == "RESOLVED":
@@ -685,6 +901,23 @@ def _h_final_response(state: GraphState) -> dict:
 # 搂1 input:  resolve_shop_result, pending_clarification
 # 搂1 output: final_response
 def _h_clarify_response(state: GraphState) -> dict:
+    pending_result = str(state.get("pending_check_result", "") or "")
+    if pending_result in {"expired", "invalid", "out_of_range"} and str(state.get("final_response", "") or "").strip():
+        return {
+            "final_response": state.get("final_response", ""),
+            **_log(state, "clarify_response"),
+        }
+    pending = state.get("pending_clarification")
+    if pending is not None:
+        try:
+            prompt = format_pending_prompt(pending)
+        except Exception:
+            prompt = "店名有点模糊，请提供完整店名。"
+        if prompt.strip():
+            return {
+                "final_response": prompt,
+                **_log(state, "clarify_response"),
+            }
     rs = state.get("resolve_shop_result")
     if rs is not None and getattr(rs, "status", "") in ("AMBIGUOUS", "LOW_CONFIDENCE"):
         return {
@@ -698,7 +931,7 @@ def _h_clarify_response(state: GraphState) -> dict:
             **_log(state, "clarify_response"),
         }
     return {
-        "final_response": "你想查哪家店的优惠券？请告诉我具体店名。",
+        "final_response": "请提供完整店名。",
         **_log(state, "clarify_response"),
     }
 
@@ -738,14 +971,76 @@ def _h_fallback_answer(state: GraphState) -> dict:
 # 搂1 input:  final_response, session_state_before
 # 搂1 output: state_update_plan
 def _h_state_update_plan(state: GraphState) -> dict:
-    return _log(state, "state_update_plan")
+    resolved = state.get("resolved_target") or state.get("resolve_shop_result")
+    resolved_status = ""
+    if resolved is not None:
+        resolved_status = getattr(resolved, "status", "") or _session_state_dict(resolved).get("status", "")
+    task_type = state.get("task_type")
+    task_type_value = task_type.value if hasattr(task_type, "value") else str(task_type or "")
+    turn_context = {
+        "resolved_target": resolved,
+        "resolved_shop": resolved,
+        "current_shop": state.get("current_shop"),
+        "pending_clarification": state.get("pending_clarification"),
+        "last_recommendation_list": state.get("last_recommendation_list", []),
+        "tool_result_set": state.get("tool_result_set") or state.get("tool_results", {}),
+        "execution_plan": state.get("validated_plan") or state.get("execution_plan"),
+    }
+    plan_dict = plan_state_update(
+        turn_context,
+        task_type_value,
+        resolved_status,
+        pending_check_result=str(state.get("pending_check_result", "") or ""),
+    )
+    directive = SessionWriteDirective(
+        set_fields=plan_dict.get("set_fields", {}),
+        clear_fields=plan_dict.get("clear_fields", []),
+    )
+    return {
+        "state_update_plan": directive,
+        **_log(
+            state,
+            "state_update_plan",
+            set_fields=list(directive.set_fields.keys()),
+            clear_fields=list(directive.clear_fields),
+        ),
+    }
 
 
 # --- 27. persist_session_state ---
 # 搂1 input:  state_update_plan
 # 搂1 output: session_state_after
 def _h_persist_session(state: GraphState) -> dict:
-    return _log(state, "persist_session_state")
+    session_state = state.get("session_state") or SessionState()
+    directive = state.get("state_update_plan")
+    if directive is not None:
+        directive = directive if isinstance(directive, SessionWriteDirective) else SessionWriteDirective(
+            set_fields=_session_state_dict(directive).get("set_fields", {}),
+            clear_fields=_session_state_dict(directive).get("clear_fields", []),
+        )
+        for field_name, value in directive.set_fields.items():
+            resolved = state.get(field_name) if value is None else value
+            if resolved is not None:
+                setattr(session_state, field_name, _session_state_dict(resolved) if field_name in {"current_shop", "pending_clarification"} and not isinstance(resolved, dict) else resolved)
+        for field_name in directive.clear_fields:
+            default_value = getattr(SessionState(), field_name)
+            if hasattr(default_value, "model_copy"):
+                default_value = default_value.model_copy(deep=True)
+            elif isinstance(default_value, (list, dict, set)):
+                default_value = type(default_value)(default_value)
+            setattr(session_state, field_name, default_value)
+    store = get_session_store()
+    store.save(str(state.get("session_id", "") or ""), session_state)
+    return {
+        "session_state": session_state,
+        "session_state_after": session_state.model_copy(deep=True),
+        "current_shop": session_state.current_shop,
+        "last_recommendation_list": session_state.last_recommendation_list,
+        "active_constraints": session_state.active_constraints,
+        "pending_clarification": session_state.pending_clarification,
+        "comparison_targets": session_state.comparison_targets,
+        **_log(state, "persist_session_state"),
+    }
 
 
 # --- 28. emit_response ---
@@ -825,10 +1120,17 @@ _NORMAL_EDGES: dict[str, str] = {
 
 def _route_check_pending(state: GraphState) -> str:
     """搂3 鈥?Route check_pending_clarification."""
-    pending = state.get("pending_clarification")
-    raw = state.get("raw_text", "")
-    if pending is not None and raw.strip().isdigit():
+    result = str(state.get("pending_check_result", "") or "")
+    if result == "restore":
         return "target_resolve"
+    if result in ("invalid", "out_of_range", "expired"):
+        return "clarify_response"
+    pending = state.get("pending_clarification")
+    raw = str(state.get("raw_text", "") or "").strip()
+    if pending is not None and raw:
+        compact = raw.replace(" ", "")
+        if compact.isdigit() or compact.startswith("第") or any(token in compact for token in ("第一个", "第二个", "第三个", "第一家", "第二家", "第三家")):
+            return "target_resolve"
     # Future: NL topic-switch detection 鈫?return "top_intent_router"
     return "basic_input_validate"
 
@@ -916,9 +1218,14 @@ def _route_plan_validator(state: GraphState) -> str:
 def _route_tool_execute(state: GraphState) -> str:
     """搂3 鈥?Route tool_execute."""
     tr = state.get("tool_result_set") or state.get("tool_results", {})
+    required_by_call_id = _plan_required_by_call_id(state.get("validated_plan") or state.get("execution_plan"))
+    plan_is_available = bool(required_by_call_id)
     for _call_id, result in tr.items():
+        required = required_by_call_id.get(_call_id, True)
         status = result.result_status.value if hasattr(result, "result_status") else str(_to_dict(result).get("result_status", ""))
-        if status in ("failed", "circuit_open"):
+        if plan_is_available and required and status in ("failed", "circuit_open", "unknown"):
+            return "fallback_answer"
+        if not plan_is_available and status in ("failed", "circuit_open"):
             return "fallback_answer"
     return "evidence_build"
 
@@ -943,6 +1250,7 @@ _CHECK_PENDING_ROUTES: dict[Any, str] = {
     "target_resolve": "target_resolve",
     "top_intent_router": "top_intent_router",
     "basic_input_validate": "basic_input_validate",
+    "clarify_response": "clarify_response",
 }
 
 _BASIC_VALIDATE_ROUTES: dict[Any, str] = {
@@ -1104,6 +1412,7 @@ _NODE_TABLE_NEXT_HOPS: dict[str, list[str]] = {
         "basic_input_validate",
         "target_resolve",
         "top_intent_router",
+        "clarify_response",
     ],
     "basic_input_validate": ["normalize_text", "emit_response"],
     "normalize_text": ["hard_guard"],
@@ -1136,6 +1445,7 @@ _NODE_TABLE_NEXT_HOPS: dict[str, list[str]] = {
 _EDGE_TABLE_ROWS: list[tuple[str, str, str]] = [
     ("check_pending_clarification", "pending reply digits", "target_resolve"),
     ("check_pending_clarification", "new topic or normal input", "basic_input_validate"),
+    ("check_pending_clarification", "expired or invalid pending reply", "clarify_response"),
     ("basic_input_validate", "invalid/empty/overlong", "emit_response"),
     ("basic_input_validate", "valid text", "normalize_text"),
     ("hard_guard", "pure invalid/greeting/capability", "emit_response"),
@@ -1195,6 +1505,7 @@ _GRAPH_STATE_FIELDS: list[str] = [
     "state_update_plan",
     # 浼氳瘽蹇収
     "session_state_before",  # 搂1 鏂囨。瀛楁
+    "session_state_after",
     # 瑙傛祴瀛楁
     "event_log",
     "metrics_tags",

@@ -40,8 +40,10 @@ def _known_shop_names_in_answer(answer: str) -> list[str]:
 
 
 def _extract_facet_results(evidence: dict[str, Any], task_type: str) -> list[dict[str, Any]]:
-    snapshot = evidence.get("ranking_snapshot") or {}
-    facet_results = snapshot.get("facet_results") or []
+    facet_results = evidence.get("facet_results") or []
+    if not facet_results:
+        snapshot = evidence.get("ranking_snapshot") or {}
+        facet_results = snapshot.get("facet_results") or []
     if facet_results:
         return [item if isinstance(item, dict) else {} for item in facet_results]
     if task_type == "coupon_query":
@@ -82,7 +84,11 @@ def _facet_rules(answer: str, facet: str, item: dict[str, Any], issues: list[str
         return
 
     if facet == "open_status":
-        open_status = str(item.get("open_status", "") or "").lower()
+        open_status = str(
+            item.get("open_status")
+            or item.get("value")
+            or ""
+        ).lower()
         if status == "ok":
             if open_status == "open":
                 if not _match_any_phrase(answer, ["营业中", "正在营业", "正常营业"]):
@@ -94,7 +100,9 @@ def _facet_rules(answer: str, facet: str, item: dict[str, Any], issues: list[str
                 if not _match_any_phrase(answer, ["营业状态未知", "暂时无法确认营业状态"]):
                     issues.append("open_status_missing_unknown_notice")
         elif status in {"unknown", "failed"}:
-            if not _match_any_phrase(answer, ["无法确认营业状态", "获取营业状态失败", "稍后再试"]):
+            if _match_any_phrase(answer, ["营业中", "正在营业", "正常营业", "已打烊", "已关门", "不营业"]):
+                issues.append("open_status_false_positive")
+            if not _match_any_phrase(answer, ["无法确认营业状态", "营业状态暂时无法确认", "获取营业状态失败", "稍后再试"]):
                 issues.append("open_status_needs_uncertain_notice")
         elif status == "circuit_open":
             if not _match_any_phrase(answer, ["服务暂时不可用", "稍后再试"]):
@@ -102,14 +110,23 @@ def _facet_rules(answer: str, facet: str, item: dict[str, Any], issues: list[str
         return
 
     if facet == "distance":
+        distance_value = item.get("value")
         distance_km = item.get("distance_km")
+        eta_minutes = item.get("eta_minutes")
+        if isinstance(distance_value, dict):
+            distance_km = distance_value.get("distance_km", distance_km)
+            eta_minutes = distance_value.get("eta_minutes", eta_minutes)
+        elif isinstance(distance_value, (int, float)):
+            distance_km = distance_value
         if status == "ok":
             if distance_km is not None:
                 expected = str(distance_km)
                 if expected not in answer and not _match_any_regex(answer, [r"\d+(\.\d+)?\s*(公里|km|米)"]):
                     issues.append("distance_missing_numeric_claim")
         elif status in {"unknown", "failed"}:
-            if not _match_any_phrase(answer, ["无法确认距离", "获取距离信息失败", "稍后再试"]):
+            if _match_any_regex(answer, [r"很近", r"不远", r"很远", r"\d+\s*分钟", r"几分钟"]):
+                issues.append("distance_false_positive")
+            if not _match_any_phrase(answer, ["无法确认距离", "距离暂时无法确认", "获取距离信息失败", "稍后再试"]):
                 issues.append("distance_needs_uncertain_notice")
         elif status == "circuit_open":
             if not _match_any_phrase(answer, ["服务暂时不可用", "稍后再试"]):

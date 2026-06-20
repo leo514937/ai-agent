@@ -86,10 +86,12 @@ class GraphState(TypedDict, total=False):
 
     # === 会话快照 (Session Snapshot) — write: load_session_state, read: top_intent_router/context_recovery/target_resolve/state_update_plan ===
     session_state_before: Optional[SessionState]  # §1 文档字段：加载时的会话快照
+    session_state_after: Optional[SessionState]
 
     # === 运行时辅助 (Runtime aux — not in doc §1 but required for graph operation) ===
     rewrite_count: int
     session_state: Optional[SessionState]
+    pending_check_result: str
     error_code: str
     error_message: str
     plan_validation_result: str

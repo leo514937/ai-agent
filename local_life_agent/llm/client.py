@@ -59,6 +59,11 @@ def clear_llm_backend() -> None:
     set_llm_backend(None)
 
 
+def has_llm_backend() -> bool:
+    """Return whether a custom backend is currently injected."""
+    return _LLM_BACKEND is not None
+
+
 @lru_cache(maxsize=16)
 def load_prompt(name: str) -> str:
     """Load a prompt template from ``llm/prompts``."""

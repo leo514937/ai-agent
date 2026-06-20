@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from ..agent import AgentResponse, DebugInfo
 from ..engine import graph_builder as gb
+from ..session.store import reset_session_store
 
 
 def _run_with_spy(text: str, monkeypatch):
+    reset_session_store()
     calls: list[tuple[str, dict]] = []
     resolve_calls: list[tuple[str, dict]] = []
     original = gb.dispatch_tool_call
@@ -125,7 +127,10 @@ def test_fuzzy_shop_does_not_call_coupon_tool(monkeypatch):
 
     assert resolve_calls
     assert all(tool_name != "get_coupon_list" for tool_name, _ in calls)
-    assert "店名有点模糊" in response.answer_text or "请提供完整店名" in response.answer_text
+    assert "1." in response.answer_text
+    assert "2." in response.answer_text
+    assert "请回复编号" in response.answer_text
+    assert "海底捞" in response.answer_text
 
 
 def test_missing_shop_name_returns_non_empty_clarification(monkeypatch):

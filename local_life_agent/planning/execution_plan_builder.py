@@ -50,8 +50,6 @@ def _normalized_facets(facets: list[Any]) -> list[dict[str, Any]]:
             continue
         seen.add(name)
         ordered.append({"name": name, "required": _facet_required(item)})
-    if not ordered:
-        ordered.append({"name": Facet.coupon.value, "required": True})
     return ordered
 
 
@@ -112,25 +110,6 @@ def build_execution_plan(task_type: str, target: dict, facets: list[str | dict[s
                 "max_parallelism": max(1, min(len(normalized_facets), config.MAX_CONCURRENCY)),
             }
         )
-
-    if not tool_calls:
-        tool_calls.append(
-            {
-                "call_id": "call_coupon_1",
-                "tool_name": "get_coupon_list",
-                "args": {"shop_id": shop_id},
-                "target_shop_id": shop_id,
-                "required": True,
-                "facet": Facet.coupon.value,
-                "depends_on": [],
-                "timeout_ms": TOOL_DEFAULT_TIMEOUT_MS,
-                "retry_policy": {"max_attempts": 1, "backoff_ms": 0},
-                "fallback_policy": {"fallback_tool": "", "fallback_args": {}},
-                "group_id": "facet_stage_1",
-                "max_parallelism": 1,
-            }
-        )
-        tool_names.append("get_coupon_list")
 
     return {
         "plan_id": f"plan_{shop_id}",
