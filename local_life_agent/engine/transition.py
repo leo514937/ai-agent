@@ -7,6 +7,8 @@ Each rule captures: current node + status → next node, emit decision,
 and session write directive.
 """
 
+from __future__ import annotations
+
 from .nodes import ExecutionNode, NodeResult, RoutingResult
 from .session_write import SessionScenario, get_directive, resolve_scenario
 from ..domain.state import SessionWriteDirective

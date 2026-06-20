@@ -33,6 +33,8 @@ build/
 .vscode/
 
 ### Local Python & DB files ###
+__pycache__/
+*.pyc
 *.log
 *.rdb
 var/

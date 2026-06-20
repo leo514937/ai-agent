@@ -13,7 +13,86 @@ from __future__ import annotations
 
 from typing import Any
 
-from jsonschema import Draft7Validator
+try:
+    from jsonschema import Draft7Validator
+except ImportError:  # pragma: no cover - fallback for minimal environments
+    class _FallbackValidationError:
+        def __init__(self, message: str, path: tuple[str, ...] | list[str] | None = None, validator: str = ""):
+            self.message = message
+            self.path = list(path or [])
+            self.validator = validator
+
+    class Draft7Validator:  # type: ignore[override]
+        def __init__(self, schema: dict[str, Any] | None):
+            self.schema = schema or {}
+
+        def iter_errors(self, instance: Any):
+            yield from _iter_schema_errors(self.schema, instance)
+
+
+def _iter_schema_errors(schema: dict[str, Any], instance: Any, path: tuple[str, ...] = ()):
+    if not isinstance(schema, dict):
+        return
+
+    schema_type = schema.get("type")
+    if schema_type == "object":
+        if not isinstance(instance, dict):
+            yield _FallbackValidationError("is not of type 'object'", path, "type")
+            return
+        required = schema.get("required", [])
+        for field in required:
+            if field not in instance or instance[field] is None or (isinstance(instance[field], str) and not instance[field].strip()):
+                yield _FallbackValidationError(f"'{field}' is a required property", path + (field,), "required")
+        properties = schema.get("properties", {})
+        for key, subschema in properties.items():
+            if key in instance:
+                yield from _iter_schema_errors(subschema, instance[key], path + (key,))
+        return
+
+    if schema_type == "array":
+        if not isinstance(instance, list):
+            yield _FallbackValidationError("is not of type 'array'", path, "type")
+            return
+        items_schema = schema.get("items")
+        if isinstance(items_schema, dict):
+            for idx, item in enumerate(instance):
+                yield from _iter_schema_errors(items_schema, item, path + (str(idx),))
+        return
+
+    if schema_type == "string":
+        if not isinstance(instance, str):
+            yield _FallbackValidationError("is not of type 'string'", path, "type")
+            return
+        min_length = schema.get("minLength")
+        if isinstance(min_length, int) and len(instance) < min_length:
+            yield _FallbackValidationError(
+                f"'' is too short" if not instance else f"'{instance}' is too short",
+                path,
+                "minLength",
+            )
+        enum = schema.get("enum")
+        if isinstance(enum, list) and instance not in enum:
+            yield _FallbackValidationError(
+                f"'{instance}' is not one of {enum}",
+                path,
+                "enum",
+            )
+        return
+
+    if schema_type == "number":
+        if not isinstance(instance, (int, float)) or isinstance(instance, bool):
+            yield _FallbackValidationError("is not of type 'number'", path, "type")
+        return
+
+    if schema_type == "integer":
+        if not isinstance(instance, int) or isinstance(instance, bool):
+            yield _FallbackValidationError("is not of type 'integer'", path, "type")
+        return
+
+    if schema_type == "boolean":
+        if not isinstance(instance, bool):
+            yield _FallbackValidationError("is not of type 'boolean'", path, "type")
+        return
 
 from .. import config
 from ..domain.schemas import ExecutionPlan, ToolCallSpec
@@ -144,11 +223,21 @@ class ExecutionPlanValidator:
         if resolved_shop_ids is None:
             return
         for tc in plan.tool_calls:
-            sid = tc.target_shop_id
+            sid = tc.target_shop_id.strip()
+            arg_shop_id = str(tc.args.get("shop_id", "")).strip() if isinstance(tc.args, dict) else ""
             if sid and sid not in resolved_shop_ids:
                 report.errors.append(
                     f"shop_id '{sid}' in call_id={tc.call_id} was not produced "
                     f"by legitimate resolve. Allowed: {resolved_shop_ids}"
+                )
+            if arg_shop_id and arg_shop_id not in resolved_shop_ids:
+                report.errors.append(
+                    f"shop_id '{arg_shop_id}' in args for call_id={tc.call_id} was not produced "
+                    f"by legitimate resolve. Allowed: {resolved_shop_ids}"
+                )
+            if sid and arg_shop_id and sid != arg_shop_id:
+                report.errors.append(
+                    f"shop_id mismatch in call_id={tc.call_id}: target_shop_id='{sid}' args.shop_id='{arg_shop_id}'"
                 )
 
     # ------------------------------------------------------------------

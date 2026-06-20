@@ -20,12 +20,23 @@ from .engine import (
 )
 
 
+def _debug_dump(value: Any) -> Any:
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        return model_dump()
+    if isinstance(value, dict):
+        return {k: _debug_dump(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_debug_dump(item) for item in value]
+    return value
+
+
 @dataclass
 class DebugInfo:
     execution_trace: list = field(default_factory=list)
     semantic_frame: dict = field(default_factory=dict)
     execution_plan: dict = field(default_factory=dict)
-    tool_results: list = field(default_factory=list)
+    tool_results: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -48,9 +59,9 @@ class AgentResponse:
         if config.DEBUG_ENABLED and self.debug is not None:
             result["debug"] = {
                 "execution_trace": self.debug.execution_trace,
-                "semantic_frame": self.debug.semantic_frame,
-                "execution_plan": self.debug.execution_plan,
-                "tool_results": self.debug.tool_results,
+                "semantic_frame": _debug_dump(self.debug.semantic_frame),
+                "execution_plan": _debug_dump(self.debug.execution_plan),
+                "tool_results": _debug_dump(self.debug.tool_results),
             }
         else:
             result["debug"] = {}
@@ -384,6 +395,7 @@ def run_agent_graph(input_text: str, session_id: str = "") -> AgentResponse:
         "normalized_text": "",
         "input_type": "text",
         "top_intent": None,
+        "task_type": None,
         "semantic_frame": None,
         "pending_clarification": None,
         "current_shop": None,
@@ -425,6 +437,9 @@ def run_agent_graph(input_text: str, session_id: str = "") -> AgentResponse:
         session_id=sid,
         debug=DebugInfo(
             execution_trace=event_log,
+            semantic_frame=_debug_dump(final_state.get("semantic_frame") or {}),
+            execution_plan=_debug_dump(final_state.get("execution_plan") or {}),
+            tool_results=_debug_dump(final_state.get("tool_result_set") or final_state.get("tool_results") or {}),
         ) if config.DEBUG_ENABLED else None,
     )
     return response

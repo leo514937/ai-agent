@@ -22,6 +22,7 @@ from ..domain.graph_state import GraphState
 from ..domain.schemas import (
     PendingClarification,
     ResolveShopResult,
+    ShopRef,
     ToolResult,
 )
 from ..engine.graph_builder import (
@@ -296,44 +297,59 @@ class TestNormalFlow:
 
     def test_top_intent_classified(self):
         """top_intent_router should classify local_life intent."""
-        graph = build_graph()
-        result = graph.invoke({
-            "raw_text": "推荐火锅店",
-            "session_id": "s",
-            "trace_id": "t",
-            "turn_id": "1",
-            "user_id": "u",
-            "normalized_text": "",
-            "input_type": "text",
-            "top_intent": None,
-            "semantic_frame": None,
-            "pending_clarification": None,
-            "current_shop": None,
-            "last_recommendation_list": [],
-            "active_constraints": {},
-            "comparison_targets": [],
-            "resolved_target": None,
-            "resolve_shop_result": None,
-            "execution_plan": None,
-            "validated_plan": None,
-            "tool_results": {},
-            "tool_result_set": {},
-            "evidence_pack": None,
-            "answer_plan": None,
-            "final_response": "",
-            "state_update_plan": None,
-            "session_state_before": None,
-            "event_log": [],
-            "metrics_tags": {},
-            "trace_spans": [],
-            "rewrite_count": 0,
-            "session_state": None,
-            "error_code": "",
-            "guard_result": "",
-            "verify_result": "",
-            "draft_response": "",
-        })
-        assert result["top_intent"] == TopIntent.local_life
+        def backend(**_kwargs):
+            return {
+                "content": {
+                    "top_intent": "local_life",
+                    "confidence": 0.97,
+                    "reason": "contains local-life intent",
+                }
+            }
+
+        from ..llm.client import set_llm_backend, clear_llm_backend
+
+        set_llm_backend(backend)
+        try:
+            graph = build_graph()
+            result = graph.invoke({
+                "raw_text": "recommend hotpot",
+                "session_id": "s",
+                "trace_id": "t",
+                "turn_id": "1",
+                "user_id": "u",
+                "normalized_text": "",
+                "input_type": "text",
+                "top_intent": None,
+                "semantic_frame": None,
+                "pending_clarification": None,
+                "current_shop": None,
+                "last_recommendation_list": [],
+                "active_constraints": {},
+                "comparison_targets": [],
+                "resolved_target": None,
+                "resolve_shop_result": None,
+                "execution_plan": None,
+                "validated_plan": None,
+                "tool_results": {},
+                "tool_result_set": {},
+                "evidence_pack": None,
+                "answer_plan": None,
+                "final_response": "",
+                "state_update_plan": None,
+                "session_state_before": None,
+                "event_log": [],
+                "metrics_tags": {},
+                "trace_spans": [],
+                "rewrite_count": 0,
+                "session_state": None,
+                "error_code": "",
+                "guard_result": "",
+                "verify_result": "",
+                "draft_response": "",
+            })
+            assert result["top_intent"] == TopIntent.local_life
+        finally:
+            clear_llm_backend()
 
 
 # ===================================================================
@@ -388,13 +404,17 @@ class TestConditionalBranching:
         route = _route_top_intent({"top_intent": TopIntent.unsafe})
         assert route == "emit_response"
 
+    def test_top_intent_capability_routes_to_emit(self):
+        route = _route_top_intent({"top_intent": TopIntent.capability})
+        assert route == "emit_response"
+
     def test_top_intent_local_life_routes_to_semantic(self):
         route = _route_top_intent({"top_intent": TopIntent.local_life})
         assert route == "semantic_parse"
 
-    def test_top_intent_chat_routes_to_semantic(self):
+    def test_top_intent_chat_routes_to_emit(self):
         route = _route_top_intent({"top_intent": TopIntent.chat})
-        assert route == "semantic_parse"
+        assert route == "emit_response"
 
     # --- _route_semantic_parse ---
 
@@ -404,7 +424,7 @@ class TestConditionalBranching:
 
     def test_semantic_missing_task_type(self):
         route = _route_semantic_parse({"error_code": "MISSING_TASK_TYPE"})
-        assert route == "frame_validator"
+        assert route == "clarify_response"
 
     def test_semantic_ok_routes_to_slot(self):
         route = _route_semantic_parse({"error_code": ""})
@@ -483,6 +503,22 @@ class TestConditionalBranching:
         })
         assert route == "fallback_answer"
 
+    def test_tool_execute_unknown_still_builds_evidence(self):
+        from ..domain.schemas import ToolResult
+        from ..domain.enums import ToolResultStatus, ErrorCode
+        route = _route_tool_execute({
+            "tool_results": {
+                "call_1": ToolResult(
+                    call_id="call_1",
+                    tool_name="get_coupon_list",
+                    shop_id="shop_001",
+                    result_status=ToolResultStatus.unknown,
+                    error_code=ErrorCode.TOOL_TIMEOUT,
+                ),
+            },
+        })
+        assert route == "evidence_build"
+
     # --- _route_answer_verify ---
 
     def test_answer_verify_pass(self):
@@ -494,21 +530,72 @@ class TestConditionalBranching:
             "verify_result": "rewrite_needed",
             "rewrite_count": 0,
         })
-        assert route == "answer_generate"
+        assert route == "rewrite"
 
     def test_answer_verify_rewrite_exhausted(self):
         route = _route_answer_verify({
             "verify_result": "rewrite_exhausted",
-            "rewrite_count": 2,
+            "rewrite_count": 1,
         })
         assert route == "fallback_answer"
 
     def test_answer_verify_rewrite_limit_reached(self):
         route = _route_answer_verify({
             "verify_result": "rewrite_needed",
-            "rewrite_count": 2,
+            "rewrite_count": 1,
         })
         assert route == "fallback_answer"
+
+    def test_plan_validator_rejects_non_resolved_shop_id(self):
+        from ..domain.schemas import ExecutionPlan, ToolCallSpec
+        plan = ExecutionPlan(
+            task_type="coupon_query",
+            tool_calls=[
+                ToolCallSpec(
+                    call_id="c1",
+                    tool_name="get_coupon_list",
+                    args={"shop_id": "shop_b"},
+                    target_shop_id="shop_b",
+                    required=True,
+                )
+            ],
+        )
+        result = _HANDLERS["plan_validator"]({
+            "execution_plan": plan,
+            "resolved_target": ResolveShopResult(
+                status="RESOLVED",
+                resolved_shop=ShopRef(shop_id="shop_a", shop_name="A"),
+            ),
+        })
+        assert result["error_code"] in {"INVALID_ARGUMENT", "SCHEMA_VALIDATION_FAILED"}
+        assert result["plan_validation_result"] == "failed"
+        assert result["failed_stage"] == "plan_validator"
+        assert result["validated_plan"] is None
+
+    def test_plan_validator_accepts_legitimate_shop_id(self):
+        from ..domain.schemas import ExecutionPlan, ToolCallSpec
+        plan = ExecutionPlan(
+            task_type="coupon_query",
+            tool_calls=[
+                ToolCallSpec(
+                    call_id="c1",
+                    tool_name="get_coupon_list",
+                    args={"shop_id": "shop_a"},
+                    target_shop_id="shop_a",
+                    required=True,
+                )
+            ],
+        )
+        result = _HANDLERS["plan_validator"]({
+            "execution_plan": plan,
+            "resolved_target": ResolveShopResult(
+                status="RESOLVED",
+                resolved_shop=ShopRef(shop_id="shop_a", shop_name="A"),
+            ),
+        })
+        assert result["error_code"] == ""
+        assert result["plan_validation_result"] == "pass"
+        assert result["validated_plan"] is plan
 
 
 # ===================================================================
@@ -533,16 +620,33 @@ class TestNodeHandlers:
         assert result["guard_result"] == "ok"
 
     def test_top_intent_router_chat(self):
-        result = _HANDLERS["top_intent_router"]({"normalized_text": "你好"})
-        assert result["top_intent"] == TopIntent.chat
+        def backend(**_kwargs):
+            return {"content": {"top_intent": "chat", "confidence": 0.92, "reason": "pure greeting"}}
+
+        from ..llm.client import set_llm_backend, clear_llm_backend
+
+        set_llm_backend(backend)
+        try:
+            result = _HANDLERS["top_intent_router"]({"normalized_text": "hello"})
+            assert result["top_intent"] == TopIntent.chat
+        finally:
+            clear_llm_backend()
 
     def test_top_intent_router_invalid(self):
         result = _HANDLERS["top_intent_router"]({"normalized_text": ""})
         assert result["top_intent"] == TopIntent.invalid
 
     def test_top_intent_router_local_life(self):
-        result = _HANDLERS["top_intent_router"]({"normalized_text": "附近火锅"})
-        assert result["top_intent"] == TopIntent.local_life
+        def backend(**_kwargs):
+            return {"content": {"top_intent": "local_life", "confidence": 0.97, "reason": "contains local-life intent"}}
+
+        from ..llm.client import set_llm_backend, clear_llm_backend
+        set_llm_backend(backend)
+        try:
+            result = _HANDLERS["top_intent_router"]({"normalized_text": "business question"})
+            assert result["top_intent"] == TopIntent.local_life
+        finally:
+            clear_llm_backend()
 
     def test_answer_verify_default_pass(self):
         result = _HANDLERS["answer_verify"]({})
@@ -641,7 +745,8 @@ class TestNodeHandlers:
 
     def test_clarify_response_has_template(self):
         result = _HANDLERS["clarify_response"]({})
-        assert "请提供" in result["final_response"]
+        assert result["final_response"].strip()
+        assert "店名" in result["final_response"] or "优惠券" in result["final_response"]
 
     def test_fallback_answer_has_template(self):
         result = _HANDLERS["fallback_answer"]({})

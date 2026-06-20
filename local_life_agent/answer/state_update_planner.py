@@ -1,6 +1,6 @@
-"""State update planner — determines how the session state should
-be updated after a turn completes, based on task type and outcomes.
-"""
+"""State update planner for the single-shop coupon flow."""
+
+from __future__ import annotations
 
 
 def plan_state_update(
@@ -8,12 +8,21 @@ def plan_state_update(
 ) -> dict:
     """Compute the session state delta for this turn.
 
-    Args:
-        turn_context: Full GlobalTurnContext for the turn.
-        task_type: Executed task type.
-        resolve_status: Outcome of shop resolution.
-
-    Returns:
-        Dict with keys to set and keys to clear in session state.
+    Stage 10 does not implement multi-turn recovery, so the planner
+    only records the resolved current shop when available.
     """
-    raise NotImplementedError("State update planner not yet implemented")
+    turn_context = turn_context or {}
+    resolved_shop = turn_context.get("resolved_shop") or {}
+    if hasattr(resolved_shop, "model_dump"):
+        resolved_shop = resolved_shop.model_dump()
+
+    set_fields = {}
+    if resolve_status == "RESOLVED" and isinstance(resolved_shop, dict):
+        set_fields["current_shop"] = resolved_shop
+
+    return {
+        "set_fields": set_fields,
+        "clear_fields": [],
+        "task_type": task_type,
+        "resolve_status": resolve_status,
+    }

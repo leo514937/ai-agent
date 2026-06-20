@@ -1,9 +1,9 @@
-"""Execution node definitions for the state machine.
+﻿"""Execution node definitions for the state machine.
 
-Mirrors the node table from `todo/05_LangGraph节点边状态字段表.md`
-and the transition rules from `todo/02_状态转移与路由决策表.md`.
+Mirrors the node table from `todo/05_LangGraph鑺傜偣杈圭姸鎬佸瓧娈佃〃.md`
+and the transition rules from `todo/02_鐘舵€佽浆绉讳笌璺敱鍐崇瓥琛?md`.
 """
-
+from __future__ import annotations
 from enum import Enum
 from dataclasses import dataclass, field
 from typing import Any
@@ -11,7 +11,6 @@ from typing import Any
 
 class ExecutionNode(str, Enum):
     """All possible nodes in the execution graph."""
-
     # --- Input & Session ---
     RECEIVE_INPUT = "receive_input"
     LOAD_SESSION_STATE = "load_session_state"
@@ -83,3 +82,4 @@ class RoutingResult:
     emit_response: bool
     session_write: "SessionWriteDirective | None" = None
     emit_content: dict | None = None
+

@@ -1,16 +1,50 @@
-"""Facet planner — determines which facets (coupon, open_status,
-distance, price) should be queried for the current task.
-"""
+"""Facet planner for the single-shop multi-facet flow."""
+
+from __future__ import annotations
+
+from typing import Any
+
+from ..domain.enums import Facet
 
 
-def plan_facets(task_type: str, semantic_frame: dict) -> list[str]:
-    """Decide which facets to query based on task type and user request.
+def _facet_name(item: Any) -> str:
+    if isinstance(item, dict):
+        raw = item.get("name") or item.get("facet") or item.get("facet_name") or ""
+        if hasattr(raw, "value"):
+            return str(raw.value)
+        return str(raw)
+    if hasattr(item, "name"):
+        raw = getattr(item, "name")
+        if hasattr(raw, "value"):
+            return str(raw.value)
+        return str(raw)
+    if hasattr(item, "value"):
+        return str(item.value)
+    return str(item)
 
-    Args:
-        task_type: Routed task type.
-        semantic_frame: User's semantic frame with requested facets.
 
-    Returns:
-        Ordered list of facet names to query.
-    """
-    raise NotImplementedError("Facet planner not yet implemented")
+def _facet_required(item: Any) -> bool:
+    if isinstance(item, dict):
+        return bool(item.get("required", False))
+    return bool(getattr(item, "required", False))
+
+
+def plan_facets(task_type: str, semantic_frame: dict) -> list[dict[str, Any]]:
+    """Decide which facets to query based on task type and user request."""
+    facets = semantic_frame.get("facets") or []
+    ordered: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for item in facets:
+        name = _facet_name(item).strip()
+        if not name or name in seen:
+            continue
+        if name not in {facet.value for facet in Facet}:
+            continue
+        seen.add(name)
+        ordered.append({"name": name, "required": _facet_required(item)})
+
+    if not ordered and task_type in {"coupon_query", "single_shop_query"}:
+        ordered.append({"name": Facet.coupon.value, "required": True})
+
+    return ordered

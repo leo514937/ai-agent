@@ -76,6 +76,45 @@ def test_legal_args_must_pass():
     assert report.passed
 
 
+def test_resolved_shop_id_mismatch_must_fail():
+    validator = ExecutionPlanValidator()
+    plan = ExecutionPlan(
+        task_type="coupon_query",
+        tool_calls=[
+            ToolCallSpec(
+                call_id="c1",
+                tool_name="get_coupon_list",
+                args={"shop_id": "shop_b"},
+                target_shop_id="shop_b",
+            ),
+        ],
+    )
+
+    report = validator.validate(plan, resolved_shop_ids={"shop_a"})
+
+    assert not report.passed
+    assert any("was not produced by legitimate resolve" in error for error in report.errors)
+
+
+def test_legitimate_resolved_shop_id_passes():
+    validator = ExecutionPlanValidator()
+    plan = ExecutionPlan(
+        task_type="coupon_query",
+        tool_calls=[
+            ToolCallSpec(
+                call_id="c1",
+                tool_name="get_coupon_list",
+                args={"shop_id": "shop_a"},
+                target_shop_id="shop_a",
+            ),
+        ],
+    )
+
+    report = validator.validate(plan, resolved_shop_ids={"shop_a"})
+
+    assert report.passed
+
+
 def test_forbidden_tools_must_fail():
     validator = ExecutionPlanValidator()
     plan = ExecutionPlan(

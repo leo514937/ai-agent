@@ -14,7 +14,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum
 from typing import Any
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from .enums import (
     TopIntent,
     TaskType,
@@ -67,10 +67,13 @@ class TurnInput(BaseModel):
 
 class SemanticFrame(BaseModel):
     """Structured interpretation of the user's request."""
+
+    model_config = ConfigDict(extra="forbid")
+
     top_intent: TopIntent | None = None
     task_type: TaskType | None = None
     primary_task: str = ""
-    facets: list[Facet] = Field(default_factory=list)
+    facets: list["FacetSpec"] = Field(default_factory=list)
     merchant_mentions: list[str] = Field(default_factory=list)
     reference_mentions: list[str] = Field(default_factory=list)
     hard_constraints: dict[str, Any] = Field(default_factory=dict)
@@ -79,6 +82,57 @@ class SemanticFrame(BaseModel):
     follow_up: dict[str, Any] | None = None
     confidence: float = 0.0
     need_context: bool = False
+
+    @field_validator("facets", mode="before")
+    @classmethod
+    def _coerce_facets(cls, value: Any) -> list[Any]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            return value
+        coerced: list[Any] = []
+        for item in value:
+            if isinstance(item, FacetSpec):
+                coerced.append(item)
+                continue
+            if isinstance(item, Facet):
+                coerced.append({"name": item, "required": False})
+                continue
+            if isinstance(item, str):
+                coerced.append({"name": item, "required": False})
+                continue
+            if isinstance(item, dict):
+                payload = dict(item)
+                if "name" not in payload and "facet" in payload:
+                    payload["name"] = payload["facet"]
+                coerced.append(payload)
+                continue
+            coerced.append(item)
+        return coerced
+
+
+class FacetSpec(BaseModel):
+    """Facet request metadata with a required/optional boundary."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: Facet
+    required: bool = False
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, FacetSpec):
+            return self.name == other.name and self.required == other.required
+        if isinstance(other, Facet):
+            return self.name == other
+        if isinstance(other, str):
+            try:
+                return self.name == Facet(other)
+            except Exception:
+                return False
+        return False
+
+
+SemanticFrame.model_rebuild()
 
 
 class PendingClarification(BaseModel):

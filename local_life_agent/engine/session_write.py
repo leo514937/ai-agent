@@ -7,7 +7,15 @@ Each scenario maps to a directive that tells the state-update planner
 which fields to set, which to clear, and what to leave unchanged.
 """
 
-from enum import StrEnum
+from __future__ import annotations
+
+try:
+    from enum import StrEnum
+except ImportError:  # Python < 3.11
+    from enum import Enum
+
+    class StrEnum(str, Enum):
+        pass
 from ..domain.state import SessionWriteDirective
 
 
