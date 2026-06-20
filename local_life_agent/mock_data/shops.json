@@ -1,0 +1,542 @@
+[
+  {
+    "shop_id": "shop_001",
+    "category": "咖啡/茶饮",
+    "sub_category": "咖啡厅",
+    "address": "海淀区西土城路10号北邮科技大厦1层",
+    "lat": 39.9615,
+    "lng": 116.3575,
+    "rating": 4.3,
+    "open_status": "open",
+    "business_hours": "07:30-21:00",
+    "phone": "010-62281234",
+    "tags": [
+      "安静",
+      "有WiFi",
+      "校园"
+    ],
+    "shop_name": "北邮科技大厦咖啡厅",
+    "avg_price": 28.0,
+    "alias": ""
+  },
+  {
+    "shop_id": "shop_002",
+    "category": "快餐",
+    "sub_category": "汉堡炸鸡",
+    "address": "海淀区西土城路2号",
+    "lat": 39.9582,
+    "lng": 116.3568,
+    "rating": 4.1,
+    "open_status": "open",
+    "business_hours": "06:00-23:00",
+    "phone": "010-62280123",
+    "tags": [
+      "快餐",
+      "24小时",
+      "早餐"
+    ],
+    "shop_name": "麦当劳(明光桥店)",
+    "avg_price": 35.0,
+    "alias": ""
+  },
+  {
+    "shop_id": "shop_003",
+    "category": "烘焙甜品",
+    "sub_category": "面包蛋糕",
+    "address": "海淀区北太平庄路18号",
+    "lat": 39.963,
+    "lng": 116.362,
+    "rating": 4.5,
+    "open_status": "open",
+    "business_hours": "08:00-21:30",
+    "phone": "010-62034567",
+    "tags": [
+      "生日蛋糕",
+      "面包",
+      "甜品"
+    ],
+    "shop_name": "好利来(北太平庄店)",
+    "avg_price": 42.0,
+    "alias": ""
+  },
+  {
+    "shop_id": "shop_004",
+    "category": "中式快餐",
+    "sub_category": "麻辣烫",
+    "address": "海淀区西土城路10号北邮南门",
+    "lat": 39.9602,
+    "lng": 116.3578,
+    "rating": 4.0,
+    "open_status": "open",
+    "business_hours": "10:00-22:00",
+    "phone": "010-62283456",
+    "tags": [
+      "麻辣烫",
+      "实惠",
+      "学生"
+    ],
+    "shop_name": "张亮麻辣烫(北邮店)",
+    "avg_price": 22.0,
+    "alias": ""
+  },
+  {
+    "shop_id": "shop_005",
+    "category": "咖啡/茶饮",
+    "sub_category": "咖啡厅",
+    "address": "海淀区西土城路10号北邮校内",
+    "lat": 39.9607,
+    "lng": 116.3583,
+    "rating": 4.4,
+    "open_status": "open",
+    "business_hours": "07:00-20:00",
+    "phone": "010-62285678",
+    "tags": [
+      "咖啡",
+      "外带",
+      "校园"
+    ],
+    "shop_name": "瑞幸咖啡(北邮店)",
+    "avg_price": 18.0,
+    "alias": ""
+  },
+  {
+    "shop_id": "shop_006",
+    "category": "烘焙甜品",
+    "sub_category": "面包蛋糕",
+    "address": "海淀区蓟门里小区东门",
+    "lat": 39.965,
+    "lng": 116.355,
+    "rating": 4.2,
+    "open_status": "open",
+    "business_hours": "07:30-22:00",
+    "phone": "010-62015678",
+    "tags": [
+      "面包",
+      "蛋糕",
+      "早餐"
+    ],
+    "shop_name": "味多美(蓟门里店)",
+    "avg_price": 35.0,
+    "alias": ""
+  },
+  {
+    "shop_id": "shop_007",
+    "category": "火锅",
+    "sub_category": "川式火锅",
+    "address": "海淀区花园东路2号",
+    "lat": 39.97,
+    "lng": 116.365,
+    "rating": 4.7,
+    "open_status": "open",
+    "business_hours": "09:00-次日07:00",
+    "phone": "010-62375678",
+    "tags": [
+      "火锅",
+      "服务好",
+      "聚餐"
+    ],
+    "shop_name": "海底捞(牡丹园店)",
+    "avg_price": 120.0,
+    "alias": ""
+  },
+  {
+    "shop_id": "shop_008",
+    "category": "咖啡/茶饮",
+    "sub_category": "奶茶",
+    "address": "海淀区北太平庄路25号",
+    "lat": 39.9635,
+    "lng": 116.3615,
+    "rating": 4.1,
+    "open_status": "closed",
+    "business_hours": "10:00-21:00",
+    "phone": "010-62026789",
+    "tags": [
+      "奶茶",
+      "外卖",
+      "学生"
+    ],
+    "shop_name": "coco都可(北太平庄店)",
+    "avg_price": 15.0,
+    "alias": ""
+  },
+  {
+    "shop_id": "shop_009",
+    "category": "中餐",
+    "sub_category": "饺子",
+    "address": "海淀区西土城路10号北邮东门",
+    "lat": 39.9612,
+    "lng": 116.3595,
+    "rating": 4.6,
+    "open_status": "open",
+    "business_hours": "11:00-21:30",
+    "phone": "010-62284567",
+    "tags": [
+      "饺子",
+      "实惠",
+      "学生"
+    ],
+    "shop_name": "金谷园饺子馆(北邮店)",
+    "avg_price": 30.0,
+    "alias": ""
+  },
+  {
+    "shop_id": "shop_010",
+    "category": "快餐",
+    "sub_category": "汉堡炸鸡",
+    "address": "海淀区北太平庄路2号",
+    "lat": 39.962,
+    "lng": 116.361,
+    "rating": 4.0,
+    "open_status": "open",
+    "business_hours": "06:30-22:30",
+    "phone": "010-62039012",
+    "tags": [
+      "快餐",
+      "早餐",
+      "外卖"
+    ],
+    "shop_name": "肯德基(北太平庄餐厅)",
+    "avg_price": 38.0,
+    "alias": ""
+  },
+  {
+    "shop_id": "shop_sc_01",
+    "category": "火锅",
+    "sub_category": "川式火锅",
+    "address": "海淀区远大路1号金源时代购物中心5层",
+    "lat": 39.9705,
+    "lng": 116.3025,
+    "rating": 4.6,
+    "open_status": "open",
+    "business_hours": "10:00-22:00",
+    "phone": "010-88881234",
+    "tags": [
+      "火锅",
+      "服务好",
+      "聚餐"
+    ],
+    "aliases": [
+      "海底捞水晶城",
+      "水晶城海底捞"
+    ],
+    "shop_name": "海底捞火锅(水晶城购物中心店)",
+    "avg_price": 135.0,
+    "alias": "海底捞水晶城"
+  },
+  {
+    "shop_id": "shop_sc_02a",
+    "category": "火锅",
+    "sub_category": "川式火锅",
+    "address": "海淀区中关村大街15号",
+    "lat": 39.98,
+    "lng": 116.31,
+    "rating": 4.5,
+    "open_status": "open",
+    "business_hours": "10:00-22:00",
+    "phone": "010-62501234",
+    "tags": [
+      "火锅",
+      "聚餐"
+    ],
+    "shop_name": "海底捞(A店)",
+    "avg_price": 130.0,
+    "alias": ""
+  },
+  {
+    "shop_id": "shop_sc_02b",
+    "category": "火锅",
+    "sub_category": "川式火锅",
+    "address": "海淀区五道口购物中心3层",
+    "lat": 39.992,
+    "lng": 116.338,
+    "rating": 4.3,
+    "open_status": "open",
+    "business_hours": "10:30-22:30",
+    "phone": "010-62515678",
+    "tags": [
+      "火锅",
+      "聚餐"
+    ],
+    "shop_name": "海底捞(B店)",
+    "avg_price": 125.0,
+    "alias": ""
+  },
+  {
+    "shop_id": "shop_sc_02c",
+    "category": "火锅",
+    "sub_category": "川式火锅",
+    "address": "海淀区苏州街18号",
+    "lat": 39.975,
+    "lng": 116.305,
+    "rating": 4.4,
+    "open_status": "open",
+    "business_hours": "10:00-23:00",
+    "phone": "010-62525678",
+    "tags": [
+      "火锅",
+      "服务好"
+    ],
+    "shop_name": "海底捞(C店)",
+    "avg_price": 128.0,
+    "alias": ""
+  },
+  {
+    "shop_id": "shop_sc_04",
+    "category": "中餐",
+    "sub_category": "家常菜",
+    "address": "海淀区西土城路8号",
+    "lat": 39.96,
+    "lng": 116.356,
+    "rating": 3.8,
+    "open_status": "open",
+    "business_hours": "10:30-21:30",
+    "phone": "010-62289876",
+    "tags": [
+      "家常菜",
+      "实惠",
+      "学生"
+    ],
+    "shop_name": "张记家常菜(北邮店)",
+    "avg_price": 25.0,
+    "alias": ""
+  },
+  {
+    "shop_id": "shop_sc_05",
+    "category": "中餐",
+    "sub_category": "川菜",
+    "address": "海淀区知春路29号",
+    "lat": 39.978,
+    "lng": 116.335,
+    "rating": 4.2,
+    "open_status": "open",
+    "business_hours": "11:00-22:00",
+    "phone": "010-82345678",
+    "tags": [
+      "川菜",
+      "麻辣",
+      "聚餐"
+    ],
+    "shop_name": "川味轩(知春路店)",
+    "avg_price": 55.0,
+    "alias": ""
+  },
+  {
+    "shop_id": "shop_sc_06",
+    "category": "烧烤",
+    "sub_category": "中式烧烤",
+    "address": "海淀区清河小营桥西200米",
+    "lat": 40.03,
+    "lng": 116.345,
+    "rating": 4.3,
+    "open_status": "open",
+    "business_hours": "17:00-次日02:00",
+    "phone": "010-62905678",
+    "tags": [
+      "烧烤",
+      "夜宵",
+      "聚餐"
+    ],
+    "shop_name": "远方烧烤(清河店)",
+    "avg_price": 75.0,
+    "alias": ""
+  },
+  {
+    "shop_id": "shop_sc_07",
+    "category": "快餐",
+    "sub_category": "中式快餐",
+    "address": "海淀区新街口外大街19号",
+    "lat": 39.958,
+    "lng": 116.362,
+    "rating": 4.0,
+    "open_status": "open",
+    "business_hours": "06:00-22:00",
+    "phone": "010-58801234",
+    "tags": [
+      "快餐",
+      "早餐",
+      "豆浆油条"
+    ],
+    "shop_name": "永和大王(北师大店)",
+    "avg_price": 28.0,
+    "alias": ""
+  },
+  {
+    "shop_id": "shop_sc_08",
+    "category": "日料",
+    "sub_category": "居酒屋",
+    "address": "海淀区蓟门桥西500米",
+    "lat": 39.966,
+    "lng": 116.35,
+    "rating": 4.5,
+    "open_status": "closed",
+    "business_hours": "18:00-次日04:00",
+    "phone": "010-62005678",
+    "tags": [
+      "日料",
+      "居酒屋",
+      "夜宵"
+    ],
+    "shop_name": "深夜食堂(蓟门桥店)",
+    "avg_price": 80.0,
+    "alias": ""
+  },
+  {
+    "shop_id": "shop_sc_09",
+    "category": "咖啡/茶饮",
+    "sub_category": "奶茶",
+    "address": "海淀区北太平庄路12号",
+    "lat": 39.9625,
+    "lng": 116.36,
+    "rating": 3.5,
+    "open_status": "unknown",
+    "business_hours": "待定",
+    "phone": "",
+    "tags": [
+      "奶茶",
+      "新店"
+    ],
+    "shop_name": "新开张奶茶铺",
+    "avg_price": 12.0,
+    "alias": ""
+  },
+  {
+    "shop_id": "shop_sc_10",
+    "category": "快餐",
+    "sub_category": "盒饭",
+    "address": "海淀区西土城路10号北邮南门对面",
+    "lat": 39.9595,
+    "lng": 116.357,
+    "rating": 3.2,
+    "open_status": "open",
+    "business_hours": "08:00-20:00",
+    "phone": "",
+    "tags": [
+      "快餐",
+      "实惠",
+      "盒饭"
+    ],
+    "shop_name": "老王快餐(校门口)",
+    "avg_price": 15.0,
+    "alias": ""
+  },
+  {
+    "shop_id": "shop_sc_11",
+    "category": "西餐",
+    "sub_category": "法式料理",
+    "address": "朝阳区建国门外大街1号国贸大厦80层",
+    "lat": 39.908,
+    "lng": 116.46,
+    "rating": 4.9,
+    "open_status": "open",
+    "business_hours": "11:30-22:00",
+    "phone": "010-65051234",
+    "tags": [
+      "西餐",
+      "高端",
+      "法式料理"
+    ],
+    "shop_name": "米其林三星(国贸)",
+    "avg_price": 800.0,
+    "alias": ""
+  },
+  {
+    "shop_id": "shop_sc_12",
+    "category": "西餐",
+    "sub_category": "法式料理",
+    "address": "朝阳区朝阳公园路6号蓝色港湾1层",
+    "lat": 39.942,
+    "lng": 116.475,
+    "rating": 4.8,
+    "open_status": "open",
+    "business_hours": "11:00-22:00",
+    "phone": "010-59051234",
+    "tags": [
+      "西餐",
+      "约会",
+      "浪漫",
+      "适合约会"
+    ],
+    "shop_name": "法式餐厅(蓝色港湾店)",
+    "avg_price": 350.0,
+    "alias": ""
+  },
+  {
+    "shop_id": "shop_sc_13",
+    "category": "快餐",
+    "sub_category": "面食",
+    "address": "海淀区北太平庄路8号",
+    "lat": 39.963,
+    "lng": 116.361,
+    "rating": 4.0,
+    "open_status": "open",
+    "business_hours": "07:00-21:00",
+    "phone": "010-62017890",
+    "tags": [
+      "面食",
+      "实惠",
+      "快餐"
+    ],
+    "shop_name": "兰州拉面(北太平庄店)",
+    "avg_price": 18.0,
+    "alias": ""
+  },
+  {
+    "shop_id": "shop_sc_14a",
+    "category": "中餐",
+    "sub_category": "面食",
+    "address": "海淀区学院路37号",
+    "lat": 39.979,
+    "lng": 116.348,
+    "rating": 4.1,
+    "open_status": "open",
+    "business_hours": "09:00-21:00",
+    "phone": "010-62331234",
+    "tags": [
+      "老北京",
+      "面食",
+      "炸酱面"
+    ],
+    "shop_name": "老北京炸酱面(学院路店)",
+    "avg_price": 22.0,
+    "alias": ""
+  },
+  {
+    "shop_id": "shop_sc_14b",
+    "category": "中餐",
+    "sub_category": "面食",
+    "address": "海淀区花园路甲2号",
+    "lat": 39.972,
+    "lng": 116.355,
+    "rating": 4.0,
+    "open_status": "open",
+    "business_hours": "09:00-21:00",
+    "phone": "010-62001234",
+    "tags": [
+      "老北京",
+      "面食",
+      "实惠"
+    ],
+    "shop_name": "老北京炸酱面(花园路店)",
+    "avg_price": 20.0,
+    "alias": ""
+  },
+  {
+    "shop_id": "shop_sc_15",
+    "category": "其他",
+    "sub_category": "体验店",
+    "address": "海淀区中关村大街28号",
+    "lat": 39.983,
+    "lng": 116.308,
+    "rating": 0.0,
+    "open_status": "unknown",
+    "business_hours": "待定",
+    "phone": "",
+    "tags": [
+      "新店",
+      "体验"
+    ],
+    "shop_name": "新品体验店(中关村)",
+    "avg_price": 0.0,
+    "alias": ""
+  }
+]

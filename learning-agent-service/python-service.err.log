@@ -1,9 +1,0 @@
-D:\javacode\hm-dianping\learning-agent-service\src\learning_agent_service\infrastructure\db\qdrant.py:51: UserWarning: Api key is used with an insecure connection.
-  client = QdrantClient(
-{"ts": "2026-06-01T01:45:23.691290+00:00", "level": "INFO", "logger": "httpx", "message": "HTTP Request: GET http://127.0.0.1:6333/collections/user_semantic_memory/exists \"HTTP/1.1 502 Bad Gateway\""}
-INFO:     Started server process [30576]
-INFO:     Waiting for application startup.
-INFO:     Application startup complete.
-ERROR:    [Errno 10048] error while attempting to bind on address ('127.0.0.1', 9003): 通常每个套接字地址(协议/网络地址/端口)只允许使用一次。
-INFO:     Waiting for application shutdown.
-INFO:     Application shutdown complete.

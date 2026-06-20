@@ -160,9 +160,6 @@ public class AiBusinessQueryFacadeImpl implements AiBusinessQueryFacade {
         if (context != null && context.hasShopContext() && merchantReference && containsAny(text, "值不值", "口碑", "评价", "评论", "评分", "详情", "怎么样", "好不好")) {
             return AiRouteType.DETAIL;
         }
-        if (context != null && context.hasShopContext() && merchantReference && containsAny(text, "值不值", "口碑", "评价", "评论", "评分", "详情", "怎么样", "好不好")) {
-            return AiRouteType.DETAIL;
-        }
         return AiRouteType.FAQ;
     }
 

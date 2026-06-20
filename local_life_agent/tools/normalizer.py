@@ -1,0 +1,129 @@
+"""Tool result normalizer — normalizes tool outputs into a uniform
+ToolResult-compatible format regardless of the underlying execution
+source (mock, HTTP, or DB).
+
+The normalizer guarantees that every result dict contains at least:
+  success, result_status, data, error_code, error_message, source, degraded
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+_VALID_STATUSES = {"ok", "empty", "failed", "circuit_open", "unknown"}
+
+
+def normalize_tool_result(tool_name: str, raw: dict) -> dict:
+    """Convert a raw tool output to a standard ToolResult dict.
+
+    Args:
+        tool_name: Name of the tool that produced the result.
+        raw: Raw output from the tool (may be a dict or other type).
+
+    Returns:
+        Standardized dict with guaranteed keys.
+    """
+    if not isinstance(raw, dict):
+        return {
+            "call_id": "",
+            "shop_id": "",
+            "tool_name": tool_name,
+            "success": bool(raw) if raw is not None else False,
+            "result_status": "ok" if raw else "unknown",
+            "data": raw,
+            "error_code": None,
+            "error_message": "",
+            "source": "mock",
+            "degraded": False,
+        }
+
+    result_status = raw.get("result_status", "unknown")
+    if result_status not in _VALID_STATUSES:
+        result_status = "unknown"
+
+    return {
+        "call_id": raw.get("call_id", ""),
+        "shop_id": raw.get("shop_id", ""),
+        "tool_name": tool_name,
+        "success": raw.get("success", False) if result_status != "failed" else False,
+        "result_status": result_status,
+        "data": raw.get("data"),
+        "error_code": raw.get("error_code"),
+        "error_message": raw.get("error_message", ""),
+        "source": raw.get("source", "mock"),
+        "degraded": raw.get("degraded", False),
+    }
+
+
+def normalize_timeout_result(tool_name: str, kwargs: dict, error_message: str) -> dict:
+    """Create a normalized ToolResult for a timeout scenario.
+
+    Args:
+        tool_name: Name of the tool that timed out.
+        kwargs: Original call arguments.
+        error_message: Timeout description.
+
+    Returns:
+        Standardized ToolResult dict with result_status='unknown'.
+    """
+    return {
+        "call_id": kwargs.get("call_id", ""),
+        "shop_id": kwargs.get("shop_id", ""),
+        "tool_name": tool_name,
+        "success": False,
+        "result_status": "unknown",
+        "data": None,
+        "error_code": "TOOL_TIMEOUT",
+        "error_message": error_message,
+        "source": "mock",
+        "degraded": True,
+    }
+
+
+def normalize_circuit_open_result(tool_name: str, kwargs: dict) -> dict:
+    """Create a normalized ToolResult for a circuit-breaker open rejection.
+
+    Args:
+        tool_name: Name of the tool whose circuit is open.
+        kwargs: Original call arguments.
+
+    Returns:
+        Standardized ToolResult dict with result_status='circuit_open'.
+    """
+    return {
+        "call_id": kwargs.get("call_id", ""),
+        "shop_id": kwargs.get("shop_id", ""),
+        "tool_name": tool_name,
+        "success": False,
+        "result_status": "circuit_open",
+        "data": None,
+        "error_code": "CIRCUIT_OPEN",
+        "error_message": f"Circuit breaker is OPEN for tool '{tool_name}'",
+        "source": "mock",
+        "degraded": True,
+    }
+
+
+def normalize_validation_error(tool_name: str, kwargs: dict, errors: list[str]) -> dict:
+    """Create a normalized ToolResult for a schema validation failure.
+
+    Args:
+        tool_name: Name of the tool.
+        kwargs: Original call arguments.
+        errors: Validation error messages.
+
+    Returns:
+        Standardized ToolResult dict with result_status='failed'.
+    """
+    return {
+        "call_id": kwargs.get("call_id", ""),
+        "shop_id": kwargs.get("shop_id", ""),
+        "tool_name": tool_name,
+        "success": False,
+        "result_status": "failed",
+        "data": None,
+        "error_code": "SCHEMA_VALIDATION_FAILED",
+        "error_message": "; ".join(errors),
+        "source": "mock",
+        "degraded": False,
+    }

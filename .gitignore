@@ -49,3 +49,9 @@ pyrightconfig.json
 .venv/
 *.sqlite
 *.sqlite-journal
+
+### Project documentation ###
+doc/
+
+### IDE and local tool plugins ###
+.opencode/
