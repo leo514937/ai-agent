@@ -93,5 +93,6 @@
 
 - **代码及分支推送**:
   - 创建了新的开发分支 `toolcall`。
-  - 在推送前，对 Python 端的所有单元与集成测试进行校验 (共 272 个测试)，以及 Java 端的代码编译，全部通过 ✅。
-  - 将所有本地修改和新增文件（包括 `local_life_agent/` 目录下的 Python 代码和测试，以及 Java 端 Streaming Event 系列代码）提交并推送至 GitHub 远程仓库的 `toolcall` 分支。
+  - 在推送前，对 Python 端的所有单元与集成测试进行校验 (共 339 个测试)，以及 Java 端的代码编译，全部通过 ✅。
+  - 清理了已跟踪的 `__pycache__` 编译文件，从 Git 索引中移除以保持仓库整洁。
+  - 将所有本地修改和新增文件（包括 `local_life_agent/` 目录下的 Python 代码和测试，特别是新增的 `session/` 内存会话存储实现与 `test_context_recovery_clarification.py` 测试）提交并推送至 GitHub 远程仓库的 `toolcall` 分支。
