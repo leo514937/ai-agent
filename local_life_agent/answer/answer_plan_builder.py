@@ -28,6 +28,8 @@ def build_answer_plan(task_type: str, evidence: dict, clarification: dict | None
     shop_id = snapshot.get("shop_id", "")
     shop_name = snapshot.get("shop_name", "")
     coupon_titles = snapshot.get("coupon_titles") or []
+    comparison_matrix = evidence.get("comparison_matrix") or {}
+    comparison_rows = comparison_matrix.get("rows") or []
     target_shop_ids = evidence.get("target_shop_ids") or ([shop_id] if shop_id else [])
 
     answer_type = "single_shop_query"
@@ -37,6 +39,12 @@ def build_answer_plan(task_type: str, evidence: dict, clarification: dict | None
     if clarification.get("clarification"):
         answer_type = "clarification"
         fallback_template_type = "clarification"
+    elif task_type == "recommendation":
+        answer_type = "recommendation"
+        fallback_template_type = "recommendation"
+    elif task_type == "comparison" or comparison_rows:
+        answer_type = "comparison"
+        fallback_template_type = "comparison"
     elif status == "ok":
         fallback_template_type = "multi_facet_ok"
     elif status == "empty":
@@ -78,6 +86,25 @@ def build_answer_plan(task_type: str, evidence: dict, clarification: dict | None
             section["shop_name"] = shop_name
         response_sections.append(section)
 
+    if answer_type == "comparison" and comparison_rows:
+        for item in comparison_rows:
+            if not isinstance(item, dict):
+                continue
+            response_sections.append(
+                {
+                    "section_id": f"shop_{item.get('shop_id', '')}",
+                    "section_type": "comparison_row",
+                    "shop_id": item.get("shop_id", ""),
+                    "shop_name": item.get("shop_name", ""),
+                    "rank": item.get("rank", 0),
+                    "open_status": item.get("open_status", "unknown"),
+                    "coupon_status": item.get("coupon_status", "unknown"),
+                    "rating": item.get("rating"),
+                    "distance_km": item.get("distance_km"),
+                    "eta_minutes": item.get("eta_minutes"),
+                }
+            )
+
     allowed_claims = []
     if status == "ok" and shop_id:
         for idx, title in enumerate(coupon_titles, start=1):
@@ -102,7 +129,7 @@ def build_answer_plan(task_type: str, evidence: dict, clarification: dict | None
         "must_mention_unknowns": must_mention_unknowns,
         "forbidden_claims": evidence.get("forbidden_claims", []),
         "ranking_snapshot_id": snapshot.get("snapshot_id", ""),
-        "comparison_matrix_id": "",
+        "comparison_matrix_id": comparison_matrix.get("matrix_id", ""),
         "tone": "neutral",
         "fallback_template_type": fallback_template_type,
     }

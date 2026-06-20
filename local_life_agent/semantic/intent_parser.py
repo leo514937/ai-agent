@@ -85,7 +85,7 @@ def _fallback_intent(normalised_text: str, error_code: str = "") -> TopIntent:
         return TopIntent.invalid
     if error_code in {"LLM_JSON_PARSE_ERROR", "LLM_ENUM_OUT_OF_RANGE"}:
         return TopIntent.out_of_scope
-    return TopIntent.out_of_scope
+    return TopIntent.local_life
 
 
 def _fallback_semantic_frame(text: str, top_intent: str) -> SemanticFrame:
@@ -245,6 +245,16 @@ def parse_semantic_frame(
             if not frame.primary_task:
                 frame.primary_task = fallback_frame.primary_task
             frame.need_context = frame.need_context or fallback_frame.need_context
+        else:
+            fallback_frame = _fallback_semantic_frame(normalised_text, top_intent)
+            if fallback_frame.task_type == TaskType.comparison and frame.task_type != TaskType.comparison:
+                frame.task_type = TaskType.comparison
+                frame.primary_task = "comparison"
+                if not frame.merchant_mentions:
+                    frame.merchant_mentions = fallback_frame.merchant_mentions
+                if not frame.reference_mentions:
+                    frame.reference_mentions = fallback_frame.reference_mentions
+                frame.need_context = frame.need_context or fallback_frame.need_context
         if not frame.facets and frame.task_type in {TaskType.single_shop_query, TaskType.coupon_query}:
             return {
                 "semantic_frame": frame,

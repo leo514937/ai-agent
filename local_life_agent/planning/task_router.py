@@ -25,6 +25,12 @@ def route_task(semantic_frame: dict, resolved_target: dict) -> str:
     if isinstance(resolved_target, dict):
         resolved_status = resolved_target.get("status", "")
 
+    if task_type == TaskType.recommendation.value:
+        return TaskType.recommendation.value
+
+    if task_type == TaskType.comparison.value:
+        return TaskType.comparison.value if resolved_status == "RESOLVED" else TaskType.clarification_reply.value
+
     if resolved_status != "RESOLVED":
         return TaskType.clarification_reply.value
 

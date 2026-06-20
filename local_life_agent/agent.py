@@ -52,6 +52,7 @@ class DebugInfo:
     semantic_frame: dict = field(default_factory=dict)
     execution_plan: dict = field(default_factory=dict)
     tool_results: dict = field(default_factory=dict)
+    evidence_pack: dict = field(default_factory=dict)
     session_state_before: dict = field(default_factory=dict)
     session_state_after: dict = field(default_factory=dict)
     state_update_plan: dict = field(default_factory=dict)
@@ -80,6 +81,7 @@ class AgentResponse:
                 "semantic_frame": _debug_dump(self.debug.semantic_frame),
                 "execution_plan": _debug_dump(self.debug.execution_plan),
                 "tool_results": _debug_dump(self.debug.tool_results),
+                "evidence_pack": _debug_dump(self.debug.evidence_pack),
                 "session_state_before": _debug_dump(self.debug.session_state_before),
                 "session_state_after": _debug_dump(self.debug.session_state_after),
                 "state_update_plan": _debug_dump(self.debug.state_update_plan),
@@ -431,6 +433,9 @@ def run_agent_graph(input_text: str, session_id: str = "") -> AgentResponse:
         "last_recommendation_list": [],
         "active_constraints": {},
         "comparison_targets": [],
+        "comparison_result": None,
+        "recommendation_candidates": [],
+        "precomputed_tool_results": {},
         "resolved_target": None,
         "resolve_shop_result": None,
         "execution_plan": None,
@@ -471,6 +476,7 @@ def run_agent_graph(input_text: str, session_id: str = "") -> AgentResponse:
             semantic_frame=_debug_dump(final_state.get("semantic_frame") or {}),
             execution_plan=_debug_dump(final_state.get("execution_plan") or {}),
             tool_results=_debug_dump(final_state.get("tool_result_set") or final_state.get("tool_results") or {}),
+            evidence_pack=_debug_dump(final_state.get("evidence_pack") or {}),
             session_state_before=_debug_dump(final_state.get("session_state_before") or {}),
             session_state_after=_debug_dump(final_state.get("session_state_after") or {}),
             state_update_plan=_debug_dump(final_state.get("state_update_plan") or {}),

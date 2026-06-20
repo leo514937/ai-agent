@@ -231,6 +231,11 @@ class ExecutionPlan(BaseModel):
     tool_calls: list[ToolCallSpec] = Field(default_factory=list)
     stages: list[ExecutionStage] = Field(default_factory=list)
     target_shop_ids: list[str] = Field(default_factory=list)
+    query_terms: list[str] = Field(default_factory=list)
+    scene_terms: list[str] = Field(default_factory=list)
+    open_now_preferred: bool = False
+    coupon_preferred: bool = False
+    nearby_preferred: bool = False
 
 
 # ===================================================================

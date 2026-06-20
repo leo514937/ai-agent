@@ -146,7 +146,7 @@ def resolve_shop(query: str, location: dict[str, float] | None = None,
     }
 
 
-def search_shops(query: str, location: dict[str, float] | None = None) -> dict:
+def search_shops(query: str, location: dict[str, float] | None = None, limit: int | None = None) -> dict:
     """Search shops by name, category, alias, or keyword.
 
     Supports exact name match, alias match, and partial keyword match
@@ -182,6 +182,28 @@ def search_shops(query: str, location: dict[str, float] | None = None) -> dict:
             matched.append(shop)
 
     matched.sort(key=lambda s: s.get("rating", 0), reverse=True)
+
+    if location:
+        enriched: list[dict] = []
+        for shop in matched:
+            shop_copy = dict(shop)
+            distance_meta = None
+            for entry in _all_distance_eta():
+                if entry["shop_id"] == shop_copy.get("shop_id"):
+                    distance_meta = entry
+                    break
+            if distance_meta is not None:
+                shop_copy["distance_km"] = distance_meta.get("distance_km")
+                shop_copy["eta_minutes"] = distance_meta.get("eta_minutes")
+                shop_copy["traffic_level"] = distance_meta.get("traffic_level", "low")
+            enriched.append(shop_copy)
+        matched = enriched
+
+    if limit is not None:
+        try:
+            matched = matched[: max(0, int(limit))]
+        except Exception:
+            pass
 
     return {
         "success": True,

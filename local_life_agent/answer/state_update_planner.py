@@ -26,8 +26,9 @@ def _plan_required_by_call_id(plan: Any | None) -> dict[str, bool]:
         call_dict = _to_dict(call)
         call_id = str(call_dict.get("call_id", "")).strip()
         if call_id:
-            result[call_id] = bool(call_dict.get("required", True))
+                result[call_id] = bool(call_dict.get("required", True))
     return result
+
 
 def plan_state_update(
     turn_context: dict,
@@ -51,6 +52,10 @@ def plan_state_update(
     recommendation_list = turn_context.get("last_recommendation_list")
     if recommendation_list is None:
         recommendation_list = []
+    comparison_targets = turn_context.get("comparison_targets")
+    if comparison_targets is None:
+        comparison_targets = []
+    comparison_result = turn_context.get("comparison_result")
     tool_results = turn_context.get("tool_result_set") or turn_context.get("tool_results") or {}
     required_by_call_id = _plan_required_by_call_id(
         turn_context.get("validated_plan") or turn_context.get("execution_plan")
@@ -122,6 +127,10 @@ def plan_state_update(
             set_fields["last_recommendation_list"] = recommendation_list
             clear_fields.extend(["pending_clarification", "current_shop"])
         elif task_type == TaskType.comparison.value:
+            if comparison_targets:
+                set_fields["comparison_targets"] = comparison_targets
+            if comparison_result is not None:
+                set_fields["comparison_result"] = comparison_result
             clear_fields.append("pending_clarification")
         else:
             clear_fields.append("pending_clarification")

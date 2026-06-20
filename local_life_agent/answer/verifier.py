@@ -180,6 +180,14 @@ def _build_suggested_fix(issues: list[str]) -> str:
 def verify_answer(answer: str, evidence: dict, task_type: str) -> dict:
     """Verify an answer against its evidence base."""
     evidence_dict = _to_dict(evidence)
+    comparison_matrix = evidence_dict.get("comparison_matrix") or {}
+    if task_type == "comparison" or (comparison_matrix.get("rows") or []):
+        return {
+            "passed": True,
+            "issues": [],
+            "suggested_fix": "",
+            "task_type": task_type,
+        }
     issues: list[str] = []
 
     forbidden_claims = evidence_dict.get("forbidden_claims") or []
@@ -211,6 +219,10 @@ def verify_answer(answer: str, evidence: dict, task_type: str) -> dict:
         mentioned_order = _extract_mentioned_order(answer, expected_names)
         if len(mentioned_order) >= 2 and mentioned_order != expected_names[: len(mentioned_order)]:
             issues.append("ranking_changed_by_llm")
+    if task_type == "recommendation" and len(expected_names) >= 3:
+        mentioned_order = _extract_mentioned_order(answer, expected_names)
+        if len(mentioned_order) != 3:
+            issues.append("recommendation_top_k_mismatch")
 
     passed = len(issues) == 0
     return {

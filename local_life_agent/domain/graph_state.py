@@ -56,6 +56,9 @@ class GraphState(TypedDict, total=False):
     last_recommendation_list: list
     active_constraints: dict
     comparison_targets: list
+    comparison_result: object
+    recommendation_candidates: list
+    precomputed_tool_results: dict[str, ToolResult]
 
     # === 解析结果 (Resolve Result) — write: target_resolve/clarify_decide, read: task_plan/clarify_decide ===
     resolved_target: Optional[ResolveShopResult]

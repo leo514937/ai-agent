@@ -19,6 +19,7 @@ from typing import Any
 
 _ID_SCHEMA = {"type": "string", "minLength": 1, "description": "Unique shop identifier"}
 _QUERY_SCHEMA = {"type": "string", "minLength": 1, "description": "Search keyword"}
+_LIMIT_SCHEMA = {"type": "integer", "minimum": 1, "description": "Maximum number of search results"}
 _LOCATION_SCHEMA = {
     "type": "object",
     "properties": {
@@ -137,6 +138,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "properties": {
                 "query": _QUERY_SCHEMA,
                 "location": _LOCATION_SCHEMA,
+                "limit": _LIMIT_SCHEMA,
             },
             "required": ["query"],
         },

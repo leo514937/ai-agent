@@ -183,7 +183,7 @@ def test_pending_reply_topic_change_clears_pending():
     _invoke("海底捞有券吗", "pend_5")
     result = _invoke("算了，附近推荐火锅", "pend_5")
     assert get_session_store().load("pend_5").pending_clarification is None
-    assert "get_coupon_list" not in _tool_names(result)
+    assert "search_shops" in _tool_names(result)
 
 
 def test_pending_expired_clears_pending():
