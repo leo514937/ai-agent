@@ -96,3 +96,49 @@
   - 在推送前，对 Python 端的所有单元与集成测试进行校验 (共 339 个测试)，以及 Java 端的代码编译，全部通过 ✅。
   - 清理了已跟踪的 `__pycache__` 编译文件，从 Git 索引中移除以保持仓库整洁。
   - 将所有本地修改和新增文件（包括 `local_life_agent/` 目录下的 Python 代码和测试，特别是新增的 `session/` 内存会话存储实现与 `test_context_recovery_clarification.py` 测试）提交并推送至 GitHub 远程仓库的 `toolcall` 分支。
+
+## 2026-06-21 进展
+- **修复乱码**: 修复了 engine/graph_builder.py 文件中的注释乱码（将 搂 替换为 §，将 鈥? 替换为 —），并进行了语法验证确保无误。
+- **双专项深度审计完成**: 对 local_life_agent 项目进行了完整的双专项审计（审计报告见 `audit_report.md`），结论如下：
+  - **专项 A — 数据源审计**: 当前完全使用 mock 数据（`config.TOOL_BACKEND="mock"`），Python 端无任何 DB 连接。但代码架构已完整支持 Java API 切换（`JavaToolExecutor` + `JavaToolClient` + 6 个端点映射均已实现），切换仅需配置环境变量。
+  - **专项 B — 语义主路径复核**: 架构上 LLM 主路径清晰（SemanticFrame → Planner → Executor → Evidence → Answer），规则堆叠边界清晰（全部在 fallback 路径 + 默认 backend 中）。但默认运行时的 LLM backend 实际是规则系统（`_classify_top_intent`），接入真实 LLM 前系统退化为关键词驱动。
+  - **测试结果**: 393 passed / 12 failed / 5 skipped / 2 xfailed。失败集中在阶段 14（comparison 流程）和阶段 12（context recovery），核心问题是对比流程的 target_resolve 在只找到 1 家店时走入 AMBIGUOUS clarification 路径。
+  - **P1 风险 4 项**: 默认 LLM backend 是规则系统、Graph clarify_decide 检查 response 文本、对比流程测试失败、_TOPIC_SWITCH_HINTS 包含"推荐"可能误判。
+- **第一阶段：LLM 回复表达能力增强完成**:
+  - **配置与结构定义**：在 `config.py` 中新增 `ENABLE_LLM_VERBALIZER` 和 `LLM_VERBALIZER_FALLBACK_TO_TEMPLATE` 开关，在 `domain/schemas.py` 中定义并重新加载了 `DecisionPlan` 结构体。
+  - **自然语言润色组件**：实现了 `llm_verbalizer.py`，设计了 Few-Shot System Prompt 引导 LLM 生成顾问口吻回复；实现了 4 类严苛的轻量级事实与语气边界校验规则（包括不合规已知店铺名拦截、forbidden claims 词组拦截、未包含所有目标店时禁止表述“对比了所有店”拦截、以及将不确定信息强行表述为肯定语气拦截）。
+  - **生成器与接口对接**：在 `generator.py` 中组装 `DecisionPlan`，修正了 `_build_decision_plan` 在单店 facet/status 场景下无法正确将目标店装入 `selected_targets` 导致边界校验误伤的 Bug，并在 `generate_answer` 处完美对接 verbalizer 流程与动态数量推荐文案修复。
+  - **测试覆盖与验证**：在 `tests/test_llm_verbalizer.py` 中实现 9 个专项测试用例，完美通过。
+- **多店对比阶段 (Stage 14) P1 阻塞问题修复与深度整合**:
+  - **比较矩阵单元深化 (Matrix Cells Integration)**: 更新 `local_life_agent/answer/evidence_builder.py`，实现标准的 `ComparisonCell` 和 `ComparisonMatrix` 属性构造。不仅支持原有 `rows`、`dimension_winners` 和 `uncertainty_notes` 等核心事实属性，还标准化并补全了 `cells` (同时绑定 `facet` 和 `dimension`，`result_status` 和 `status`)、`unknown_cells` 和 `failed_cells` 过滤分组，以及支持 `overall_ranking` 别名。
+  - **数据完整度防御校验**: 在 `evidence_builder.py` 最终返回前，直接调用 Pydantic `ComparisonMatrix.model_validate` 做严密的强 schema 运行时校验。
+  - **指代解析缺陷修复**: 修复 `local_life_agent/target/reference_resolver.py` 中 `_parse_list_size` 解析正则 Group 捕获组时只拿 Group 1 (指代词如"这"或"前") 而非 Group 2 (数字) 的缺陷，使其能准确提炼出 "这六家"、"前五家"、"这两家" 的准确数量。
+  - **完善验证性测试**: 编写全新的 `local_life_agent/tests/test_stage14_verification.py` 自动化测试包，覆盖：群体指代解析 (Group Deictic)、指代词数量提炼、歧义指代优先级 (Deictic Priority) 拦截为 `AMBIGUOUS` 以及比较矩阵 Pydantic Schema 强校验。目前，新增测试已全量 Pass。
+- **阶段 B2 剩余缺口补齐与全面收官**:
+  - **实现真实 LLM Provider Adapter**：在 `local_life_agent/llm/openai_backend.py` 中实现了 `OpenAICompatibleBackend` 类，完全支持从 `config.py` 中动态读取 `REAL_LLM_PROVIDER`、`REAL_LLM_MODEL`、`REAL_LLM_ENDPOINT` 等全量配置，通过 `httpx` 调用 OpenAI 兼容的 chat/completions 接口，并在启动时按需自动注册为全局 LLM 后端。
+  - **抽取独立 B2MiniVerifier 事实校验组件**：在 `local_life_agent/answer/b2_mini_verifier.py` 中独立实现了 `B2MiniVerifier`，涵盖 5 大核心安全和事实边界校验（防止已知店铺外名幻觉、距离/价格/评分/券等属性越界、防止将 unknown 表达为确定否定的 `unknown_as_false` 拦截、排序变动拦截、以及违规断言/缺漏目标拦截），并在 `llm_verbalizer.py` 中深度接入，将校验未通过的拦截结果以 `violation` 指标安全记录并触发 template fallback 降级。
+  - **补齐 Graph 级集成测试**：编写了 `local_life_agent/tests/test_llm_verbalizer_graph.py`，完整覆盖推荐、对比、单店以及 multi-facet 场景。通过 monkeypatch 重置 Graph 编译缓存和模拟 LLM 校验异常，验证了在 Graph 主路径中 `answer_source="llm_verbalizer"` 和 fallback 时 `answer_source="template_fallback"` 及其具体违规标志的透传路径。
+  - **补充 Real LLM Integration 连通性测试**：编写了 `local_life_agent/tests/test_real_llm_integration.py`，智能读取环境变量 API Key。在缺少 API Key 时优雅 `pytest.skip()` 跳过以保证普通测试的清洁度，而当 API Key 存在时可自动验证真实接口与 `semantic_source`、`llm_called` 的透传表现。
+  - **全量测试通过**：目前 Python 端共计 542 个测试用例全部通过（530 passed / 10 skipped / 2 xfailed），保证了原有全量系统测试无回归 ✅。
+
+## 2026-06-21 (晚) — 阶段 C: 统一推荐与对比为 Candidate Decision 完成
+
+成功将推荐（Recommendation）与多店对比（Comparison）的后半段业务流程统一收拢为 Candidate Decision 决策链路，只完成了阶段 C 开发与验证：
+
+### 统一 Candidate 核心数据结构与收集层
+- 新增 [candidate_decision.py](file:///d:/javacode/hm-dianping/local_life_agent/answer/candidate_decision.py)，定义了 `CandidateItem`、`CandidateEvidence`、`CandidateEvaluation`、`CandidateDecisionPlan` 等 DTO 模型，对所有决策阶段的证据及评估提供标准类型约束。
+- 实现 `CandidateEvidenceCollector` 类，用于根据 shop_ids 自动从 `tool_results` 中提取并归纳所有店铺的营业状态、优惠券列表、距离等底层证据，并严格对未执行、超时、以及未知状态（unknown / failed）保留状态以防止幻觉。
+
+### 构建统一 Evaluator 决策与排序评估器
+- 实现 `CandidateEvaluator` 类，统一处理推荐与对比的排序规则：推荐流程中接入既定的 `RankingPolicy` 策略评分；对比流程中针对各家店的 rating、distance、open_status、coupon 情况进行归一化打分与均值整体评分，并提取出各个维度最领先的 `dimension_winners`。
+
+### 深度整合 generator 生成器与 DecisionPlan 适配器
+- 重写了 [generator.py](file:///d:/javacode/hm-dianping/local_life_agent/answer/generator.py) 中 `_build_decision_plan` 的决策部分。当检测到 `answer_type` 为 `recommendation` 或者是 `comparison` 时，通过 `CandidateEvidenceCollector` 和 `CandidateEvaluator` 运行统一后半段数据管线，得到统一的 `CandidateDecisionPlan`。
+- 实现 `map_candidate_decision_plan_to_decision_plan` 适配器，将 `CandidateDecisionPlan` 还原映射回原有的 `DecisionPlan` 格式，从而在零重构 downstream 的前提下，使 `LLMVerbalizer` 和 `B2MiniVerifier` (包括事实校验、降级 fallback 逻辑) 完美无缝运行。
+- 支持了 `generate_answer` 时的 metadata 传出，完美记录并透传 `decision_type` 和 `candidate_count` 到引擎外层。
+- 在 [schemas.py](file:///d:/javacode/hm-dianping/local_life_agent/domain/schemas.py) 的 `EvidencePack` 以及 [evidence_builder.py](file:///d:/javacode/hm-dianping/local_life_agent/answer/evidence_builder.py) 中增加了 `tool_results` 的全链路字段透传，以确保收集层能直接解析到原始工具调用内容；同时在 generator 内部设计了稳健的根据 snapshot / comparison matrix 重建原始 tool results 的后备机制，确保遗留单元测试无缝运行。
+
+### 新增专项自动化测试与全量回归
+- 新建了 [test_candidate_decision.py](file:///d:/javacode/hm-dianping/local_life_agent/tests/test_candidate_decision.py)，完整覆盖了收集器 (Collector)、评估器 (Evaluator)、生成器 (Generator) 和适配器 (Adapter) 在推荐、对比、有券/未知属性等场景下的完整逻辑，同时验证了 LLMVerbalizer 的对接表现。
+- 在全量测试套件中，通过了全部 548 个用例（新增 6 个测试全部 Pass），无任何功能性与安全机制回归。
+

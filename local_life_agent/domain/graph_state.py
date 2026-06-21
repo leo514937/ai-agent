@@ -13,6 +13,7 @@ from typing import Optional, TypedDict
 from .enums import TaskType, TopIntent
 from .schemas import (
     AnswerPlan,
+    ComparisonTargetResolution,
     EvidencePack,
     ExecutionPlan,
     PendingClarification,
@@ -105,3 +106,8 @@ class GraphState(TypedDict, total=False):
     semantic_source: str
     fallback_reason: str
     llm_called: bool
+    llm_backend: str
+    answer_source: str
+    llm_verbalizer_violation: Optional[str]
+    comparison_target_resolution: Optional[ComparisonTargetResolution]
+

@@ -1,8 +1,8 @@
-﻿"""LangGraph StateGraph builder for the local life agent.
+"""LangGraph StateGraph builder for the local life agent.
 
 Maps the node/edge/state contracts from todo/05 into a compilable
 ``StateGraph``.  Each node handler documents its input/output fields
-per 搂2 Node Table; conditional edges follow 搂3 Conditional Edge Table.
+per §2 Node Table; conditional edges follow §3 Conditional Edge Table.
 """
 
 from __future__ import annotations
@@ -20,6 +20,7 @@ from ..domain.enums import TaskType, ToolResultStatus, TopIntent
 from ..domain.graph_state import GraphState
 from ..domain.schemas import (
     AnswerPlan,
+    ComparisonTargetResolution,
     EvidenceItem,
     EvidencePack,
     ExecutionPlan,
@@ -51,7 +52,6 @@ from ..semantic.intent_parser import parse_semantic_frame, parse_top_intent
 from ..llm.client import call_llm
 from ..tools.gateway import dispatch_tool_call
 from ..tools.gateway import BatchToolExecutor
-from ..tools.mock_tools import resolve_shop as mock_resolve_shop
 from ..target.shop_resolver import resolve_shop
 from ..target.clarification import build_pending_clarification, format_pending_prompt, handle_clarification_reply
 from ..target.context_recovery import recover_context
@@ -63,7 +63,7 @@ from .session_write import get_directive, resolve_scenario
 # Helpers
 # ===================================================================
 
-GraphNodeFunc = Any  # Callable[[GraphState], dict] 鈥?acceptable typing overhead
+GraphNodeFunc = Any  # Callable[[GraphState], dict] —acceptable typing overhead
 
 _GRAPH_REWRITE_LIMIT = 1
 
@@ -278,14 +278,26 @@ def _comparison_structured_queries(semantic_frame: Any) -> list[str]:
     return queries
 
 
+def _comparison_reason_response(reason: str) -> str:
+    if reason == "comparison_requires_at_least_two_shops":
+        return "对比至少需要两家不同的店，请补充另一家店名。"
+    if reason == "comparison_too_many_shops":
+        return "最多支持 5 家店对比，请缩小范围后再试。"
+    if reason == "pronoun_without_current_shop":
+        return "你说的“这家”还不明确，请告诉我是刚才推荐里的哪一家。"
+    if reason == "ordinal_out_of_range":
+        return "你提到的编号超出了上一次推荐范围，请换一个编号或店名。"
+    return ""
+
+
 # ===================================================================
-# 26 Node Handlers  (todo/05 搂2 Node Table)
+# 26 Node Handlers  (todo/05 §2 Node Table)
 # ===================================================================
 
 
 # --- 1. receive_input ---
-# 搂1 input:  raw_text, session_id, trace_id
-# 搂1 output: normalized_text, input_type, basic IDs
+# §1 input:  raw_text, session_id, trace_id
+# §1 output: normalized_text, input_type, basic IDs
 def _h_receive_input(state: GraphState) -> dict:
     raw = state.get("raw_text", "")
     received = assemble_turn_input(raw)
@@ -298,8 +310,8 @@ def _h_receive_input(state: GraphState) -> dict:
 
 
 # --- 2. load_session_state ---
-# 搂1 input:  session_id
-# 搂1 output: current_shop, last_recommendation_list, pending_clarification, session_state_before
+# §1 input:  session_id
+# §1 output: current_shop, last_recommendation_list, pending_clarification, session_state_before
 def _h_load_session(state: GraphState) -> dict:
     session_id = str(state.get("session_id", "") or "")
     store = get_session_store()
@@ -322,8 +334,8 @@ def _h_load_session(state: GraphState) -> dict:
 
 
 # --- 3. check_pending_clarification ---
-# 搂1 input:  pending_clarification, raw_text
-# 搂1 output: cleared or retained pending state
+# §1 input:  pending_clarification, raw_text
+# §1 output: cleared or retained pending state
 def _h_check_pending(state: GraphState) -> dict:
     pending = state.get("pending_clarification")
     if pending is None:
@@ -398,8 +410,8 @@ def _h_check_pending(state: GraphState) -> dict:
 
 
 # --- 4. basic_input_validate ---
-# 搂1 input:  normalized_text
-# 搂1 output: input_type, error_code
+# §1 input:  normalized_text
+# §1 output: input_type, error_code
 def _h_basic_validate(state: GraphState) -> dict:
     raw = state.get("raw_text", "")
     validation = validate_basic_input(raw)
@@ -420,8 +432,8 @@ def _h_basic_validate(state: GraphState) -> dict:
 
 
 # --- 5. normalize_text ---
-# 搂1 input:  raw_text
-# 搂1 output: normalized_text
+# §1 input:  raw_text
+# §1 output: normalized_text
 def _h_normalize_text(state: GraphState) -> dict:
     raw = state.get("raw_text", "")
     return {
@@ -431,8 +443,8 @@ def _h_normalize_text(state: GraphState) -> dict:
 
 
 # --- 6. hard_guard ---
-# 搂1 input:  normalized_text
-# 搂1 output: guard_result
+# §1 input:  normalized_text
+# §1 output: guard_result
 def _h_hard_guard(state: GraphState) -> dict:
     txt = state.get("normalized_text", "")
     result = check_hard_guard(txt)
@@ -447,11 +459,11 @@ def _h_hard_guard(state: GraphState) -> dict:
 
 
 # --- 7. top_intent_router ---
-# 搂1 input:  normalized_text, session_state_before
-# 搂1 output: top_intent
+# §1 input:  normalized_text, session_state_before
+# §1 output: top_intent
 def _h_top_intent_router(state: GraphState) -> dict:
     txt = state.get("normalized_text", "")
-    result = parse_top_intent(txt)
+    result = parse_top_intent(txt, llm_call=call_llm)
     intent = result.get("top_intent", TopIntent.out_of_scope)
     if not isinstance(intent, TopIntent):
         try:
@@ -479,8 +491,8 @@ def _h_top_intent_router(state: GraphState) -> dict:
 
 
 # --- 8. semantic_parse ---
-# 搂1 input:  normalized_text, top_intent
-# 搂1 output: semantic_frame
+# §1 input:  normalized_text, top_intent
+# §1 output: semantic_frame
 def _h_semantic_parse(state: GraphState) -> dict:
     txt = state.get("normalized_text", "")
     top_intent = state.get("top_intent")
@@ -502,6 +514,7 @@ def _h_semantic_parse(state: GraphState) -> dict:
     error_code = parsed.get("error_code", "")
     error_message = parsed.get("error_message", "")
     semantic_source = str(parsed.get("semantic_source", "") or "")
+    llm_backend = str(parsed.get("llm_backend", "") or "")
     fallback_reason = str(parsed.get("fallback_reason", "") or "")
     llm_called = bool(parsed.get("llm_called", False))
     if not isinstance(frame, SemanticFrame):
@@ -513,9 +526,10 @@ def _h_semantic_parse(state: GraphState) -> dict:
                 "error_code": "SCHEMA_VALIDATION_FAILED",
                 "error_message": str(exc),
                 "semantic_source": semantic_source,
+                "llm_backend": llm_backend,
                 "fallback_reason": fallback_reason or "semantic_frame_validation_failed",
                 "llm_called": llm_called,
-                **_log(state, "semantic_parse", status="failed", reason="semantic_frame_validation_failed", semantic_source=semantic_source, fallback_reason=fallback_reason, llm_called=llm_called),
+                **_log(state, "semantic_parse", status="failed", reason="semantic_frame_validation_failed", semantic_source=semantic_source, llm_backend=llm_backend, fallback_reason=fallback_reason, llm_called=llm_called),
             }
     if not error_code:
         validation = validate_frame(frame.model_dump())
@@ -537,15 +551,16 @@ def _h_semantic_parse(state: GraphState) -> dict:
         "error_code": error_code,
         "error_message": error_message,
         "semantic_source": semantic_source or getattr(frame, "semantic_source", ""),
+        "llm_backend": llm_backend or getattr(frame, "llm_backend", ""),
         "fallback_reason": fallback_reason or getattr(frame, "fallback_reason", ""),
         "llm_called": llm_called if parsed.get("llm_called") is not None else getattr(frame, "llm_called", False),
-        **_log(state, "semantic_parse", semantic_source=semantic_source or getattr(frame, "semantic_source", ""), fallback_reason=fallback_reason or getattr(frame, "fallback_reason", ""), llm_called=llm_called if parsed.get("llm_called") is not None else getattr(frame, "llm_called", False)),
+        **_log(state, "semantic_parse", semantic_source=semantic_source or getattr(frame, "semantic_source", ""), llm_backend=llm_backend or getattr(frame, "llm_backend", ""), fallback_reason=fallback_reason or getattr(frame, "fallback_reason", ""), llm_called=llm_called if parsed.get("llm_called") is not None else getattr(frame, "llm_called", False)),
     }
 
 
 # --- 9. slot_extractor ---
-# 搂1 input:  semantic_frame
-# 搂1 output: facets, merchant_mentions, reference_mentions
+# §1 input:  semantic_frame
+# §1 output: facets, merchant_mentions, reference_mentions
 def _h_slot_extractor(state: GraphState) -> dict:
     sf = state.get("semantic_frame")
     if sf is not None:
@@ -561,8 +576,8 @@ def _h_slot_extractor(state: GraphState) -> dict:
 
 
 # --- 10. frame_validator ---
-# 搂1 input:  semantic_frame
-# 搂1 output: semantic_frame (or error_code)
+# §1 input:  semantic_frame
+# §1 output: semantic_frame (or error_code)
 def _h_frame_validator(state: GraphState) -> dict:
     sf = state.get("semantic_frame")
     validation = validate_frame(sf.model_dump() if hasattr(sf, "model_dump") else _to_dict(sf))
@@ -588,32 +603,44 @@ def _h_frame_validator(state: GraphState) -> dict:
 
 
 # --- 11. context_recovery ---
-# 搂1 input:  session_state_before, semantic_frame
-# 搂1 output: resolved_target (candidates)
+# §1 input:  session_state_before, semantic_frame
+# §1 output: resolved_target (candidates)
 def _h_context_recovery(state: GraphState) -> dict:
     sf = state.get("semantic_frame")
     recovered = recover_context(
-        state.get("session_state_before") or state.get("session_state"),
-        sf.model_dump() if hasattr(sf, "model_dump") else _session_state_dict(sf),
+        session_state=state.get("session_state_before") or state.get("session_state"),
+        semantic_frame=state.get("semantic_frame"),
+        text=str(state.get("raw_text", "") or ""),
     )
     updates: dict[str, Any] = {}
     if recovered.get("resolved_target") is not None:
         updates["resolved_target"] = recovered.get("resolved_target")
     if recovered.get("comparison_targets") is not None:
         updates["comparison_targets"] = recovered.get("comparison_targets")
+    if recovered.get("comparison_target_resolution") is not None:
+        updates["comparison_target_resolution"] = recovered.get("comparison_target_resolution")
+    frame_dict = sf.model_dump() if hasattr(sf, "model_dump") else _to_dict(sf)
+    semantic_refs = {
+        "ordinal_references": list(frame_dict.get("ordinal_references", []) or []),
+        "deictic_references": list(frame_dict.get("deictic_references", []) or []),
+        "comparison_targets": list(frame_dict.get("comparison_targets", []) or []),
+    }
     return {
         **updates,
         **_log(
             state,
             "context_recovery",
             status=str((recovered.get("context_resolution") or {}).get("status", "")),
+            context_recovery_input_text=str(state.get("raw_text", "") or ""),
+            context_recovery_used_semantic_refs=semantic_refs,
+            context_recovery_result=_to_dict(recovered.get("comparison_target_resolution") or recovered.get("context_resolution")),
         ),
     }
 
 
 # --- 12. target_resolve ---
-# 搂1 input:  merchant_mentions, reference_mentions, session_state_before
-# 搂1 output: resolve_shop_result
+# §1 input:  merchant_mentions, reference_mentions, session_state_before
+# §1 output: resolve_shop_result
 def _h_target_resolve(state: GraphState) -> dict:
     sf = state.get("semantic_frame")
     sf_task_type = getattr(sf, "task_type", None) if sf is not None else None
@@ -636,7 +663,7 @@ def _h_target_resolve(state: GraphState) -> dict:
 
         def _append_target(target: Any) -> None:
             data = _to_dict(target)
-            resolved_shop = data.get("resolved_shop") or data.get("shop") or {}
+            resolved_shop = data.get("resolved_shop") or data.get("shop") or data
             if hasattr(resolved_shop, "model_dump"):
                 resolved_shop = resolved_shop.model_dump()
             if not isinstance(resolved_shop, dict):
@@ -645,40 +672,112 @@ def _h_target_resolve(state: GraphState) -> dict:
             shop_name = str(resolved_shop.get("shop_name", "")).strip()
             if not shop_id and not shop_name:
                 return
-            if any(
-                str(_to_dict(item).get("resolved_shop", {}).get("shop_id", "") or _to_dict(item).get("shop_id", "")).strip()
-                == shop_id
-                for item in resolved_targets
-            ):
+            dedupe_key = shop_id or shop_name
+            if any((str(item.get("shop_id", "")).strip() or str(item.get("shop_name", "")).strip()) == dedupe_key for item in resolved_targets):
                 return
             resolved_targets.append(
-                ResolveShopResult(
-                    status="RESOLVED",
-                    resolved_shop=ShopRef(shop_id=shop_id, shop_name=shop_name),
-                    confidence=float(data.get("confidence", 1.0) or 1.0),
-                    reason=str(data.get("reason", "comparison_target") or "comparison_target"),
-                ).model_dump()
+                {
+                    "shop_id": shop_id,
+                    "shop_name": shop_name,
+                    "source": str(data.get("source", "")),
+                    "source_ref": str(data.get("source_ref", "")),
+                }
             )
 
         for item in state.get("comparison_targets", []) or []:
             _append_target(item)
 
+        comparison_resolution = _to_dict(state.get("comparison_target_resolution"))
+        for item in comparison_resolution.get("targets", []) or []:
+            _append_target(item)
+
         existing_target = state.get("resolved_target")
         if existing_target is not None and _to_dict(existing_target).get("status") == "RESOLVED":
-            _append_target(existing_target)
+            _append_target(_to_dict(existing_target).get("resolved_shop") or {})
 
-        comparison_queries = _comparison_structured_queries(sf)
-        for query in comparison_queries:
-            query = str(query).strip()
+        resolution_status = str(comparison_resolution.get("status", "") or "")
+        if resolution_status == "TOO_MANY":
+            reason = str(comparison_resolution.get("reason", "comparison_too_many_shops") or "comparison_too_many_shops")
+            final_response = comparison_resolution.get("prompt") or _comparison_reason_response(reason)
+            return {
+                "resolve_shop_result": ResolveShopResult(status="NOT_FOUND", confidence=0.0, reason=reason),
+                "final_response": final_response,
+                "comparison_target_resolution": comparison_resolution,
+                **_log(state, "target_resolve", status="TOO_MANY", query="comparison"),
+            }
+        if resolution_status == "NEED_CLARIFICATION":
+            ambiguous_target = comparison_resolution.get("ambiguous_target") or {}
+            ambiguous_ref = ""
+            if isinstance(ambiguous_target, dict):
+                ambiguous_ref = str(ambiguous_target.get("reference", "") or "").strip()
+
+            if ambiguous_ref == "deictic" or not comparison_resolution.get("unresolved_targets"):
+                reason = str(comparison_resolution.get("reason", "comparison_requires_at_least_two_shops") or "comparison_requires_at_least_two_shops")
+                if ambiguous_ref == "deictic":
+                    reco_list = []
+                    session = state.get("session_state_before") or state.get("session_state") or {}
+                    if session:
+                        session_dict = _to_dict(session)
+                        reco_list = session_dict.get("last_recommendation_list", []) or []
+                    
+                    pending_candidates = []
+                    candidates = []
+                    for item in reco_list:
+                        item = _to_dict(item)
+                        shop_id = item.get("shop_id")
+                        shop_name = item.get("shop_name")
+                        address = item.get("address", "")
+                        if shop_id and shop_name:
+                            pending_candidates.append({
+                                "shop_id": shop_id,
+                                "shop_name": shop_name,
+                                "address": address
+                            })
+                            candidates.append(ShopCandidate(shop=ShopRef(shop_id=shop_id, shop_name=shop_name)))
+                    
+                    resolved_result = ResolveShopResult(
+                        status="AMBIGUOUS",
+                        candidates=candidates,
+                        confidence=0.5,
+                        reason="pronoun_without_current_shop",
+                    )
+                    pending = build_pending_clarification(
+                        original_text=str(state.get("raw_text", "") or ""),
+                        original_semantic_frame=sf.model_dump(mode="json") if hasattr(sf, "model_dump") else _session_state_dict(sf),
+                        original_task_type=(getattr(sf, "task_type", "") if getattr(sf, "task_type", None) is not None else state.get("task_type", "")),
+                        candidate_targets=pending_candidates,
+                        reason=resolved_result.reason,
+                        source_node="target_resolve",
+                        already_resolved_targets=resolved_targets,
+                        ambiguous_target_slot=str(ambiguous_target.get("source_ref", "") or "这家").strip(),
+                    )
+                    prompt = format_pending_prompt(pending)
+                    return {
+                        "resolve_shop_result": resolved_result,
+                        "pending_clarification": pending,
+                        "final_response": prompt,
+                        **_log(state, "target_resolve", status="AMBIGUOUS", query="comparison"),
+                    }
+                else:
+                    final_response = comparison_resolution.get("prompt") or _comparison_reason_response(reason)
+                    return {
+                        "resolve_shop_result": ResolveShopResult(status="NOT_FOUND", confidence=0.0, reason=reason),
+                        "final_response": final_response,
+                        "comparison_target_resolution": comparison_resolution,
+                        **_log(state, "target_resolve", status="NEED_CLARIFICATION", query="comparison"),
+                    }
+
+        unresolved_targets = list(comparison_resolution.get("unresolved_targets", []) or [])
+        if not unresolved_targets and len(resolved_targets) < 2:
+            unresolved_targets = [{"query": query, "source_ref": query, "reference": "explicit"} for query in _comparison_structured_queries(sf)]
+
+        for item in unresolved_targets:
+            query = str(_to_dict(item).get("query", "") or "").strip()
+            source_ref = str(_to_dict(item).get("source_ref", "") or query).strip()
             if not query:
                 continue
             raw = resolve_shop(query, location=MOCK_LOCATION, session_shop_ids=_session_shop_ids(state))
             payload = _unwrap_resolve_shop_result(raw)
-            if query and payload.get("status") == "NOT_FOUND":
-                fallback_raw = mock_resolve_shop(query, location=MOCK_LOCATION, session_shop_ids=_session_shop_ids(state))
-                fallback_payload = _unwrap_resolve_shop_result(fallback_raw)
-                if fallback_payload.get("status") in {"RESOLVED", "AMBIGUOUS", "LOW_CONFIDENCE"}:
-                    payload = fallback_payload
             status = payload.get("status", "NOT_FOUND")
             if status == "RESOLVED":
                 shop = payload.get("shop") or {}
@@ -686,17 +785,15 @@ def _h_target_resolve(state: GraphState) -> dict:
                     shop = shop.model_dump()
                 if isinstance(shop, dict):
                     _append_target(
-                        ResolveShopResult(
-                            status="RESOLVED",
-                            resolved_shop=ShopRef(
-                                shop_id=str(shop.get("shop_id", "")),
-                                shop_name=str(shop.get("shop_name", "")),
-                            ),
-                            confidence=float(payload.get("confidence", 0.0)),
-                            reason="resolved_by_target_resolve",
-                        )
+                        {
+                            "shop_id": str(shop.get("shop_id", "")),
+                            "shop_name": str(shop.get("shop_name", "")),
+                            "source": "explicit_shop",
+                            "source_ref": source_ref,
+                        }
                     )
-            elif status in ("AMBIGUOUS", "LOW_CONFIDENCE"):
+                continue
+            if status in ("AMBIGUOUS", "LOW_CONFIDENCE"):
                 candidates = []
                 pending_candidates = []
                 for candidate in payload.get("candidates", []):
@@ -707,36 +804,9 @@ def _h_target_resolve(state: GraphState) -> dict:
                     shop_id = candidate.get("shop_id") or (shop_ref.get("shop_id", "") if isinstance(shop_ref, dict) else "")
                     shop_name = candidate.get("shop_name") or (shop_ref.get("shop_name", "") if isinstance(shop_ref, dict) else "")
                     address = candidate.get("address") or (shop_ref.get("address", "") if isinstance(shop_ref, dict) else "")
-                    candidates.append(
-                        ShopCandidate(
-                            shop=ShopRef(
-                                shop_id=shop_id,
-                                shop_name=shop_name,
-                            )
-                        )
-                    )
+                    candidates.append(ShopCandidate(shop=ShopRef(shop_id=shop_id, shop_name=shop_name)))
                     if shop_id and shop_name:
-                        pending_candidates.append(
-                            {
-                                "shop_id": shop_id,
-                                "shop_name": shop_name,
-                                "address": address,
-                            }
-                        )
-                if len(resolved_targets) >= 1 and len(pending_candidates) >= 3:
-                    for candidate in pending_candidates:
-                        _append_target(
-                            ResolveShopResult(
-                                status="RESOLVED",
-                                resolved_shop=ShopRef(
-                                    shop_id=str(candidate.get("shop_id", "")),
-                                    shop_name=str(candidate.get("shop_name", "")),
-                                ),
-                                confidence=float(payload.get("confidence", 0.0)),
-                                reason="comparison_ambiguous_candidates",
-                            )
-                        )
-                    continue
+                        pending_candidates.append({"shop_id": shop_id, "shop_name": shop_name, "address": address})
                 resolved_result = ResolveShopResult(
                     status=status,
                     candidates=candidates,
@@ -746,14 +816,12 @@ def _h_target_resolve(state: GraphState) -> dict:
                 pending = build_pending_clarification(
                     original_text=str(state.get("raw_text", "") or ""),
                     original_semantic_frame=sf.model_dump(mode="json") if hasattr(sf, "model_dump") else _session_state_dict(sf),
-                    original_task_type=(
-                        getattr(sf, "task_type", "")
-                        if getattr(sf, "task_type", None) is not None
-                        else state.get("task_type", "")
-                    ),
+                    original_task_type=(getattr(sf, "task_type", "") if getattr(sf, "task_type", None) is not None else state.get("task_type", "")),
                     candidate_targets=pending_candidates,
                     reason=resolved_result.reason,
                     source_node="target_resolve",
+                    already_resolved_targets=resolved_targets,
+                    ambiguous_target_slot=source_ref,
                 )
                 prompt = format_pending_prompt(pending)
                 return {
@@ -762,76 +830,30 @@ def _h_target_resolve(state: GraphState) -> dict:
                     "final_response": prompt,
                     **_log(state, "target_resolve", status="AMBIGUOUS", query=query),
                 }
-            else:
-                continue
 
-        resolved_targets = resolved_targets[: config.COMPARISON_MAX_SHOP_LIMIT]
-        if len(resolved_targets) < 2:
-            pending_candidates = []
-            for item in resolved_targets:
-                data = _to_dict(item)
-                resolved_shop = data.get("resolved_shop") or data.get("shop") or {}
-                if hasattr(resolved_shop, "model_dump"):
-                    resolved_shop = resolved_shop.model_dump()
-                if isinstance(resolved_shop, dict):
-                    shop_id = str(resolved_shop.get("shop_id", "")).strip()
-                    shop_name = str(resolved_shop.get("shop_name", "")).strip()
-                    if shop_id or shop_name:
-                        pending_candidates.append({"shop_id": shop_id, "shop_name": shop_name})
-            pending = build_pending_clarification(
-                original_text=str(state.get("raw_text", "") or ""),
-                original_semantic_frame=sf.model_dump(mode="json") if hasattr(sf, "model_dump") else _session_state_dict(sf),
-                original_task_type=(
-                    getattr(sf, "task_type", "")
-                    if getattr(sf, "task_type", None) is not None
-                    else state.get("task_type", "")
-                ),
-                candidate_targets=pending_candidates,
-                reason="comparison_requires_at_least_two_shops",
-                source_node="target_resolve",
-            )
-            prompt = format_pending_prompt(pending)
+        if len(resolved_targets) > config.COMPARISON_MAX_SHOP_LIMIT:
+            final_response = _comparison_reason_response("comparison_too_many_shops")
             return {
-                "resolve_shop_result": ResolveShopResult(
-                    status="AMBIGUOUS" if pending_candidates else "NOT_FOUND",
-                    candidates=[
-                        ShopCandidate(shop=ShopRef(shop_id=item.get("shop_id", ""), shop_name=item.get("shop_name", "")))
-                        for item in pending_candidates
-                    ] if pending_candidates else [],
-                    confidence=0.0,
-                    reason="comparison_requires_at_least_two_shops",
-                ),
-                "pending_clarification": pending,
-                "final_response": prompt or "比较需要至少两家店，请补充另一家店名。",
-                **_log(state, "target_resolve", status="AMBIGUOUS" if pending_candidates else "NOT_FOUND", query="comparison"),
+                "resolve_shop_result": ResolveShopResult(status="NOT_FOUND", confidence=0.0, reason="comparison_too_many_shops"),
+                "final_response": final_response,
+                **_log(state, "target_resolve", status="TOO_MANY", query="comparison"),
+            }
+        if len(resolved_targets) < 2:
+            final_response = _comparison_reason_response("comparison_requires_at_least_two_shops")
+            return {
+                "resolve_shop_result": ResolveShopResult(status="NOT_FOUND", confidence=0.0, reason="comparison_requires_at_least_two_shops"),
+                "final_response": final_response,
+                **_log(state, "target_resolve", status="NEED_CLARIFICATION", query="comparison"),
             }
 
         first_shop = resolved_targets[0]
-        first_shop_ref = first_shop.get("resolved_shop") or first_shop.get("shop") or {}
-        if hasattr(first_shop_ref, "model_dump"):
-            first_shop_ref = first_shop_ref.model_dump()
-        if not isinstance(first_shop_ref, dict):
-            first_shop_ref = {}
-        simple_targets = []
-        for item in resolved_targets:
-            data = _to_dict(item)
-            resolved_shop = data.get("resolved_shop") or data.get("shop") or {}
-            if hasattr(resolved_shop, "model_dump"):
-                resolved_shop = resolved_shop.model_dump()
-            if isinstance(resolved_shop, dict):
-                shop_id = str(resolved_shop.get("shop_id", "")).strip()
-                shop_name = str(resolved_shop.get("shop_name", "")).strip()
-                if shop_id or shop_name:
-                    simple_targets.append({"shop_id": shop_id, "shop_name": shop_name})
         resolved_result = ResolveShopResult(
             status="RESOLVED",
-            resolved_shop=ShopRef(
-                shop_id=str(first_shop_ref.get("shop_id", "")),
-                shop_name=str(first_shop_ref.get("shop_name", "")),
-            ),
+            resolved_shop=ShopRef(shop_id=str(first_shop.get("shop_id", "")), shop_name=str(first_shop.get("shop_name", ""))),
             confidence=1.0,
             reason="comparison_targets_resolved",
         )
+        simple_targets = [{"shop_id": item.get("shop_id", ""), "shop_name": item.get("shop_name", "")} for item in resolved_targets]
         return {
             "resolve_shop_result": resolved_result,
             "resolved_target": resolved_result,
@@ -866,11 +888,6 @@ def _h_target_resolve(state: GraphState) -> dict:
         }
     raw = resolve_shop(query, location=MOCK_LOCATION, session_shop_ids=_session_shop_ids(state))
     payload = _unwrap_resolve_shop_result(raw)
-    if query and payload.get("status") == "NOT_FOUND":
-        fallback_raw = mock_resolve_shop(query, location=MOCK_LOCATION, session_shop_ids=_session_shop_ids(state))
-        fallback_payload = _unwrap_resolve_shop_result(fallback_raw)
-        if fallback_payload.get("status") in {"RESOLVED", "AMBIGUOUS", "LOW_CONFIDENCE"}:
-            payload = fallback_payload
     status = payload.get("status", "NOT_FOUND")
     if status == "RESOLVED":
         shop = payload.get("shop") or {}
@@ -958,8 +975,8 @@ def _h_target_resolve(state: GraphState) -> dict:
 
 
 # --- 12b. clarify_decide ---
-# 搂1 input:  resolve_shop_result, semantic_frame
-# 搂1 output: pending_clarification 鎴?resolved_target (鍙墽琛岀洰鏍?
+# §1 input:  resolve_shop_result, semantic_frame
+# §1 output: pending_clarification 鎴?resolved_target (鍙墽琛岀洰鏍?
 def _h_clarify_decide(state: GraphState) -> dict:
     if state.get("task_type") == TaskType.recommendation:
         return {
@@ -968,7 +985,9 @@ def _h_clarify_decide(state: GraphState) -> dict:
         }
     rs = state.get("resolved_target") or state.get("resolve_shop_result")
     if rs is not None:
-        status = _to_dict(rs).get("status", getattr(rs, "status", ""))
+        rs_dict = _to_dict(rs)
+        status = rs_dict.get("status", getattr(rs, "status", ""))
+        reason = str(rs_dict.get("reason", getattr(rs, "reason", "")) or "")
         if status == "RESOLVED":
             return {
                 "resolved_target": rs,
@@ -978,10 +997,9 @@ def _h_clarify_decide(state: GraphState) -> dict:
             return {
                 **_log(state, "clarify_decide", decision="clarify"),
             }
-        final_response = str(state.get("final_response", "") or "").strip()
-        if final_response and ("至少需要两家店" in final_response or "比较" in final_response):
+        if reason in {"comparison_requires_at_least_two_shops", "comparison_too_many_shops", "pronoun_without_current_shop", "ordinal_out_of_range"}:
             return {
-                "final_response": final_response,
+                "final_response": str(state.get("final_response", "") or _comparison_reason_response(reason)),
                 **_log(state, "clarify_decide", decision="comparison_prompt"),
             }
         # NOT_FOUND or other
@@ -994,8 +1012,8 @@ def _h_clarify_decide(state: GraphState) -> dict:
 
 
 # --- 13. task_plan ---
-# 搂1 input:  top_intent, task_type, resolved_target
-# 搂1 output: execution_plan
+# §1 input:  top_intent, task_type, resolved_target
+# §1 output: execution_plan
 def _h_task_plan(state: GraphState) -> dict:
     sf = state.get("semantic_frame")
     rt = state.get("resolved_target")
@@ -1009,8 +1027,8 @@ def _h_task_plan(state: GraphState) -> dict:
 
 
 # --- 14. facet_plan ---
-# 搂1 input:  semantic_frame, resolved_target
-# 搂1 output: execution_plan.tool_calls
+# §1 input:  semantic_frame, resolved_target
+# §1 output: execution_plan.tool_calls
 def _h_facet_plan(state: GraphState) -> dict:
     sf = state.get("semantic_frame")
     rt = state.get("resolved_target")
@@ -1040,8 +1058,8 @@ def _h_facet_plan(state: GraphState) -> dict:
 
 
 # --- 15. comparison_planner ---
-# 搂1 input:  comparison_targets, resolved_target
-# 搂1 output: execution_plan, comparison_matrix placeholder
+# §1 input:  comparison_targets, resolved_target
+# §1 output: execution_plan, comparison_matrix placeholder
 def _h_comparison_planner(state: GraphState) -> dict:
     comparison_targets = list(state.get("comparison_targets", []) or [])
     if not comparison_targets:
@@ -1084,8 +1102,8 @@ def _h_comparison_planner(state: GraphState) -> dict:
 
 
 # --- 16. plan_validator ---
-# 搂1 input:  execution_plan
-# 搂1 output: validated_plan (or error_code)
+# §1 input:  execution_plan
+# §1 output: validated_plan (or error_code)
 def _h_plan_validator(state: GraphState) -> dict:
     plan = state.get("execution_plan")
     if plan is None:
@@ -1128,14 +1146,14 @@ def _h_plan_validator(state: GraphState) -> dict:
         "error_message": "",
         "plan_validation_result": "pass",
         "failed_stage": "",
-        "validated_plan": plan,  # 搂1: 鏍￠獙閫氳繃鍚庣殑鎵ц璁″垝
+        "validated_plan": plan,  # §1: 鏍￠獙閫氳繃鍚庣殑鎵ц璁″垝
         **_log(state, "plan_validator", status="pass"),
     }
 
 
 # --- 17. tool_execute ---
-# 搂1 input:  validated_plan
-# 搂1 output: tool_result_set
+# §1 input:  validated_plan
+# §1 output: tool_result_set
 def _h_tool_execute(state: GraphState) -> dict:
     plan = state.get("validated_plan") or state.get("execution_plan")
     results: dict[str, ToolResult] = {}
@@ -1177,7 +1195,9 @@ def _h_tool_execute(state: GraphState) -> dict:
                     "data": None,
                     "error_code": "INVALID_ARGUMENT",
                     "error_message": f"Tool '{resolved_call.get('tool_name', '')}' could not resolve shop_id from search result",
-                    "source": "mock",
+                    "source": config.TOOL_BACKEND,
+                    "tool_backend": config.TOOL_BACKEND,
+                    "backend_source": config.TOOL_BACKEND,
                     "degraded": not resolved_call.get("required", True),
                 }
                 continue
@@ -1197,7 +1217,9 @@ def _h_tool_execute(state: GraphState) -> dict:
                     "data": None,
                     "error_code": "TOOL_TIMEOUT",
                     "error_message": f"Tool '{call.get('tool_name', '')}' did not return a result",
-                    "source": "mock",
+                    "source": config.TOOL_BACKEND,
+                    "tool_backend": config.TOOL_BACKEND,
+                    "backend_source": config.TOOL_BACKEND,
                     "degraded": not call.get("required", True),
                 }
             resolved_call = call
@@ -1213,14 +1235,14 @@ def _h_tool_execute(state: GraphState) -> dict:
             results[call_id or call.get("tool_name", "")] = ToolResult.model_validate(raw_result)
     return {
         "tool_results": results,
-        "tool_result_set": results,  # 搂1: 鏂囨。瑕佹眰鐨勫瓧娈靛悕
+        "tool_result_set": results,  # §1: 鏂囨。瑕佹眰鐨勫瓧娈靛悕
         **_log(state, "tool_execute"),
     }
 
 
 # --- 18. evidence_build ---
-# 搂1 input:  tool_result_set
-# 搂1 output: evidence_pack
+# §1 input:  tool_result_set
+# §1 output: evidence_pack
 def _h_evidence_build(state: GraphState) -> dict:
     evidence_payload = build_evidence(
         state.get("tool_result_set") or state.get("tool_results", {}),
@@ -1241,8 +1263,8 @@ def _h_evidence_build(state: GraphState) -> dict:
 
 
 # --- 19. answer_plan_build ---
-# 搂1 input:  evidence_pack, semantic_frame
-# 搂1 output: answer_plan
+# §1 input:  evidence_pack, semantic_frame
+# §1 output: answer_plan
 def _h_answer_plan_build(state: GraphState) -> dict:
     execution_plan = state.get("execution_plan")
     task_type = ""
@@ -1264,22 +1286,27 @@ def _h_answer_plan_build(state: GraphState) -> dict:
 
 
 # --- 20. answer_generate ---
-# 搂1 input:  answer_plan, evidence_pack
-# 搂1 output: draft_response
+# §1 input:  answer_plan, evidence_pack
+# §1 output: draft_response
 def _h_answer_generate(state: GraphState) -> dict:
+    metadata: dict[str, Any] = {}
     txt = generate_answer(
         state.get("answer_plan") or {},
         state.get("evidence_pack") or {},
+        metadata_out=metadata,
     )
     return {
         "draft_response": txt,
+        "answer_source": metadata.get("answer_source", "template"),
+        "llm_verbalizer_violation": metadata.get("violation"),
         **_log(state, "answer_generate"),
     }
 
 
+
 # --- 21. answer_verify ---
-# 搂1 input:  draft_response, evidence_pack
-# 搂1 output: verify_result
+# §1 input:  draft_response, evidence_pack
+# §1 output: verify_result
 def _h_answer_verify(state: GraphState) -> dict:
     evidence = state.get("evidence_pack") or {}
     answer_plan = state.get("answer_plan") or {}
@@ -1303,8 +1330,8 @@ def _h_answer_verify(state: GraphState) -> dict:
 
 
 # --- 22. rewrite ---
-# 搂1 input:  verify_result, answer_plan
-# 搂1 output: draft_response
+# §1 input:  verify_result, answer_plan
+# §1 output: draft_response
 def _h_rewrite(state: GraphState) -> dict:
     rc = state.get("rewrite_count", 0) + 1
     txt = state.get("draft_response", "")
@@ -1316,8 +1343,8 @@ def _h_rewrite(state: GraphState) -> dict:
 
 
 # --- 23. final_response_build ---
-# 搂1 input:  draft_response, verify_result
-# 搂1 output: final_response
+# §1 input:  draft_response, verify_result
+# §1 output: final_response
 def _h_final_response(state: GraphState) -> dict:
     txt = state.get("draft_response", "")
     return {
@@ -1327,13 +1354,14 @@ def _h_final_response(state: GraphState) -> dict:
 
 
 # --- 24. clarify_response ---
-# 搂1 input:  resolve_shop_result, pending_clarification
-# 搂1 output: final_response
+# §1 input:  resolve_shop_result, pending_clarification
+# §1 output: final_response
 def _h_clarify_response(state: GraphState) -> dict:
     pending_result = str(state.get("pending_check_result", "") or "")
     if pending_result in {"expired", "invalid", "out_of_range"} and str(state.get("final_response", "") or "").strip():
         return {
             "final_response": state.get("final_response", ""),
+            "answer_source": "template_fallback",
             **_log(state, "clarify_response"),
         }
     pending = state.get("pending_clarification")
@@ -1345,29 +1373,33 @@ def _h_clarify_response(state: GraphState) -> dict:
         if prompt.strip():
             return {
                 "final_response": prompt,
+                "answer_source": "template_fallback",
                 **_log(state, "clarify_response"),
             }
     rs = state.get("resolve_shop_result")
     if rs is not None and getattr(rs, "status", "") in ("AMBIGUOUS", "LOW_CONFIDENCE"):
         return {
             "final_response": "店名有点模糊，请提供完整店名。",
+            "answer_source": "template_fallback",
             **_log(state, "clarify_response"),
         }
     clarification = (state.get("error_message", "") or "").strip()
     if clarification:
         return {
             "final_response": clarification,
+            "answer_source": "template_fallback",
             **_log(state, "clarify_response"),
         }
     return {
         "final_response": "请提供完整店名。",
+        "answer_source": "template_fallback",
         **_log(state, "clarify_response"),
     }
 
 
 # --- 25. fallback_answer ---
-# 搂1 input:  error_code, evidence_pack
-# 搂1 output: final_response
+# §1 input:  error_code, evidence_pack
+# §1 output: final_response
 def _h_fallback_answer(state: GraphState) -> dict:
     evidence = state.get("evidence_pack")
     evidence_dict = _to_dict(evidence)
@@ -1392,13 +1424,14 @@ def _h_fallback_answer(state: GraphState) -> dict:
         response = "抱歉，暂时无法处理您的请求，请稍后再试。"
     return {
         "final_response": response,
+        "answer_source": "template_fallback",
         **_log(state, "fallback_answer"),
     }
 
 
 # --- 26. state_update_plan ---
-# 搂1 input:  final_response, session_state_before
-# 搂1 output: state_update_plan
+# §1 input:  final_response, session_state_before
+# §1 output: state_update_plan
 def _h_state_update_plan(state: GraphState) -> dict:
     resolve_shop_result = state.get("resolve_shop_result")
     pending = state.get("pending_clarification")
@@ -1443,8 +1476,8 @@ def _h_state_update_plan(state: GraphState) -> dict:
 
 
 # --- 27. persist_session_state ---
-# 搂1 input:  state_update_plan
-# 搂1 output: session_state_after
+# §1 input:  state_update_plan
+# §1 output: session_state_after
 def _h_persist_session(state: GraphState) -> dict:
     session_state = state.get("session_state") or SessionState()
     directive = state.get("state_update_plan")
@@ -1480,8 +1513,8 @@ def _h_persist_session(state: GraphState) -> dict:
 
 
 # --- 28. emit_response ---
-# 搂1 input:  final_response, trace_id
-# 搂1 output: (terminal 鈥?no state mutation)
+# §1 input:  final_response, trace_id
+# §1 output: (terminal —no state mutation)
 def _h_emit_response(state: GraphState) -> dict:
     return _log(state, "emit_response")
 
@@ -1522,18 +1555,18 @@ _HANDLERS: dict[str, GraphNodeFunc] = {
     "emit_response": _h_emit_response,
 }
 
-# Nodes that the 搂2 Node Table says should exist in the graph.
+# Nodes that the §2 Node Table says should exist in the graph.
 # All 27 rows including clarify_decide as independent node.
 ALL_NODE_NAMES: set[str] = set(_HANDLERS.keys())
 
-# Normal-flow unconditional edges  (搂2 "涓嬩竴璺? default path)
+# Normal-flow unconditional edges  (§2 "涓嬩竴璺? default path)
 _NORMAL_EDGES: dict[str, str] = {
     "receive_input": "load_session_state",
     "load_session_state": "check_pending_clarification",
     "normalize_text": "hard_guard",
     "slot_extractor": "context_recovery",
     "context_recovery": "target_resolve",
-    "target_resolve": "clarify_decide",  # 搂2: target_resolve 鈫?clarify_decide
+    "target_resolve": "clarify_decide",  # §2: target_resolve 鈫?clarify_decide
     "facet_plan": "plan_validator",
     "comparison_planner": "plan_validator",
     "evidence_build": "answer_plan_build",
@@ -1549,23 +1582,17 @@ _NORMAL_EDGES: dict[str, str] = {
 
 
 # ===================================================================
-# Conditional edge routing functions  (todo/05 搂3)
+# Conditional edge routing functions  (todo/05 §3)
 # ===================================================================
 
 
 def _route_check_pending(state: GraphState) -> str:
-    """搂3 鈥?Route check_pending_clarification."""
+    """§3 —Route check_pending_clarification."""
     result = str(state.get("pending_check_result", "") or "")
     if result == "restore":
         return "target_resolve"
     if result in ("invalid", "out_of_range", "expired"):
         return "clarify_response"
-    pending = state.get("pending_clarification")
-    raw = str(state.get("raw_text", "") or "").strip()
-    if pending is not None and raw:
-        compact = raw.replace(" ", "")
-        if compact.isdigit() or compact.startswith("第") or any(token in compact for token in ("第一个", "第二个", "第三个", "第一家", "第二家", "第三家")):
-            return "target_resolve"
     # Future: NL topic-switch detection 鈫?return "top_intent_router"
     return "basic_input_validate"
 
@@ -1579,7 +1606,7 @@ def _route_basic_validate(state: GraphState) -> str:
 
 
 def _route_hard_guard(state: GraphState) -> str:
-    """搂3 鈥?Route hard_guard."""
+    """§3 —Route hard_guard."""
     result = state.get("guard_result", "")
     if result in ("safe", "ok"):
         return "top_intent_router"
@@ -1589,7 +1616,7 @@ def _route_hard_guard(state: GraphState) -> str:
 
 
 def _route_top_intent(state: GraphState) -> str:
-    """搂3 鈥?Route top_intent_router."""
+    """§3 —Route top_intent_router."""
     intent = state.get("top_intent")
     if intent in (TopIntent.local_life, "local_life"):
         return "semantic_parse"
@@ -1610,7 +1637,7 @@ def _route_top_intent(state: GraphState) -> str:
 
 
 def _route_semantic_parse(state: GraphState) -> str:
-    """搂3 + 搂2 鈥?Route semantic_parse."""
+    """§3 + §2 —Route semantic_parse."""
     err = state.get("error_code", "")
     if err == "LLM_JSON_PARSE_ERROR":
         return "clarify_response"
@@ -1620,7 +1647,7 @@ def _route_semantic_parse(state: GraphState) -> str:
 
 
 def _route_frame_validator(state: GraphState) -> str:
-    """搂2 鈥?Route frame_validator."""
+    """§2 —Route frame_validator."""
     err = state.get("error_code", "")
     if err:
         return "clarify_response"
@@ -1631,11 +1658,15 @@ def _route_clarify_decide(state: GraphState) -> str:
     """?3 ??Route clarify_decide based on resolve_shop_result.status."""
     rs = state.get("resolve_shop_result")
     if rs is not None:
-        status = _to_dict(rs).get("status", getattr(rs, "status", ""))
+        rs_dict = _to_dict(rs)
+        status = rs_dict.get("status", getattr(rs, "status", ""))
+        reason = str(rs_dict.get("reason", getattr(rs, "reason", "")) or "")
         if status == "RESOLVED":
             return "task_plan"
         if status in ("AMBIGUOUS", "LOW_CONFIDENCE"):
             return "clarify_response"
+        if reason in {"comparison_requires_at_least_two_shops", "comparison_too_many_shops", "pronoun_without_current_shop", "ordinal_out_of_range"}:
+            return "emit_response"
         if status == "NOT_FOUND":
             return "emit_response"
     # Default fallthrough ??clarify
@@ -1643,7 +1674,7 @@ def _route_clarify_decide(state: GraphState) -> str:
 
 
 def _route_plan_validator(state: GraphState) -> str:
-    """搂3 鈥?Route plan_validator."""
+    """§3 —Route plan_validator."""
     err = state.get("error_code", "")
     if err:
         return "fallback_answer"
@@ -1660,7 +1691,7 @@ def _route_task_plan(state: GraphState) -> str:
 
 
 def _route_tool_execute(state: GraphState) -> str:
-    """搂3 鈥?Route tool_execute."""
+    """§3 —Route tool_execute."""
     tr = state.get("tool_result_set") or state.get("tool_results", {})
     required_by_call_id = _plan_required_by_call_id(state.get("validated_plan") or state.get("execution_plan"))
     plan_is_available = bool(required_by_call_id)
@@ -1675,7 +1706,7 @@ def _route_tool_execute(state: GraphState) -> str:
 
 
 def _route_answer_verify(state: GraphState) -> str:
-    """搂3 鈥?Route answer_verify."""
+    """§3 —Route answer_verify."""
     vr = state.get("verify_result", "pass")
     rc = state.get("rewrite_count", 0)
     if vr == "pass":
@@ -1781,7 +1812,7 @@ def build_graph() -> CompiledStateGraph:
     for src, dst in _NORMAL_EDGES.items():
         builder.add_edge(src, dst)
 
-    # 4. Conditional edges  (搂3)
+    # 4. Conditional edges  (§3)
     builder.add_conditional_edges(
         "check_pending_clarification",
         _route_check_pending,
@@ -1876,8 +1907,8 @@ _NODE_TABLE_NEXT_HOPS: dict[str, list[str]] = {
     "slot_extractor": ["context_recovery"],
     "frame_validator": ["context_recovery", "clarify_response"],
     "context_recovery": ["target_resolve"],
-    "target_resolve": ["clarify_decide"],  # 搂2: 鏃犳潯浠惰浆鍏?clarify_decide
-    "clarify_decide": ["clarify_response", "task_plan", "emit_response"],  # 搂2: 鐙珛鍐崇瓥鑺傜偣
+    "target_resolve": ["clarify_decide"],  # §2: 鏃犳潯浠惰浆鍏?clarify_decide
+    "clarify_decide": ["clarify_response", "task_plan", "emit_response"],  # §2: 鐙珛鍐崇瓥鑺傜偣
     "task_plan": ["facet_plan", "comparison_planner", "tool_execute"],
     "facet_plan": ["plan_validator"],
     "comparison_planner": ["plan_validator"],
@@ -1945,13 +1976,13 @@ _GRAPH_STATE_FIELDS: list[str] = [
     "recommendation_candidates",
     # 瑙ｆ瀽缁撴灉
     "resolved_target",
-    "resolve_shop_result",  # 搂1 鏂囨。瀛楁
+    "resolve_shop_result",  # §1 鏂囨。瀛楁
     # 鎵ц璁″垝
     "execution_plan",
-    "validated_plan",  # 搂1 鏂囨。瀛楁
+    "validated_plan",  # §1 鏂囨。瀛楁
     # 宸ュ叿缁撴灉
     "tool_results",
-    "tool_result_set",  # 搂1 鏂囨。瀛楁
+    "tool_result_set",  # §1 鏂囨。瀛楁
     # 璇佹嵁灞?
     "evidence_pack",
     # 鍥炵瓟灞?
@@ -1960,7 +1991,7 @@ _GRAPH_STATE_FIELDS: list[str] = [
     # 鐘舵€佹洿鏂?
     "state_update_plan",
     # 浼氳瘽蹇収
-    "session_state_before",  # 搂1 鏂囨。瀛楁
+    "session_state_before",  # §1 鏂囨。瀛楁
     "session_state_after",
     # 瑙傛祴瀛楁
     "event_log",
@@ -1979,10 +2010,10 @@ def verify_graph_completeness(
     """Verify the graph against the todo/05 contract.
 
     Checks:
-      1. All 26 nodes from 搂2 Node Table exist.
-      2. All 搂3 conditional edges have their ``from`` nodes present.
+      1. All 26 nodes from §2 Node Table exist.
+      2. All §3 conditional edges have their ``from`` nodes present.
       3. No orphan destinations (every ``涓嬩竴璺砢` target exists as a node).
-      4. All 搂1 state fields are documented.
+      4. All §1 state fields are documented.
 
     Args:
         builder: Optional built (but not compiled) graph.  When omitted
@@ -2000,11 +2031,11 @@ def verify_graph_completeness(
     # Check that the node-table next hops all exist
     for src, targets in _NODE_TABLE_NEXT_HOPS.items():
         if src not in configured:
-            errors.append(f"搂2 node '{src}' has no handler 鈥?missing from graph")
+            errors.append(f"§2 node '{src}' has no handler —missing from graph")
         for t in targets:
             if t and t not in configured:
                 errors.append(
-                    f"搂2 node '{src}' lists '{t}' as 涓嬩竴璺? "
+                    f"§2 node '{src}' lists '{t}' as 涓嬩竴璺? "
                     f"but '{t}' has no handler"
                 )
 
@@ -2014,12 +2045,12 @@ def verify_graph_completeness(
         seen_from.add(src)
         if src not in configured:
             errors.append(
-                f"搂3 conditional edge from '{src}' 鈫?'{dst}': "
+                f"§3 conditional edge from '{src}' 鈫?'{dst}': "
                 f"source node missing from graph"
             )
         if dst not in configured:
             errors.append(
-                f"搂3 conditional edge '{src}' 鈫?'{dst}': "
+                f"§3 conditional edge '{src}' 鈫?'{dst}': "
                 f"destination node missing from graph"
             )
 
@@ -2027,7 +2058,7 @@ def verify_graph_completeness(
     if builder is not None:
         try:
             # The builder performs internal consistency at add_* time.
-            # No explicit validate call needed 鈥?LangGraph checks inline.
+            # No explicit validate call needed —LangGraph checks inline.
             pass
         except Exception as exc:
             errors.append(f"Builder internal validation: {exc}")

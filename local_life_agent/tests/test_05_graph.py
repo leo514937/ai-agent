@@ -368,15 +368,14 @@ class TestConditionalBranching:
 
     def test_check_pending_with_number_routes_to_target_resolve(self):
         route = _route_check_pending({
-            "pending_clarification": PendingClarification(pending_id="pc_1"),
-            "raw_text": "1",
+            "pending_check_result": "restore",
         })
         assert route == "target_resolve"
 
-    def test_check_pending_with_text_routes_default(self):
+    def test_check_pending_uses_pending_check_result_not_raw_text(self):
         route = _route_check_pending({
             "pending_clarification": PendingClarification(pending_id="pc_1"),
-            "raw_text": "我想换一家",
+            "raw_text": "1",
         })
         assert route == "basic_input_validate"
 
@@ -464,6 +463,23 @@ class TestConditionalBranching:
     def test_clarify_decide_not_found(self):
         route = _route_clarify_decide({
             "resolve_shop_result": ResolveShopResult(status="NOT_FOUND"),
+        })
+        assert route == "emit_response"
+
+    def test_clarify_decide_routes_by_reason_not_final_response(self):
+        route = _route_clarify_decide({
+            "resolve_shop_result": ResolveShopResult(
+                status="NOT_FOUND",
+                reason="comparison_requires_at_least_two_shops",
+            ),
+            "final_response": "文案已经改了，但仍然应该走 comparison prompt",
+        })
+        assert route == "emit_response"
+
+    def test_clarify_decide_does_not_match_final_response_text(self):
+        route = _route_clarify_decide({
+            "resolve_shop_result": ResolveShopResult(status="NOT_FOUND", reason="shop_not_found"),
+            "final_response": "至少需要两家店",
         })
         assert route == "emit_response"
 

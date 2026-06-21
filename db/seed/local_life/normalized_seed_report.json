@@ -1,0 +1,48 @@
+{
+  "summary": {
+    "shop_count": 27,
+    "voucher_count": 16,
+    "manual_review_count": 0,
+    "warning_count": 0
+  },
+  "id_ranges": {
+    "shop_start": 900001,
+    "shop_end": 900027,
+    "voucher_start": 910001,
+    "voucher_end": 910016
+  },
+  "skipped_fields": {
+    "shop": {
+      "open_status": "DB has no open_status column; should be dynamically determined from open_hours",
+      "phone": "DB tb_shop has no phone column",
+      "tags": "DB tb_shop has no tags column; could be introduced as a separate table",
+      "alias": "DB tb_shop has no alias column",
+      "aliases": "DB tb_shop has no aliases column",
+      "sub_category": "DB uses type_id foreign key; sub_category is too granular"
+    },
+    "voucher": {
+      "stock": "stock is only stored in tb_seckill_voucher for type=1 (seckill) vouchers; all mock vouchers are type=0 (普通券)"
+    },
+    "distance_eta": {
+      "distance_km": "DB has no distance_eta table; distance should be dynamically calculated from shop coordinates (tb_shop.x, tb_shop.y) and user location",
+      "eta_minutes": "same as above; ETA can be estimated from distance",
+      "traffic_level": "same as above; not stored in DB",
+      "_note": "distance_eta.json is NOT imported in any phase of this seed process"
+    }
+  },
+  "category_mapping": {
+    "咖啡/茶饮": 1,
+    "快餐": 1,
+    "烘焙甜品": 1,
+    "中式快餐": 1,
+    "火锅": 1,
+    "中餐": 1,
+    "烧烤": 1,
+    "日料": 1,
+    "西餐": 1,
+    "其他": 1
+  },
+  "open_status_handling": "skipped — DB has no open_status column; can be derived from open_hours + current time",
+  "manual_review_items": [],
+  "warnings": []
+}

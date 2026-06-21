@@ -90,6 +90,7 @@ class SemanticFrame(BaseModel):
     semantic_source: str = ""
     fallback_reason: str = ""
     llm_called: bool = False
+    llm_backend: str = ""
 
     @field_validator("facets", mode="before")
     @classmethod
@@ -155,6 +156,8 @@ class PendingClarification(BaseModel):
     original_semantic_frame: dict[str, Any] | None = None
     reason: str = ""
     source_node: str = ""
+    already_resolved_targets: list[dict[str, Any]] = Field(default_factory=list)
+    ambiguous_target_slot: str = ""
 
 
 class ToolResult(BaseModel):
@@ -173,6 +176,10 @@ class ToolResult(BaseModel):
     error_message: str = ""
     source: str = ""
     degraded: bool = False
+    backend_source: str = ""
+    http_status: int | None = None
+    endpoint: str | None = None
+    fallback_from: str | None = None
 
     @model_validator(mode="after")
     def _validate_shop_scope(self) -> ToolResult:
@@ -265,6 +272,7 @@ class EvidenceItem(BaseModel):
     confidence: float = 1.0
     timestamp: str = ""
     source_type: SourceType = SourceType.TOOL
+    backend_source: str = ""
 
 
 class EvidencePack(BaseModel):
@@ -280,6 +288,7 @@ class EvidencePack(BaseModel):
     forbidden_claims: list[str] = Field(default_factory=list)
     ranking_snapshot: dict[str, Any] | None = None
     comparison_matrix: dict[str, Any] | None = None
+    tool_results: dict[str, Any] = Field(default_factory=dict)
 
 
 # ===================================================================
@@ -364,6 +373,70 @@ class AnswerPlan(BaseModel):
     comparison_matrix_id: str = ""
     tone: str = "neutral"
     fallback_template_type: str = ""
+
+
+class ComparisonTargetResolution(BaseModel):
+    """Resolution details for multi-target comparison references."""
+    model_config = ConfigDict(extra="forbid")
+
+    status: str = ""
+    targets: list[dict[str, Any]] = Field(default_factory=list)
+    unresolved_targets: list[dict[str, Any]] = Field(default_factory=list)
+    ambiguous_target: dict[str, Any] | None = None
+    reason: str = ""
+    prompt: str | None = None
+
+
+ComparisonTargetResolution.model_rebuild()
+
+
+class ComparisonCell(BaseModel):
+    shop_id: str = ""
+    shop_name: str = ""
+    facet: str = ""
+    dimension: str = ""
+    status: str = ""
+    result_status: str = ""
+    value: Any = None
+    evidence_ref: str = ""
+    eligible_for_comparison: bool = True
+
+
+class ComparisonMatrix(BaseModel):
+    matrix_id: str = ""
+    status: str = ""
+    rows: list[dict] = Field(default_factory=list)
+    cells: list[ComparisonCell] = Field(default_factory=list)
+    unknown_cells: list[ComparisonCell] = Field(default_factory=list)
+    failed_cells: list[ComparisonCell] = Field(default_factory=list)
+    dimension_winners: dict[str, list[dict]] = Field(default_factory=dict)
+    uncertainty_notes: list[str] = Field(default_factory=list)
+    overall_ranked: list[dict] = Field(default_factory=list)
+    overall_ranking: list[dict] = Field(default_factory=list)
+    reason_codes: list[str] = Field(default_factory=list)
+
+
+ComparisonCell.model_rebuild()
+ComparisonMatrix.model_rebuild()
+
+
+class DecisionPlan(BaseModel):
+    """Factual plan used by the LLMVerbalizer to generate a natural response."""
+    model_config = ConfigDict(extra="forbid")
+
+    answer_type: str = ""  # recommendation | comparison | single_shop | coupon | open_status | distance | general
+    selected_targets: list[dict[str, Any]] = Field(default_factory=list)
+    omitted_targets: list[dict[str, Any]] = Field(default_factory=list)
+    main_recommendation: dict[str, Any] | None = None
+    overall_ranking: list[dict[str, Any]] = Field(default_factory=list)
+    best_for: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    factual_points: list[str] = Field(default_factory=list)
+    uncertainty_notes: list[str] = Field(default_factory=list)
+    forbidden_claims: list[str] = Field(default_factory=list)
+    style_hints: list[str] = Field(default_factory=list)
+
+
+DecisionPlan.model_rebuild()
 
 
 # ===================================================================

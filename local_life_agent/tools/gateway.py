@@ -9,7 +9,13 @@ from typing import Any
 
 from .. import config
 from .circuit_breaker import get_circuit_breaker_manager
-from .executor import MockToolExecutor, ToolExecutor
+from .executor import (
+    JavaToolExecutor,
+    MockToolExecutor,
+    ToolExecutor,
+    build_fallback_executor,
+    build_tool_executor,
+)
 from .normalizer import (
     normalize_circuit_open_result,
     normalize_tool_result,
@@ -24,7 +30,10 @@ class ToolCallGateway:
     def __init__(self, executor: ToolExecutor | None = None):
         self._registry = get_registry()
         self._cb_manager = get_circuit_breaker_manager()
-        self._executor = executor or MockToolExecutor()
+        if executor is not None:
+            self._executor = executor
+        else:
+            self._executor = build_tool_executor()
 
     async def call(self, tool_name: str, kwargs: dict[str, Any]) -> dict[str, Any]:
         """Execute a single tool call through the full Gateway pipeline."""
@@ -59,13 +68,14 @@ class ToolCallGateway:
                 max_attempts=max_retries + 1,
             )
         except Exception as exc:
+            backend = self._executor.backend_source if hasattr(self._executor, "backend_source") else "unknown"
             result = {
                 "success": False,
                 "result_status": "unknown",
                 "data": None,
                 "error_code": "NETWORK_ERROR",
                 "error_message": str(exc),
-                "source": "mock",
+                "source": backend,
                 "degraded": True,
             }
 
@@ -74,6 +84,33 @@ class ToolCallGateway:
                 self._cb_manager.record_success(tool_name)
             else:
                 self._cb_manager.record_failure(tool_name)
+
+        # --- Fallback check: java_api failed and fallback is allowed ---
+        if (
+            not result.get("success", False)
+            and isinstance(self._executor, JavaToolExecutor)
+            and config.ALLOW_TOOL_BACKEND_FALLBACK
+        ):
+            fallback_executor = build_fallback_executor()
+            try:
+                fallback_raw = await fallback_executor.execute(tool_def, kwargs)
+                if fallback_raw.success:
+                    result = {
+                        "call_id": kwargs.get("call_id", ""),
+                        "shop_id": kwargs.get("shop_id", ""),
+                        "tool_name": tool_def["name"],
+                        "success": fallback_raw.success,
+                        "result_status": "ok" if fallback_raw.data is not None else "empty",
+                        "data": fallback_raw.data,
+                        "error_code": fallback_raw.error_code,
+                        "error_message": fallback_raw.error_message,
+                        "source": "mock",
+                        "degraded": True,
+                        "backend_source": "mock",
+                        "fallback_from": "java_api",
+                    }
+            except Exception:
+                pass  # keep the original failed result
 
         return normalize_tool_result(tool_name, result)
 
@@ -97,8 +134,13 @@ class ToolCallGateway:
             "data": raw.data,
             "error_code": raw.error_code,
             "error_message": raw.error_message,
-            "source": "mock",
+            "source": raw.backend_source,
+            "tool_backend": raw.backend_source,
             "degraded": False,
+            "backend_source": raw.backend_source,
+            "fallback_from": raw.fallback_from,
+            "http_status": raw.http_status,
+            "endpoint": raw.endpoint,
         }
 
 
@@ -121,10 +163,12 @@ class BatchToolExecutor:
         deadline_ms: int | None = None,
         max_concurrency: int | None = None,
         call_fn: Any | None = None,
+        backend_source: str | None = None,
     ) -> None:
         self._deadline_ms = deadline_ms or config.DEADLINE_MS
         self._max_concurrency = max_concurrency or config.MAX_CONCURRENCY
         self._call_fn = call_fn or dispatch_tool_call
+        self._backend_source = backend_source or config.TOOL_BACKEND
 
     def _normalize_call(self, call: Any) -> _BatchToolCall:
         if hasattr(call, "model_dump"):
@@ -151,7 +195,9 @@ class BatchToolExecutor:
             "data": None,
             "error_code": "TOOL_TIMEOUT",
             "error_message": message,
-            "source": "mock",
+            "source": self._backend_source,
+            "tool_backend": self._backend_source,
+            "backend_source": self._backend_source,
             "degraded": not call.required,
         }
 
@@ -185,7 +231,9 @@ class BatchToolExecutor:
                     "data": None,
                     "error_code": "NETWORK_ERROR",
                     "error_message": str(exc),
-                    "source": "mock",
+                    "source": self._backend_source,
+                    "tool_backend": self._backend_source,
+                    "backend_source": self._backend_source,
                     "degraded": not call.required,
                 }
 

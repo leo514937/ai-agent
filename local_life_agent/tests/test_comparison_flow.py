@@ -143,6 +143,17 @@ def test_compare_three_from_last_recommendation_list(monkeypatch: pytest.MonkeyP
 
 def test_compare_first_item_and_explicit_shop(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(graph_builder, "dispatch_tool_call", _comparison_dispatch)
+    monkeypatch.setattr(
+        graph_builder,
+        "resolve_shop",
+        lambda query, **_: {
+            "status": "RESOLVED",
+            "shop": SHOP_B,
+            "candidates": [],
+            "confidence": 0.95,
+            "error_code": None,
+        } if query == "海底捞" else resolve_shop(query),
+    )
     get_session_store().save(
         "cmp_first_explicit",
         SessionState(last_recommendation_list=[SHOP_A, SHOP_D, SHOP_E]),

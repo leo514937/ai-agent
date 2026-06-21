@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import re
+from functools import lru_cache
+from pathlib import Path
 
 from ..domain.enums import Facet, TaskType
 from ..input.normalizer import normalize_text
-from ..tools.mock_tools import _all_shops
 
 _COUPON_HINTS = (
     "\u6709\u5238",
@@ -103,14 +105,31 @@ _ORDINAL_ALIASES = {
     "\u7b2c\u4e09\u95f4": "\u7b2c\u4e09\u5bb6",
 }
 _DEICTIC_HINTS = (
-    "\u8fd9\u5bb6",
-    "\u90a3\u5bb6",
-    "\u8fd9\u95f4",
-    "\u90a3\u95f4",
-    "\u8fd9\u4e09\u5bb6",
-    "\u8fd9\u51e0\u5bb6",
+    "这家",
+    "那家",
+    "这间",
+    "那间",
+    "这三家",
+    "这几家",
+    "这些",
+    "上面这些",
+    "刚才这几家",
+    "这几个",
+    "这几间",
+    "这三个",
 )
 _NOISE_RE = re.compile(r"[\s,\.\?!;:()\[\]{}<>/\\|\"'\u3001\uff0c\u3002\uff01\uff1f\uff1b\uff1a]+")
+
+
+@lru_cache(maxsize=1)
+def _load_mock_catalog() -> list[dict]:
+    """只在 fallback 规则解析时读取 mock 店铺目录，避免依赖 mock tool 实现。"""
+    path = Path(__file__).resolve().parent.parent / "mock_data" / "shops.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
+    except Exception:
+        return []
+    return data if isinstance(data, list) else []
 
 
 def _dedupe(items: list[str]) -> list[str]:
@@ -134,7 +153,7 @@ def _brand_prefix(name: str) -> str:
 
 def _shop_tokens() -> list[tuple[str, str]]:
     tokens: list[tuple[str, str]] = []
-    for shop in _all_shops():
+    for shop in _load_mock_catalog():
         canonical = normalize_text(shop.get("shop_name", "")).strip()
         if canonical:
             tokens.append((canonical, canonical))
@@ -173,8 +192,16 @@ def _extract_ordinals(text: str) -> list[str]:
     return _dedupe(hits + digits)
 
 
+_GROUP_DEICTIC_RE = re.compile(
+    r"(这|前)\s*([1-9]\d*|[一二两三四五六七八九十]+)\s*(家|个|间)"
+)
+
+
 def _extract_deictic(text: str) -> list[str]:
-    return _dedupe([hint for hint in _DEICTIC_HINTS if hint in text])
+    hits = [hint for hint in _DEICTIC_HINTS if hint in text]
+    for match in _GROUP_DEICTIC_RE.finditer(text):
+        hits.append(match.group(0))
+    return _dedupe(hits)
 
 
 def _facet_positions(text: str) -> list[tuple[int, str]]:

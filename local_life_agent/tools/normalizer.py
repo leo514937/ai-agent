@@ -33,7 +33,9 @@ def normalize_tool_result(tool_name: str, raw: dict) -> dict:
             "data": raw,
             "error_code": None,
             "error_message": "",
-            "source": "mock",
+            "source": raw.get("source", "mock") if hasattr(raw, "get") else "mock",
+            "tool_backend": raw.get("tool_backend", raw.get("backend_source", "mock")) if hasattr(raw, "get") else "mock",
+            "backend_source": raw.get("backend_source", "mock") if hasattr(raw, "get") else "mock",
             "degraded": False,
         }
 
@@ -51,6 +53,11 @@ def normalize_tool_result(tool_name: str, raw: dict) -> dict:
         "error_code": raw.get("error_code"),
         "error_message": raw.get("error_message", ""),
         "source": raw.get("source", "mock"),
+        "tool_backend": raw.get("tool_backend", raw.get("backend_source", raw.get("source", "mock"))),
+        "backend_source": raw.get("backend_source", raw.get("source", "mock")),
+        "fallback_from": raw.get("fallback_from"),
+        "http_status": raw.get("http_status"),
+        "endpoint": raw.get("endpoint"),
         "degraded": raw.get("degraded", False),
     }
 
@@ -76,6 +83,8 @@ def normalize_timeout_result(tool_name: str, kwargs: dict, error_message: str) -
         "error_code": "TOOL_TIMEOUT",
         "error_message": error_message,
         "source": "mock",
+        "tool_backend": "mock",
+        "backend_source": "mock",
         "degraded": True,
     }
 
@@ -100,6 +109,8 @@ def normalize_circuit_open_result(tool_name: str, kwargs: dict) -> dict:
         "error_code": "CIRCUIT_OPEN",
         "error_message": f"Circuit breaker is OPEN for tool '{tool_name}'",
         "source": "mock",
+        "tool_backend": "mock",
+        "backend_source": "mock",
         "degraded": True,
     }
 
@@ -125,5 +136,7 @@ def normalize_validation_error(tool_name: str, kwargs: dict, errors: list[str]) 
         "error_code": "SCHEMA_VALIDATION_FAILED",
         "error_message": "; ".join(errors),
         "source": "mock",
+        "tool_backend": "mock",
+        "backend_source": "mock",
         "degraded": False,
     }

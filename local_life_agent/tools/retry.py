@@ -61,6 +61,7 @@ async def retry_with_backoff(
                 "error_code": "TOOL_TIMEOUT",
                 "error_message": str(exc),
                 "source": "mock",
+                "backend_source": "mock",
                 "degraded": False,
             }
         except Exception as exc:
@@ -71,6 +72,7 @@ async def retry_with_backoff(
                 "error_code": "NETWORK_ERROR",
                 "error_message": str(exc),
                 "source": "mock",
+                "backend_source": "mock",
                 "degraded": False,
             }
 
@@ -97,6 +99,7 @@ async def retry_with_backoff(
             "error_code": "UNKNOWN",
             "error_message": f"Tool '{tool_name}' failed after {max_attempts} attempt(s)",
             "source": "mock",
+            "backend_source": "mock",
             "degraded": False,
         }
     return last_result

@@ -207,11 +207,17 @@ def _default_llm_backend(
     """Deterministic offline backend used when nothing is injected."""
     user_text = _extract_user_text(prompt, system_prompt)
     top_intent, confidence, reason = _classify_top_intent(user_text)
-    payload = {
-        "top_intent": top_intent,
-        "confidence": confidence,
-        "reason": reason,
-    }
+    if "Local Life Semantic Parser" in prompt:
+        from ..semantic.slot_extractor import extract_slots
+
+        payload = extract_slots(user_text, top_intent)
+        payload["confidence"] = max(float(payload.get("confidence", 0.0) or 0.0), confidence)
+    else:
+        payload = {
+            "top_intent": top_intent,
+            "confidence": confidence,
+            "reason": reason,
+        }
     return json.dumps(payload, ensure_ascii=False)
 
 
@@ -309,6 +315,17 @@ def call_llm(
     degrade gracefully.
     """
     effective_backend = backend or _LLM_BACKEND or _default_llm_backend
+    if effective_backend is _default_llm_backend:
+        # Default pure-rule backend → semantic_source = "rule_based"
+        backend_kind = "rule_based"
+    else:
+        # Injected test backend or explicit backend parameter.
+        # Tests may set llm_backend="fake" or llm_backend="real" as attributes.
+        backend_kind = str(
+            getattr(effective_backend, "llm_backend", None)
+            or getattr(effective_backend, "backend_kind", None)
+            or "real_llm"
+        )
     attempts = max(1, int(max_retries) + 1)
     last_error_code = ""
     last_error_message = ""
@@ -342,6 +359,7 @@ def call_llm(
                 "raw": raw_text,
                 "error_code": "",
                 "error_message": "",
+                "llm_backend": backend_kind,
                 "attempts": attempt,
                 "temperature": temperature,
                 "timeout_ms": timeout_ms,
@@ -372,7 +390,16 @@ def call_llm(
         "raw": last_raw,
         "error_code": last_error_code or "LLM_BACKEND_ERROR",
         "error_message": last_error_message or "LLM call failed",
+        "llm_backend": backend_kind,
         "attempts": attempts,
         "temperature": temperature,
         "timeout_ms": timeout_ms,
     }
+
+
+# Auto-register real backend if enabled
+from .. import config
+if config.LLM_ENABLED and config.LLM_BACKEND == "real_llm":
+    from .openai_backend import OpenAICompatibleBackend
+    set_llm_backend(OpenAICompatibleBackend())
+

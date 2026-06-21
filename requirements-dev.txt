@@ -1,0 +1,6 @@
+# Dev / optional dependencies
+# Install with: pip install -r requirements-dev.txt
+
+# MySQL driver for mock seed DB import (Phase 3/4)
+# Only needed when running: python scripts/import_mock_seed_to_mysql.py --apply|--rollback
+mysql-connector-python>=9.0,<10.0

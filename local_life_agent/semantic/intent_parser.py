@@ -1,4 +1,4 @@
-﻿"""Top-level intent and semantic frame parsing."""
+"""Top-level intent and semantic frame parsing."""
 
 from __future__ import annotations
 
@@ -114,20 +114,30 @@ def _annotate_frame(
     frame: SemanticFrame,
     *,
     semantic_source: str,
+    llm_backend: str = "",
     fallback_reason: str = "",
     llm_called: bool,
 ) -> SemanticFrame:
     frame.semantic_source = semantic_source
+    frame.llm_backend = llm_backend
     frame.fallback_reason = fallback_reason
     frame.llm_called = llm_called
     return frame
 
 
-def _fallback_semantic_frame(text: str, top_intent: str, *, fallback_reason: str, llm_called: bool) -> SemanticFrame:
+def _fallback_semantic_frame(
+    text: str,
+    top_intent: str,
+    *,
+    fallback_reason: str,
+    llm_called: bool,
+    llm_backend: str = "",
+) -> SemanticFrame:
     frame = SemanticFrame.model_validate(extract_slots(text, top_intent))
     return _annotate_frame(
         frame,
-        semantic_source="fallback",
+        semantic_source="fallback_rules",
+        llm_backend=llm_backend,
         fallback_reason=fallback_reason,
         llm_called=llm_called,
     )
@@ -216,7 +226,8 @@ def parse_semantic_frame(
     if not normalised_text.strip():
         frame = _annotate_frame(
             SemanticFrame(),
-            semantic_source="fallback",
+            semantic_source="fallback_rules",
+            llm_backend="",
             fallback_reason="empty_input",
             llm_called=False,
         )
@@ -226,6 +237,7 @@ def parse_semantic_frame(
             "error_message": "input is empty after normalisation",
             "raw": "",
             "semantic_source": frame.semantic_source,
+            "llm_backend": frame.llm_backend,
             "fallback_reason": frame.fallback_reason,
             "llm_called": frame.llm_called,
         }
@@ -238,6 +250,7 @@ def parse_semantic_frame(
                 "error_message": "semantic llm backend is unavailable",
                 "raw": "",
                 "semantic_source": "",
+                "llm_backend": "",
                 "fallback_reason": "llm_call_unavailable",
                 "llm_called": False,
             }
@@ -246,6 +259,7 @@ def parse_semantic_frame(
             top_intent,
             fallback_reason="llm_call_unavailable",
             llm_called=False,
+            llm_backend="",
         )
         return {
             "semantic_frame": fallback_frame,
@@ -253,6 +267,7 @@ def parse_semantic_frame(
             "error_message": "",
             "raw": "",
             "semantic_source": fallback_frame.semantic_source,
+            "llm_backend": fallback_frame.llm_backend,
             "fallback_reason": fallback_frame.fallback_reason,
             "llm_called": fallback_frame.llm_called,
         }
@@ -280,9 +295,26 @@ def parse_semantic_frame(
                 payload = {}
         if "top_intent" not in payload or payload.get("top_intent") is None:
             payload["top_intent"] = TopIntent(top_intent) if top_intent in {item.value for item in TopIntent} else TopIntent.out_of_scope
+        llm_backend = str(result.get("llm_backend", "real_llm") or "real_llm")
+        # Map backend kinds to semantic source taxonomy.
+        #   rule_based → rule_based (pure offline rules, no LLM)
+        #   fake_llm   → fake_llm   (test-injected fake)
+        #   fake       → fake_llm   (legacy compat)
+        #   real_llm   → real_llm   (real LLM provider)
+        #   real       → real_llm   (legacy compat)
+        #   other      → passthrough
+        _source_map = {
+            "rule_based": "rule_based",
+            "fake_llm": "fake_llm",
+            "fake": "fake_llm",
+            "real_llm": "real_llm",
+            "real": "real_llm",
+        }
+        semantic_source = _source_map.get(llm_backend, "real_llm")
         frame = _annotate_frame(
             SemanticFrame.model_validate(payload),
-            semantic_source="llm",
+            semantic_source=semantic_source,
+            llm_backend=llm_backend,
             fallback_reason="",
             llm_called=True,
         )
@@ -294,6 +326,7 @@ def parse_semantic_frame(
             "error_message": "",
             "raw": result.get("raw", ""),
             "semantic_source": frame.semantic_source,
+            "llm_backend": frame.llm_backend,
             "fallback_reason": frame.fallback_reason,
             "llm_called": frame.llm_called,
         }
@@ -307,15 +340,18 @@ def parse_semantic_frame(
             "error_message": error_message,
             "raw": result.get("raw", ""),
             "semantic_source": "",
+            "llm_backend": str(result.get("llm_backend", "") or ""),
             "fallback_reason": error_code,
             "llm_called": True,
         }
 
+    llm_backend = str(result.get("llm_backend", "real") or "real")
     fallback_frame = _fallback_semantic_frame(
         normalised_text,
         top_intent,
         fallback_reason=error_code,
         llm_called=True,
+        llm_backend=llm_backend,
     )
     return {
         "semantic_frame": fallback_frame,
@@ -323,6 +359,7 @@ def parse_semantic_frame(
         "error_message": "",
         "raw": result.get("raw", ""),
         "semantic_source": fallback_frame.semantic_source,
+        "llm_backend": fallback_frame.llm_backend,
         "fallback_reason": fallback_frame.fallback_reason,
         "llm_called": fallback_frame.llm_called,
     }

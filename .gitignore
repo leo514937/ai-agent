@@ -57,3 +57,8 @@ doc/
 
 ### IDE and local tool plugins ###
 .opencode/
+
+### Local config & runtime ###
+.omo/
+.env
+**/config/.env

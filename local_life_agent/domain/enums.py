@@ -36,12 +36,14 @@ class ToolResultStatus(str, Enum):
     unknown = "unknown"
     failed = "failed"
     circuit_open = "circuit_open"
+    backend_unavailable = "backend_unavailable"
 
 
 class ErrorCode(str, Enum):
     TOOL_TIMEOUT = "TOOL_TIMEOUT"
     NETWORK_ERROR = "NETWORK_ERROR"
     CIRCUIT_OPEN = "CIRCUIT_OPEN"
+    BACKEND_UNAVAILABLE = "BACKEND_UNAVAILABLE"
     INVALID_ARGUMENT = "INVALID_ARGUMENT"
     SHOP_NOT_FOUND = "SHOP_NOT_FOUND"
     AMBIGUOUS_SHOP = "AMBIGUOUS_SHOP"

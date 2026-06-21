@@ -272,6 +272,38 @@ def test_first_item_reference_uses_last_recommendation_list():
     assert result["current_shop"]["shop_name"] == "川味轩(知春路店)"
 
 
+def test_context_recovery_receives_raw_text():
+    session_state = SessionState(
+        last_recommendation_list=[
+            {"shop_id": "shop_sc_05", "shop_name": "川味轩(知春路店)"},
+            {"shop_id": "shop_007", "shop_name": "海底捞(牡丹园店)"},
+        ]
+    )
+    recovered = recover_context(
+        session_state,
+        {"task_type": "coupon_query", "merchant_mentions": [], "ordinal_references": [], "deictic_references": []},
+        text="第一家有券吗",
+    )
+
+    assert recovered["resolved_target"].resolved_shop.shop_id == "shop_sc_05"
+
+
+def test_first_item_reference_uses_raw_text_or_semantic_reference():
+    session_state = SessionState(
+        last_recommendation_list=[
+            {"shop_id": "shop_sc_05", "shop_name": "川味轩(知春路店)"},
+            {"shop_id": "shop_007", "shop_name": "海底捞(牡丹园店)"},
+        ]
+    )
+    recovered = recover_context(
+        session_state,
+        {"task_type": "coupon_query", "merchant_mentions": [], "ordinal_references": ["第一家"], "deictic_references": []},
+        text="",
+    )
+
+    assert recovered["resolved_target"].resolved_shop.shop_id == "shop_sc_05"
+
+
 def test_this_shop_after_recommendation_list_must_clarify():
     get_session_store().save(
         "reco_2",
@@ -287,6 +319,35 @@ def test_this_shop_after_recommendation_list_must_clarify():
     assert "请提供完整店名" in result["final_response"]
     assert "get_coupon_list" not in _tool_names(result)
     assert result["current_shop"] is None
+
+
+def test_this_shop_reference_not_lost_due_to_empty_text():
+    session_state = SessionState(current_shop={"shop_id": "shop_sc_05", "shop_name": "川味轩(知春路店)"})
+    recovered = recover_context(
+        session_state,
+        {"task_type": "single_shop_query", "merchant_mentions": [], "ordinal_references": [], "deictic_references": ["这家"]},
+        text="",
+    )
+
+    assert recovered["resolved_target"].resolved_shop.shop_id == "shop_sc_05"
+
+
+def test_pending_reply_recommend_first_not_topic_switch():
+    first = _invoke("海底捞有券吗", "pend_recommend_first")
+    assert first["pending_clarification"] is not None
+
+    second = _invoke("推荐第一个", "pend_recommend_first")
+
+    assert "get_coupon_list" in _tool_names(second)
+    assert second["pending_clarification"] is None
+
+
+def test_pending_topic_change_explicit_new_query_still_clears_pending():
+    _invoke("海底捞有券吗", "pend_change_explicit")
+    second = _invoke("附近推荐火锅", "pend_change_explicit")
+
+    assert second["pending_clarification"] is None
+    assert "search_shops" in _tool_names(second)
 
 
 def test_active_constraints_can_be_inherited_without_overriding_explicit_constraints():

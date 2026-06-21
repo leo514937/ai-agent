@@ -56,6 +56,9 @@ class DebugInfo:
     session_state_before: dict = field(default_factory=dict)
     session_state_after: dict = field(default_factory=dict)
     state_update_plan: dict = field(default_factory=dict)
+    answer_source: str = ""
+    llm_verbalizer_violation: str | None = None
+
 
 
 @dataclass
@@ -85,7 +88,10 @@ class AgentResponse:
                 "session_state_before": _debug_dump(self.debug.session_state_before),
                 "session_state_after": _debug_dump(self.debug.session_state_after),
                 "state_update_plan": _debug_dump(self.debug.state_update_plan),
+                "answer_source": self.debug.answer_source,
+                "llm_verbalizer_violation": self.debug.llm_verbalizer_violation,
             }
+
         else:
             result["debug"] = {}
         return result
@@ -459,9 +465,14 @@ def run_agent_graph(input_text: str, session_id: str = "") -> AgentResponse:
         "verify_result": "",
         "draft_response": "",
         "semantic_source": "",
+        "llm_backend": "",
         "fallback_reason": "",
         "llm_called": False,
+        "answer_source": "",
+        "llm_verbalizer_violation": None,
+        "comparison_target_resolution": None,
     }
+
 
     final_state = graph.invoke(initial)
 
@@ -483,6 +494,9 @@ def run_agent_graph(input_text: str, session_id: str = "") -> AgentResponse:
             session_state_before=_debug_dump(final_state.get("session_state_before") or {}),
             session_state_after=_debug_dump(final_state.get("session_state_after") or {}),
             state_update_plan=_debug_dump(final_state.get("state_update_plan") or {}),
+            answer_source=final_state.get("answer_source", ""),
+            llm_verbalizer_violation=final_state.get("llm_verbalizer_violation"),
         ) if config.DEBUG_ENABLED else None,
     )
+
     return response

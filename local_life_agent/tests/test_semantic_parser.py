@@ -40,7 +40,7 @@ def test_semantic_parser_rejects_forbidden_fields_and_retries():
     assert len(attempts) == 2
     assert result["error_code"] == ""
     assert result["semantic_frame"].task_type == TaskType.coupon_query
-    assert result["semantic_source"] == "fallback"
+    assert result["semantic_source"] == "fallback_rules"
     assert result["fallback_reason"] == "LLM_ENUM_OUT_OF_RANGE"
 
 

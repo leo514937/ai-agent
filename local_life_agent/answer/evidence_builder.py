@@ -340,15 +340,95 @@ def _build_comparison_evidence(
     )
 
     cells: list[dict[str, Any]] = []
+    unknown_cells: list[dict[str, Any]] = []
+    failed_cells: list[dict[str, Any]] = []
+
+    def _map_to_ok_status(s: str) -> str:
+        s_lower = str(s or "").lower()
+        if s_lower in {"ok", "has_coupon", "empty", "open", "closed"}:
+            return "ok"
+        if s_lower in {"failed", "circuit_open"}:
+            return s_lower
+        return "unknown"
+
     for row in rows:
-        cells.extend(
-            [
-                {"shop_id": row["shop_id"], "shop_name": row["shop_name"], "facet": "rating", "status": "ok" if row.get("rating") is not None else "unknown", "value": row.get("rating")},
-                {"shop_id": row["shop_id"], "shop_name": row["shop_name"], "facet": "distance", "status": "ok" if row.get("distance_km") is not None else "unknown", "value": row.get("distance_km")},
-                {"shop_id": row["shop_id"], "shop_name": row["shop_name"], "facet": "open_status", "status": "ok" if str(row.get("open_status", "")).lower() in {"open", "closed"} else "unknown", "value": row.get("open_status")},
-                {"shop_id": row["shop_id"], "shop_name": row["shop_name"], "facet": "coupon", "status": "ok" if row.get("coupon_status") in {"has_coupon", "empty"} else "unknown", "value": len(row.get("coupon_titles", [])) if row.get("coupon_status") == "has_coupon" else row.get("coupon_status")},
-            ]
+        row_cells = []
+        
+        # Rating cell
+        rating_val = row.get("rating")
+        rating_status = "ok" if rating_val is not None else _map_to_ok_status(row.get("detail_status", "unknown"))
+        row_cells.append(
+            {
+                "shop_id": row["shop_id"],
+                "shop_name": row["shop_name"],
+                "facet": "rating",
+                "dimension": "rating",
+                "status": rating_status,
+                "result_status": rating_status,
+                "value": rating_val,
+                "evidence_ref": "",
+                "eligible_for_comparison": (rating_status == "ok"),
+            }
         )
+
+        # Distance cell
+        distance_val = row.get("distance_km")
+        distance_status = "ok" if distance_val is not None else "unknown"
+        row_cells.append(
+            {
+                "shop_id": row["shop_id"],
+                "shop_name": row["shop_name"],
+                "facet": "distance",
+                "dimension": "distance",
+                "status": distance_status,
+                "result_status": distance_status,
+                "value": distance_val,
+                "evidence_ref": "",
+                "eligible_for_comparison": (distance_status == "ok"),
+            }
+        )
+
+        # Open status cell
+        open_val = row.get("open_status")
+        open_status_str = str(open_val or "unknown").lower()
+        open_status_status = "ok" if open_status_str in {"open", "closed"} else _map_to_ok_status(open_val)
+        row_cells.append(
+            {
+                "shop_id": row["shop_id"],
+                "shop_name": row["shop_name"],
+                "facet": "open_status",
+                "dimension": "open_status",
+                "status": open_status_status,
+                "result_status": open_status_status,
+                "value": open_val,
+                "eligible_for_comparison": (open_status_status == "ok"),
+            }
+        )
+
+        # Coupon cell
+        coupon_val = row.get("coupon_status")
+        coupon_status_status = "ok" if coupon_val in {"has_coupon", "empty"} else _map_to_ok_status(coupon_val)
+        coupon_cell_value = len(row.get("coupon_titles", [])) if coupon_val == "has_coupon" else coupon_val
+        row_cells.append(
+            {
+                "shop_id": row["shop_id"],
+                "shop_name": row["shop_name"],
+                "facet": "coupon",
+                "dimension": "coupon",
+                "status": coupon_status_status,
+                "result_status": coupon_status_status,
+                "value": coupon_cell_value,
+                "evidence_ref": "",
+                "eligible_for_comparison": (coupon_status_status == "ok"),
+            }
+        )
+
+        for cell in row_cells:
+            cells.append(cell)
+            if cell["status"] == "unknown":
+                unknown_cells.append(cell)
+            elif cell["status"] in {"failed", "circuit_open"}:
+                failed_cells.append(cell)
 
     dimension_winners: dict[str, list[dict[str, Any]]] = {}
     known_ratings = [row for row in rows if row.get("rating") is not None]
@@ -392,6 +472,22 @@ def _build_comparison_evidence(
         if row.get("distance_km") is None:
             uncertainty_notes.append(f"{row.get('shop_name') or row.get('shop_id')}距离暂无法确认")
 
+    from ..domain.schemas import ComparisonMatrix
+    matrix_dict = {
+        "matrix_id": f"cmp_{plan_dict.get('plan_id', '') or 'matrix'}",
+        "status": "ok" if rows else "unknown",
+        "rows": rows,
+        "cells": cells,
+        "unknown_cells": unknown_cells,
+        "failed_cells": failed_cells,
+        "dimension_winners": dimension_winners,
+        "uncertainty_notes": uncertainty_notes,
+        "overall_ranked": overall_ranked,
+        "overall_ranking": overall_ranked,
+    }
+    # Perform strict schemas validation
+    ComparisonMatrix.model_validate(matrix_dict)
+
     return {
         "target_shop_ids": target_ids,
         "requested_facets": ["detail", "open_status", "coupon", "distance"],
@@ -406,15 +502,8 @@ def _build_comparison_evidence(
             "ranked_shops": overall_ranked,
             "candidate_count": len(rows),
         },
-        "comparison_matrix": {
-            "matrix_id": f"cmp_{plan_dict.get('plan_id', '') or 'matrix'}",
-            "status": "ok" if rows else "unknown",
-            "rows": rows,
-            "cells": cells,
-            "dimension_winners": dimension_winners,
-            "uncertainty_notes": uncertainty_notes,
-            "overall_ranked": overall_ranked,
-        },
+        "comparison_matrix": matrix_dict,
+        "tool_results": tool_results or {},
     }
 
 
@@ -678,6 +767,7 @@ def build_evidence(
         "forbidden_claims": forbidden_claims,
         "ranking_snapshot": ranking_snapshot,
         "comparison_matrix": comparison_matrix,
+        "tool_results": tool_results or {},
     }
 
 
@@ -897,4 +987,5 @@ def _build_recommendation_evidence(
             "facet_statuses": {},
         },
         "last_recommendation_list": ranked_snapshot,
+        "tool_results": tool_results or {},
     }
