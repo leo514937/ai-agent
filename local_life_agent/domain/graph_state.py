@@ -102,3 +102,6 @@ class GraphState(TypedDict, total=False):
     guard_result: str
     verify_result: str
     draft_response: str
+    semantic_source: str
+    fallback_reason: str
+    llm_called: bool

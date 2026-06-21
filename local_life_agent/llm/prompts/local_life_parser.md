@@ -15,6 +15,13 @@ Schema:
   ],
   "merchant_mentions": ["shop name text"],
   "reference_mentions": [],
+  "comparison_targets": [
+    {"shop_name": "shop name text", "reference": "ordinal|deictic|explicit|context", "source_text": "original phrase"}
+  ],
+  "ordinal_references": ["第一家", "第二家"],
+  "deictic_references": ["这家", "那家", "这三家"],
+  "focused_facets": ["coupon", "open_status", "distance"],
+  "comparison_focus": "price|coupon|open_status|distance|rating|overall|null",
   "hard_constraints": {},
   "soft_preferences": {},
   "ranking_signals": {},
@@ -28,6 +35,10 @@ Rules:
 - `task_type` must be a supported task or null if you cannot determine it.
 - `facets` must contain objects with `name` and `required`.
 - `merchant_mentions` must contain only text names, never `shop_id`.
+- `comparison_targets` must contain only structured shop-name references; never output `shop_id`, `winner`, or `ranking`.
+- `ordinal_references` and `deictic_references` should list the exact textual references found in the user message.
+- `focused_facets` should contain only the comparison dimensions that are explicitly requested or clearly implied.
+- `comparison_focus` should summarize what the user is trying to compare in one short phrase.
 - Never output `shop_id`.
 - Never output tool names.
 - Never fabricate shop facts.

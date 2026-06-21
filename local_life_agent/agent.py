@@ -458,6 +458,9 @@ def run_agent_graph(input_text: str, session_id: str = "") -> AgentResponse:
         "guard_result": "",
         "verify_result": "",
         "draft_response": "",
+        "semantic_source": "",
+        "fallback_reason": "",
+        "llm_called": False,
     }
 
     final_state = graph.invoke(initial)

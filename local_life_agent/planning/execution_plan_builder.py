@@ -7,7 +7,6 @@ from typing import Any
 from .. import config
 from ..config import TOOL_DEFAULT_TIMEOUT_MS
 from ..domain.enums import Facet, TaskType
-from ..tools.mock_tools import search_shops
 from .ranking_policy import infer_recommendation_query
 
 
@@ -152,23 +151,14 @@ def build_execution_plan(task_type: str, target: dict, facets: list[str | dict[s
 
 def build_recommendation_execution_plan(
     semantic_frame: dict[str, Any],
-    normalized_text: str,
     *,
     location: dict[str, float] | None = None,
-    search_result: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Build a deterministic recommendation plan and recall snapshot."""
+    """Build a deterministic recommendation plan."""
     frame = _to_dict(semantic_frame)
-    query = infer_recommendation_query(frame, normalized_text)
+    query = infer_recommendation_query(frame)
     preferences = _recommendation_preferences(frame)
     location = location or config.MOCK_LOCATION
-
-    if search_result is None:
-        search_result = search_shops(query, location=location, limit=config.SEARCH_LIMIT)
-
-    recall = list((search_result or {}).get("data", []) or [])[: config.RECOMMENDATION_CANDIDATE_TOP_K]
-
-    candidates: list[dict[str, Any]] = []
     tool_calls: list[dict[str, Any]] = [
         {
             "call_id": "call_search_shops",
@@ -192,19 +182,14 @@ def build_recommendation_execution_plan(
 
     task_type = str(_to_dict(frame).get("task_type", TaskType.recommendation.value))
 
-    for idx, shop in enumerate(recall, start=1):
-        shop = shop if isinstance(shop, dict) else {}
-        shop_id = str(shop.get("shop_id", "")).strip()
-        if not shop_id:
-            continue
-        candidates.append(shop)
+    for idx in range(1, config.RECOMMENDATION_CANDIDATE_TOP_K + 1):
         tool_calls.extend(
             [
                 {
                     "call_id": f"call_detail_{idx}",
                     "tool_name": "get_shop_detail",
-                    "args": {"shop_id": shop_id},
-                    "target_shop_id": shop_id,
+                    "args": {"shop_id": f"$search_result[{idx - 1}].shop_id"},
+                    "target_shop_id": f"$search_result[{idx - 1}].shop_id",
                     "required": False,
                     "facet": "detail",
                     "depends_on": ["call_search_shops"],
@@ -217,8 +202,8 @@ def build_recommendation_execution_plan(
                 {
                     "call_id": f"call_open_{idx}",
                     "tool_name": "check_open_status",
-                    "args": {"shop_id": shop_id},
-                    "target_shop_id": shop_id,
+                    "args": {"shop_id": f"$search_result[{idx - 1}].shop_id"},
+                    "target_shop_id": f"$search_result[{idx - 1}].shop_id",
                     "required": False,
                     "facet": "open_status",
                     "depends_on": ["call_search_shops"],
@@ -231,8 +216,8 @@ def build_recommendation_execution_plan(
                 {
                     "call_id": f"call_coupon_{idx}",
                     "tool_name": "get_coupon_list",
-                    "args": {"shop_id": shop_id},
-                    "target_shop_id": shop_id,
+                    "args": {"shop_id": f"$search_result[{idx - 1}].shop_id"},
+                    "target_shop_id": f"$search_result[{idx - 1}].shop_id",
                     "required": False,
                     "facet": "coupon",
                     "depends_on": ["call_search_shops"],
@@ -266,20 +251,14 @@ def build_recommendation_execution_plan(
                     "max_parallelism": config.MAX_CONCURRENCY,
                 },
             ],
-            "target_shop_ids": [str(shop.get("shop_id", "")) for shop in candidates if str(shop.get("shop_id", "")).strip()],
+            "target_shop_ids": [],
             "query_terms": preferences["query_terms"],
             "scene_terms": preferences["scene_terms"],
             "open_now_preferred": preferences["open_now_preferred"],
             "coupon_preferred": preferences["coupon_preferred"],
             "nearby_preferred": preferences["nearby_preferred"],
         },
-        "recommendation_candidates": candidates,
         "recommendation_query": query,
         "query_terms": preferences["query_terms"],
         "scene_terms": preferences["scene_terms"],
-        "search_call_args": {
-            "query": query,
-            "location": location,
-            "limit": config.SEARCH_LIMIT,
-        },
     }

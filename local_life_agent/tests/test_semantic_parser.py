@@ -38,8 +38,10 @@ def test_semantic_parser_rejects_forbidden_fields_and_retries():
     result = parse_semantic_frame("海底捞水晶城店有券吗", "local_life", llm_call=wrapped_call_llm)
 
     assert len(attempts) == 2
-    assert result["error_code"] != ""
+    assert result["error_code"] == ""
     assert result["semantic_frame"].task_type == TaskType.coupon_query
+    assert result["semantic_source"] == "fallback"
+    assert result["fallback_reason"] == "LLM_ENUM_OUT_OF_RANGE"
 
 
 def test_semantic_parser_generalizes_coupon_queries():
@@ -62,7 +64,11 @@ def test_semantic_parser_missing_shop_name_requests_context():
     result = parse_semantic_frame("这家店有优惠券吗", "local_life")
 
     assert result["semantic_frame"].task_type == TaskType.coupon_query
-    assert result["semantic_frame"].need_context is True or result["error_code"] != ""
+    assert (
+        result["semantic_frame"].need_context is True
+        or result["semantic_frame"].deictic_references
+        or result["error_code"] != ""
+    )
 
 
 def test_forbidden_semantic_fields_stop_graph_before_tool_execution(monkeypatch):

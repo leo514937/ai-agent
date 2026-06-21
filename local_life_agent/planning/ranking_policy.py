@@ -29,7 +29,7 @@ def _as_list(value: Any) -> list[str]:
     return [str(value)]
 
 
-def infer_recommendation_query(semantic_frame: dict[str, Any], normalized_text: str) -> str:
+def infer_recommendation_query(semantic_frame: dict[str, Any]) -> str:
     """Infer the search query used for recommendation recall."""
     frame = _to_dict(semantic_frame)
     mentions = frame.get("merchant_mentions") or []
@@ -49,10 +49,6 @@ def infer_recommendation_query(semantic_frame: dict[str, Any], normalized_text: 
     scene_terms = _as_list(soft_preferences.get("scene_terms"))
     if scene_terms:
         return scene_terms[0]
-
-    text = str(normalized_text or "").strip()
-    if text:
-        return text
     return ""
 
 

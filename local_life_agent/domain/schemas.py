@@ -76,12 +76,20 @@ class SemanticFrame(BaseModel):
     facets: list["FacetSpec"] = Field(default_factory=list)
     merchant_mentions: list[str] = Field(default_factory=list)
     reference_mentions: list[str] = Field(default_factory=list)
+    comparison_targets: list[dict[str, Any]] = Field(default_factory=list)
+    ordinal_references: list[str] = Field(default_factory=list)
+    deictic_references: list[str] = Field(default_factory=list)
+    focused_facets: list[str] = Field(default_factory=list)
+    comparison_focus: str = ""
     hard_constraints: dict[str, Any] = Field(default_factory=dict)
     soft_preferences: dict[str, Any] = Field(default_factory=dict)
     ranking_signals: dict[str, Any] = Field(default_factory=dict)
     follow_up: dict[str, Any] | None = None
     confidence: float = 0.0
     need_context: bool = False
+    semantic_source: str = ""
+    fallback_reason: str = ""
+    llm_called: bool = False
 
     @field_validator("facets", mode="before")
     @classmethod

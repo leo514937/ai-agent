@@ -65,7 +65,25 @@ def plan_comparison(
         seen.add(key)
         normalized.append(shop)
 
-    selected = normalized[: config.COMPARISON_MAX_SHOP_LIMIT]
+    if len(normalized) > config.COMPARISON_MAX_SHOP_LIMIT:
+        target_shop_ids = [str(item.get("shop_id", "")).strip() for item in normalized if str(item.get("shop_id", "")).strip()]
+        return {
+            "plan_id": "comparison_plan_intercept",
+            "task_type": "comparison",
+            "tool_calls": [],
+            "stages": [
+                {
+                    "stage_id": "stage_1",
+                    "description": "Too many comparison targets; please narrow the scope",
+                    "tool_names": [],
+                    "depends_on": [],
+                    "max_parallelism": 1,
+                }
+            ],
+            "target_shop_ids": target_shop_ids,
+        }
+
+    selected = normalized
     mode, default_facets = _focus_facets(selected, max_detail)
     target_shop_ids = [str(item.get("shop_id", "")).strip() for item in selected if str(item.get("shop_id", "")).strip()]
     selected_focus_facets = [facet for facet in (focus_facets or default_facets) if facet in {"detail", "open_status", "coupon", "distance"}]

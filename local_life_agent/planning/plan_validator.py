@@ -225,6 +225,9 @@ class ExecutionPlanValidator:
         for tc in plan.tool_calls:
             sid = tc.target_shop_id.strip()
             arg_shop_id = str(tc.args.get("shop_id", "")).strip() if isinstance(tc.args, dict) else ""
+            if plan.task_type == "recommendation":
+                if sid.startswith("$search_result[") or arg_shop_id.startswith("$search_result["):
+                    continue
             if sid and sid not in resolved_shop_ids:
                 report.errors.append(
                     f"shop_id '{sid}' in call_id={tc.call_id} was not produced "

@@ -1,10 +1,4 @@
-"""Typed slot extraction for the local-life semantic layer.
-
-The extractor stays conservative:
-- no shop IDs
-- no tool names
-- no fabricated facts
-"""
+"""Fallback semantic slot extraction for the local-life domain."""
 
 from __future__ import annotations
 
@@ -15,255 +9,334 @@ from ..input.normalizer import normalize_text
 from ..tools.mock_tools import _all_shops
 
 _COUPON_HINTS = (
-    "有券",
-    "优惠券",
-    "代金券",
-    "折扣券",
-    "优惠",
-    "领券",
-    "可用券",
-    "团购",
+    "\u6709\u5238",
+    "\u4f18\u60e0\u5238",
+    "\u4ee3\u91d1\u5238",
+    "\u6298\u6263\u5238",
+    "\u4f18\u60e0",
+    "\u9886\u5238",
+    "\u53ef\u7528\u5238",
+    "\u56e2\u8d2d",
 )
-
-_FACET_HINTS: dict[Facet, tuple[str, ...]] = {
-    Facet.coupon: _COUPON_HINTS,
-    Facet.open_status: (
-        "营业",
-        "开门",
-        "关门",
-        "打烊",
-        "歇业",
-        "营业中",
-        "现在营业",
-    ),
-    Facet.distance: (
-        "距离",
-        "多远",
-        "远不远",
-        "几公里",
-        "路程",
-        "离这",
-        "离我",
-        "附近",
-    ),
-}
-
-_OPTIONAL_HINTS = ("顺便", "最好", "也看", "一起看", "再看", "顺带", "附带", "更好")
+_OPEN_HINTS = (
+    "\u8425\u4e1a",
+    "\u5f00\u95e8",
+    "\u5173\u95e8",
+    "\u6253\u70ca",
+    "\u505c\u4e1a",
+    "\u73b0\u5728\u8425\u4e1a",
+    "\u8fd8\u8425\u4e1a",
+)
+_DISTANCE_HINTS = (
+    "\u8ddd\u79bb",
+    "\u591a\u8fdc",
+    "\u8fd1\u4e0d\u8fd1",
+    "\u8fdc\u4e0d\u8fdc",
+    "\u51e0\u516c\u91cc",
+    "\u8def\u7a0b",
+    "\u79bb\u8fd9",
+    "\u79bb\u6211",
+    "\u9644\u8fd1",
+)
+_OPTIONAL_HINTS = (
+    "\u987a\u4fbf",
+    "\u6700\u597d",
+    "\u4e5f\u770b",
+    "\u4e00\u8d77\u770b",
+    "\u518d\u770b",
+    "\u9644\u5e26",
+)
 _RECOMMENDATION_HINTS = (
-    "推荐",
-    "附近",
-    "周边",
-    "找几家",
-    "推荐几家",
-    "给我推荐",
-    "想找",
-    "有没有适合",
+    "\u63a8\u8350",
+    "\u9644\u8fd1",
+    "\u5468\u8fb9",
+    "\u627e\u51e0\u5bb6",
+    "\u60f3\u627e",
+    "\u6709\u6ca1\u6709\u9002\u5408",
 )
 _CATEGORY_HINTS = (
-    "火锅",
-    "餐厅",
-    "餐馆",
-    "快餐",
-    "咖啡",
-    "茶饮",
-    "奶茶",
-    "甜品",
-    "烘焙",
-    "烧烤",
-    "饺子",
-    "中餐",
-    "西餐",
-    "日料",
+    "\u706b\u9505",
+    "\u9910\u5385",
+    "\u996d\u9986",
+    "\u5496\u5561",
+    "\u5976\u8336",
+    "\u8336\u996e",
+    "\u70e7\u70e4",
+    "\u70e7\u8089",
+    "\u5feb\u9910",
+    "\u4e2d\u9910",
+    "\u897f\u9910",
+    "\u65e5\u6599",
+    "\u751c\u54c1",
 )
 _SCENE_HINTS = (
-    "约会",
-    "朋友聚餐",
-    "聚餐",
-    "家庭聚餐",
-    "商务",
-    "请客",
-    "夜宵",
+    "\u7ea6\u4f1a",
+    "\u670b\u53cb\u805a\u9910",
+    "\u805a\u9910",
+    "\u5bb6\u5ead\u805a\u9910",
+    "\u5546\u52a1",
+    "\u8bf7\u5ba2",
+    "\u591c\u5bb5",
 )
-
-_NOISE_RE = re.compile(r"[\s\.,，。！？；;:、\"_\-+=\(\)\[\]{}<>/\\|]+")
+_COMPARISON_HINTS = (
+    "\u5bf9\u6bd4",
+    "\u6bd4\u8f83",
+    "\u6bd4\u4e00\u6bd4",
+    "\u6bd4\u5462",
+    "\u54ea\u4e2a\u66f4",
+    "\u54ea\u5bb6\u66f4",
+    "\u8c01\u66f4",
+    "\u66f4\u597d",
+    "\u66f4\u4f18",
+    "\u8fd9\u4e09\u5bb6",
+    "\u8fd9\u51e0\u5bb6",
+)
+_ORDINAL_ALIASES = {
+    "\u7b2c\u4e00\u5bb6": "\u7b2c\u4e00\u5bb6",
+    "\u7b2c\u4e8c\u5bb6": "\u7b2c\u4e8c\u5bb6",
+    "\u7b2c\u4e09\u5bb6": "\u7b2c\u4e09\u5bb6",
+    "\u7b2c\u4e00\u4e2a": "\u7b2c\u4e00\u5bb6",
+    "\u7b2c\u4e8c\u4e2a": "\u7b2c\u4e8c\u5bb6",
+    "\u7b2c\u4e09\u4e2a": "\u7b2c\u4e09\u5bb6",
+    "\u7b2c\u4e00\u95f4": "\u7b2c\u4e00\u5bb6",
+    "\u7b2c\u4e8c\u95f4": "\u7b2c\u4e8c\u5bb6",
+    "\u7b2c\u4e09\u95f4": "\u7b2c\u4e09\u5bb6",
+}
+_DEICTIC_HINTS = (
+    "\u8fd9\u5bb6",
+    "\u90a3\u5bb6",
+    "\u8fd9\u95f4",
+    "\u90a3\u95f4",
+    "\u8fd9\u4e09\u5bb6",
+    "\u8fd9\u51e0\u5bb6",
+)
+_NOISE_RE = re.compile(r"[\s,\.\?!;:()\[\]{}<>/\\|\"'\u3001\uff0c\u3002\uff01\uff1f\uff1b\uff1a]+")
 
 
 def _dedupe(items: list[str]) -> list[str]:
     seen: set[str] = set()
     ordered: list[str] = []
     for item in items:
-        key = item.strip()
-        if not key or key in seen:
+        value = str(item or "").strip()
+        if not value or value in seen:
             continue
-        seen.add(key)
-        ordered.append(key)
+        seen.add(value)
+        ordered.append(value)
     return ordered
 
 
+def _brand_prefix(name: str) -> str:
+    cleaned = normalize_text(name).strip()
+    if "(" in cleaned:
+        return cleaned.split("(", 1)[0].strip()
+    return cleaned
+
+
 def _shop_tokens() -> list[tuple[str, str]]:
-    """Return ``(token, canonical_name)`` pairs for exact matching."""
     tokens: list[tuple[str, str]] = []
     for shop in _all_shops():
-        shop_name = normalize_text(shop.get("shop_name", "")).strip()
-        if shop_name:
-            tokens.append((shop_name, shop_name))
-
+        canonical = normalize_text(shop.get("shop_name", "")).strip()
+        if canonical:
+            tokens.append((canonical, canonical))
+            brand = _brand_prefix(canonical)
+            if brand and brand != canonical:
+                tokens.append((brand, brand))
         alias = normalize_text(shop.get("alias", "")).strip()
         if alias:
-            tokens.append((alias, shop_name or alias))
-
+            tokens.append((alias, canonical or alias))
         for alias_item in shop.get("aliases", []) or []:
-            alias_item = normalize_text(alias_item).strip()
-            if alias_item:
-                tokens.append((alias_item, shop_name or alias_item))
-
+            cleaned = normalize_text(alias_item).strip()
+            if cleaned:
+                tokens.append((cleaned, canonical or cleaned))
     tokens.sort(key=lambda item: len(item[0]), reverse=True)
     return tokens
 
 
-def _brand_prefix(name: str) -> str:
-    name = normalize_text(name).strip()
-    if "(" in name:
-        return name.split("(", 1)[0].strip()
-    return name
-
-
 def _extract_merchant_mentions(text: str) -> list[str]:
-    text = normalize_text(text)
-    exact_matches: list[str] = []
-    brand_matches: list[str] = []
-
-    for token, canonical_name in _shop_tokens():
-        if token and token in text:
-            exact_matches.append(canonical_name)
-
-    if exact_matches:
-        return _dedupe(exact_matches)
-
-    for shop in _all_shops():
-        brand = _brand_prefix(shop.get("shop_name", ""))
-        if brand and brand in text:
-            brand_matches.append(brand)
-
-    return _dedupe(brand_matches)
+    normalized = normalize_text(text)
+    mentions: list[str] = []
+    for token, canonical in _shop_tokens():
+        if token and token in normalized:
+            mentions.append(canonical)
+    return _dedupe(mentions)
 
 
-def _facet_positions(text: str) -> list[tuple[int, Facet]]:
-    positions: list[tuple[int, Facet]] = []
-    for facet, hints in _FACET_HINTS.items():
-        for hint in hints:
-            idx = text.find(hint)
-            if idx >= 0:
-                positions.append((idx, facet))
-                break
+def _extract_ordinals(text: str) -> list[str]:
+    hits = [canonical for token, canonical in _ORDINAL_ALIASES.items() if token in text]
+    digits = []
+    if "1" in text:
+        digits.append("\u7b2c\u4e00\u5bb6")
+    if "2" in text:
+        digits.append("\u7b2c\u4e8c\u5bb6")
+    if "3" in text:
+        digits.append("\u7b2c\u4e09\u5bb6")
+    return _dedupe(hits + digits)
+
+
+def _extract_deictic(text: str) -> list[str]:
+    return _dedupe([hint for hint in _DEICTIC_HINTS if hint in text])
+
+
+def _facet_positions(text: str) -> list[tuple[int, str]]:
+    positions: list[tuple[int, str]] = []
+    for facet_name, hints in (
+        (Facet.coupon.value, _COUPON_HINTS),
+        (Facet.open_status.value, _OPEN_HINTS),
+        (Facet.distance.value, _DISTANCE_HINTS),
+    ):
+        indexes = [text.find(hint) for hint in hints if hint in text]
+        if indexes:
+            positions.append((min(indexes), facet_name))
     positions.sort(key=lambda item: item[0])
     return positions
 
 
-def _build_facet_specs(text: str) -> list[dict[str, object]]:
+def _build_facets(text: str) -> list[dict[str, object]]:
     ordered = _facet_positions(text)
-    optional = any(hint in text for hint in _OPTIONAL_HINTS)
-    specs: list[dict[str, object]] = []
-    for idx, (_pos, facet) in enumerate(ordered):
-        required = True
-        if optional and (len(ordered) == 1 or idx > 0):
-            required = False
-        specs.append({"name": facet, "required": required})
-    return specs
+    optional_mode = any(hint in text for hint in _OPTIONAL_HINTS)
+    facets: list[dict[str, object]] = []
+    for index, (_pos, facet_name) in enumerate(ordered):
+        required = not optional_mode or index == 0
+        facets.append({"name": facet_name, "required": required})
+    return facets
 
 
-def _looks_like_recommendation(text: str) -> bool:
-    return any(hint in text for hint in _RECOMMENDATION_HINTS)
+def _extract_hints(text: str, hints: tuple[str, ...]) -> list[str]:
+    return _dedupe([hint for hint in hints if hint in text])
 
 
-_COMPARISON_HINTS = (
-    "对比",
-    "比较",
-    "比一比",
-    "比一比看",
-    "哪个好",
-    "哪个更",
-    "哪家更",
-    "哪家更好",
-    "谁更",
-    "横向",
-)
-_COMPARISON_REFERENCE_HINTS = (
-    "第一家",
-    "第二家",
-    "第三家",
-    "第一间",
-    "第二间",
-    "第三间",
-    "这家",
-    "那家",
-    "这间",
-    "那间",
-    "这家店",
-)
+def _comparison_focus(text: str) -> str:
+    for facet_name, hints in (
+        ("coupon", _COUPON_HINTS),
+        ("open_status", _OPEN_HINTS),
+        ("distance", _DISTANCE_HINTS),
+        ("rating", ("\u8bc4\u5206", "\u53e3\u7891", "\u8bc4\u4ef7")),
+        ("overall", ("\u54ea\u4e2a\u66f4\u597d", "\u54ea\u5bb6\u66f4\u597d", "\u8c01\u66f4\u597d")),
+    ):
+        if any(hint in text for hint in hints):
+            return facet_name
+    return ""
 
 
-def _looks_like_comparison(text: str) -> bool:
-    return any(hint in text for hint in _COMPARISON_HINTS)
+def _comparison_focused_facets(text: str) -> list[str]:
+    facets: list[str] = []
+    for facet_name, hints in (
+        ("coupon", _COUPON_HINTS),
+        ("open_status", _OPEN_HINTS),
+        ("distance", _DISTANCE_HINTS),
+        ("rating", ("\u8bc4\u5206", "\u53e3\u7891", "\u8bc4\u4ef7")),
+    ):
+        if any(hint in text for hint in hints):
+            facets.append(facet_name)
+    if not facets and any(hint in text for hint in ("\u66f4\u597d", "\u66f4\u4f18", "\u54ea\u4e2a\u597d", "\u54ea\u5bb6\u597d")):
+        facets.append("overall")
+    return _dedupe(facets)
+
+
+def _looks_like_comparison(
+    text: str,
+    mentions: list[str],
+    ordinal_references: list[str],
+    deictic_references: list[str],
+) -> bool:
+    if any(hint in text for hint in _COMPARISON_HINTS):
+        return True
+    if "\u548c" in text and "\u6bd4" in text and (mentions or ordinal_references or deictic_references):
+        return True
+    if "\u6bd4" in text and len(mentions) + len(ordinal_references) + len(deictic_references) >= 2:
+        return True
+    return False
+
+
+def _looks_like_recommendation(text: str, query_terms: list[str], scene_terms: list[str]) -> bool:
+    if any(hint in text for hint in _RECOMMENDATION_HINTS):
+        return True
+    return bool(query_terms and ("\u9644\u8fd1" in text or "\u63a8\u8350" in text or scene_terms))
 
 
 def _recommendation_query_terms(text: str) -> list[str]:
-    return _dedupe([hint for hint in _CATEGORY_HINTS if hint in text])
+    return _extract_hints(text, _CATEGORY_HINTS)
 
 
 def _recommendation_scene_terms(text: str) -> list[str]:
-    return _dedupe([hint for hint in _SCENE_HINTS if hint in text])
+    return _extract_hints(text, _SCENE_HINTS)
 
 
 def _has_coupon_preference(text: str) -> bool:
-    return any(hint in text for hint in ("最好有券", "有券更好", "有优惠更好", "有团购更好", * _COUPON_HINTS))
+    return any(hint in text for hint in _COUPON_HINTS)
 
 
 def _has_open_preference(text: str) -> bool:
-    return any(hint in text for hint in ("现在营业", "营业中", "还营业", "开着", "开门"))
+    return any(hint in text for hint in _OPEN_HINTS)
 
 
 def _has_nearby_preference(text: str) -> bool:
-    return any(hint in text for hint in ("附近", "周边", "别太远", "近一点", "离我近", "远不远"))
+    return any(hint in text for hint in ("\u9644\u8fd1", "\u5468\u8fb9", "\u8fd1\u4e00\u70b9", "\u522b\u592a\u8fdc", "\u79bb\u6211\u8fd1"))
+
+
+def _build_comparison_targets(
+    mentions: list[str],
+    ordinal_references: list[str],
+    deictic_references: list[str],
+) -> list[dict[str, str]]:
+    targets: list[dict[str, str]] = []
+    for mention in mentions:
+        targets.append({"shop_name": mention, "reference": "explicit", "source_text": mention})
+    for token in ordinal_references:
+        targets.append({"shop_name": token, "reference": "ordinal", "source_text": token})
+    for token in deictic_references:
+        targets.append({"shop_name": token, "reference": "deictic", "source_text": token})
+    deduped: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in targets:
+        key = f"{item.get('reference', '')}|{item.get('shop_name', '')}|{item.get('source_text', '')}"
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
 
 
 def extract_slots(text: str, top_intent: str) -> dict:
-    """Extract typed slots from the user's utterance."""
-    normalized_raw = normalize_text(text)
-    normalised = _NOISE_RE.sub(" ", normalized_raw)
-    mentions = _extract_merchant_mentions(normalized_raw)
-    facets = _build_facet_specs(normalised)
-    recommendation = _looks_like_recommendation(normalised)
-    comparison = _looks_like_comparison(normalised)
-    query_terms = _recommendation_query_terms(normalised)
-    scene_terms = _recommendation_scene_terms(normalised)
-    has_multi_facet = len(facets) > 1
-    coupon_preferred = _has_coupon_preference(normalised)
-    open_preferred = _has_open_preference(normalised)
-    nearby_preferred = _has_nearby_preference(normalised)
+    normalized = normalize_text(text)
+    simplified = _NOISE_RE.sub(" ", normalized)
+    mentions = _extract_merchant_mentions(normalized)
+    ordinal_references = _extract_ordinals(normalized)
+    deictic_references = _extract_deictic(normalized)
+    facets = _build_facets(simplified)
+    query_terms = _recommendation_query_terms(simplified)
+    scene_terms = _recommendation_scene_terms(simplified)
+    comparison = _looks_like_comparison(simplified, mentions, ordinal_references, deictic_references)
+    recommendation = _looks_like_recommendation(simplified, query_terms, scene_terms) and not comparison
 
     task_type: TaskType | None = None
     primary_task = ""
     need_context = False
     reference_mentions: list[str] = []
+    comparison_targets: list[dict[str, str]] = []
+    focused_facets: list[str] = []
+    comparison_focus = ""
 
     if top_intent == "local_life":
-        if recommendation:
-            task_type = TaskType.recommendation
-            primary_task = "recommendation"
-            need_context = False
-        elif comparison:
+        if comparison:
             task_type = TaskType.comparison
             primary_task = "comparison"
-            reference_mentions = [hint for hint in _COMPARISON_REFERENCE_HINTS if hint in normalised]
-            need_context = len(mentions) < 2 and not reference_mentions
+            reference_mentions = _dedupe(ordinal_references + deictic_references)
+            comparison_targets = _build_comparison_targets(mentions, ordinal_references, deictic_references)
+            focused_facets = _comparison_focused_facets(simplified)
+            comparison_focus = _comparison_focus(simplified)
+            need_context = not bool(mentions or ordinal_references or deictic_references)
+        elif recommendation:
+            task_type = TaskType.recommendation
+            primary_task = "recommendation"
         elif facets:
-            task_type = TaskType.single_shop_query if has_multi_facet or any(
-                isinstance(spec, dict) and spec.get("name") in {Facet.open_status, Facet.distance}
-                for spec in facets
-            ) else TaskType.coupon_query
-            primary_task = "multi_facet_query" if len(facets) > 1 or task_type == TaskType.single_shop_query else "coupon_query"
-            need_context = not bool(mentions)
+            task_type = (
+                TaskType.coupon_query
+                if len(facets) == 1 and facets[0]["name"] == Facet.coupon.value
+                else TaskType.single_shop_query
+            )
+            primary_task = "coupon_query" if task_type == TaskType.coupon_query else "single_shop_query"
+            need_context = not bool(mentions or ordinal_references or deictic_references)
         elif mentions:
             task_type = TaskType.single_shop_query
             primary_task = "single_shop_query"
@@ -277,17 +350,19 @@ def extract_slots(text: str, top_intent: str) -> dict:
         if query_terms:
             ranking_signals["query_terms"] = query_terms
             ranking_signals["category"] = query_terms[0]
-        if open_preferred:
+        if _has_open_preference(simplified):
             soft_preferences["open_now_preferred"] = True
             ranking_signals["open_now_preferred"] = True
-        if coupon_preferred:
+        if _has_coupon_preference(simplified):
             soft_preferences["coupon_preferred"] = True
             ranking_signals["coupon_preferred"] = True
-        if nearby_preferred:
+        if _has_nearby_preference(simplified):
             soft_preferences["nearby_preferred"] = True
             ranking_signals["nearby_preferred"] = True
-    if comparison and not reference_mentions:
-        reference_mentions = [hint for hint in _COMPARISON_REFERENCE_HINTS if hint in normalised]
+
+    confidence = 0.9 if task_type is not None else 0.6
+    if mentions or ordinal_references or deictic_references:
+        confidence = max(confidence, 0.85)
 
     return {
         "top_intent": top_intent,
@@ -295,11 +370,16 @@ def extract_slots(text: str, top_intent: str) -> dict:
         "primary_task": primary_task,
         "facets": facets,
         "merchant_mentions": mentions,
-        "reference_mentions": reference_mentions if comparison else [],
+        "reference_mentions": reference_mentions,
+        "comparison_targets": comparison_targets,
+        "ordinal_references": ordinal_references,
+        "deictic_references": deictic_references,
+        "focused_facets": focused_facets,
+        "comparison_focus": comparison_focus,
         "hard_constraints": {},
         "soft_preferences": soft_preferences,
         "ranking_signals": ranking_signals,
         "follow_up": None,
-        "confidence": 0.9 if mentions else 0.6,
+        "confidence": confidence,
         "need_context": need_context,
     }

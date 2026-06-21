@@ -154,6 +154,7 @@ def _gateway_stub(
     return _dispatch, recorded
 
 
+@pytest.mark.xfail(reason="legacy assertion expected dynamic enrich-call trimming before staged placeholder planning", strict=False)
 def test_recommendation_flow_staged_parallel():
     response = run_agent_graph("附近有没有适合约会、现在营业、最好有券的火锅？", "recommendation_flow")
 
@@ -177,6 +178,7 @@ def test_recommendation_flow_staged_parallel():
     assert len(snapshot.get("ranked", [])) == 3
 
 
+@pytest.mark.xfail(reason="legacy builder test expected pre-executed search_shops inside planner", strict=False)
 def test_recommendation_plan_enriches_only_top_8_candidates(monkeypatch: pytest.MonkeyPatch):
     observed: dict[str, object] = {}
 
@@ -215,6 +217,43 @@ def test_recommendation_plan_enriches_only_top_8_candidates(monkeypatch: pytest.
         "get_coupon_list",
     }
     assert {call["target_shop_id"] for call in tool_calls[1:]} == set(target_shop_ids)
+
+
+def test_recommendation_flow_staged_parallel_placeholder_plan():
+    response = run_agent_graph("\u9644\u8fd1\u6709\u6ca1\u6709\u9002\u5408\u7ea6\u4f1a\u3001\u73b0\u5728\u8425\u4e1a\u3001\u6700\u597d\u6709\u5238\u7684\u706b\u9505\uff1f", "recommendation_flow_placeholder")
+
+    assert response.debug is not None
+    plan = response.debug.execution_plan
+    snapshot = response.debug.evidence_pack.get("ranking_snapshot") or {}
+    tool_calls = plan.get("tool_calls", [])
+
+    search_calls = [call for call in tool_calls if call.get("tool_name") == "search_shops"]
+    enrich_calls = [call for call in tool_calls if call.get("tool_name") != "search_shops"]
+
+    assert plan.get("task_type") == "recommendation"
+    assert search_calls and search_calls[0]["args"]["limit"] == SEARCH_LIMIT
+    assert len(enrich_calls) == RECOMMENDATION_CANDIDATE_TOP_K * 3
+    assert enrich_calls[0]["target_shop_id"] == "$search_result[0].shop_id"
+    assert enrich_calls[-1]["target_shop_id"] == f"$search_result[{RECOMMENDATION_CANDIDATE_TOP_K - 1}].shop_id"
+    assert len(snapshot.get("ranked", [])) == 3
+
+
+def test_recommendation_plan_builds_placeholder_enrichment_calls():
+    payload = execution_plan_builder.build_recommendation_execution_plan(
+        _semantic_frame(query_terms=["\u706b\u9505"], scene_terms=["\u7ea6\u4f1a"], coupon_preferred=True),
+        location={"lat": 39.9, "lng": 116.3},
+    )
+
+    plan = payload["plan"]
+    tool_calls = plan["tool_calls"]
+
+    assert payload["recommendation_query"] == "\u706b\u9505"
+    assert plan["target_shop_ids"] == []
+    assert len(tool_calls) == 1 + RECOMMENDATION_CANDIDATE_TOP_K * 3
+    assert tool_calls[0]["tool_name"] == "search_shops"
+    assert tool_calls[0]["args"]["limit"] == SEARCH_LIMIT
+    assert tool_calls[1]["target_shop_id"] == "$search_result[0].shop_id"
+    assert tool_calls[-1]["target_shop_id"] == f"$search_result[{RECOMMENDATION_CANDIDATE_TOP_K - 1}].shop_id"
 
 
 def test_recommendation_all_tools_go_through_gateway(monkeypatch: pytest.MonkeyPatch):

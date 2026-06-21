@@ -134,7 +134,22 @@ def resolve_shop(query: str, location: dict[str, float] | None = None,
             "error_code": None,
         }
 
-    # Multiple matches — AMBIGUOUS
+    if session_shop_ids:
+        session_set = {str(sid).strip() for sid in session_shop_ids if str(sid).strip()}
+        session_matched = [s for s in matched if str(s.get("shop_id", "")).strip() in session_set]
+        if len(session_matched) == 1:
+            shop = session_matched[0]
+            return {
+                "status": "RESOLVED",
+                "shop": shop,
+                "candidates": [],
+                "confidence": 0.95,
+                "error_code": None,
+            }
+        if len(session_matched) > 1:
+            matched = session_matched
+
+    # Multiple matches – AMBIGUOUS
     candidates = [{"shop_id": s["shop_id"], "shop_name": s["shop_name"], "address": s.get("address", "")}
                   for s in matched[:5]]
     return {

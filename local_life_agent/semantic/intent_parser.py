@@ -1,4 +1,4 @@
-"""Top-level intent and semantic frame parsing."""
+﻿"""Top-level intent and semantic frame parsing."""
 
 from __future__ import annotations
 
@@ -6,9 +6,9 @@ from typing import Any, Callable
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from ..config import LLM_TIMEOUT_MS
+from ..config import LLM_TIMEOUT_MS, SEMANTIC_FALLBACK_ENABLED
 from ..domain.enums import Facet, TaskType, TopIntent
-from ..domain.schemas import FacetSpec, SemanticFrame
+from ..domain.schemas import SemanticFrame
 from ..input.normalizer import normalize_text
 from ..llm.client import call_llm, load_prompt
 from ..llm.json_parser import LLMJSONParseError, parse_json_response
@@ -23,28 +23,33 @@ class _TopIntentRouterResponse(BaseModel):
     reason: str = Field(default="")
 
 
+class FacetSpecResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: Facet
+    required: bool = False
+
+
 class _SemanticFrameRouterResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     top_intent: TopIntent | None = None
     task_type: TaskType | None = None
     primary_task: str = ""
-    facets: list["FacetSpecResponse"] = Field(default_factory=list)
+    facets: list[FacetSpecResponse] = Field(default_factory=list)
     merchant_mentions: list[str] = Field(default_factory=list)
     reference_mentions: list[str] = Field(default_factory=list)
+    comparison_targets: list[dict[str, Any]] = Field(default_factory=list)
+    ordinal_references: list[str] = Field(default_factory=list)
+    deictic_references: list[str] = Field(default_factory=list)
+    focused_facets: list[str] = Field(default_factory=list)
+    comparison_focus: str = ""
     hard_constraints: dict[str, Any] = Field(default_factory=dict)
     soft_preferences: dict[str, Any] = Field(default_factory=dict)
     ranking_signals: dict[str, Any] = Field(default_factory=dict)
     follow_up: dict[str, Any] | None = None
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     need_context: bool = False
-
-
-class FacetSpecResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    name: Facet
-    required: bool = False
 
 
 _SemanticFrameRouterResponse.model_rebuild()
@@ -61,7 +66,6 @@ class TopIntentRouter:
 
 
 def _validate_router_payload(payload: Any) -> dict[str, Any]:
-    """Validate the structured LLM payload against the strict schema."""
     try:
         model = _TopIntentRouterResponse.model_validate(payload)
     except ValidationError as exc:
@@ -70,7 +74,6 @@ def _validate_router_payload(payload: Any) -> dict[str, Any]:
 
 
 def _validate_semantic_payload(payload: Any) -> dict[str, Any]:
-    """Validate the structured semantic payload against the strict schema."""
     try:
         model = _SemanticFrameRouterResponse.model_validate(payload)
     except ValidationError as exc:
@@ -79,32 +82,58 @@ def _validate_semantic_payload(payload: Any) -> dict[str, Any]:
 
 
 def _fallback_intent(normalised_text: str, error_code: str = "") -> TopIntent:
-    """Use a deterministic fallback when the LLM path fails."""
     compact = normalised_text.strip()
     if not compact:
         return TopIntent.invalid
-    if error_code in {"LLM_JSON_PARSE_ERROR", "LLM_ENUM_OUT_OF_RANGE"}:
+    if error_code:
         return TopIntent.out_of_scope
-    return TopIntent.local_life
+    if any(
+        hint in compact
+        for hint in (
+            "瀵规瘮",
+            "姣旇緝",
+            "姣斾竴姣?",
+            "姣斿憿",
+            "杩欎笁瀹?",
+            "杩欏嚑瀹?",
+            "绗竴瀹?",
+            "绗簩瀹?",
+            "绗笁瀹?",
+            "鍝釜鏇?",
+            "鍝鏇?",
+            "璋佹洿",
+        )
+    ):
+        return TopIntent.local_life
+    if any("\u4e00" <= ch <= "\u9fff" for ch in compact):
+        return TopIntent.local_life
+    return TopIntent.out_of_scope
 
 
-def _fallback_semantic_frame(text: str, top_intent: str) -> SemanticFrame:
-    """Use the conservative rule fallback when the semantic LLM path fails."""
-    fallback_slots = extract_slots(text, top_intent)
-    frame = SemanticFrame.model_validate(fallback_slots)
+def _annotate_frame(
+    frame: SemanticFrame,
+    *,
+    semantic_source: str,
+    fallback_reason: str = "",
+    llm_called: bool,
+) -> SemanticFrame:
+    frame.semantic_source = semantic_source
+    frame.fallback_reason = fallback_reason
+    frame.llm_called = llm_called
     return frame
 
 
-def _frame_payload(frame: SemanticFrame) -> dict[str, Any]:
-    return frame.model_dump()
+def _fallback_semantic_frame(text: str, top_intent: str, *, fallback_reason: str, llm_called: bool) -> SemanticFrame:
+    frame = SemanticFrame.model_validate(extract_slots(text, top_intent))
+    return _annotate_frame(
+        frame,
+        semantic_source="fallback",
+        fallback_reason=fallback_reason,
+        llm_called=llm_called,
+    )
 
 
 def parse_top_intent(text: str, llm_call: Callable[..., dict[str, Any]] | None = None) -> dict[str, Any]:
-    """Classify the top-level intent of the user input.
-
-    The function returns a dict with at least ``top_intent`` (a
-    :class:`TopIntent`) and ``confidence``.
-    """
     normalised_text = normalize_text(text)
     if not normalised_text.strip():
         return {
@@ -153,7 +182,7 @@ def parse_top_intent(text: str, llm_call: Callable[..., dict[str, Any]] | None =
                     "error_code": "LLM_ENUM_OUT_OF_RANGE",
                     "error_message": "top_intent is outside the allowed enum range",
                 }
-        confidence = float(payload.get("confidence", result.get("confidence", 0.0)))
+        confidence = float(payload.get('confidence', result.get('confidence', 0.0)))
         confidence = max(0.0, min(1.0, confidence))
         return {
             "top_intent": top_intent,
@@ -179,34 +208,57 @@ def parse_semantic_frame(
     text: str,
     top_intent: str,
     llm_call: Callable[..., dict[str, Any]] | None = None,
+    *,
+    allow_fallback: bool = SEMANTIC_FALLBACK_ENABLED,
 ) -> dict[str, Any]:
-    """Parse a semantic frame for the local-life flow.
-
-    The preferred path is an LLM-backed structured response. If that
-    fails, we fall back to the conservative rule-based extractor.
-    """
+    """Parse a semantic frame for the local-life flow."""
     normalised_text = normalize_text(text)
     if not normalised_text.strip():
+        frame = _annotate_frame(
+            SemanticFrame(),
+            semantic_source="fallback",
+            fallback_reason="empty_input",
+            llm_called=False,
+        )
         return {
-            "semantic_frame": SemanticFrame(),
+            "semantic_frame": frame,
             "error_code": "EMPTY_INPUT",
             "error_message": "input is empty after normalisation",
             "raw": "",
+            "semantic_source": frame.semantic_source,
+            "fallback_reason": frame.fallback_reason,
+            "llm_called": frame.llm_called,
         }
 
     if llm_call is None:
-        fallback_frame = _fallback_semantic_frame(normalised_text, top_intent)
+        if not allow_fallback:
+            return {
+                "semantic_frame": None,
+                "error_code": "SEMANTIC_LLM_UNAVAILABLE",
+                "error_message": "semantic llm backend is unavailable",
+                "raw": "",
+                "semantic_source": "",
+                "fallback_reason": "llm_call_unavailable",
+                "llm_called": False,
+            }
+        fallback_frame = _fallback_semantic_frame(
+            normalised_text,
+            top_intent,
+            fallback_reason="llm_call_unavailable",
+            llm_called=False,
+        )
         return {
             "semantic_frame": fallback_frame,
             "error_code": "",
             "error_message": "",
             "raw": "",
+            "semantic_source": fallback_frame.semantic_source,
+            "fallback_reason": fallback_frame.fallback_reason,
+            "llm_called": fallback_frame.llm_called,
         }
 
     prompt_template = load_prompt("local_life_parser")
-    rendered_prompt = (
-        prompt_template.replace("{{TEXT}}", normalised_text).replace("{{TOP_INTENT}}", top_intent)
-    )
+    rendered_prompt = prompt_template.replace("{{TEXT}}", normalised_text).replace("{{TOP_INTENT}}", top_intent)
     result = llm_call(
         rendered_prompt,
         system_prompt="",
@@ -227,61 +279,52 @@ def parse_semantic_frame(
             else:
                 payload = {}
         if "top_intent" not in payload or payload.get("top_intent") is None:
-            payload["top_intent"] = TopIntent(top_intent) if top_intent in {t.value for t in TopIntent} else TopIntent.out_of_scope
-        frame = SemanticFrame.model_validate(payload)
-        # Keep the frame conservative even if the LLM omits a few easy
-        # fields.  This is a fallback-normalisation step, not a second
-        # parser path.
-        if frame.top_intent is None and top_intent in {t.value for t in TopIntent}:
+            payload["top_intent"] = TopIntent(top_intent) if top_intent in {item.value for item in TopIntent} else TopIntent.out_of_scope
+        frame = _annotate_frame(
+            SemanticFrame.model_validate(payload),
+            semantic_source="llm",
+            fallback_reason="",
+            llm_called=True,
+        )
+        if frame.top_intent is None and top_intent in {item.value for item in TopIntent}:
             frame.top_intent = TopIntent(top_intent)
-        if frame.task_type is None:
-            fallback_frame = _fallback_semantic_frame(normalised_text, top_intent)
-            if fallback_frame.task_type is not None:
-                frame.task_type = fallback_frame.task_type
-            if not frame.merchant_mentions:
-                frame.merchant_mentions = fallback_frame.merchant_mentions
-            if not frame.facets:
-                frame.facets = fallback_frame.facets
-            if not frame.primary_task:
-                frame.primary_task = fallback_frame.primary_task
-            frame.need_context = frame.need_context or fallback_frame.need_context
-        else:
-            fallback_frame = _fallback_semantic_frame(normalised_text, top_intent)
-            if fallback_frame.task_type == TaskType.comparison and frame.task_type != TaskType.comparison:
-                frame.task_type = TaskType.comparison
-                frame.primary_task = "comparison"
-                if not frame.merchant_mentions:
-                    frame.merchant_mentions = fallback_frame.merchant_mentions
-                if not frame.reference_mentions:
-                    frame.reference_mentions = fallback_frame.reference_mentions
-                frame.need_context = frame.need_context or fallback_frame.need_context
-        if not frame.facets and frame.task_type in {TaskType.single_shop_query, TaskType.coupon_query}:
-            return {
-                "semantic_frame": frame,
-                "error_code": "MISSING_FACET",
-                "error_message": "请补充你要查询的优惠、营业状态或距离。",
-                "raw": result.get("raw", ""),
-            }
-        if not frame.merchant_mentions and frame.need_context:
-            return {
-                "semantic_frame": frame,
-                "error_code": "",
-                "error_message": "",
-                "raw": result.get("raw", ""),
-            }
         return {
             "semantic_frame": frame,
             "error_code": "",
             "error_message": "",
             "raw": result.get("raw", ""),
+            "semantic_source": frame.semantic_source,
+            "fallback_reason": frame.fallback_reason,
+            "llm_called": frame.llm_called,
         }
 
-    fallback_frame = _fallback_semantic_frame(normalised_text, top_intent)
     error_code = result.get("error_code", "") or "SEMANTIC_PARSE_FAILED"
-    error_message = result.get("error_message", "") or "请补充你要查询的店名和优惠券需求。"
+    error_message = result.get("error_message", "") or "semantic parse failed"
+    if not allow_fallback:
+        return {
+            "semantic_frame": None,
+            "error_code": error_code,
+            "error_message": error_message,
+            "raw": result.get("raw", ""),
+            "semantic_source": "",
+            "fallback_reason": error_code,
+            "llm_called": True,
+        }
+
+    fallback_frame = _fallback_semantic_frame(
+        normalised_text,
+        top_intent,
+        fallback_reason=error_code,
+        llm_called=True,
+    )
     return {
         "semantic_frame": fallback_frame,
-        "error_code": error_code,
-        "error_message": error_message,
+        "error_code": "",
+        "error_message": "",
         "raw": result.get("raw", ""),
+        "semantic_source": fallback_frame.semantic_source,
+        "fallback_reason": fallback_frame.fallback_reason,
+        "llm_called": fallback_frame.llm_called,
     }
+
+

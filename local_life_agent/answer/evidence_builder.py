@@ -339,9 +339,20 @@ def _build_comparison_evidence(
         ),
     )
 
+    cells: list[dict[str, Any]] = []
+    for row in rows:
+        cells.extend(
+            [
+                {"shop_id": row["shop_id"], "shop_name": row["shop_name"], "facet": "rating", "status": "ok" if row.get("rating") is not None else "unknown", "value": row.get("rating")},
+                {"shop_id": row["shop_id"], "shop_name": row["shop_name"], "facet": "distance", "status": "ok" if row.get("distance_km") is not None else "unknown", "value": row.get("distance_km")},
+                {"shop_id": row["shop_id"], "shop_name": row["shop_name"], "facet": "open_status", "status": "ok" if str(row.get("open_status", "")).lower() in {"open", "closed"} else "unknown", "value": row.get("open_status")},
+                {"shop_id": row["shop_id"], "shop_name": row["shop_name"], "facet": "coupon", "status": "ok" if row.get("coupon_status") in {"has_coupon", "empty"} else "unknown", "value": len(row.get("coupon_titles", [])) if row.get("coupon_status") == "has_coupon" else row.get("coupon_status")},
+            ]
+        )
+
     dimension_winners: dict[str, list[dict[str, Any]]] = {}
     known_ratings = [row for row in rows if row.get("rating") is not None]
-    if known_ratings:
+    if len(known_ratings) >= 2:
         best_rating = max(float(row.get("rating", 0.0) or 0.0) for row in known_ratings)
         dimension_winners["rating"] = [
             {"shop_id": row["shop_id"], "shop_name": row["shop_name"], "value": row.get("rating")}
@@ -350,7 +361,7 @@ def _build_comparison_evidence(
         ]
 
     known_distances = [row for row in rows if row.get("distance_km") is not None]
-    if known_distances:
+    if len(known_distances) >= 2:
         best_distance = min(float(row.get("distance_km", 9999.0) or 9999.0) for row in known_distances)
         dimension_winners["distance"] = [
             {"shop_id": row["shop_id"], "shop_name": row["shop_name"], "value": row.get("distance_km")}
@@ -359,14 +370,14 @@ def _build_comparison_evidence(
         ]
 
     open_rows = [row for row in rows if str(row.get("open_status", "")).lower() == "open"]
-    if open_rows:
+    if len([row for row in rows if str(row.get("open_status", "")).lower() in {"open", "closed"}]) >= 2 and open_rows:
         dimension_winners["open_status"] = [
             {"shop_id": row["shop_id"], "shop_name": row["shop_name"], "value": "open"}
             for row in open_rows
         ]
 
     coupon_rows = [row for row in rows if row.get("coupon_status") == "has_coupon"]
-    if coupon_rows:
+    if len([row for row in rows if row.get("coupon_status") in {"has_coupon", "empty"}]) >= 2 and coupon_rows:
         dimension_winners["coupon"] = [
             {"shop_id": row["shop_id"], "shop_name": row["shop_name"], "value": len(row.get("coupon_titles", []))}
             for row in coupon_rows
@@ -399,6 +410,7 @@ def _build_comparison_evidence(
             "matrix_id": f"cmp_{plan_dict.get('plan_id', '') or 'matrix'}",
             "status": "ok" if rows else "unknown",
             "rows": rows,
+            "cells": cells,
             "dimension_winners": dimension_winners,
             "uncertainty_notes": uncertainty_notes,
             "overall_ranked": overall_ranked,
