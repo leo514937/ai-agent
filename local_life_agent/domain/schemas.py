@@ -434,6 +434,9 @@ class DecisionPlan(BaseModel):
     uncertainty_notes: list[str] = Field(default_factory=list)
     forbidden_claims: list[str] = Field(default_factory=list)
     style_hints: list[str] = Field(default_factory=list)
+    decision_context: dict[str, Any] = Field(default_factory=dict)
+    candidate_summaries: list[dict[str, Any]] = Field(default_factory=list)
+    must_mention_unknowns: list[str] = Field(default_factory=list)
 
 
 DecisionPlan.model_rebuild()

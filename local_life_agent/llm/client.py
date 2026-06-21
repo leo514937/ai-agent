@@ -330,6 +330,9 @@ def call_llm(
     last_error_code = ""
     last_error_message = ""
     last_raw = ""
+    last_provider = ""
+    last_model = ""
+    last_transport = ""
 
     for attempt in range(1, attempts + 1):
         try:
@@ -342,6 +345,10 @@ def call_llm(
             )
             raw_text, parsed_dict, confidence = _normalise_backend_result(raw_result)
             last_raw = raw_text
+            if isinstance(raw_result, dict):
+                last_provider = str(raw_result.get("provider", last_provider) or last_provider)
+                last_model = str(raw_result.get("model", last_model) or last_model)
+                last_transport = str(raw_result.get("transport", last_transport) or last_transport)
 
             if parsed_dict is not None:
                 parsed = parsed_dict
@@ -360,6 +367,9 @@ def call_llm(
                 "error_code": "",
                 "error_message": "",
                 "llm_backend": backend_kind,
+                "provider": last_provider,
+                "model": last_model,
+                "transport": last_transport,
                 "attempts": attempt,
                 "temperature": temperature,
                 "timeout_ms": timeout_ms,
@@ -391,6 +401,9 @@ def call_llm(
         "error_code": last_error_code or "LLM_BACKEND_ERROR",
         "error_message": last_error_message or "LLM call failed",
         "llm_backend": backend_kind,
+        "provider": last_provider,
+        "model": last_model,
+        "transport": last_transport,
         "attempts": attempts,
         "temperature": temperature,
         "timeout_ms": timeout_ms,

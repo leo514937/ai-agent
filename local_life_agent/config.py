@@ -50,7 +50,6 @@ COMPARISON_FOCUSED_SHOP_LIMIT = 5
 COMPARISON_MAX_SHOP_LIMIT = 5
 
 # --- LLM ---
-LLM_TIMEOUT_MS = 3000
 LLM_CONFIDENCE_THRESHOLD = 0.8
 SEMANTIC_FALLBACK_ENABLED = True
 ENABLE_LLM_VERBALIZER = False
@@ -106,12 +105,36 @@ def load_llm_config_value(key: str) -> str:
     return cfg.get(key, "")
 
 
+def _llm_cfg_str(primary_key: str, fallback_key: str, default: str) -> str:
+    file_value = load_llm_config_value(primary_key) or load_llm_config_value(fallback_key)
+    if file_value:
+        return file_value
+    return _env_str(primary_key, _env_str(fallback_key, default))
+
+
+def _llm_cfg_bool(primary_key: str, fallback_key: str, default: bool) -> bool:
+    raw = load_llm_config_value(primary_key) or load_llm_config_value(fallback_key)
+    if raw:
+        return raw.lower() in ("1", "true", "yes", "on")
+    return _env_bool(primary_key, _env_bool(fallback_key, default))
+
+
+def _llm_cfg_int(primary_key: str, fallback_key: str, default: int) -> int:
+    raw = load_llm_config_value(primary_key) or load_llm_config_value(fallback_key)
+    if raw:
+        try:
+            return int(raw)
+        except (ValueError, TypeError):
+            return default
+    return _env_int(primary_key, _env_int(fallback_key, default))
+
+
 # --- LLM Backend Selection ---
 # Accepted values: "rule_based", "fake_llm", "real_llm"
 # "rule_based" = pure rule-based backend (default, no real LLM call)
 # "fake_llm"   = injected fake backend for tests
 # "real_llm"   = connected to a real LLM provider (OpenAI-compatible)
-LOCAL_LIFE_LLM_BACKEND: str = _env_str("LOCAL_LIFE_LLM_BACKEND", _env_str("LLM_BACKEND", "rule_based"))
+LOCAL_LIFE_LLM_BACKEND: str = _llm_cfg_str("LOCAL_LIFE_LLM_BACKEND", "LLM_BACKEND", "rule_based")
 LLM_BACKEND: str = LOCAL_LIFE_LLM_BACKEND
 if LLM_BACKEND not in ("rule_based", "fake_llm", "real_llm"):
     raise ValueError(
@@ -119,22 +142,25 @@ if LLM_BACKEND not in ("rule_based", "fake_llm", "real_llm"):
         "Accepted values: 'rule_based', 'fake_llm', 'real_llm'."
     )
 
-ENABLE_REAL_LLM: bool = _env_bool("ENABLE_REAL_LLM", _env_bool("LLM_ENABLED", False))
+ENABLE_REAL_LLM: bool = _llm_cfg_bool("ENABLE_REAL_LLM", "LLM_ENABLED", False)
 LLM_ENABLED: bool = ENABLE_REAL_LLM
 
-REAL_LLM_PROVIDER: str = _env_str("REAL_LLM_PROVIDER", _env_str("LLM_PROVIDER", ""))
+REAL_LLM_PROVIDER: str = _llm_cfg_str("REAL_LLM_PROVIDER", "LLM_PROVIDER", "")
 LLM_PROVIDER: str = REAL_LLM_PROVIDER
 
-REAL_LLM_MODEL: str = _env_str("REAL_LLM_MODEL", _env_str("LLM_MODEL", ""))
+REAL_LLM_MODEL: str = _llm_cfg_str("REAL_LLM_MODEL", "LLM_MODEL", "")
 LLM_MODEL: str = REAL_LLM_MODEL
 
-REAL_LLM_ENDPOINT: str = _env_str("REAL_LLM_ENDPOINT", _env_str("LLM_ENDPOINT", ""))
+REAL_LLM_ENDPOINT: str = _llm_cfg_str("REAL_LLM_ENDPOINT", "LLM_ENDPOINT", "")
 LLM_ENDPOINT: str = REAL_LLM_ENDPOINT
 
-REAL_LLM_TIMEOUT_SECONDS: int = _env_int("REAL_LLM_TIMEOUT_SECONDS", _env_int("LLM_TIMEOUT_SECONDS", 20))
+REAL_LLM_TIMEOUT_SECONDS: int = _llm_cfg_int("REAL_LLM_TIMEOUT_SECONDS", "LLM_TIMEOUT_SECONDS", 20)
 LLM_TIMEOUT_SECONDS: int = REAL_LLM_TIMEOUT_SECONDS
+LLM_TIMEOUT_MS: int = _llm_cfg_int("REAL_LLM_TIMEOUT_MS", "LLM_TIMEOUT_MS", REAL_LLM_TIMEOUT_SECONDS * 1000)
 
-REAL_LLM_API_KEY_ENV: str = _env_str("REAL_LLM_API_KEY_ENV", "LLM_API_KEY")
+REAL_LLM_API_KEY_ENV: str = _llm_cfg_str("REAL_LLM_API_KEY_ENV", "REAL_LLM_API_KEY_ENV", "LLM_API_KEY")
+
+ENABLE_LLM_VERBALIZER = _llm_cfg_bool("ENABLE_LLM_VERBALIZER", "ENABLE_LLM_VERBALIZER", False)
 
 # --- Tools ---
 TOOL_DEFAULT_TIMEOUT_MS = 2000

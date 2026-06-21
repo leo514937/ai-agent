@@ -659,6 +659,54 @@ def _h_target_resolve(state: GraphState) -> dict:
         }
 
     if comparison_requested:
+        frame_dict = _to_dict(sf)
+        explicit_mentions = [str(item).strip() for item in (frame_dict.get("merchant_mentions") or []) if str(item).strip()]
+        has_structured_refs = bool(frame_dict.get("ordinal_references") or frame_dict.get("deictic_references"))
+        if len(explicit_mentions) >= 2 and not has_structured_refs:
+            direct_targets: list[dict[str, Any]] = []
+            seen: set[str] = set()
+            for mention in explicit_mentions:
+                raw = resolve_shop(mention, location=MOCK_LOCATION, session_shop_ids=_session_shop_ids(state))
+                payload = _unwrap_resolve_shop_result(raw)
+                status = str(payload.get("status", "NOT_FOUND") or "NOT_FOUND")
+                shop: dict[str, Any] | None = None
+                if status == "RESOLVED":
+                    shop = payload.get("shop") or {}
+                elif status in ("AMBIGUOUS", "LOW_CONFIDENCE"):
+                    candidates = payload.get("candidates", []) or []
+                    if candidates:
+                        candidate = candidates[0]
+                        candidate = candidate if isinstance(candidate, dict) else {}
+                        shop = {
+                            "shop_id": str(candidate.get("shop_id", "")).strip(),
+                            "shop_name": str(candidate.get("shop_name", "")).strip(),
+                        }
+                if hasattr(shop, "model_dump"):
+                    shop = shop.model_dump()
+                if isinstance(shop, dict):
+                    sid = str(shop.get("shop_id", "")).strip()
+                    sname = str(shop.get("shop_name", "")).strip()
+                    key = sid or sname
+                    if key and key not in seen and (sid or sname):
+                        seen.add(key)
+                        direct_targets.append({"shop_id": sid, "shop_name": sname, "source": "explicit_shop", "source_ref": mention})
+
+            if len(direct_targets) >= 2:
+                first_shop = direct_targets[0]
+                resolved_result = ResolveShopResult(
+                    status="RESOLVED",
+                    resolved_shop=ShopRef(shop_id=str(first_shop.get("shop_id", "")), shop_name=str(first_shop.get("shop_name", ""))),
+                    confidence=1.0,
+                    reason="comparison_targets_resolved",
+                )
+                simple_targets = [{"shop_id": item.get("shop_id", ""), "shop_name": item.get("shop_name", "")} for item in direct_targets]
+                return {
+                    "resolve_shop_result": resolved_result,
+                    "resolved_target": resolved_result,
+                    "comparison_targets": simple_targets,
+                    **_log(state, "target_resolve", status="RESOLVED", query="comparison_flow"),
+                }
+
         resolved_targets: list[dict[str, Any]] = []
 
         def _append_target(target: Any) -> None:
@@ -794,6 +842,31 @@ def _h_target_resolve(state: GraphState) -> dict:
                     )
                 continue
             if status in ("AMBIGUOUS", "LOW_CONFIDENCE"):
+                frame_dict = _to_dict(sf)
+                explicit_compare_only = (
+                    comparison_requested
+                    and not (frame_dict.get("ordinal_references") or frame_dict.get("deictic_references"))
+                    and len(frame_dict.get("merchant_mentions") or []) >= 2
+                )
+                if explicit_compare_only and payload.get("candidates"):
+                    candidate = payload.get("candidates", [])[0] or {}
+                    if hasattr(candidate, "model_dump"):
+                        candidate = candidate.model_dump()
+                    shop_ref = candidate.get("shop") or {}
+                    if hasattr(shop_ref, "model_dump"):
+                        shop_ref = shop_ref.model_dump()
+                    shop_id = str(candidate.get("shop_id") or (shop_ref.get("shop_id", "") if isinstance(shop_ref, dict) else "")).strip()
+                    shop_name = str(candidate.get("shop_name") or (shop_ref.get("shop_name", "") if isinstance(shop_ref, dict) else "")).strip()
+                    if shop_id and shop_name:
+                        _append_target(
+                            {
+                                "shop_id": shop_id,
+                                "shop_name": shop_name,
+                                "source": "ambiguous_explicit_shop",
+                                "source_ref": source_ref,
+                            }
+                        )
+                        continue
                 candidates = []
                 pending_candidates = []
                 for candidate in payload.get("candidates", []):
@@ -1036,9 +1109,23 @@ def _h_facet_plan(state: GraphState) -> dict:
     target_dict = rt.model_dump() if hasattr(rt, "model_dump") else _to_dict(rt)
     task_type = state.get("task_type") or route_task(frame_dict, target_dict)
     if task_type == TaskType.recommendation.value:
+        fallback_query = ""
+        session_state = state.get("session_state_before") or state.get("session_state") or {}
+        session_dict = _to_dict(session_state)
+        for item in session_dict.get("last_recommendation_list", []) or []:
+            item_dict = _to_dict(item)
+            category = str(item_dict.get("category", "") or "").strip()
+            shop_name = str(item_dict.get("shop_name", "") or "").strip()
+            if category:
+                fallback_query = category
+                break
+            if "火锅" in shop_name:
+                fallback_query = "火锅"
+                break
         plan_payload = build_recommendation_execution_plan(
             frame_dict,
             location=MOCK_LOCATION,
+            fallback_query=fallback_query,
         )
         plan = ExecutionPlan.model_validate(plan_payload.get("plan", {}))
         return {
@@ -1298,6 +1385,9 @@ def _h_answer_generate(state: GraphState) -> dict:
     return {
         "draft_response": txt,
         "answer_source": metadata.get("answer_source", "template"),
+        "answer_fallback_reason": metadata.get("answer_fallback_reason", ""),
+        "llm_verbalizer_error": metadata.get("llm_verbalizer_error"),
+        "generated_llm_answer_before_fallback": metadata.get("generated_llm_answer_before_fallback", ""),
         "llm_verbalizer_violation": metadata.get("violation"),
         **_log(state, "answer_generate"),
     }

@@ -153,10 +153,11 @@ def build_recommendation_execution_plan(
     semantic_frame: dict[str, Any],
     *,
     location: dict[str, float] | None = None,
+    fallback_query: str = "",
 ) -> dict[str, Any]:
     """Build a deterministic recommendation plan."""
     frame = _to_dict(semantic_frame)
-    query = infer_recommendation_query(frame)
+    query = infer_recommendation_query(frame) or str(fallback_query or "").strip()
     preferences = _recommendation_preferences(frame)
     location = location or config.MOCK_LOCATION
     tool_calls: list[dict[str, Any]] = [

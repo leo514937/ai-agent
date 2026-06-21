@@ -198,6 +198,13 @@ class ExecutionPlanValidator:
                 )
                 continue
 
+            if plan.task_type == "recommendation":
+                args = dict(tc.args or {}) if isinstance(tc.args, dict) else {}
+                shop_id = str(args.get("shop_id", "")).strip()
+                placeholder = shop_id.startswith("$search_result[") and shop_id.endswith(".shop_id")
+                if placeholder:
+                    continue
+
             validator = Draft7Validator(schema)
             for error in sorted(validator.iter_errors(tc.args), key=lambda e: (list(e.path), e.validator, e.message)):
                 code = "SCHEMA_VALIDATION_FAILED" if error.validator == "required" else "INVALID_ARGUMENT"

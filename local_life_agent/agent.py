@@ -57,6 +57,9 @@ class DebugInfo:
     session_state_after: dict = field(default_factory=dict)
     state_update_plan: dict = field(default_factory=dict)
     answer_source: str = ""
+    answer_fallback_reason: str = ""
+    llm_verbalizer_error: str | None = None
+    generated_llm_answer_before_fallback: str = ""
     llm_verbalizer_violation: str | None = None
 
 
@@ -89,6 +92,9 @@ class AgentResponse:
                 "session_state_after": _debug_dump(self.debug.session_state_after),
                 "state_update_plan": _debug_dump(self.debug.state_update_plan),
                 "answer_source": self.debug.answer_source,
+                "answer_fallback_reason": self.debug.answer_fallback_reason,
+                "llm_verbalizer_error": self.debug.llm_verbalizer_error,
+                "generated_llm_answer_before_fallback": self.debug.generated_llm_answer_before_fallback,
                 "llm_verbalizer_violation": self.debug.llm_verbalizer_violation,
             }
 
@@ -472,9 +478,9 @@ def run_agent_graph(input_text: str, session_id: str = "") -> AgentResponse:
         "llm_verbalizer_violation": None,
         "comparison_target_resolution": None,
     }
-
-
-    final_state = graph.invoke(initial)
+    # Some valid multi-turn paths exceed LangGraph's default recursion limit
+    # of 25 because every node transition counts as a step.
+    final_state = graph.invoke(initial, config={"recursion_limit": 64})
 
     answer = final_state.get("final_response", "")
     trace_id = final_state.get("trace_id", "")
@@ -495,6 +501,9 @@ def run_agent_graph(input_text: str, session_id: str = "") -> AgentResponse:
             session_state_after=_debug_dump(final_state.get("session_state_after") or {}),
             state_update_plan=_debug_dump(final_state.get("state_update_plan") or {}),
             answer_source=final_state.get("answer_source", ""),
+            answer_fallback_reason=final_state.get("answer_fallback_reason", ""),
+            llm_verbalizer_error=final_state.get("llm_verbalizer_error"),
+            generated_llm_answer_before_fallback=final_state.get("generated_llm_answer_before_fallback", ""),
             llm_verbalizer_violation=final_state.get("llm_verbalizer_violation"),
         ) if config.DEBUG_ENABLED else None,
     )

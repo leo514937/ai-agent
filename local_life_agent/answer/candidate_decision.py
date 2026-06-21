@@ -465,11 +465,21 @@ def build_candidate_decision_plan(
 def map_candidate_decision_plan_to_decision_plan(plan: CandidateDecisionPlan) -> DecisionPlan:
     selected_targets = []
     overall_ranking = []
+    sorted_candidates = sorted(
+        plan.candidates,
+        key=lambda candidate: (
+            candidate.rank if candidate.rank is not None else 9999,
+            -(candidate.score or 0.0),
+            candidate.shop_name,
+            candidate.shop_id,
+        ),
+    )
     
-    for candidate in plan.candidates:
+    for candidate in sorted_candidates:
         row_dict = {
             "shop_id": candidate.shop_id,
             "shop_name": candidate.shop_name,
+            "source": candidate.source,
             "category": candidate.facts.get("category", ""),
             "tags": candidate.facts.get("tags", []),
             "rating": candidate.facts.get("rating"),
@@ -483,7 +493,10 @@ def map_candidate_decision_plan_to_decision_plan(plan: CandidateDecisionPlan) ->
             "detail_failed": "detail" in candidate.failed_facts,
             "overall_score": candidate.score,
             "rank": candidate.rank,
-            "known_dimensions": 4 - len(candidate.unknown_facts)
+            "known_dimensions": 4 - len(candidate.unknown_facts),
+            "reason_codes": list(candidate.reason_codes),
+            "unknown_facts": list(candidate.unknown_facts),
+            "failed_facts": list(candidate.failed_facts),
         }
         selected_targets.append(row_dict)
         overall_ranking.append(row_dict)
@@ -516,7 +529,8 @@ def map_candidate_decision_plan_to_decision_plan(plan: CandidateDecisionPlan) ->
                     }
                     
     factual_points = []
-    for candidate in plan.candidates:
+    candidate_summaries = []
+    for candidate in sorted_candidates:
         facts = []
         sname = candidate.shop_name
         if candidate.facts.get("rating") is not None:
@@ -538,6 +552,19 @@ def map_candidate_decision_plan_to_decision_plan(plan: CandidateDecisionPlan) ->
             facts.append("暂无可用券")
         if facts:
             factual_points.append(f"{sname}：{', '.join(facts)}")
+        candidate_summaries.append(
+            {
+                "shop_id": candidate.shop_id,
+                "shop_name": candidate.shop_name,
+                "rank": candidate.rank,
+                "score": candidate.score,
+                "source": candidate.source,
+                "reason_codes": list(candidate.reason_codes),
+                "facts": dict(candidate.facts),
+                "unknown_facts": list(candidate.unknown_facts),
+                "failed_facts": list(candidate.failed_facts),
+            }
+        )
             
     omitted_targets = []
     if plan.must_mention_unknowns:
@@ -554,5 +581,13 @@ def map_candidate_decision_plan_to_decision_plan(plan: CandidateDecisionPlan) ->
         factual_points=factual_points,
         uncertainty_notes=plan.uncertainty_notes,
         forbidden_claims=plan.forbidden_claims,
-        style_hints=plan.answer_style_hints
+        style_hints=plan.answer_style_hints,
+        decision_context={
+            "decision_type": plan.decision_type,
+            "user_goal": plan.user_goal,
+            "based_on_location": plan.based_on_location,
+            "final_recommendation": plan.final_recommendation,
+        },
+        candidate_summaries=candidate_summaries,
+        must_mention_unknowns=list(plan.must_mention_unknowns),
     )

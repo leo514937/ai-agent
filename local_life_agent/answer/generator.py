@@ -625,6 +625,9 @@ def generate_answer(
         "answer_source": "template",
         "llm_verbalizer_enabled": False,
         "llm_used": False,
+        "answer_fallback_reason": "",
+        "llm_verbalizer_error": "",
+        "generated_llm_answer_before_fallback": "",
     }
     
     # Track decision metadata
@@ -667,6 +670,7 @@ def generate_answer(
         if verbalized != template_text:
             metadata["llm_used"] = True
             metadata["answer_source"] = "llm_verbalizer"
+            metadata["answer_fallback_reason"] = ""
         else:
             metadata["answer_source"] = "template_fallback"
 

@@ -79,6 +79,42 @@ def _check_boundary(plan: DecisionPlan, text: str) -> bool:
     return True
 
 
+def _invoke_verbalizer_llm(
+    llm_client: Any,
+    *,
+    prompt: str,
+    system_prompt: str,
+) -> dict[str, Any]:
+    validator = VerbalizerResponse.model_validate
+
+    if callable(llm_client):
+        try:
+            return llm_client(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                response_validator=validator,
+            )
+        except TypeError as exc:
+            if "response_validator" not in str(exc):
+                raise
+            from ..llm.client import call_llm
+            return call_llm(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                response_validator=validator,
+                backend=llm_client,
+            )
+
+    call_fn = getattr(llm_client, "call_llm", getattr(llm_client, "call", None))
+    if not call_fn:
+        raise AttributeError("llm_call_missing_callable")
+    return call_fn(
+        prompt=prompt,
+        system_prompt=system_prompt,
+        response_validator=validator,
+    )
+
+
 def verbalize_decision_plan(
     plan: DecisionPlan,
     *,
@@ -88,6 +124,9 @@ def verbalize_decision_plan(
 ) -> str:
     # Check client
     if not llm_client:
+        if metadata_out is not None:
+            metadata_out["answer_fallback_reason"] = "llm_client_unavailable"
+            metadata_out["llm_verbalizer_error"] = "llm_client_unavailable"
         return fallback_text
 
     system_prompt = (
@@ -106,13 +145,16 @@ def verbalize_decision_plan(
     user_prompt = (
         "## DecisionPlan 事实数据：\n"
         f"- 意图类型: {plan.answer_type}\n"
+        f"- 决策上下文: {json.dumps(plan.decision_context, ensure_ascii=False)}\n"
         f"- 选择的目标店面: {json.dumps(plan.selected_targets, ensure_ascii=False)}\n"
         f"- 未选择/省略的店面: {json.dumps(plan.omitted_targets, ensure_ascii=False)}\n"
+        f"- 候选店详情摘要: {json.dumps(plan.candidate_summaries, ensure_ascii=False)}\n"
         f"- 主推荐店: {json.dumps(plan.main_recommendation, ensure_ascii=False)}\n"
         f"- 综合排序: {json.dumps(plan.overall_ranking, ensure_ascii=False)}\n"
         f"- 优势推荐归类 (best_for): {json.dumps(plan.best_for, ensure_ascii=False)}\n"
         f"- 确定性事实点: {json.dumps(plan.factual_points, ensure_ascii=False)}\n"
         f"- 不确定项/无法确认项: {json.dumps(plan.uncertainty_notes, ensure_ascii=False)}\n"
+        f"- 必须提及的未确认项: {json.dumps(plan.must_mention_unknowns, ensure_ascii=False)}\n"
         f"- 禁止声明: {json.dumps(plan.forbidden_claims, ensure_ascii=False)}\n\n"
         "## 示例 1（多店对比场景）：\n"
         "输入 DecisionPlan (其中 selected_targets 包含 A 店和 B 店，best_for 包含 B-距离近，A-有券)\n"
@@ -130,24 +172,22 @@ def verbalize_decision_plan(
     )
 
     try:
-        if callable(llm_client):
-            res = llm_client(
+        try:
+            res = _invoke_verbalizer_llm(
+                llm_client,
                 prompt=user_prompt,
                 system_prompt=system_prompt,
-                response_validator=VerbalizerResponse.model_validate
             )
-        else:
-            call_fn = getattr(llm_client, "call_llm", getattr(llm_client, "call", None))
-            if call_fn:
-                res = call_fn(
-                    prompt=user_prompt,
-                    system_prompt=system_prompt,
-                    response_validator=VerbalizerResponse.model_validate
-                )
-            else:
-                return fallback_text
+        except AttributeError:
+            if metadata_out is not None:
+                metadata_out["answer_fallback_reason"] = "llm_call_missing_callable"
+                metadata_out["llm_verbalizer_error"] = "llm_call_missing_callable"
+            return fallback_text
 
         if not res or not res.get("ok"):
+            if metadata_out is not None:
+                metadata_out["answer_fallback_reason"] = "llm_call_failed"
+                metadata_out["llm_verbalizer_error"] = str((res or {}).get("error_message", "") or (res or {}).get("error_code", "") or "llm_call_failed")
             return fallback_text
 
         content = res.get("content")
@@ -156,10 +196,19 @@ def verbalize_decision_plan(
         elif isinstance(content, dict):
             natural_text = content.get("natural_response", "")
         else:
+            if metadata_out is not None:
+                metadata_out["answer_fallback_reason"] = "llm_output_invalid"
+                metadata_out["llm_verbalizer_error"] = "missing_natural_response"
             return fallback_text
 
         if not natural_text:
+            if metadata_out is not None:
+                metadata_out["answer_fallback_reason"] = "llm_output_invalid"
+                metadata_out["llm_verbalizer_error"] = "empty_natural_response"
             return fallback_text
+
+        if metadata_out is not None:
+            metadata_out["generated_llm_answer_before_fallback"] = natural_text
 
         from .b2_mini_verifier import B2MiniVerifier
         verifier = B2MiniVerifier()
@@ -168,9 +217,14 @@ def verbalize_decision_plan(
             if metadata_out is not None:
                 metadata_out["violation"] = verification_result["violation"]
                 metadata_out["violations"] = verification_result["violations"]
+                metadata_out["answer_fallback_reason"] = f"b2_mini_verifier:{verification_result['violation'] or 'unknown'}"
+                metadata_out["llm_verbalizer_error"] = verification_result["violations"]
             return fallback_text
 
         return natural_text
-    except Exception:
+    except Exception as exc:
+        if metadata_out is not None:
+            metadata_out["answer_fallback_reason"] = "llm_verbalizer_exception"
+            metadata_out["llm_verbalizer_error"] = str(exc)
         return fallback_text
 

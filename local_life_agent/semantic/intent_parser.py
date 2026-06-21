@@ -307,6 +307,7 @@ def parse_semantic_frame(
             "rule_based": "rule_based",
             "fake_llm": "fake_llm",
             "fake": "fake_llm",
+            "spy_real_llm": "spy_real_llm",
             "real_llm": "real_llm",
             "real": "real_llm",
         }

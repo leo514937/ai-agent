@@ -36,6 +36,10 @@ def infer_recommendation_query(semantic_frame: dict[str, Any]) -> str:
     if mentions:
         return str(mentions[0]).strip()
 
+    primary_task = str(frame.get("primary_task", "") or "").strip().lower()
+    if "hotpot" in primary_task or "火锅" in primary_task:
+        return "火锅"
+
     signals = _to_dict(frame.get("ranking_signals"))
     for key in ("query", "category", "keyword"):
         value = signals.get(key)
