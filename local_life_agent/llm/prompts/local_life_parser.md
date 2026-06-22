@@ -33,6 +33,21 @@ Schema:
 Rules:
 - `top_intent` must be one of the allowed enum values.
 - `task_type` must be a supported task or null if you cannot determine it.
+- Important task_type distinction rules:
+  - recommendation: User asks for a list of shops matching criteria (cuisine category, nearby, etc.). Keywords: "推荐", "附近", "有没有". merchant_mentions should be empty or contain only specific brand names.
+  - single_shop_query: User mentions a specific named shop (e.g. "海底捞", "麦当劳"). Include the shop name in merchant_mentions.
+  - coupon_query: User only asks about coupons, especially with ordinal references like "第一家", "第二家".
+  - comparison: User compares two or more named shops. Use "A和B哪个好" pattern.
+  - clarification_reply: User is answering a clarification question.
+- Cuisine categories like "火锅", "川菜", "烧烤" are NOT merchant_mentions. They go into hard_constraints or ranking_signals.
+- For follow-up / refinement queries like "便宜一点的呢", "远不远":
+  - Set follow_up to {"is_follow_up": true, "refine_action": "cheaper"} (or appropriate action).
+  - Set need_context to true.
+  - Keep task_type as recommendation for price/quality refinements.
+  - Set merchant_mentions to empty unless a specific shop name is mentioned.
+- For comparison queries:
+  - Put both shop names in both merchant_mentions and comparison_targets.
+  - Set comparison_targets entries with reference: "explicit" and source_text matching the original text.
 - `facets` must contain objects with `name` and `required`.
 - `merchant_mentions` must contain only the exact shop-name text as it appears in the user message — do NOT change or "correct" characters (e.g. if the user writes "川味轩", the mention must be "川味轩", not "川味宣"). Never output `shop_id`.
 - `comparison_targets` must contain only structured shop-name references; never output `shop_id`, `winner`, or `ranking`.

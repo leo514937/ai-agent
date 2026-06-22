@@ -38,8 +38,8 @@ def _assert_llm_path_taken(response: Any, spy: SpyRealLLMBackend) -> None:
     assert spy.called, "SpyRealLLMBackend was never called — LLM path not exercised"
     assert response.debug is not None
     semantic_source = response.debug.semantic_frame.get("semantic_source", "")
-    assert semantic_source in ("real_llm", "fake_llm"), (
-        f"Expected real_llm/fake_llm semantic_source, got {semantic_source!r}"
+    assert semantic_source in ("real_llm", "fake_llm", "spy_real_llm"), (
+        f"Expected real_llm/fake_llm/spy_real_llm semantic_source, got {semantic_source!r}"
     )
     assert response.debug.semantic_frame.get("llm_called") is True
 
@@ -62,7 +62,7 @@ class TestRecommendationLLMPath:
         assert spy.called, "SpyRealLLMBackend was never called"
         assert response.debug is not None
         sf = response.debug.semantic_frame
-        assert sf.get("semantic_source") in ("real_llm", "fake_llm"), sf.get("semantic_source")
+        assert sf.get("semantic_source") in ("real_llm", "fake_llm", "spy_real_llm"), sf.get("semantic_source")
         assert sf.get("llm_called") is True
 
     def test_recommendation_with_poison_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -84,7 +84,7 @@ class TestRecommendationLLMPath:
 
         assert spy.called
         assert response.debug is not None
-        assert response.debug.semantic_frame.get("semantic_source") in ("real_llm", "fake_llm")
+        assert response.debug.semantic_frame.get("semantic_source") in ("real_llm", "fake_llm", "spy_real_llm")
 
 
 # ===================================================================
@@ -125,7 +125,7 @@ class TestComparisonLLMPath:
 
         assert spy.called, "LLM path not exercised for comparison"
         assert response.debug is not None
-        assert response.debug.semantic_frame.get("semantic_source") in ("real_llm", "fake_llm")
+        assert response.debug.semantic_frame.get("semantic_source") in ("real_llm", "fake_llm", "spy_real_llm")
         assert response.debug.semantic_frame.get("llm_called") is True
 
     def test_comparison_with_poison(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -188,7 +188,7 @@ class TestMultiTurnLLMPath:
 
         assert spy.called
         assert response.debug is not None
-        assert response.debug.semantic_frame.get("semantic_source") in ("real_llm", "fake_llm")
+        assert response.debug.semantic_frame.get("semantic_source") in ("real_llm", "fake_llm", "spy_real_llm")
 
     def test_multiturn_with_poison(self, monkeypatch: pytest.MonkeyPatch) -> None:
         get_session_store().save(
@@ -226,7 +226,7 @@ class TestRefinementLLMPath:
 
         assert spy.called
         assert response.debug is not None
-        assert response.debug.semantic_frame.get("semantic_source") in ("real_llm", "fake_llm")
+        assert response.debug.semantic_frame.get("semantic_source") in ("real_llm", "fake_llm", "spy_real_llm")
 
     def test_refinement_with_poison(self, monkeypatch: pytest.MonkeyPatch) -> None:
         spy = SpyRealLLMBackend()
@@ -286,7 +286,7 @@ class TestDeicticComparisonLLMPath:
 
         assert spy.called
         assert response.debug is not None
-        assert response.debug.semantic_frame.get("semantic_source") in ("real_llm", "fake_llm")
+        assert response.debug.semantic_frame.get("semantic_source") in ("real_llm", "fake_llm", "spy_real_llm")
 
     def test_deictic_comparison_with_poison(self, monkeypatch: pytest.MonkeyPatch) -> None:
         get_session_store().save(

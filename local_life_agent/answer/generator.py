@@ -668,7 +668,7 @@ def generate_answer(
         from ..llm.client import call_llm
         client = llm_client or call_llm
         plan = _build_decision_plan(answer_plan, evidence)
-        verbalized = verbalize_decision_plan(plan, llm_client=client, fallback_text=template_text, metadata_out=metadata_out)
+        verbalized = verbalize_decision_plan(plan, llm_client=client, fallback_text=template_text, metadata_out=metadata_out, timeout_ms=config.LLM_TIMEOUT_MS)
         if verbalized != template_text:
             metadata["llm_used"] = True
             metadata["answer_source"] = "llm_verbalizer"

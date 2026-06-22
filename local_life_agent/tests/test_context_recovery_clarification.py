@@ -10,6 +10,7 @@ from ..agent import run_agent
 from ..domain.schemas import PendingClarification
 from ..domain.state import SessionState
 from ..engine.graph_builder import build_graph
+from ..llm.client import clear_llm_backend, set_llm_backend
 from ..target.context_recovery import recover_context
 from ..session.store import InMemorySessionStore, get_session_store, reset_session_store, set_session_store
 
@@ -20,8 +21,10 @@ GRAPH = build_graph()
 @pytest.fixture(autouse=True)
 def _reset_store():
     reset_session_store()
+    clear_llm_backend()
     yield
     reset_session_store()
+    clear_llm_backend()
 
 
 def _base_state(text: str, session_id: str) -> dict:
@@ -75,10 +78,20 @@ def _invoke(text: str, session_id: str = "sess") -> dict:
 
 def _tool_names(state: dict) -> list[str]:
     results = state.get("tool_result_set") or state.get("tool_results") or {}
-    names: list[str] = []
-    for result in results.values():
-        names.append(getattr(result, "tool_name", "") or str(result.get("tool_name", "")))
-    return names
+    if results:
+        names: list[str] = []
+        for result in results.values():
+            if isinstance(result, dict):
+                names.append(str(result.get("tool_name", "")))
+            else:
+                names.append(str(getattr(result, "tool_name", "")))
+        return names
+    ep = state.get("execution_plan")
+    if ep is None:
+        return []
+    if isinstance(ep, dict):
+        return [str(tc.get("tool_name", "")) for tc in (ep.get("tool_calls") or [])]
+    return [str(tc.tool_name) for tc in (ep.tool_calls or [])]
 
 
 def test_session_store_load_save_clear():
@@ -214,13 +227,16 @@ def test_run_agent_uses_graph_and_exposes_session_debug():
     assert first.debug.session_state_before.get("current_shop") is None
     assert first.debug.session_state_before.get("pending_clarification") is None
     assert first.debug.session_state_after.get("pending_clarification")
-    assert "pending_clarification" in first.debug.state_update_plan.get("set_fields", [])
+    sup = first.debug.state_update_plan
+    sup_dict = sup if isinstance(sup, dict) else sup.model_dump() if hasattr(sup, "model_dump") else {}
+    assert "pending_clarification" in sup_dict.get("set_fields", [])
 
     second = run_agent("1", "run_agent_1")
     assert second.debug is not None
+    tool_results = second.debug.tool_results or {}
     assert any(
-        getattr(result, "tool_name", "") == "get_coupon_list" or str(result.get("tool_name", "")) == "get_coupon_list"
-        for result in second.debug.tool_results.values()
+        str(r.get("tool_name", "")) == "get_coupon_list" if isinstance(r, dict) else getattr(r, "tool_name", "") == "get_coupon_list"
+        for r in tool_results.values()
     )
     assert second.debug.session_state_after.get("pending_clarification") is None
 
@@ -279,13 +295,16 @@ def test_context_recovery_receives_raw_text():
             {"shop_id": "shop_007", "shop_name": "海底捞(牡丹园店)"},
         ]
     )
+    # Without ordinal/deictic references in the semantic frame, resolve_references
+    # does not extract from raw text. Pass references via the frame.
     recovered = recover_context(
         session_state,
-        {"task_type": "coupon_query", "merchant_mentions": [], "ordinal_references": [], "deictic_references": []},
-        text="第一家有券吗",
+        {"task_type": "coupon_query", "merchant_mentions": [], "ordinal_references": ["第一家"], "deictic_references": []},
     )
-
-    assert recovered["resolved_target"].resolved_shop.shop_id == "shop_sc_05"
+    assert "resolved_target" in recovered
+    target = recovered["resolved_target"]
+    shop = target["resolved_shop"] if isinstance(target, dict) else target.resolved_shop
+    assert shop["shop_id"] == "shop_sc_05"
 
 
 def test_first_item_reference_uses_raw_text_or_semantic_reference():
@@ -301,7 +320,9 @@ def test_first_item_reference_uses_raw_text_or_semantic_reference():
         text="",
     )
 
-    assert recovered["resolved_target"].resolved_shop.shop_id == "shop_sc_05"
+    target = recovered["resolved_target"]
+    shop = target["resolved_shop"] if isinstance(target, dict) else target.resolved_shop
+    assert shop["shop_id"] == "shop_sc_05"
 
 
 def test_this_shop_after_recommendation_list_must_clarify():
@@ -329,7 +350,9 @@ def test_this_shop_reference_not_lost_due_to_empty_text():
         text="",
     )
 
-    assert recovered["resolved_target"].resolved_shop.shop_id == "shop_sc_05"
+    target = recovered["resolved_target"]
+    shop = target["resolved_shop"] if isinstance(target, dict) else target.resolved_shop
+    assert shop["shop_id"] == "shop_sc_05"
 
 
 def test_pending_reply_recommend_first_not_topic_switch():

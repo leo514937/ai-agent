@@ -40,6 +40,12 @@ def infer_recommendation_query(semantic_frame: dict[str, Any]) -> str:
     if "hotpot" in primary_task or "火锅" in primary_task:
         return "火锅"
 
+    # Try cuisine from hard_constraints first
+    hard_constraints = _to_dict(frame.get("hard_constraints"))
+    cuisine = str(hard_constraints.get("cuisine", "") or "").strip()
+    if cuisine:
+        return cuisine
+
     # Strip common intent-direction verbs from start AND end to extract the core subject
     task_stripped = primary_task
     for _pfx in ("附近推荐", "推荐附近", "推荐", "找", "附近", "查询", "寻找", "有", "来", "求推荐", "求", "想找", "想要", "需要", "有没有"):

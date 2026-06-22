@@ -84,6 +84,7 @@ def _invoke_verbalizer_llm(
     *,
     prompt: str,
     system_prompt: str,
+    timeout_ms: int = 30000,
 ) -> dict[str, Any]:
     validator = VerbalizerResponse.model_validate
 
@@ -92,6 +93,7 @@ def _invoke_verbalizer_llm(
             return llm_client(
                 prompt=prompt,
                 system_prompt=system_prompt,
+                timeout_ms=timeout_ms,
                 response_validator=validator,
             )
         except TypeError as exc:
@@ -101,6 +103,7 @@ def _invoke_verbalizer_llm(
             return call_llm(
                 prompt=prompt,
                 system_prompt=system_prompt,
+                timeout_ms=timeout_ms,
                 response_validator=validator,
                 backend=llm_client,
             )
@@ -111,6 +114,7 @@ def _invoke_verbalizer_llm(
     return call_fn(
         prompt=prompt,
         system_prompt=system_prompt,
+        timeout_ms=timeout_ms,
         response_validator=validator,
     )
 
@@ -121,6 +125,7 @@ def verbalize_decision_plan(
     llm_client: Any | None = None,
     fallback_text: str = "",
     metadata_out: dict | None = None,
+    timeout_ms: int = 30000,
 ) -> str:
     # Check client
     if not llm_client:
@@ -177,6 +182,7 @@ def verbalize_decision_plan(
                 llm_client,
                 prompt=user_prompt,
                 system_prompt=system_prompt,
+                timeout_ms=timeout_ms,
             )
         except AttributeError:
             if metadata_out is not None:

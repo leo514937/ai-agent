@@ -27,12 +27,15 @@ class SpyRealLLMBackend:
 
     llm_backend = "spy_real_llm"
 
-    def __init__(self, scenario_payloads: dict[str, dict[str, Any]] | None = None):
+    def __init__(self, scenario_payloads: dict[str, dict[str, Any]] | None = None, **kwargs):
         self.requests: list[dict[str, Any]] = []
         self.prompts: list[str] = []
         self.responses: list[dict[str, Any]] = []
         self.sentinel_id = f"{LLM_SENTINEL_PREFIX}{uuid.uuid4().hex[:8].upper()}"
         self._scenario_payloads = dict(scenario_payloads or {})
+        # Backward compat: default_payload= is stored as __default__ marker
+        if kwargs.get("default_payload") is not None:
+            self._scenario_payloads["__default__"] = kwargs["default_payload"]
 
     @property
     def called(self) -> bool:
@@ -111,6 +114,8 @@ class SpyRealLLMBackend:
 
     def _scenario_payload(self, text: str) -> dict[str, Any]:
         for marker, payload in self._scenario_payloads.items():
+            if marker == "__default__":
+                return dict(payload)
             if marker and marker in text:
                 return dict(payload)
 

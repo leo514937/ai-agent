@@ -940,6 +940,7 @@ def _build_recommendation_evidence(
                 "rank": idx,
                 "shop_id": item.get("shop_id", ""),
                 "shop_name": item.get("shop_name", ""),
+                "category": item.get("category", ""),
                 "rating": item.get("rating"),
                 "distance_km": item.get("distance_km"),
                 "eta_minutes": item.get("eta_minutes"),

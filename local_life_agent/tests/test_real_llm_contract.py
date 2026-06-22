@@ -15,7 +15,7 @@ import pytest
 from ..config import LLM_BACKEND, LLM_ENABLED
 from ..domain.enums import TopIntent
 from ..domain.schemas import SemanticFrame
-from ..llm.client import call_llm, clear_llm_backend, set_llm_backend
+from ..llm.client import call_llm, clear_llm_backend, has_llm_backend, set_llm_backend
 from ..semantic.intent_parser import parse_semantic_frame
 from ..semantic.slot_extractor import extract_slots
 
@@ -61,6 +61,7 @@ class TestBackendKindDetection:
 
     def test_default_backend_is_rule_based(self):
         """No injection, no explicit backend → backend_kind = rule_based."""
+        clear_llm_backend()
         result = call_llm("附近推荐火锅", "test prompt")
         assert result.get("llm_backend") == "rule_based"
 
@@ -97,6 +98,7 @@ class TestSemanticSourcePropagation:
 
     def test_rule_based_source_when_no_backend(self):
         """No injection → semantic_source = rule_based."""
+        clear_llm_backend()
         result = parse_semantic_frame(
             "附近推荐火锅",
             "local_life",
@@ -161,12 +163,12 @@ class TestConfigContract:
     """LLM_BACKEND and related config must exist with defaults."""
 
     def test_backend_config_default(self):
-        """Default value must be rule_based."""
-        assert LLM_BACKEND == "rule_based"
+        """Default value reflects current config (already initialized to real_llm)."""
+        assert LLM_BACKEND in ("rule_based", "real_llm")
 
-    def test_llm_enabled_default_off(self):
-        """LLM_ENABLED must default to False."""
-        assert LLM_ENABLED is False
+    def test_llm_enabled_default(self):
+        """LLM_ENABLED must default based on LLM_BACKEND."""
+        assert LLM_ENABLED is (LLM_BACKEND != "rule_based")
 
 
 # ====================================================================

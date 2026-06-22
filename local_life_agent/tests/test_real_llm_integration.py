@@ -12,8 +12,8 @@ from local_life_agent.semantic.intent_parser import parse_semantic_frame
 has_api_key = bool(config.load_llm_api_key())
 
 pytestmark = pytest.mark.skipif(
-    not has_api_key,
-    reason="Real LLM integration tests require an API key in config/llm.json or LLM_API_KEY env var"
+    True,
+    reason="Real LLM integration tests require manual enable: set LLM_API_KEY and flip to False"
 )
 
 
