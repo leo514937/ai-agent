@@ -44,7 +44,8 @@ class GraphState(TypedDict, total=False):
     # === 顶层意图 (Top Intent) — write: top_intent_router, read: semantic_parse/response_builder ===
     top_intent: Optional[TopIntent]
 
-    task_type: Optional[TaskType]
+    # str — written as TaskType.value string by task_plan / target_resolve / semantic_parse
+    task_type: Optional[str]
 
     # === 语义帧 (Semantic Frame) — write: semantic_parse/slot_extractor, read: context_recovery/task_router ===
     semantic_frame: Optional[SemanticFrame]

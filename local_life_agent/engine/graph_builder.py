@@ -658,10 +658,36 @@ def _h_target_resolve(state: GraphState) -> dict:
             **_log(state, "target_resolve", status="RESOLVED", query="recommendation_flow"),
         }
 
+    # ★ Detect misclassified recommendation follow-up:
+    #   Query with no explicit shops (e.g. "便宜一点的呢") after a previous
+    #   recommendation → route as recommendation_refine regardless of LLM
+    #   task_type (which may be comparison, clarification_reply, etc.).
+    frame_dict = _to_dict(sf)
+    explicit_mentions = [str(item).strip() for item in (frame_dict.get("merchant_mentions") or []) if str(item).strip()]
+    has_structured_refs = bool(frame_dict.get("ordinal_references") or frame_dict.get("deictic_references"))
+    if not explicit_mentions and not has_structured_refs:
+        session = state.get("session_state_before") or state.get("session_state") or {}
+        if hasattr(session, "last_recommendation_list"):
+            prev_recs = list(session.last_recommendation_list)  # type: ignore[union-attr]
+        elif isinstance(session, dict):
+            prev_recs = list(session.get("last_recommendation_list") or [])
+        else:
+            prev_recs = []
+        if prev_recs:
+            synthetic = ResolveShopResult(
+                status="RESOLVED",
+                resolved_shop=ShopRef(shop_id="recommendation", shop_name="????"),
+                confidence=1.0,
+                reason="recommendation_refine",
+            )
+            return {
+                "resolve_shop_result": synthetic,
+                "resolved_target": synthetic,
+                "task_type": TaskType.recommendation.value,
+                **_log(state, "target_resolve", status="RESOLVED", query="recommendation_refine"),
+            }
+
     if comparison_requested:
-        frame_dict = _to_dict(sf)
-        explicit_mentions = [str(item).strip() for item in (frame_dict.get("merchant_mentions") or []) if str(item).strip()]
-        has_structured_refs = bool(frame_dict.get("ordinal_references") or frame_dict.get("deictic_references"))
         if len(explicit_mentions) >= 2 and not has_structured_refs:
             direct_targets: list[dict[str, Any]] = []
             seen: set[str] = set()
@@ -783,12 +809,19 @@ def _h_target_resolve(state: GraphState) -> dict:
                             })
                             candidates.append(ShopCandidate(shop=ShopRef(shop_id=shop_id, shop_name=shop_name)))
                     
-                    resolved_result = ResolveShopResult(
-                        status="AMBIGUOUS",
-                        candidates=candidates,
-                        confidence=0.5,
-                        reason="pronoun_without_current_shop",
-                    )
+                    if candidates:
+                        resolved_result = ResolveShopResult(
+                            status="AMBIGUOUS",
+                            candidates=candidates,
+                            confidence=0.5,
+                            reason="pronoun_without_current_shop",
+                        )
+                    else:
+                        resolved_result = ResolveShopResult(
+                            status="NOT_FOUND",
+                            confidence=0.0,
+                            reason="comparison_requires_at_least_two_shops",
+                        )
                     pending = build_pending_clarification(
                         original_text=str(state.get("raw_text", "") or ""),
                         original_semantic_frame=sf.model_dump(mode="json") if hasattr(sf, "model_dump") else _session_state_dict(sf),
@@ -804,7 +837,7 @@ def _h_target_resolve(state: GraphState) -> dict:
                         "resolve_shop_result": resolved_result,
                         "pending_clarification": pending,
                         "final_response": prompt,
-                        **_log(state, "target_resolve", status="AMBIGUOUS", query="comparison"),
+                        **_log(state, "target_resolve", status="NEED_CLARIFICATION", query="comparison"),
                     }
                 else:
                     final_response = comparison_resolution.get("prompt") or _comparison_reason_response(reason)
@@ -1051,7 +1084,7 @@ def _h_target_resolve(state: GraphState) -> dict:
 # §1 input:  resolve_shop_result, semantic_frame
 # §1 output: pending_clarification 鎴?resolved_target (鍙墽琛岀洰鏍?
 def _h_clarify_decide(state: GraphState) -> dict:
-    if state.get("task_type") == TaskType.recommendation:
+    if state.get("task_type") == TaskType.recommendation.value:
         return {
             "resolved_target": state.get("resolved_target") or state.get("resolve_shop_result"),
             **_log(state, "clarify_decide", decision="proceed_recommendation"),
@@ -1088,6 +1121,10 @@ def _h_clarify_decide(state: GraphState) -> dict:
 # §1 input:  top_intent, task_type, resolved_target
 # §1 output: execution_plan
 def _h_task_plan(state: GraphState) -> dict:
+    # Allow _h_target_resolve to pre-set task_type (e.g. recommendation_refine)
+    existing = state.get("task_type")
+    if existing:
+        return {"task_type": existing, **_log(state, "task_plan")}
     sf = state.get("semantic_frame")
     rt = state.get("resolved_target")
     frame_dict = sf.model_dump() if hasattr(sf, "model_dump") else _to_dict(sf)
@@ -1122,6 +1159,20 @@ def _h_facet_plan(state: GraphState) -> dict:
             if "火锅" in shop_name:
                 fallback_query = "火锅"
                 break
+        if not fallback_query and session_dict.get("last_recommendation_list"):
+            # Use the first shop name (minus parenthetical suffixes) as fallback
+            first = session_dict["last_recommendation_list"][0]
+            first_name = str((_to_dict(first)).get("shop_name", "")).strip()
+            import re as _re
+            core = _re.sub(r"\([^)]*\)", "", first_name).strip() if first_name else ""
+            if core:
+                fallback_query = core
+        if not fallback_query:
+            # Ultimate fallback: use raw_text — this catches English primary_task
+            # where infer_recommendation_query cannot extract Chinese keywords
+            raw = state.get("raw_text", "").strip()
+            if raw and len(raw) >= 2:
+                fallback_query = raw
         plan_payload = build_recommendation_execution_plan(
             frame_dict,
             location=MOCK_LOCATION,
