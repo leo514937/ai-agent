@@ -301,7 +301,7 @@ def _validate_output_schema(
 def call_llm(
     prompt: str,
     system_prompt: str = "",
-    timeout_ms: int = 3000,
+    timeout_ms: int = LLM_TIMEOUT_MS,
     *,
     temperature: float = 0.0,
     max_retries: int = 1,

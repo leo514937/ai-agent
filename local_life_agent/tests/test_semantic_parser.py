@@ -123,13 +123,14 @@ def test_forbidden_semantic_fields_stop_graph_before_tool_execution(monkeypatch)
 
 
 def test_facet_dropped_logging(caplog):
-    """未知 facet 被过滤时应该产生 warning 日志。"""
+    """未知 facet 被过滤时应该产生 warning 日志；已支持的 facet 不应被过滤。"""
     payload = {
         "task_type": "single_shop_query",
         "facets": [
             {"name": "coupon", "required": True},
             {"name": "environment", "required": True},
             {"name": "rating", "required": False},
+            {"name": "unknown_xxx", "required": True},
         ],
         "merchant_mentions": ["海底捞"],
     }
@@ -137,7 +138,55 @@ def test_facet_dropped_logging(caplog):
     with caplog.at_level(logging.WARNING, logger="local_life_agent.semantic.intent_parser"):
         result = _validate_semantic_payload(payload)
 
-    assert len(result["facets"]) == 2, f"Expected 2 facets (coupon, rating), got {len(result['facets'])}: {result['facets']}"
-    assert any("environment" in record.message for record in caplog.records), (
-        "Warning log should mention dropped facet 'environment'"
+    # coupon / environment / rating — all supported → kept
+    assert len(result["facets"]) == 3, (
+        f"Expected 3 facets (coupon, environment, rating), "
+        f"got {len(result['facets'])}: {result['facets']}"
+    )
+    kept_names = {f["name"] for f in result["facets"]}
+    assert "coupon" in kept_names
+    assert "environment" in kept_names
+    assert "rating" in kept_names
+
+    # unknown_xxx should be dropped with a warning
+    assert any("unknown_xxx" in record.message for record in caplog.records), (
+        "Warning log should mention dropped facet 'unknown_xxx'"
+    )
+
+
+def test_facet_dropped_facets_captured():
+    """drop_facets 被 _validate_semantic_payload 正确捕获。"""
+    from ..semantic.intent_parser import get_last_dropped_facets, _last_dropped_facets
+
+    # Reset
+    _last_dropped_facets.clear()
+    payload = {
+        "task_type": "single_shop_query",
+        "facets": [
+            {"name": "coupon", "required": True},
+            {"name": "unknown_abc", "required": True},
+            {"name": "unknown_def", "required": False},
+        ],
+        "merchant_mentions": ["海底捞"],
+    }
+    _validate_semantic_payload(payload)
+    dropped = get_last_dropped_facets()
+    assert "unknown_abc" in dropped
+    assert "unknown_def" in dropped
+    assert "coupon" not in dropped
+    # Second call should be empty (cleared)
+    assert get_last_dropped_facets() == []
+
+
+def test_task_type_source_in_graph_state():
+    """GraphState 包含 task_type_source 和 dropped_facets 字段。"""
+    from typing import get_type_hints
+    from ..domain.graph_state import GraphState
+
+    hints = get_type_hints(GraphState)
+    assert "task_type_source" in hints, (
+        f"GraphState missing task_type_source. Available: {list(hints.keys())}"
+    )
+    assert "dropped_facets" in hints, (
+        f"GraphState missing dropped_facets. Available: {list(hints.keys())}"
     )

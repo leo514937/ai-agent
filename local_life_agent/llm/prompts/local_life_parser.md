@@ -11,7 +11,7 @@ Schema:
   "task_type": "coupon_query | single_shop_query | clarification_reply | recommendation | comparison | null",
   "primary_task": "short task label",
   "facets": [
-    {"name": "coupon | open_status | distance | price | rating | category", "required": true}
+    {"name": "coupon | open_status | distance | price | rating | category | environment | taste | service | review_summary | scene_fit", "required": true}
   ],
   "merchant_mentions": ["shop name text"],
   "reference_mentions": [],
@@ -49,6 +49,19 @@ Rules:
 - If a facet is only mentioned in a "顺便/最好/也看一下" style clause, set `required` to false.
 - If no specific shop can be identified, set `need_context` to true.
 - If the request is unrelated to local life, use `out_of_scope` or `chat` or `invalid` as appropriate.
+
+Common query to facet mapping:
+- "有券吗 / 有优惠吗 / 有团购吗" → facet: coupon
+- "现在营业吗 / 开门了吗" → facet: open_status
+- "离我多远 / 距离远不远" → facet: distance
+- "贵不贵 / 便宜一点 / 价格怎么样" → facet: price
+- "评分高吗 / 评分怎么样" → facet: rating
+- "环境怎么样 / 环境好不好" → facet: environment
+- "口味怎么样 / 味道好不好" → facet: taste
+- "服务怎么样 / 服务好不好" → facet: service
+- "评价怎么样 / 口碑怎么样" → facet: review_summary
+- "适合约会吗 / 适合聚餐吗 / 适合带家人去吗" → facet: scene_fit
+- "这是川菜馆吗 / 什么菜系" → facet: category
 
 User text:
 {{TEXT}}

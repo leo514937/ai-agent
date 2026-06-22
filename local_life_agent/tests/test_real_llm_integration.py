@@ -19,18 +19,21 @@ pytestmark = pytest.mark.skipif(
 
 def test_openai_backend_direct_call():
     # Instantiate backend with config or overrides
-    backend = OpenAICompatibleBackend()
+    backend = OpenAICompatibleBackend(timeout_seconds=45)
     
     # Simple direct invocation check
     prompt = "Reply with exactly the word: 'Hello'"
-    response = backend(prompt=prompt, system_prompt="You are a helpful assistant.", temperature=0.0)
+    response = backend(prompt=prompt, system_prompt="You are a helpful assistant.", temperature=0.0, timeout_ms=45000)
     
     assert response is not None
-    assert "hello" in response.lower()
+    assert "hello" in response.get("content", "").lower()
 
 
-def test_openai_backend_integration_via_call_llm():
-    backend = OpenAICompatibleBackend()
+def test_openai_backend_integration_via_call_llm(monkeypatch):
+    monkeypatch.setattr(config, "REAL_LLM_TIMEOUT_SECONDS", 45)
+    monkeypatch.setattr(config, "LLM_TIMEOUT_MS", 45000)
+
+    backend = OpenAICompatibleBackend(timeout_seconds=45)
     set_llm_backend(backend)
     
     try:
@@ -43,19 +46,20 @@ def test_openai_backend_integration_via_call_llm():
         result = call_llm(
             prompt=prompt,
             system_prompt="You must output only valid JSON.",
-            temperature=0.0
+            temperature=0.0,
+            timeout_ms=45000
         )
         
         assert result.get("ok") is True
         assert result.get("llm_backend") == backend.llm_backend
         
         # Verify parse_semantic_frame output metadata
-        frame = parse_semantic_frame("附近推荐火锅", "local_life")
+        frame = parse_semantic_frame("附近推荐火锅", "local_life", llm_call=call_llm)
         
         assert frame["semantic_source"] == "real_llm"
         assert frame["llm_backend"] == backend.llm_backend
         assert frame["llm_called"] is True
-        assert frame["fallback_reason"] is None
+        assert not frame["fallback_reason"]
         
     finally:
         clear_llm_backend()

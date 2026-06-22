@@ -15,7 +15,7 @@ class TopIntent(str, Enum):
 class TaskType(str, Enum):
     recommendation = "recommendation"
     single_shop_query = "single_shop_query"
-    coupon_query = "coupon_query"
+    coupon_query = "coupon_query"  # @deprecated — Use single_shop_query + facets=[coupon]; normalized in route_task()
     comparison = "comparison"
     clarification_reply = "clarification_reply"
     general_chat = "general_chat"
@@ -28,6 +28,11 @@ class Facet(str, Enum):
     price = "price"
     rating = "rating"
     category = "category"
+    environment = "environment"
+    taste = "taste"
+    service = "service"
+    review_summary = "review_summary"
+    scene_fit = "scene_fit"
 
 
 class ToolResultStatus(str, Enum):

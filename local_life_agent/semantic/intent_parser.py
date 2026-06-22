@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -13,6 +14,20 @@ from ..input.normalizer import normalize_text
 from ..llm.client import call_llm, load_prompt
 from ..llm.json_parser import LLMJSONParseError, parse_json_response
 from .slot_extractor import extract_slots
+
+_logger = logging.getLogger(__name__)
+
+# Module-level capture of dropped facets from the last _validate_semantic_payload call.
+# Reset before each LLM call; consumed by parse_semantic_frame after validation.
+_last_dropped_facets: list[str] = []
+
+
+def get_last_dropped_facets() -> list[str]:
+    """Return the list of facet names dropped in the most recent validation, then clear."""
+    global _last_dropped_facets
+    result = list(_last_dropped_facets)
+    _last_dropped_facets = []
+    return result
 
 
 class _TopIntentRouterResponse(BaseModel):
@@ -74,6 +89,7 @@ def _validate_router_payload(payload: Any) -> dict[str, Any]:
 
 
 def _validate_semantic_payload(payload: Any) -> dict[str, Any]:
+    global _last_dropped_facets
     if isinstance(payload, dict) and "facets" in payload and isinstance(payload["facets"], list):
         valid_facet_values = {f.value for f in Facet}
         original_facets = list(payload["facets"])
@@ -85,13 +101,12 @@ def _validate_semantic_payload(payload: Any) -> dict[str, Any]:
             f for f in original_facets
             if isinstance(f, dict) and f.get("name") not in valid_facet_values
         ]
-        if dropped:
-            import logging
-            _logger = logging.getLogger(__name__)
+        _last_dropped_facets = [str(f.get("name", "")) for f in dropped if f.get("name")]
+        if _last_dropped_facets:
             _logger.warning(
                 "Dropped %d facet(s) not in Facet enum: %s",
-                len(dropped),
-                [f.get("name") for f in dropped],
+                len(_last_dropped_facets),
+                _last_dropped_facets,
             )
     try:
         model = _SemanticFrameRouterResponse.model_validate(payload)
@@ -340,6 +355,7 @@ def parse_semantic_frame(
         )
         if frame.top_intent is None and top_intent in {item.value for item in TopIntent}:
             frame.top_intent = TopIntent(top_intent)
+        dropped_facets = get_last_dropped_facets()
         return {
             "semantic_frame": frame,
             "error_code": "",
@@ -349,6 +365,7 @@ def parse_semantic_frame(
             "llm_backend": frame.llm_backend,
             "fallback_reason": frame.fallback_reason,
             "llm_called": frame.llm_called,
+            "dropped_facets": dropped_facets,
         }
 
     error_code = result.get("error_code", "") or "SEMANTIC_PARSE_FAILED"

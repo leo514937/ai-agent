@@ -241,15 +241,15 @@ def test_ordinal_reference_prefers_semantic_frame(
     response = run_agent_graph("第一家有券吗", "e2e_ordinal")
 
     frame = _assert_main_llm_metadata(response)
-    resolved = resolve_references(response.debug.session_state_before, frame)
+    resolved = resolve_references("第一家有券吗", response.debug.session_state_before, frame)
     recommendation_list = response.debug.session_state_before.get("last_recommendation_list") or []
 
     assert frame.get("task_type") == "coupon_query"
     assert frame.get("ordinal_references") == ["第一家"]
     assert resolved.get("resolution_source") == "semantic_frame"
-    assert resolved.get("resolved_target") is not None
+    assert resolved.get("target") is not None
     assert recommendation_list
-    assert resolved["resolved_target"]["resolved_shop"]["shop_id"] == recommendation_list[0]["shop_id"]
+    assert resolved["target"]["shop_id"] == recommendation_list[0]["shop_id"]
     assert response.debug.answer_source in {"llm_verbalizer", "template", "template_fallback"}
     assert spy.call_count >= 3
 
@@ -308,7 +308,7 @@ def test_real_llm_optional_integration_e2e() -> None:
 
     scenarios = [
         ("附近有没有适合约会、现在营业、最好有券的火锅？", "real_e2e_recommend"),
-        ("海底捞和山城一锅哪个好？", "real_e2e_compare"),
+        ("海底捞(牡丹园店)和川味轩(知春路店)哪个好？", "real_e2e_compare"),
         ("附近推荐火锅", "real_e2e_follow_turn1"),
         ("便宜一点的呢", "real_e2e_follow_turn1"),
         ("附近推荐火锅", "real_e2e_ordinal_turn1"),

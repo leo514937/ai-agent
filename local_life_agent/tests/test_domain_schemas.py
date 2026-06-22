@@ -529,7 +529,12 @@ class TestEnums:
         assert Facet.price.value == "price"
         assert Facet.rating.value == "rating"
         assert Facet.category.value == "category"
-        assert len(Facet) == 6
+        assert Facet.environment.value == "environment"
+        assert Facet.taste.value == "taste"
+        assert Facet.service.value == "service"
+        assert Facet.review_summary.value == "review_summary"
+        assert Facet.scene_fit.value == "scene_fit"
+        assert len(Facet) == 11
 
     def test_tool_result_status_values(self):
         assert ToolResultStatus.ok.value == "ok"

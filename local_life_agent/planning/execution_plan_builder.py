@@ -119,8 +119,14 @@ def build_execution_plan(task_type: str, target: dict, facets: list[str | dict[s
         elif facet_name == Facet.distance.value:
             tool_name = "get_distance_eta"
             args = {"shop_id": shop_id, "from_location": config.MOCK_LOCATION}
+        elif facet_name in (Facet.environment.value, Facet.taste.value, Facet.service.value,
+                            Facet.review_summary.value, Facet.scene_fit.value):
+            tool_name = "get_shop_detail"
+            args = {"shop_id": shop_id}
         else:
-            continue
+            # price / rating / category — get_shop_detail 包含这些基础信息
+            tool_name = "get_shop_detail"
+            args = {"shop_id": shop_id}
 
         tool_names.append(tool_name)
         tool_calls.append(

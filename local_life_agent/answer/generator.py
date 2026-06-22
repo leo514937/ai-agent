@@ -621,13 +621,15 @@ def generate_answer(
                 template_text = f"暂时无法确认{shop_name}的相关信息。"
 
     # Track answer source
+    # NOTE: verbalizer diagnostic fields (answer_fallback_reason,
+    # llm_verbalizer_error, generated_llm_answer_before_fallback) are set
+    # by verbalize_decision_plan() in metadata_out.  Do NOT include them
+    # here with defaults, otherwise metadata_out.update(metadata) below
+    # would overwrite the real diagnostic values.
     metadata = {
         "answer_source": "template",
         "llm_verbalizer_enabled": False,
         "llm_used": False,
-        "answer_fallback_reason": "",
-        "llm_verbalizer_error": "",
-        "generated_llm_answer_before_fallback": "",
     }
     
     # Track decision metadata

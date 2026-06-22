@@ -142,3 +142,11 @@
 - 新建了 [test_candidate_decision.py](file:///d:/javacode/hm-dianping/local_life_agent/tests/test_candidate_decision.py)，完整覆盖了收集器 (Collector)、评估器 (Evaluator)、生成器 (Generator) 和适配器 (Adapter) 在推荐、对比、有券/未知属性等场景下的完整逻辑，同时验证了 LLMVerbalizer 的对接表现。
 - 在全量测试套件中，通过了全部 548 个用例（新增 6 个测试全部 Pass），无任何功能性与安全机制回归。
 
+## 2026-06-21 (晚) — 代码清理与 GitHub 推送
+- **Git配置优化**：更新了项目根目录下的 `.gitignore`，新增了针对本地运行时产生的缓存目录 `.omo/` 以及可能包含敏感 API Key 的配置文件 `.env` 和 `**/config/.env` 的过滤规则，防止本地敏感环境配置泄露到代码库。
+- **提交与推送**：将阶段 B2 与阶段 C 开发过程中涉及的所有 Python 代码、Java 控制器及服务端桥接代码、测试用例以及归一化的数据库 Seed 文件（共 71 个新增/修改文件）打包提交，并成功推送到 GitHub 远程仓库的 `toolcall` 开发分支。
+
+## 2026-06-22 进展
+- **启用 Real LLM 运行配置**：更新了 `local_life_agent/config/.env` 配置文件，成功将后台 LLM 切换为真实的 OpenAI 兼容模型后端 (`LOCAL_LIFE_LLM_BACKEND=real_llm`, `ENABLE_REAL_LLM=true`, `ENABLE_LLM_VERBALIZER=true`)，从而走真实的大模型路由和 Verbalizer 自然语言优化。
+- **修复真实 LLM 连通性测试**：修正了 `test_real_llm_integration.py` 中测试对 `dict` 返回值进行 `.lower()` 的断言错误，并通过 `monkeypatch` 将超时时间配置统一放宽至 45 秒，以稳健适配包含代理网络和 OpenRouter/DeepSeek 在内的连接延迟。实测通过真实接口调用验证，2 个 integration 测试用例全部通过 ✅。
+

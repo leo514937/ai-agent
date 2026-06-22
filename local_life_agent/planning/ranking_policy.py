@@ -40,6 +40,20 @@ def infer_recommendation_query(semantic_frame: dict[str, Any]) -> str:
     if "hotpot" in primary_task or "火锅" in primary_task:
         return "火锅"
 
+    # Strip common intent-direction verbs from start AND end to extract the core subject
+    task_stripped = primary_task
+    for _pfx in ("附近推荐", "推荐附近", "推荐", "找", "附近", "查询", "寻找", "有", "来", "求推荐", "求", "想找", "想要", "需要", "有没有"):
+        if task_stripped.startswith(_pfx):
+            task_stripped = task_stripped[len(_pfx):].strip()
+            break
+    # Remove trailing intent words and particles
+    for _sfx in ("的店", "的地方", "的馆子", "的餐厅", "推荐", "的", "一下", "呗", "吧", "呢", "吗", "啊"):
+        if task_stripped.endswith(_sfx):
+            task_stripped = task_stripped[:-len(_sfx)].strip()
+            break
+    if task_stripped and task_stripped != primary_task and len(task_stripped) >= 2:
+        return task_stripped
+
     signals = _to_dict(frame.get("ranking_signals"))
     for key in ("query", "category", "keyword"):
         value = signals.get(key)

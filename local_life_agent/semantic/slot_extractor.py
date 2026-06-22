@@ -90,6 +90,8 @@ _COMPARISON_HINTS = (
     "\u8c01\u66f4",
     "\u66f4\u597d",
     "\u66f4\u4f18",
+    "\u54ea\u4e2a\u597d",
+    "\u54ea\u5bb6\u597d",
     "\u8fd9\u4e09\u5bb6",
     "\u8fd9\u51e0\u5bb6",
 )

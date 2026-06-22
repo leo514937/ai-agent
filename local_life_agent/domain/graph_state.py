@@ -88,6 +88,8 @@ class GraphState(TypedDict, total=False):
     event_log: list
     metrics_tags: dict
     trace_spans: list
+    task_type_source: str  # origin of task_type: llm_semantic | context_recovery | target_resolve_override | pending_clarification_restore
+    dropped_facets: list  # facet names filtered out by validation
 
     # === 会话快照 (Session Snapshot) — write: load_session_state, read: top_intent_router/context_recovery/target_resolve/state_update_plan ===
     session_state_before: Optional[SessionState]  # §1 文档字段：加载时的会话快照

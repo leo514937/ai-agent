@@ -365,10 +365,8 @@ def _h_check_pending(state: GraphState) -> dict:
             updates["semantic_frame"] = restored_frame
         if result.get("task_type"):
             task_type_value = result.get("task_type")
-            try:
-                updates["task_type"] = TaskType(task_type_value)
-            except Exception:
-                updates["task_type"] = task_type_value
+            updates["task_type"] = str(task_type_value)
+            updates["task_type_source"] = "pending_clarification_restore"
         if result.get("resolved_target") is not None:
             updates["resolved_target"] = result.get("resolved_target")
             updates["resolve_shop_result"] = result.get("resolved_target")
@@ -546,6 +544,7 @@ def _h_semantic_parse(state: GraphState) -> dict:
             else:
                 error_code = "SEMANTIC_FRAME_INVALID"
             error_message = validation.get("clarification", "")
+    dropped_facets = parsed.get("dropped_facets", [])
     return {
         "semantic_frame": frame,
         "error_code": error_code,
@@ -554,6 +553,7 @@ def _h_semantic_parse(state: GraphState) -> dict:
         "llm_backend": llm_backend or getattr(frame, "llm_backend", ""),
         "fallback_reason": fallback_reason or getattr(frame, "fallback_reason", ""),
         "llm_called": llm_called if parsed.get("llm_called") is not None else getattr(frame, "llm_called", False),
+        "dropped_facets": dropped_facets,
         **_log(state, "semantic_parse", semantic_source=semantic_source or getattr(frame, "semantic_source", ""), llm_backend=llm_backend or getattr(frame, "llm_backend", ""), fallback_reason=fallback_reason or getattr(frame, "fallback_reason", ""), llm_called=llm_called if parsed.get("llm_called") is not None else getattr(frame, "llm_called", False)),
     }
 
@@ -655,6 +655,7 @@ def _h_target_resolve(state: GraphState) -> dict:
         return {
             "resolve_shop_result": synthetic,
             "resolved_target": synthetic,
+            "task_type_source": "target_resolve_override",
             **_log(state, "target_resolve", status="RESOLVED", query="recommendation_flow"),
         }
 
@@ -684,6 +685,7 @@ def _h_target_resolve(state: GraphState) -> dict:
                 "resolve_shop_result": synthetic,
                 "resolved_target": synthetic,
                 "task_type": TaskType.recommendation.value,
+                "task_type_source": "target_resolve_override",
                 **_log(state, "target_resolve", status="RESOLVED", query="recommendation_refine"),
             }
 
@@ -1128,6 +1130,7 @@ def _h_task_plan(state: GraphState) -> dict:
     task_type = route_task(frame_dict, target_dict)
     return {
         "task_type": task_type,
+        "task_type_source": "llm_semantic",
         **_log(state, "task_plan"),
     }
 
