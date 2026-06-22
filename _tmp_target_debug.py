@@ -28,7 +28,7 @@ graph_builder._h_target_resolve = debug_target_resolve
 try:
     graph_builder._GRAPH_CACHE = None
     reset_session_store()
-    resp = run_agent_graph('海底捞和山城一锅哪个好？', 'probe_comp3')
+    resp = run_agent_graph('海底捞(牡丹园店)和川味轩(知春路店)哪个好？', 'probe_comp3')
     print('FINAL', resp.debug.answer_source, resp.debug.execution_trace)
 finally:
     graph_builder._h_target_resolve = orig

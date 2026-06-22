@@ -16,7 +16,7 @@ reset_session_store()
 cases.append(('1', run_agent_graph('附近有没有适合约会、现在营业、最好有券的火锅？', 'real_q1')))
 
 reset_session_store()
-cases.append(('2', run_agent_graph('海底捞和山城一锅哪个好？', 'real_q2')))
+cases.append(('2', run_agent_graph('海底捞(牡丹园店)和川味轩(知春路店)哪个好？', 'real_q2')))
 
 reset_session_store()
 run_agent_graph('附近推荐火锅', 'real_q3')

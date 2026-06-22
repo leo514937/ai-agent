@@ -9,7 +9,7 @@ backend = OpenAICompatibleBackend(provider=config.LLM_PROVIDER, model=config.LLM
 set_llm_backend(backend)
 try:
     reset_session_store()
-    resp = run_agent_graph('海底捞和山城一锅哪个好？', 'cmp_final')
+    resp = run_agent_graph('海底捞(牡丹园店)和川味轩(知春路店)哪个好？', 'cmp_final')
     print(json.dumps(resp.debug.execution_trace, ensure_ascii=False, default=str))
     print('ANSWER', resp.debug.answer_source, resp.debug.answer_fallback_reason, resp.answer_text)
     print('SF', json.dumps(resp.debug.semantic_frame, ensure_ascii=False, default=str))

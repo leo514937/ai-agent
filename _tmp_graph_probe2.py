@@ -18,7 +18,7 @@ r1 = run_agent_graph('附近有没有适合约会、现在营业、最好有券�
 results.append(('1', r1))
 
 reset_session_store()
-r2 = run_agent_graph('海底捞和山城一锅哪个好？', 'real_q2')
+r2 = run_agent_graph('海底捞(牡丹园店)和川味轩(知春路店)哪个好？', 'real_q2')
 results.append(('2', r2))
 
 reset_session_store()

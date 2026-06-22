@@ -22,7 +22,7 @@ def pass_verify(self, plan, response_text):
 B2MiniVerifier.verify = pass_verify
 try:
     reset_session_store()
-    resp = run_agent_graph('海底捞和山城一锅哪个好？', 'probe_comp')
+    resp = run_agent_graph('海底捞(牡丹园店)和川味轩(知春路店)哪个好？', 'probe_comp')
     print('ANSWER_SOURCE', resp.debug.answer_source)
     print('ANSWER_TEXT', resp.answer_text)
     print('LLM_VIOLATION', resp.debug.llm_verbalizer_violation)

@@ -10,7 +10,7 @@ backend = OpenAICompatibleBackend(provider=config.LLM_PROVIDER, model=config.LLM
 set_llm_backend(backend)
 cases = []
 reset_session_store(); cases.append(('1', run_agent_graph('附近有没有适合约会、现在营业、最好有券的火锅？', 'real_q1')))
-reset_session_store(); cases.append(('2', run_agent_graph('海底捞和山城一锅哪个好？', 'real_q2')))
+reset_session_store(); cases.append(('2', run_agent_graph('海底捞(牡丹园店)和川味轩(知春路店)哪个好？', 'real_q2')))
 reset_session_store(); run_agent_graph('附近推荐火锅', 'real_q3'); cases.append(('3', run_agent_graph('便宜一点的呢', 'real_q3')))
 reset_session_store(); store = get_session_store(); store.save('real_q4', SessionState(last_recommendation_list=[SHOP_HAIDILAO, SHOP_KAOROU])); cases.append(('4', run_agent_graph('第一家有券吗', 'real_q4')))
 for idx, resp in cases:

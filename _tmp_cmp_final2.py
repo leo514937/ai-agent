@@ -10,7 +10,7 @@ set_llm_backend(backend)
 try:
     agent._GRAPH_CACHE = None
     reset_session_store()
-    resp = run_agent_graph('海底捞和山城一锅哪个好？', 'cmp_final2')
+    resp = run_agent_graph('海底捞(牡丹园店)和川味轩(知春路店)哪个好？', 'cmp_final2')
     print(json.dumps(resp.debug.execution_trace, ensure_ascii=False, default=str))
     print('ANSWER', resp.debug.answer_source, resp.debug.answer_fallback_reason, resp.answer_text)
 finally:

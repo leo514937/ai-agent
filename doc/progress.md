@@ -149,4 +149,6 @@
 ## 2026-06-22 进展
 - **启用 Real LLM 运行配置**：更新了 `local_life_agent/config/.env` 配置文件，成功将后台 LLM 切换为真实的 OpenAI 兼容模型后端 (`LOCAL_LIFE_LLM_BACKEND=real_llm`, `ENABLE_REAL_LLM=true`, `ENABLE_LLM_VERBALIZER=true`)，从而走真实的大模型路由和 Verbalizer 自然语言优化。
 - **修复真实 LLM 连通性测试**：修正了 `test_real_llm_integration.py` 中测试对 `dict` 返回值进行 `.lower()` 的断言错误，并通过 `monkeypatch` 将超时时间配置统一放宽至 45 秒，以稳健适配包含代理网络和 OpenRouter/DeepSeek 在内的连接延迟。实测通过真实接口调用验证，2 个 integration 测试用例全部通过 ✅。
+- **代码提交与推送**：对本地 `local_life_agent` 修改（包含新增 `environment`, `taste`, `service` 等 facets 校验过滤、在 `GraphState` 中记录 `task_type_source` 与 `dropped_facets` 状态以增强调试追溯力等特性）进行打包提交，并成功 push 至 GitHub 远程仓库的 `toolcall` 分支。
+
 

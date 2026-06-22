@@ -25,7 +25,7 @@ def wrapped_call_llm(*args, **kwargs):
 llm_client_mod.call_llm = wrapped_call_llm
 try:
     reset_session_store()
-    resp = run_agent_graph('海底捞和山城一锅哪个好？', 'probe_comp2')
+    resp = run_agent_graph('海底捞(牡丹园店)和川味轩(知春路店)哪个好？', 'probe_comp2')
     print('FINAL', resp.debug.answer_source, resp.answer_text)
 finally:
     llm_client_mod.call_llm = real_call_llm
