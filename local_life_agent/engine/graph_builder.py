@@ -1121,10 +1121,6 @@ def _h_clarify_decide(state: GraphState) -> dict:
 # §1 input:  top_intent, task_type, resolved_target
 # §1 output: execution_plan
 def _h_task_plan(state: GraphState) -> dict:
-    # Allow _h_target_resolve to pre-set task_type (e.g. recommendation_refine)
-    existing = state.get("task_type")
-    if existing:
-        return {"task_type": existing, **_log(state, "task_plan")}
     sf = state.get("semantic_frame")
     rt = state.get("resolved_target")
     frame_dict = sf.model_dump() if hasattr(sf, "model_dump") else _to_dict(sf)

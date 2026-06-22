@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..domain.enums import TaskType
+from ..domain.enums import Facet, TaskType
 
 
 def validate_frame(frame: dict) -> dict:
@@ -37,7 +37,11 @@ def validate_frame(frame: dict) -> dict:
         issues.append("missing_task_type")
         clarification = "请补充你要查的店名和优惠券需求。"
     elif isinstance(task_type, TaskType):
-        if task_type == TaskType.coupon_query and not mentions:
+        has_coupon = any(
+            f.get("name") == Facet.coupon.value or (hasattr(f, "name") and getattr(f, "name") == Facet.coupon)
+            for f in (frame.get("facets") or [])
+        )
+        if has_coupon and not mentions:
             issues.append("missing_merchant_mentions")
             clarification = "请告诉我你想查哪家店的优惠券。"
     else:

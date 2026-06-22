@@ -1,5 +1,10 @@
 """State transition routing engine.
 
+⚠️ DEPRECATED — This module is no longer used by the LangGraph runtime.
+Actual routing: engine/graph_builder.py:_NORMAL_EDGES (unconditional)
+                engine/graph_builder.py:_route_* (conditional)
+Keep this file as reference only; verify zero imports before deleting.
+
 Implements the state transition table from
 `todo/02_状态转移与路由决策表.md` §1.
 

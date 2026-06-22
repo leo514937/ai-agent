@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from .. import config
 from ..config import TOOL_DEFAULT_TIMEOUT_MS
 from ..domain.enums import Facet, TaskType
 from .ranking_policy import infer_recommendation_query
+
+_logger = logging.getLogger(__name__)
 
 
 def _to_dict(value: Any) -> dict[str, Any]:
@@ -85,7 +88,12 @@ def build_execution_plan(task_type: str, target: dict, facets: list[str | dict[s
         resolved_shop = resolved_shop.model_dump()
 
     shop_id = resolved_shop.get("shop_id", "")
-    if task_type not in (TaskType.coupon_query.value, TaskType.single_shop_query.value) or status != "RESOLVED" or not shop_id:
+    if task_type != TaskType.single_shop_query.value or status != "RESOLVED" or not shop_id:
+        _logger.warning(
+            "build_execution_plan: unknown task_type=%r or unresolvable target "
+            "(status=%r shop_id=%r) => returning empty plan",
+            task_type, status, shop_id,
+        )
         return {
             "plan_id": "",
             "task_type": task_type,

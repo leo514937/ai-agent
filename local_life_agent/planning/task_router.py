@@ -34,7 +34,10 @@ def route_task(semantic_frame: dict, resolved_target: dict) -> str:
     if resolved_status != "RESOLVED":
         return TaskType.clarification_reply.value
 
-    if task_type in (TaskType.coupon_query.value, TaskType.single_shop_query.value):
+    if task_type == TaskType.coupon_query.value:
+        # Normalize coupon_query → single_shop_query (保留 enum 值以兼容 LLM)
+        return TaskType.single_shop_query.value
+    if task_type == TaskType.single_shop_query.value:
         return task_type
 
     facets = semantic_frame.get("facets") or []

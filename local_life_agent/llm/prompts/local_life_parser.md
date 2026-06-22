@@ -11,7 +11,7 @@ Schema:
   "task_type": "coupon_query | single_shop_query | clarification_reply | recommendation | comparison | null",
   "primary_task": "short task label",
   "facets": [
-    {"name": "coupon | open_status | distance", "required": true}
+    {"name": "coupon | open_status | distance | price | rating | category", "required": true}
   ],
   "merchant_mentions": ["shop name text"],
   "reference_mentions": [],
@@ -34,7 +34,7 @@ Rules:
 - `top_intent` must be one of the allowed enum values.
 - `task_type` must be a supported task or null if you cannot determine it.
 - `facets` must contain objects with `name` and `required`.
-- `merchant_mentions` must contain only text names, never `shop_id`.
+- `merchant_mentions` must contain only the exact shop-name text as it appears in the user message — do NOT change or "correct" characters (e.g. if the user writes "川味轩", the mention must be "川味轩", not "川味宣"). Never output `shop_id`.
 - `comparison_targets` must contain only structured shop-name references; never output `shop_id`, `winner`, or `ranking`.
 - `ordinal_references` and `deictic_references` should list the exact textual references found in the user message.
 - `focused_facets` should contain only the comparison dimensions that are explicitly requested or clearly implied.

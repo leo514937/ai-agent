@@ -137,7 +137,6 @@ class ExecutionPlanValidator:
             registered_tools if registered_tools is not None else set(self._tool_registry.list_tools())
         )
         self._forbidden_tools: dict[str, list[str]] = {
-            "coupon_query": ["search_shops"],
             "single_shop_query": ["search_shops"],
         }
 
