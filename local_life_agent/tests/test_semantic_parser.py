@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+
 from ..domain.enums import TaskType
 from ..agent import run_agent_graph
 from ..engine import graph_builder as gb
 from ..llm.client import call_llm
-from ..semantic.intent_parser import parse_semantic_frame
+from ..semantic.intent_parser import _validate_semantic_payload, parse_semantic_frame
 
 
 def test_semantic_parser_rejects_forbidden_fields_and_retries():
@@ -118,3 +120,24 @@ def test_forbidden_semantic_fields_stop_graph_before_tool_execution(monkeypatch)
     assert not resolve_calls
     assert not tool_calls
     assert "forbidden" in response.answer_text or "店名" in response.answer_text or "优惠券" in response.answer_text
+
+
+def test_facet_dropped_logging(caplog):
+    """未知 facet 被过滤时应该产生 warning 日志。"""
+    payload = {
+        "task_type": "single_shop_query",
+        "facets": [
+            {"name": "coupon", "required": True},
+            {"name": "environment", "required": True},
+            {"name": "rating", "required": False},
+        ],
+        "merchant_mentions": ["海底捞"],
+    }
+
+    with caplog.at_level(logging.WARNING, logger="local_life_agent.semantic.intent_parser"):
+        result = _validate_semantic_payload(payload)
+
+    assert len(result["facets"]) == 2, f"Expected 2 facets (coupon, rating), got {len(result['facets'])}: {result['facets']}"
+    assert any("environment" in record.message for record in caplog.records), (
+        "Warning log should mention dropped facet 'environment'"
+    )

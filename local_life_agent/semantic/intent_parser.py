@@ -74,6 +74,25 @@ def _validate_router_payload(payload: Any) -> dict[str, Any]:
 
 
 def _validate_semantic_payload(payload: Any) -> dict[str, Any]:
+    if isinstance(payload, dict) and "facets" in payload and isinstance(payload["facets"], list):
+        valid_facet_values = {f.value for f in Facet}
+        original_facets = list(payload["facets"])
+        payload["facets"] = [
+            f for f in payload["facets"]
+            if isinstance(f, dict) and f.get("name") in valid_facet_values
+        ]
+        dropped = [
+            f for f in original_facets
+            if isinstance(f, dict) and f.get("name") not in valid_facet_values
+        ]
+        if dropped:
+            import logging
+            _logger = logging.getLogger(__name__)
+            _logger.warning(
+                "Dropped %d facet(s) not in Facet enum: %s",
+                len(dropped),
+                [f.get("name") for f in dropped],
+            )
     try:
         model = _SemanticFrameRouterResponse.model_validate(payload)
     except ValidationError as exc:
