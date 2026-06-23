@@ -759,6 +759,39 @@ class TestNodeHandlers:
         assert "tool_results" in result
         assert "tool_result_set" in result
 
+    def test_tool_execute_ignores_none_search_data(self, monkeypatch: pytest.MonkeyPatch):
+        from ..domain.schemas import ExecutionPlan, ToolCallSpec
+        from ..engine import graph_builder
+
+        monkeypatch.setattr(graph_builder.config, "TOOL_BACKEND", "db")
+
+        def _dispatch(tool_name: str, args: dict) -> dict:
+            if tool_name == "search_shops":
+                return {
+                    "success": True,
+                    "result_status": "ok",
+                    "data": None,
+                    "total": 0,
+                }
+            raise AssertionError(f"Unexpected tool: {tool_name}")
+
+        monkeypatch.setattr(graph_builder, "dispatch_tool_call", _dispatch)
+        plan = ExecutionPlan(
+            task_type="recommendation",
+            tool_calls=[
+                ToolCallSpec(
+                    call_id="call_search_shops",
+                    tool_name="search_shops",
+                    args={"query": "火锅"},
+                )
+            ],
+        )
+
+        result = _HANDLERS["tool_execute"]({"validated_plan": plan})
+
+        assert "tool_result_set" in result
+        assert "call_search_shops" in result["tool_result_set"]
+
     def test_clarify_response_has_template(self):
         result = _HANDLERS["clarify_response"]({})
         assert result["final_response"].strip()

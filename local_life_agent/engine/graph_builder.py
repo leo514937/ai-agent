@@ -1538,7 +1538,7 @@ def _h_tool_execute(state: GraphState) -> dict:
             task_type_value = str(getattr(plan, "task_type", "") or _to_dict(plan).get("task_type", "") or "")
             if task_type_value == TaskType.recommendation.value:
                 search_result = raw_results.get("call_search_shops", {})
-                search_data = _to_dict(search_result).get("data", [])
+                search_data = _to_dict(search_result).get("data") or []
                 shop_ids = [
                     str(item.get("shop_id", "")).strip()
                     for item in search_data if isinstance(item, dict) and str(item.get("shop_id", "")).strip()

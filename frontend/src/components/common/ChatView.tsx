@@ -35,6 +35,35 @@ export const ChatView: React.FC<ChatViewProps> = ({ sessionId, initialQuery, onU
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  const copyMessageText = async (text: string) => {
+    const content = text ?? '';
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(content);
+        return;
+      }
+
+      const textarea = document.createElement('textarea');
+      textarea.value = content;
+      textarea.setAttribute('readonly', 'true');
+      textarea.style.position = 'fixed';
+      textarea.style.left = '-9999px';
+      textarea.style.top = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textarea);
+    } catch (error) {
+      console.error('复制失败:', error);
+    }
+  };
+
+  const copyIcon = (
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="h-3.5 w-3.5">
+      <path d="M16 1.75H8A2.25 2.25 0 0 0 5.75 4v1h-1A2.25 2.25 0 0 0 2.5 7.25v12.5A2.25 2.25 0 0 0 4.75 22h8.5a2.25 2.25 0 0 0 2.25-2.25v-1h1A2.25 2.25 0 0 0 18.75 16v-12A2.25 2.25 0 0 0 16.5 1.75ZM7.25 5V4A.75.75 0 0 1 8 3.25h8A.75.75 0 0 1 16.75 4v12a.75.75 0 0 1-.75.75h-1V7.25A2.25 2.25 0 0 0 12.75 5h-5.5Zm8.25 13v1a.75.75 0 0 1-.75.75h-8.5A.75.75 0 0 1 5.5 19v-12a.75.75 0 0 1 .75-.75h8.5a.75.75 0 0 1 .75.75Z" />
+    </svg>
+  );
+
   // 快捷问题提示卡片
   const suggestionCards = [
     {
@@ -163,13 +192,13 @@ export const ChatView: React.FC<ChatViewProps> = ({ sessionId, initialQuery, onU
         if (idx === messages.length - 1 && m.sender === 'assistant') {
           return {
             ...m,
-            text: m.text + '\n\n⚠️ *[会话已被用户手动中断]*',
+            text: m.text + '\n\n⚠️ *[已停止生成]*',
           };
         }
         return m;
       });
       setMessages(finalMsgs);
-      setCurrentSteps(prev => [...prev, '⏹ 会话已被用户手动中断']);
+      setCurrentSteps(prev => [...prev, '⏹ 已经停止生成']);
       persistMessages(finalMsgs);
     }
   };
@@ -195,6 +224,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ sessionId, initialQuery, onU
     const placeholderMsg: Message = { id: assistantMsgId, sender: 'assistant', text: '' };
     const stageMsgs = [...initialMsgs, placeholderMsg];
     setMessages(stageMsgs);
+    persistMessages(stageMsgs);
 
     const apiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8081';
     let streamText = '';
@@ -419,39 +449,53 @@ export const ChatView: React.FC<ChatViewProps> = ({ sessionId, initialQuery, onU
               return (
                 <div
                   key={msg.id}
-                  className={`flex gap-4 w-full ${isUser ? 'justify-end' : 'justify-start'}`}
+                  className={`flex w-full ${isUser ? 'justify-end' : 'justify-start'}`}
                 >
-                  {/* AI 头像 */}
-                  {!isUser && (
-                    <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-secondary flex items-center justify-center text-white text-sm font-extrabold shadow-theme-sm shrink-0">
-                      AI
+                  {/* 消息内容：用户有气泡，AI没有气泡且没有头像 */}
+                  {isUser ? (
+                    <div className="relative max-w-[70%] pb-7">
+                      <div className="bg-gray-200 dark:bg-[#2f2f2f] text-gray-900 dark:text-gray-100 rounded-2xl px-4 py-2.5 shadow-theme-sm text-xs font-semibold whitespace-pre-wrap select-text">
+                        {msg.text}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => copyMessageText(msg.text)}
+                        className="absolute right-1 bottom-0 inline-flex items-center justify-center rounded-md border border-themeBorder bg-themeBg-card/95 p-1.5 text-themeText-muted shadow-sm transition-colors hover:text-primary hover:border-primary/30"
+                        title="复制消息"
+                        aria-label="复制用户消息"
+                      >
+                        {copyIcon}
+                      </button>
                     </div>
-                  )}
+                  ) : (
+                    <div className="flex flex-col gap-3 w-full items-start">
+                      <div className="relative w-full pb-7">
+                        <div className="text-xs text-themeText-main leading-relaxed py-1 whitespace-pre-wrap select-text w-full">
+                          {msg.text}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => copyMessageText(msg.text)}
+                          className="absolute left-0 bottom-0 inline-flex items-center justify-center rounded-md border border-themeBorder bg-themeBg-card/95 p-1.5 text-themeText-muted shadow-sm transition-colors hover:text-primary hover:border-primary/30"
+                          title="复制消息"
+                          aria-label="复制助手消息"
+                        >
+                          {copyIcon}
+                        </button>
+                      </div>
 
-                  {/* 消息气泡内容 */}
-                  <div className={`flex flex-col gap-2 max-w-[85%] ${isUser ? 'items-end' : 'items-start'}`}>
-                    <div
-                      className={`rounded-theme-lg px-4 py-3 text-xs leading-relaxed border shadow-theme-sm
-                        ${isUser 
-                          ? 'bg-primary text-white border-primary rounded-tr-none' 
-                          : 'bg-themeBg-card text-themeText-main border-themeBorder rounded-tl-none'}`}
-                    >
-                      <div className="whitespace-pre-wrap">{msg.text}</div>
-                    </div>
-
-                    {/* 推理链与卡片组件 */}
-                    {!isUser && (
+                      {/* 推理链与卡片组件：放在文本流下方，无背景气泡 */}
                       <div className="w-full flex flex-col gap-3">
                         {/* 推理链轨迹 */}
                         {msg.steps && msg.steps.length > 0 && (
                           <details className="mt-1 group">
-                            <summary className="text-[9px] font-extrabold text-themeText-light cursor-pointer select-none hover:text-themeText-muted transition-colors outline-none">
-                              ⚡ 查看大模型推理链与工具调用轨迹 ({msg.steps.length} 步)
+                            <summary className="text-[11px] text-themeText-light cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden hover:text-themeText-muted transition-colors outline-none flex items-center gap-1 font-medium">
+                              <span>已思考若干秒 &gt;</span>
                             </summary>
-                            <div className="mt-1.5 p-3 rounded-theme-md bg-themeBg-panel border border-themeBorder text-[9px] font-mono text-themeText-muted flex flex-col gap-1.5 leading-relaxed">
+                            <div className="mt-1.5 pl-3.5 border-l border-themeBorder text-[9px] font-mono text-themeText-muted flex flex-col gap-1.5 leading-relaxed">
                               {msg.steps.map((step, idx) => (
                                 <div key={idx} className="flex gap-1.5">
-                                  <span className="text-primary-hover shrink-0">▸</span>
+                                  <span className="text-primary shrink-0">▸</span>
                                   <span>{step}</span>
                                 </div>
                               ))}
@@ -481,13 +525,6 @@ export const ChatView: React.FC<ChatViewProps> = ({ sessionId, initialQuery, onU
                           </div>
                         )}
                       </div>
-                    )}
-                  </div>
-
-                  {/* 用户头像 */}
-                  {isUser && (
-                    <div className="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center text-primary text-sm font-extrabold shadow-theme-sm shrink-0">
-                      U
                     </div>
                   )}
                 </div>
@@ -496,32 +533,27 @@ export const ChatView: React.FC<ChatViewProps> = ({ sessionId, initialQuery, onU
 
             {/* SSE 正在加载指示 */}
             {isStreaming && (
-              <div className="flex gap-4 w-full justify-start animate-pulse-subtle">
-                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-secondary flex items-center justify-center text-white text-sm font-extrabold shadow-theme-sm shrink-0 animate-spin-slow">
-                  AI
-                </div>
-                <div className="flex flex-col gap-2.5 max-w-[85%]">
-                  <div className="rounded-theme-lg px-4 py-3 bg-themeBg-panel border border-themeBorder text-xs text-themeText-light flex items-center gap-2.5 shadow-theme-sm">
-                    <div className="flex space-x-1 shrink-0">
-                      <div className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                      <div className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <div className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-                    </div>
-                    <span>决策中枢正在读取商户库并评估执行计划...</span>
+              <div className="flex flex-col gap-2.5 w-full justify-start">
+                <div className="flex items-center gap-2.5 py-1 text-xs text-themeText-light">
+                  <div className="flex space-x-1 shrink-0">
+                    <div className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                    <div className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                    <div className="w-1.5 h-1.5 bg-primary rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                   </div>
-                  
-                  {currentSteps.length > 0 && (
-                    <div className="p-3 rounded-theme-md bg-themeBg-panel border border-themeBorder text-[9px] font-mono text-themeText-muted flex flex-col gap-1 w-72 md:w-96 shadow-theme-sm">
-                      <p className="font-extrabold text-primary text-[8px] uppercase tracking-wider mb-1 shrink-0">⚙️ 实时推理链路（LangGraph 节点）</p>
-                      {currentSteps.map((step, idx) => (
-                        <div key={idx} className="flex gap-1.5">
-                          <span className="text-primary-hover shrink-0">▸</span>
-                          <span className="truncate">{step}</span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  <span className="font-semibold">决策中枢正在读取商户库并评估执行计划...</span>
                 </div>
+                
+                {currentSteps.length > 0 && (
+                  <div className="mt-1.5 pl-3.5 border-l border-primary/20 text-[9px] font-mono text-themeText-muted flex flex-col gap-1 w-72 md:w-96 animate-pulse-subtle">
+                    <p className="font-extrabold text-primary text-[8px] uppercase tracking-wider mb-1 shrink-0">⚙️ 实时推理链路（LangGraph 节点）</p>
+                    {currentSteps.map((step, idx) => (
+                      <div key={idx} className="flex gap-1.5">
+                        <span className="text-primary shrink-0">▸</span>
+                        <span className="truncate">{step}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -544,24 +576,30 @@ export const ChatView: React.FC<ChatViewProps> = ({ sessionId, initialQuery, onU
               onChange={(e) => setInputValue(e.target.value)}
               disabled={isStreaming}
               placeholder={isStreaming ? '正在生成流式答复中...' : '给 AI 决策助手发送消息 (如: 对比附近的KTV)'}
-              className="flex-1 bg-transparent text-xs font-semibold text-themeText-main placeholder:text-themeText-light focus:outline-none pr-24 py-1"
+              className="flex-1 bg-transparent text-xs font-semibold text-themeText-main placeholder:text-themeText-light focus:outline-none pr-12 py-1"
             />
-            <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
+            <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center">
               {isStreaming ? (
                 <button
                   type="button"
                   onClick={handleInterrupt}
-                  className="px-3.5 py-1.5 bg-accent-red hover:bg-red-600 text-white text-[10px] font-bold rounded-xl transition-all shadow-theme-sm active:scale-95 flex items-center justify-center gap-1 border border-accent-red"
+                  className="w-8 h-8 bg-accent-red hover:bg-red-600 text-white rounded-full transition-all shadow-theme-sm active:scale-95 flex items-center justify-center border border-accent-red"
+                  title="停止生成"
                 >
-                  <span>⏹</span> 中断
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
+                    <rect x="6" y="6" width="12" height="12" rx="1.5" />
+                  </svg>
                 </button>
               ) : (
                 <button
                   type="submit"
                   disabled={!inputValue.trim()}
-                  className="px-3.5 py-1.5 bg-primary hover:bg-primary-hover disabled:bg-themeBg-panel disabled:text-themeText-light text-white text-[10px] font-bold rounded-xl transition-all shadow-theme-sm active:scale-95 disabled:active:scale-100 flex items-center justify-center border border-primary disabled:border-themeBorder"
+                  className="w-8 h-8 bg-primary hover:bg-primary-hover disabled:bg-themeBg-panel disabled:text-themeText-light text-white rounded-full transition-all shadow-theme-sm active:scale-95 disabled:active:scale-100 flex items-center justify-center border border-primary disabled:border-themeBorder"
+                  title="发送"
                 >
-                  发送
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4">
+                    <path fillRule="evenodd" d="M12 20.25a.75.75 0 0 1-.75-.75V6.31L6.53 11.03a.75.75 0 0 1-1.06-1.06l6-6a.75.75 0 0 1 1.06 0l6 6a.75.75 0 1 1-1.06 1.06l-4.72-4.72V19.5a.75.75 0 0 1-.75.75Z" clipRule="evenodd" />
+                  </svg>
                 </button>
               )}
             </div>

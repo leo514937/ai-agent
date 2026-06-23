@@ -3,6 +3,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { usePathname, useRouter } from 'next/navigation';
+import Link from 'next/link';
 import '../styles/globals.css';
 import { ChatView } from '../components/common/ChatView';
 
@@ -32,13 +33,17 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   const [theme, setTheme] = useState<'light' | 'dark'>('light');
   
   // ChatGPT 风格状态管理
-  const [isChatOpen, setIsChatOpen] = useState(true); // 默认开启大屏聊天 UI
+  const pathname = usePathname();
+  const router = useRouter();
+
+  // isChatOpen 为 null 表示未做手动干预，由当前路径决定 (仅在 "/" 根路由下渲染对话)
+  const [isChatOpen, setIsChatOpen] = useState<boolean | null>(null);
   const [sessionId, setSessionId] = useState<string>('');
   const [history, setHistory] = useState<SessionHistoryItem[]>([]);
   const [chatInitialQuery, setChatInitialQuery] = useState('');
   
-  const pathname = usePathname();
-  const router = useRouter();
+  // 计算最终呈现的 AI 激活状态
+  const activeChatOpen = isChatOpen !== null ? isChatOpen : (pathname === '/');
 
   // 重新从 localStorage 加载历史会话列表
   const reloadHistory = () => {
@@ -46,7 +51,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     if (saved) {
       try {
         const parsed: any[] = JSON.parse(saved);
-        // 映射简化数据结构以节省内存
         const mapped = parsed.map(item => ({
           sessionId: item.sessionId,
           title: item.title || '无标题会话',
@@ -69,25 +73,18 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       document.documentElement.classList.toggle('dark', savedTheme === 'dark');
     }
 
-    const currentHistory = reloadHistory();
-    if (currentHistory.length > 0) {
-      setSessionId(currentHistory[0].sessionId);
-    } else {
-      setSessionId(`session-${Date.now()}`);
-    }
-
-    // 如果初始化访问不是 "/"，则默认关闭聊天以显示子页面内容
-    if (window.location.pathname !== '/') {
-      setIsChatOpen(false);
-    }
+    reloadHistory();
+    // 始终开启一个全新的会话，符合“一旦发送消息就新建会话”的设计
+    setSessionId(`session-${Date.now()}`);
   }, []);
 
   // 监听全局打开 Chat 事件
   useEffect(() => {
     const handleOpenChat = (e: any) => {
+      // 每次从外部路由触发（如卡片点击）进入对话时，都强制新建一个会话
+      setSessionId(`session-${Date.now()}`);
       setChatInitialQuery(e.detail?.query || '');
       setIsChatOpen(true);
-      // 如果不在根路径，则跳转回根路径以展现聊天大 UI
       if (window.location.pathname !== '/') {
         router.push('/');
       }
@@ -133,7 +130,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         const filtered = parsed.filter(item => item.sessionId !== idToDelete);
         localStorage.setItem('chat_sessions', JSON.stringify(filtered));
         
-        // 重新加载状态
         const reloaded = reloadHistory();
         if (idToDelete === sessionId) {
           if (reloaded.length > 0) {
@@ -156,7 +152,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <div className="flex w-full min-h-screen relative overflow-hidden">
               
               {/* 1. 左侧大 Sidebar - ChatGPT 经典暗色面板 */}
-              <aside className="w-64 bg-[#171717] text-gray-200 flex flex-col h-screen sticky top-0 shrink-0 z-40 transition-colors duration-300 border-r border-[#262626] shadow-theme- premium">
+              <aside className="w-64 bg-[#171717] text-gray-200 flex flex-col h-screen sticky top-0 shrink-0 z-40 transition-colors duration-300 border-r border-[#262626] shadow-theme-premium">
                 
                 {/* 品牌 & 新建对话区 */}
                 <div className="p-3.5 flex flex-col gap-3 shrink-0">
@@ -187,7 +183,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                     <p className="text-[10px] text-gray-500 text-center py-8">暂无历史对话</p>
                   ) : (
                     history.map((item) => {
-                      const isActive = item.sessionId === sessionId && isChatOpen;
+                      const isActive = item.sessionId === sessionId && activeChatOpen;
                       return (
                         <div
                           key={item.sessionId}
@@ -224,7 +220,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                       }
                     }}
                     className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold transition-all border border-transparent
-                      ${isChatOpen
+                      ${activeChatOpen
                         ? 'bg-primary/20 text-primary border-primary/20 shadow-theme-sm' 
                         : 'text-gray-400 hover:bg-[#212121] hover:text-white'}`}
                   >
@@ -232,44 +228,54 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                     <span>AI 决策助手</span>
                   </button>
 
-                  <a
+                  <Link
                     href="/"
-                    onClick={(e) => {
-                      setIsChatOpen(false);
-                    }}
+                    onClick={() => setIsChatOpen(false)}
                     className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold transition-all border border-transparent ${
-                      pathname === '/' && !isChatOpen
+                      pathname === '/' && !activeChatOpen
                         ? 'text-primary bg-primary-light/10 border-primary/10 shadow-theme-sm' 
                         : 'text-gray-400 hover:bg-[#212121] hover:text-white'
                     }`}
                   >
                     <span className="text-sm">🏠</span>
                     <span>服务首页</span>
-                  </a>
-                  <a
+                  </Link>
+                  <Link
                     href="/explore"
                     onClick={() => setIsChatOpen(false)}
                     className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold transition-all border border-transparent ${
-                      pathname === '/explore' && !isChatOpen
+                      pathname === '/explore' && !activeChatOpen
                         ? 'text-primary bg-primary-light/10 border-primary/10 shadow-theme-sm' 
                         : 'text-gray-400 hover:bg-[#212121] hover:text-white'
                     }`}
                   >
                     <span className="text-sm">🧭</span>
                     <span>发现推荐</span>
-                  </a>
-                  <a
+                  </Link>
+                  <Link
                     href="/order"
                     onClick={() => setIsChatOpen(false)}
                     className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold transition-all border border-transparent ${
-                      pathname === '/order' && !isChatOpen
+                      pathname === '/order' && !activeChatOpen
                         ? 'text-primary bg-primary-light/10 border-primary/10 shadow-theme-sm' 
                         : 'text-gray-400 hover:bg-[#212121] hover:text-white'
                     }`}
                   >
                     <span className="text-sm">📋</span>
                     <span>我的订单</span>
-                  </a>
+                  </Link>
+                  <Link
+                    href="/profile"
+                    onClick={() => setIsChatOpen(false)}
+                    className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold transition-all border border-transparent ${
+                      pathname === '/profile' && !activeChatOpen
+                        ? 'text-primary bg-primary-light/10 border-primary/10 shadow-theme-sm' 
+                        : 'text-gray-400 hover:bg-[#212121] hover:text-white'
+                    }`}
+                  >
+                    <span className="text-sm">👤</span>
+                    <span>个人中心</span>
+                  </Link>
                 </div>
 
                 {/* 4. 侧边栏 Footer & 主题与用户 */}
@@ -297,47 +303,47 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 
               </aside>
 
-              {/* 2. 右侧主内容视口 (根据 isChatOpen 开关进行大视口切分) */}
-              <div className="flex-1 flex flex-col h-screen min-w-0 overflow-hidden bg-themeBg-main">
+              {/* 2. 右侧主内容视口 (使用 CSS 隐藏/显示以保留 AI 对话挂载和流式状态) */}
+              <div className="flex-1 flex flex-col h-screen min-w-0 overflow-hidden bg-themeBg-main relative">
                 
-                {isChatOpen ? (
-                  // AI 助手激活状态：渲染全屏 ChatView 大 UI
+                {/* AI 助手大 UI：始终挂载，使用 CSS 控制显隐 */}
+                <div className={`flex-grow h-full overflow-hidden ${activeChatOpen ? 'block' : 'hidden'}`}>
                   <ChatView
                     key={sessionId} // 强制绑定 Key 以在会话 ID 切换时重置全部内部状态并自动加载历史
                     sessionId={sessionId}
                     initialQuery={chatInitialQuery}
                     onUpdateHistory={reloadHistory}
                   />
-                ) : (
-                  // AI 助手收起状态：渲染子页面路由（首页推荐、订单列表、发现流）
-                  <div className="flex-1 flex flex-col h-full overflow-y-auto">
-                    {/* 顶部 Sticky View Header */}
-                    <header className="sticky top-0 z-20 flex items-center justify-between px-8 py-4 bg-themeBg-sidebar/80 backdrop-blur-md border-b border-themeBorder transition-colors duration-300 shrink-0">
-                      <div>
-                        <h1 className="font-extrabold text-lg text-themeText-main tracking-tight">商户检索与智能推荐</h1>
-                        <p className="text-xs text-themeText-muted mt-0.5">为您实时寻找附近最划算、最高评分的团购与代金券服务</p>
-                      </div>
-                      
-                      <div className="flex items-center gap-3">
-                        <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-theme-md bg-themeBg-panel border border-themeBorder text-xs font-bold text-themeText-muted">
-                          <span>📍</span>
-                          <span>北京邮电大学</span>
-                        </div>
-                        <button
-                          onClick={handleNewChat}
-                          className="px-4 py-2 text-xs font-bold text-white bg-primary hover:bg-primary-hover rounded-theme-md shadow-theme-sm transition-colors"
-                        >
-                          新建询问
-                        </button>
-                      </div>
-                    </header>
+                </div>
 
-                    {/* 核心页面路由内容区 */}
-                    <main className="flex-grow max-w-7xl w-full mx-auto px-8 py-8">
-                      {children}
-                    </main>
-                  </div>
-                )}
+                {/* 业务功能页面：始终挂载，使用 CSS 控制显隐 */}
+                <div className={`flex-1 flex flex-col h-full overflow-y-auto ${!activeChatOpen ? 'block' : 'hidden'}`}>
+                  {/* 顶部 Sticky View Header */}
+                  <header className="sticky top-0 z-20 flex items-center justify-between px-8 py-4 bg-themeBg-sidebar/80 backdrop-blur-md border-b border-themeBorder transition-colors duration-300 shrink-0">
+                    <div>
+                      <h1 className="font-extrabold text-lg text-themeText-main tracking-tight">商户检索与智能推荐</h1>
+                      <p className="text-xs text-themeText-muted mt-0.5">为您实时寻找附近最划算、最高评分的团购与代金券服务</p>
+                    </div>
+                    
+                    <div className="flex items-center gap-3">
+                      <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-theme-md bg-themeBg-panel border border-themeBorder text-xs font-bold text-themeText-muted">
+                        <span>📍</span>
+                        <span>北京邮电大学</span>
+                      </div>
+                      <button
+                        onClick={handleNewChat}
+                        className="px-4 py-2 text-xs font-bold text-white bg-primary hover:bg-primary-hover rounded-theme-md shadow-theme-sm transition-colors"
+                      >
+                        新建询问
+                      </button>
+                    </div>
+                  </header>
+
+                  {/* 核心页面路由内容区 */}
+                  <main className="flex-grow max-w-7xl w-full mx-auto px-8 py-8">
+                    {children}
+                  </main>
+                </div>
                 
               </div>
 
