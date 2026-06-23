@@ -8,6 +8,7 @@ per §2 Node Table; conditional edges follow §3 Conditional Edge Table.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from time import perf_counter, time
 from typing import Any
 
 from langgraph.graph import END, START, StateGraph
@@ -15,7 +16,7 @@ from langgraph.graph.state import CompiledStateGraph
 from pydantic import ValidationError
 
 from .. import config
-from ..config import MOCK_LOCATION
+from ..config import MOCK_LOCATION, TOOL_DEFAULT_TIMEOUT_MS
 from ..domain.enums import TaskType, ToolResultStatus, TopIntent
 from ..domain.graph_state import GraphState
 from ..domain.schemas import (
@@ -36,15 +37,16 @@ from ..domain.state import SessionState, SessionWriteDirective
 from ..answer.answer_plan_builder import build_answer_plan
 from ..answer.evidence_builder import build_evidence
 from ..answer.generator import generate_answer
-from ..answer.state_update_planner import plan_state_update
+from ..planning.state_update_planner import plan_state_update
+from ..tools.result_semantics import TOOL_FAILURE_STATUSES, get_tool_result_status
 from ..answer.verifier import verify_answer
+from ..observability.trace import record_span, sanitize_payload
 from ..input.hard_guard import check_hard_guard
 from ..input.normalizer import normalize_text as input_normalize_text
 from ..input.receiver import receive_input as assemble_turn_input
 from ..input.validator import validate_basic_input
 from ..planning.plan_validator import ExecutionPlanValidator
-from ..planning.execution_plan_builder import build_execution_plan, build_recommendation_execution_plan
-from ..planning.comparison_planner import plan_comparison
+from ..planning.tool_plan_adapter import build_execution_plan_with_tool_planner
 from ..planning.facet_planner import plan_facets
 from ..planning.task_router import route_task
 from ..semantic.frame_validator import validate_frame
@@ -65,13 +67,47 @@ from .session_write import get_directive, resolve_scenario
 
 GraphNodeFunc = Any  # Callable[[GraphState], dict] —acceptable typing overhead
 
-_GRAPH_REWRITE_LIMIT = 1
+_GRAPH_REWRITE_LIMIT = max(1, config.MAX_REWRITE_ATTEMPTS - 1)
+
+_TRACE_STAGE_MAP: dict[str, str] = {
+    "receive_input": "input_received",
+    "load_session_state": "input_received",
+    "check_pending_clarification": "pending_clarification_checked",
+    "basic_input_validate": "input_received",
+    "normalize_text": "input_received",
+    "hard_guard": "hard_guard",
+    "top_intent_router": "top_intent_router",
+    "semantic_parse": "semantic_parse",
+    "slot_extractor": "semantic_parse",
+    "frame_validator": "semantic_parse",
+    "context_recovery": "context_recovery",
+    "target_resolve": "shop_resolver",
+    "clarify_decide": "reference_resolver",
+    "task_plan": "task_router",
+    "facet_plan": "execution_plan",
+    "comparison_planner": "candidate_decision_plan",
+    "plan_validator": "execution_plan",
+    "tool_execute": "tool_call",
+    "evidence_build": "evidence_builder",
+    "answer_plan_build": "candidate_evidence_collector",
+    "answer_generate": "answer_generate",
+    "answer_verify": "answer_verify",
+    "rewrite": "rewrite",
+    "final_response_build": "final_response",
+    "clarify_response": "final_response",
+    "fallback_answer": "fallback_answer",
+    "state_update_plan": "final_response",
+    "persist_session_state": "final_response",
+    "emit_response": "final_response",
+}
+
 
 
 def _log(state: GraphState, node: str, **extra: Any) -> dict:
     """Return a partial update that appends an event-log entry."""
     log = list(state.get("event_log", []))
-    log.append({"node": node, **extra})
+    entry = {"node": node, **sanitize_payload(extra)}
+    log.append(entry)
     return {"event_log": log}
 
 
@@ -100,6 +136,8 @@ def _plan_validation_error_code(errors: list[str]) -> str:
         return "INVALID_ARGUMENT"
     if "not produced by legitimate resolve" in joined or "shop_id mismatch" in joined:
         return "INVALID_ARGUMENT"
+    if "comparison_target_limit_exceeded" in joined:
+        return "INVALID_ARGUMENT"
     if "INVALID_ARGUMENT" in joined:
         return "INVALID_ARGUMENT"
     if "SCHEMA_VALIDATION_FAILED" in joined:
@@ -119,6 +157,144 @@ def _to_dict(value: Any) -> dict[str, Any]:
         dumped = model_dump()
         return dumped if isinstance(dumped, dict) else {}
     return dict(getattr(value, "__dict__", {}) or {})
+
+
+def _coerce_str(value: Any) -> str:
+    if value is None:
+        return ""
+    if hasattr(value, "value"):
+        value = getattr(value, "value")
+    return str(value)
+
+
+def _trace_input_summary(state: GraphState, node_name: str) -> dict[str, Any]:
+    semantic_frame = _to_dict(state.get("semantic_frame"))
+    summary = {
+        "raw_text": str(state.get("raw_text", "") or "")[:120],
+        "top_intent": _coerce_str(state.get("top_intent") or semantic_frame.get("top_intent"))[:64],
+        "task_type": _coerce_str(state.get("task_type") or semantic_frame.get("task_type"))[:64],
+        "pending_clarification": bool(state.get("pending_clarification")),
+        "rewrite_count": int(state.get("rewrite_count", 0) or 0),
+    }
+    if node_name == "tool_execute":
+        summary["tool_calls"] = len(getattr(state.get("validated_plan") or state.get("execution_plan"), "tool_calls", []) or [])
+    return sanitize_payload(summary)
+
+
+def _trace_output_summary(update: dict[str, Any]) -> dict[str, Any]:
+    output = {
+        "keys": sorted(str(key) for key in update.keys()),
+        "error_code": _coerce_str(update.get("error_code"))[:64],
+        "answer_source": _coerce_str(update.get("answer_source"))[:64],
+        "verify_result": _coerce_str(update.get("verify_result"))[:64],
+        "tool_result_count": len((_to_dict(update.get("tool_result_set")) or _to_dict(update.get("tool_results")))),
+    }
+    event_log = update.get("event_log") or []
+    if event_log and isinstance(event_log, list) and isinstance(event_log[-1], dict):
+        output["event"] = dict(event_log[-1])
+    return sanitize_payload(output)
+
+
+def _event_status(node_name: str, update: dict[str, Any], event_entry: dict[str, Any]) -> str:
+    status = str(event_entry.get("status", "") or "").strip().lower()
+    if status:
+        return str(event_entry.get("status"))
+    if update.get("error_code"):
+        return "failed"
+    if node_name == "rewrite":
+        return "success"
+    return "success"
+
+
+def _instrument_handler(node_name: str, handler: GraphNodeFunc) -> GraphNodeFunc:
+    stage = _TRACE_STAGE_MAP.get(node_name, node_name)
+
+    def wrapped(state: GraphState) -> dict:
+        started_at = perf_counter()
+        timestamp_ms = int(time() * 1000)
+        input_summary = _trace_input_summary(state, node_name)
+        try:
+            update = handler(state)
+        except Exception as exc:
+            try:
+                trace_id = str(state.get("trace_id", "") or "")
+                if trace_id:
+                    record_span(
+                        trace_id,
+                        node_name,
+                        {
+                            "session_id": str(state.get("session_id", "") or "") or None,
+                            "turn_id": str(state.get("turn_id", "") or ""),
+                            "stage": stage,
+                            "status": "failed",
+                            "timestamp_ms": timestamp_ms,
+                            "duration_ms": int((perf_counter() - started_at) * 1000),
+                            "input_summary": input_summary,
+                            "output_summary": {},
+                            "error_code": "TRACE_HANDLER_EXCEPTION",
+                            "error_message": str(exc),
+                            "metadata": {"node": node_name, "trace_safe": True},
+                        },
+                    )
+            except Exception:
+                pass
+            raise
+
+        try:
+            log = list(update.get("event_log", []) or [])
+            event_entry = log[-1] if log and isinstance(log[-1], dict) and str(log[-1].get("node", "")) == node_name else {}
+            status = _event_status(node_name, update, event_entry)
+            output_summary = _trace_output_summary(update)
+            metadata = {
+                key: value
+                for key, value in event_entry.items()
+                if key not in {
+                    "node",
+                    "stage",
+                    "status",
+                    "timestamp_ms",
+                    "duration_ms",
+                    "input_summary",
+                    "output_summary",
+                    "error_code",
+                    "error_message",
+                    "metadata",
+                }
+            }
+            standardized = {
+                "node": node_name,
+                "stage": stage,
+                "status": status,
+                "timestamp_ms": timestamp_ms,
+                "duration_ms": int((perf_counter() - started_at) * 1000),
+                "input_summary": input_summary,
+                "output_summary": output_summary,
+                "error_code": _coerce_str(update.get("error_code")) or None,
+                "error_message": _coerce_str(update.get("error_message")) or None,
+                "metadata": sanitize_payload(metadata),
+            }
+            if event_entry:
+                event_entry.update(standardized)
+            else:
+                log.append(standardized)
+            update["event_log"] = log
+            trace_id = str(state.get("trace_id", "") or update.get("trace_id", "") or "")
+            if trace_id:
+                record_span(
+                    trace_id,
+                    node_name,
+                    {
+                        "session_id": str(state.get("session_id", "") or update.get("session_id", "") or "") or None,
+                        "turn_id": str(state.get("turn_id", "") or update.get("turn_id", "") or ""),
+                        **standardized,
+                    },
+                )
+        except Exception:
+            # trace must never break the graph
+            return update
+        return update
+
+    return wrapped
 
 
 def _resolved_shop_ids_from_state(state: GraphState) -> set[str]:
@@ -231,8 +407,69 @@ def _session_shop_ids(state: GraphState) -> list[str]:
     return deduped
 
 
+def _build_conversation_continuity(state: GraphState) -> dict[str, Any]:
+    """Build a lightweight ``conversation_continuity`` dict from graph state.
+
+    This is injected into the verbalizer prompt as metadata only — it
+    is **not** a source of factual claims.  The verbalizer must still
+    derive all facts from ``DecisionPlan`` fields.
+    """
+    cc: dict[str, Any] = {}
+
+    session_state = state.get("session_state_before") or state.get("session_state")
+    if session_state is None:
+        return cc
+
+    # Determine if this turn is a follow-up by inspecting the semantic frame
+    sf = state.get("semantic_frame")
+    if sf is not None:
+        sf_dict = _to_dict(sf)
+        fu = sf_dict.get("follow_up") or {}
+        if isinstance(fu, dict) and fu.get("is_follow_up"):
+            cc["is_follow_up"] = True
+            ra = fu.get("refine_action")
+            if ra:
+                cc["follow_up_action"] = str(ra)
+
+    # Session-derived continuity hints (shop names only, no IDs)
+    if isinstance(session_state, dict):
+        raw = session_state
+    else:
+        raw = _to_dict(session_state)
+
+    current_raw = raw.get("current_shop") or {}
+    if isinstance(current_raw, dict):
+        name = str(current_raw.get("shop_name", "") or current_raw.get("name", "") or "")
+        if name:
+            cc["previous_focus"] = name
+
+    # Inherited task type
+    last_task = raw.get("last_task_type") or raw.get("task_type") or ""
+    if last_task:
+        cc["previous_task_type"] = str(last_task)
+
+    # Inherited constraints (short keys only)
+    active_raw = raw.get("active_constraints") or {}
+    if isinstance(active_raw, dict) and active_raw:
+        cc["inherited_constraints"] = dict(active_raw)
+
+    return cc
+
+
 def _resolve_search_result_placeholder(value: Any, search_result: Any) -> Any:
-    if not isinstance(value, str) or not value.startswith("$search_result[") or "].shop_id" not in value:
+    if not isinstance(value, str) or not value.startswith("$search_result"):
+        return value
+    if value == "$search_result.shop_ids":
+        items = []
+        if isinstance(search_result, dict):
+            items = list(search_result.get("data", []) or [])
+        return [str(item.get("shop_id", "")).strip() for item in items if isinstance(item, dict) and str(item.get("shop_id", "")).strip()]
+    if value == "$search_result.shop_names":
+        items = []
+        if isinstance(search_result, dict):
+            items = list(search_result.get("data", []) or [])
+        return [str(item.get("shop_name", "")).strip() for item in items if isinstance(item, dict) and str(item.get("shop_name", "")).strip()]
+    if not value.startswith("$search_result[") or "].shop_id" not in value:
         return value
     try:
         index_part = value.split("[", 1)[1].split("]", 1)[0]
@@ -495,18 +732,21 @@ def _h_semantic_parse(state: GraphState) -> dict:
     txt = state.get("normalized_text", "")
     top_intent = state.get("top_intent")
     top_intent_value = top_intent.value if isinstance(top_intent, TopIntent) else str(top_intent or "")
+    session_state = state.get("session_state_before") or state.get("session_state")
     try:
         parsed = parse_semantic_frame(
             txt,
             top_intent_value,
             llm_call=call_llm,
             allow_fallback=config.SEMANTIC_FALLBACK_ENABLED,
+            session_state=session_state,
         )
     except TypeError:
         parsed = parse_semantic_frame(
             txt,
             top_intent_value,
             llm_call=call_llm,
+            session_state=session_state,
         )
     frame = parsed.get("semantic_frame")
     error_code = parsed.get("error_code", "")
@@ -554,7 +794,7 @@ def _h_semantic_parse(state: GraphState) -> dict:
         "fallback_reason": fallback_reason or getattr(frame, "fallback_reason", ""),
         "llm_called": llm_called if parsed.get("llm_called") is not None else getattr(frame, "llm_called", False),
         "dropped_facets": dropped_facets,
-        **_log(state, "semantic_parse", semantic_source=semantic_source or getattr(frame, "semantic_source", ""), llm_backend=llm_backend or getattr(frame, "llm_backend", ""), fallback_reason=fallback_reason or getattr(frame, "fallback_reason", ""), llm_called=llm_called if parsed.get("llm_called") is not None else getattr(frame, "llm_called", False)),
+        **_log(state, "semantic_parse", semantic_source=semantic_source or getattr(frame, "semantic_source", ""), llm_backend=llm_backend or getattr(frame, "llm_backend", ""), fallback_reason=fallback_reason or getattr(frame, "fallback_reason", ""), llm_called=llm_called if parsed.get("llm_called") is not None else getattr(frame, "llm_called", False), task_type=getattr(frame, "task_type", ""), primary_task=getattr(frame, "primary_task", ""), need_context=getattr(frame, "need_context", False), follow_up=_to_dict(getattr(frame, "follow_up", None)), facets=getattr(frame, "focused_facets", []) or []),
     }
 
 
@@ -619,6 +859,10 @@ def _h_context_recovery(state: GraphState) -> dict:
         updates["comparison_targets"] = recovered.get("comparison_targets")
     if recovered.get("comparison_target_resolution") is not None:
         updates["comparison_target_resolution"] = recovered.get("comparison_target_resolution")
+    if recovered.get("reference_resolution_source"):
+        updates["reference_resolution_source"] = str(recovered.get("reference_resolution_source", "") or "")
+    elif recovered.get("context_resolution") and isinstance(recovered.get("context_resolution"), dict):
+        updates["reference_resolution_source"] = str(recovered.get("context_resolution", {}).get("resolution_source", "") or "")
     frame_dict = sf.model_dump() if hasattr(sf, "model_dump") else _to_dict(sf)
     semantic_refs = {
         "ordinal_references": list(frame_dict.get("ordinal_references", []) or []),
@@ -634,6 +878,7 @@ def _h_context_recovery(state: GraphState) -> dict:
             context_recovery_input_text=str(state.get("raw_text", "") or ""),
             context_recovery_used_semantic_refs=semantic_refs,
             context_recovery_result=_to_dict(recovered.get("comparison_target_resolution") or recovered.get("context_resolution")),
+            reference_resolution_source=str(recovered.get("reference_resolution_source") or (recovered.get("context_resolution") or {}).get("resolution_source", "") or ""),
         ),
     }
 
@@ -655,6 +900,7 @@ def _h_target_resolve(state: GraphState) -> dict:
         return {
             "resolve_shop_result": synthetic,
             "resolved_target": synthetic,
+            "reference_resolution_source": "semantic_frame",
             "task_type_source": "target_resolve_override",
             **_log(state, "target_resolve", status="RESOLVED", query="recommendation_flow"),
         }
@@ -685,6 +931,7 @@ def _h_target_resolve(state: GraphState) -> dict:
                 "resolve_shop_result": synthetic,
                 "resolved_target": synthetic,
                 "task_type": TaskType.recommendation.value,
+                "reference_resolution_source": "semantic_frame",
                 "task_type_source": "target_resolve_override",
                 **_log(state, "target_resolve", status="RESOLVED", query="recommendation_refine"),
             }
@@ -732,6 +979,7 @@ def _h_target_resolve(state: GraphState) -> dict:
                     "resolve_shop_result": resolved_result,
                     "resolved_target": resolved_result,
                     "comparison_targets": simple_targets,
+                    "reference_resolution_source": "semantic_frame",
                     **_log(state, "target_resolve", status="RESOLVED", query="comparison_flow"),
                 }
 
@@ -839,6 +1087,7 @@ def _h_target_resolve(state: GraphState) -> dict:
                         "resolve_shop_result": resolved_result,
                         "pending_clarification": pending,
                         "final_response": prompt,
+                        "reference_resolution_source": "semantic_frame",
                         **_log(state, "target_resolve", status="NEED_CLARIFICATION", query="comparison"),
                     }
                 else:
@@ -847,6 +1096,7 @@ def _h_target_resolve(state: GraphState) -> dict:
                         "resolve_shop_result": ResolveShopResult(status="NOT_FOUND", confidence=0.0, reason=reason),
                         "final_response": final_response,
                         "comparison_target_resolution": comparison_resolution,
+                        "reference_resolution_source": "semantic_frame",
                         **_log(state, "target_resolve", status="NEED_CLARIFICATION", query="comparison"),
                     }
 
@@ -966,6 +1216,7 @@ def _h_target_resolve(state: GraphState) -> dict:
             "resolve_shop_result": resolved_result,
             "resolved_target": resolved_result,
             "comparison_targets": simple_targets,
+            "reference_resolution_source": "semantic_frame",
             **_log(state, "target_resolve", status="RESOLVED", query="comparison_flow"),
         }
 
@@ -976,6 +1227,7 @@ def _h_target_resolve(state: GraphState) -> dict:
             return {
                 "resolve_shop_result": existing_target,
                 "resolved_target": existing_target,
+                "reference_resolution_source": "semantic_frame",
                 **_log(state, "target_resolve", status="RESOLVED", query="context_recovered"),
             }
 
@@ -1013,6 +1265,7 @@ def _h_target_resolve(state: GraphState) -> dict:
         return {
             "resolve_shop_result": resolved_result,
             "resolved_target": resolved_result,
+            "reference_resolution_source": str(payload.get("resolution_source", "") or ""),
             **_log(state, "target_resolve", status="RESOLVED", query=query),
         }
 
@@ -1067,6 +1320,7 @@ def _h_target_resolve(state: GraphState) -> dict:
             "resolve_shop_result": resolved_result,
             "pending_clarification": pending,
             "final_response": prompt,
+            "reference_resolution_source": str(payload.get("resolution_source", "") or ""),
             **_log(state, "target_resolve", status="AMBIGUOUS", query=query),
         }
 
@@ -1131,7 +1385,7 @@ def _h_task_plan(state: GraphState) -> dict:
     return {
         "task_type": task_type,
         "task_type_source": "llm_semantic",
-        **_log(state, "task_plan"),
+        **_log(state, "task_plan", task_type=task_type),
     }
 
 
@@ -1139,58 +1393,24 @@ def _h_task_plan(state: GraphState) -> dict:
 # §1 input:  semantic_frame, resolved_target
 # §1 output: execution_plan.tool_calls
 def _h_facet_plan(state: GraphState) -> dict:
-    sf = state.get("semantic_frame")
-    rt = state.get("resolved_target")
-    frame_dict = sf.model_dump() if hasattr(sf, "model_dump") else _to_dict(sf)
-    target_dict = rt.model_dump() if hasattr(rt, "model_dump") else _to_dict(rt)
-    task_type = state.get("task_type") or route_task(frame_dict, target_dict)
-    if task_type == TaskType.recommendation.value:
-        fallback_query = ""
-        session_state = state.get("session_state_before") or state.get("session_state") or {}
-        session_dict = _to_dict(session_state)
-        for item in session_dict.get("last_recommendation_list", []) or []:
-            item_dict = _to_dict(item)
-            category = str(item_dict.get("category", "") or "").strip()
-            shop_name = str(item_dict.get("shop_name", "") or "").strip()
-            if category:
-                fallback_query = category
-                break
-            if "火锅" in shop_name:
-                fallback_query = "火锅"
-                break
-        if not fallback_query and session_dict.get("last_recommendation_list"):
-            # Use the first shop name (minus parenthetical suffixes) as fallback
-            first = session_dict["last_recommendation_list"][0]
-            first_name = str((_to_dict(first)).get("shop_name", "")).strip()
-            import re as _re
-            core = _re.sub(r"\([^)]*\)", "", first_name).strip() if first_name else ""
-            if core:
-                fallback_query = core
-        if not fallback_query:
-            # Ultimate fallback: use raw_text — this catches English primary_task
-            # where infer_recommendation_query cannot extract Chinese keywords
-            raw = state.get("raw_text", "").strip()
-            if raw and len(raw) >= 2:
-                fallback_query = raw
-        plan_payload = build_recommendation_execution_plan(
-            frame_dict,
-            location=MOCK_LOCATION,
-            fallback_query=fallback_query,
-        )
-        plan = ExecutionPlan.model_validate(plan_payload.get("plan", {}))
-        return {
-            "execution_plan": plan,
-            "recommendation_query": plan_payload.get("recommendation_query", ""),
-            "recommendation_candidates": [],
-            **_log(state, "facet_plan", tool_calls=len(plan.tool_calls), candidate_count=0),
-        }
-
-    facets = plan_facets(task_type, frame_dict)
-    plan_dict = build_execution_plan(task_type, target_dict, facets)
-    plan = ExecutionPlan.model_validate(plan_dict)
+    result = build_execution_plan_with_tool_planner(state)
+    plan = ExecutionPlan.model_validate(result.get("execution_plan", {}))
+    task_type = str(result.get("execution_plan", {}).get("task_type", "") if isinstance(result.get("execution_plan"), dict) else getattr(result.get("execution_plan"), "task_type", "") or "")
+    selected_flow = "recommendation_flow" if task_type == TaskType.recommendation.value else f"{task_type}_flow"
     return {
+        **result,
         "execution_plan": plan,
-        **_log(state, "facet_plan", tool_calls=len(plan.tool_calls)),
+        **_log(
+            state,
+            "facet_plan",
+            tool_calls=len(plan.tool_calls),
+            candidate_count=0,
+            selected_flow=selected_flow,
+            tool_plan_source=result.get("tool_plan_source"),
+            tool_plan_validated=result.get("tool_plan_validated"),
+            tool_plan_fallback_reason=result.get("tool_plan_fallback_reason"),
+            tool_plan_reason=result.get("tool_plan_reason"),
+        ),
     }
 
 
@@ -1198,25 +1418,9 @@ def _h_facet_plan(state: GraphState) -> dict:
 # §1 input:  comparison_targets, resolved_target
 # §1 output: execution_plan, comparison_matrix placeholder
 def _h_comparison_planner(state: GraphState) -> dict:
+    result = build_execution_plan_with_tool_planner(state)
+    plan = ExecutionPlan.model_validate(result.get("execution_plan", {}))
     comparison_targets = list(state.get("comparison_targets", []) or [])
-    if not comparison_targets:
-        resolved = state.get("resolved_target")
-        if resolved is not None:
-            comparison_targets.append(resolved)
-    focus_facets: list[str] = []
-    sf = state.get("semantic_frame")
-    if sf is not None:
-        for item in getattr(sf, "focused_facets", []) or []:
-            name = str(item or "").strip()
-            if name:
-                focus_facets.append(name)
-    plan_payload = plan_comparison(
-        comparison_targets,
-        max_detail=config.COMPARISON_FULL_DETAIL_SHOP_LIMIT,
-        focus_facets=focus_facets or None,
-        location=MOCK_LOCATION,
-    )
-    plan = ExecutionPlan.model_validate(plan_payload)
     target_shop_ids: list[str] = []
     for item in comparison_targets:
         data = _to_dict(item)
@@ -1228,13 +1432,24 @@ def _h_comparison_planner(state: GraphState) -> dict:
             if sid:
                 target_shop_ids.append(sid)
     return {
+        **result,
         "execution_plan": plan,
         "comparison_result": {
             "status": "planned",
             "target_shop_ids": target_shop_ids,
             "mode": "comparison",
         },
-        **_log(state, "comparison_planner", target_count=len(comparison_targets), tool_calls=len(plan.tool_calls)),
+        **_log(
+            state,
+            "comparison_planner",
+            target_count=len(comparison_targets),
+            tool_calls=len(plan.tool_calls),
+            selected_flow="comparison_flow",
+            tool_plan_source=result.get("tool_plan_source"),
+            tool_plan_validated=result.get("tool_plan_validated"),
+            tool_plan_fallback_reason=result.get("tool_plan_fallback_reason"),
+            tool_plan_reason=result.get("tool_plan_reason"),
+        ),
     }
 
 
@@ -1303,6 +1518,11 @@ def _h_tool_execute(state: GraphState) -> dict:
         batch_executor = BatchToolExecutor(call_fn=dispatch_tool_call)
         search_calls = []
         remaining_specs = []
+        planned_tool_names = {
+            str((_to_dict(spec)).get("tool_name", "")).strip()
+            for spec in tool_calls
+            if str((_to_dict(spec)).get("tool_name", "")).strip()
+        }
         for spec in tool_calls:
             call = spec.model_dump() if hasattr(spec, "model_dump") else _to_dict(spec)
             if call.get("tool_name") == "search_shops":
@@ -1312,6 +1532,110 @@ def _h_tool_execute(state: GraphState) -> dict:
 
         if search_calls:
             raw_results.update(batch_executor.execute_sync(search_calls))
+
+        if config.TOOL_BACKEND != "mock":
+            hidden_calls: list[dict[str, Any]] = []
+            task_type_value = str(getattr(plan, "task_type", "") or _to_dict(plan).get("task_type", "") or "")
+            if task_type_value == TaskType.recommendation.value:
+                search_result = raw_results.get("call_search_shops", {})
+                search_data = _to_dict(search_result).get("data", [])
+                shop_ids = [
+                    str(item.get("shop_id", "")).strip()
+                    for item in search_data if isinstance(item, dict) and str(item.get("shop_id", "")).strip()
+                ][: config.RECOMMENDATION_CANDIDATE_TOP_K]
+                if shop_ids:
+                    if "get_shop_cards" not in planned_tool_names:
+                        hidden_calls.append(
+                            {
+                                "call_id": "call_shop_cards_auto",
+                                "tool_name": "get_shop_cards",
+                                "args": {
+                                    "shop_ids": shop_ids,
+                                    "user_location": state.get("user_context") and {
+                                        "lat": getattr(state.get("user_context"), "lat", MOCK_LOCATION["lat"]),
+                                        "lng": getattr(state.get("user_context"), "lng", MOCK_LOCATION["lng"]),
+                                    } or MOCK_LOCATION,
+                                    "need_coupon_brief": True,
+                                    "need_open_status": True,
+                                    "need_distance_eta": True,
+                                    "max_items": len(shop_ids),
+                                },
+                                "required": False,
+                                "timeout_ms": TOOL_DEFAULT_TIMEOUT_MS,
+                                "max_parallelism": 1,
+                            }
+                        )
+                    if "get_shop_review_summary" not in planned_tool_names:
+                        hidden_calls.append(
+                            {
+                                "call_id": "call_review_summary_auto",
+                                "tool_name": "get_shop_review_summary",
+                                "args": {
+                                    "shop_ids": shop_ids,
+                                    "aspects": [str(item) for item in (state.get("semantic_frame") and getattr(state.get("semantic_frame"), "focused_facets", []) or []) if str(item).strip()],
+                                    "scene": None,
+                                    "max_reviews": len(shop_ids),
+                                },
+                                "required": False,
+                                "timeout_ms": TOOL_DEFAULT_TIMEOUT_MS,
+                                "max_parallelism": 1,
+                            }
+                        )
+            elif task_type_value == TaskType.comparison.value:
+                target_ids = []
+                for item in state.get("comparison_targets", []) or []:
+                    data = _to_dict(item)
+                    resolved_shop = data.get("resolved_shop") or data.get("shop") or data
+                    if hasattr(resolved_shop, "model_dump"):
+                        resolved_shop = resolved_shop.model_dump()
+                    if isinstance(resolved_shop, dict):
+                        sid = str(resolved_shop.get("shop_id", "")).strip()
+                        if sid and sid not in target_ids:
+                            target_ids.append(sid)
+                    sid = str(data.get("shop_id", "")).strip()
+                    if sid and sid not in target_ids:
+                        target_ids.append(sid)
+                if len(target_ids) >= 2:
+                    if "get_shop_cards" not in planned_tool_names:
+                        hidden_calls.append(
+                            {
+                                "call_id": "call_shop_cards_auto",
+                                "tool_name": "get_shop_cards",
+                                "args": {
+                                    "shop_ids": target_ids[: config.COMPARISON_MAX_SHOP_LIMIT],
+                                    "user_location": MOCK_LOCATION,
+                                    "need_coupon_brief": True,
+                                    "need_open_status": True,
+                                    "need_distance_eta": True,
+                                    "max_items": len(target_ids),
+                                },
+                                "required": False,
+                                "timeout_ms": TOOL_DEFAULT_TIMEOUT_MS,
+                                "max_parallelism": 1,
+                            }
+                        )
+                    if "get_shop_review_summary" not in planned_tool_names:
+                        hidden_calls.append(
+                            {
+                                "call_id": "call_review_summary_auto",
+                                "tool_name": "get_shop_review_summary",
+                                "args": {
+                                    "shop_ids": target_ids[: config.COMPARISON_MAX_SHOP_LIMIT],
+                                    "aspects": ["review_summary"],
+                                    "scene": None,
+                                    "max_reviews": len(target_ids),
+                                },
+                                "required": False,
+                                "timeout_ms": TOOL_DEFAULT_TIMEOUT_MS,
+                                "max_parallelism": 1,
+                            }
+                        )
+
+            if hidden_calls:
+                try:
+                    raw_results.update(batch_executor.execute_sync(hidden_calls))
+                except Exception:
+                    pass
 
         for spec in remaining_specs:
             call = spec.model_dump() if hasattr(spec, "model_dump") else _to_dict(spec)
@@ -1370,10 +1694,15 @@ def _h_tool_execute(state: GraphState) -> dict:
                 "tool_name": resolved_call.get("tool_name", ""),
             }
             results[call_id or call.get("tool_name", "")] = ToolResult.model_validate(raw_result)
+    failed_calls = [
+        call_id
+        for call_id, result in results.items()
+        if str(getattr(result, "result_status", _to_dict(result).get("result_status", ""))).lower() in {"failed", "unknown", "circuit_open"}
+    ]
     return {
         "tool_results": results,
         "tool_result_set": results,  # §1: 鏂囨。瑕佹眰鐨勫瓧娈靛悕
-        **_log(state, "tool_execute"),
+        **_log(state, "tool_execute", tool_call_count=len(results), tool_failures=failed_calls, tool_calls=list(results.keys())),
     }
 
 
@@ -1392,10 +1721,13 @@ def _h_evidence_build(state: GraphState) -> dict:
     updates: dict[str, Any] = {}
     if "last_recommendation_list" in evidence_payload:
         updates["last_recommendation_list"] = evidence_payload.get("last_recommendation_list", [])
+    ranking_snapshot = _to_dict(pack.ranking_snapshot if hasattr(pack, "ranking_snapshot") else evidence_payload.get("ranking_snapshot"))
+    comparison_matrix = _to_dict(pack.comparison_matrix if hasattr(pack, "comparison_matrix") else evidence_payload.get("comparison_matrix"))
+    candidate_count = len(ranking_snapshot.get("ranked") or ranking_snapshot.get("ranked_shops") or comparison_matrix.get("rows") or [])
     return {
         "evidence_pack": pack,
         **updates,
-        **_log(state, "evidence_build"),
+        **_log(state, "evidence_build", candidate_count=candidate_count, decision_type="comparison" if comparison_matrix.get("rows") else ("recommendation" if ranking_snapshot else "")),
     }
 
 
@@ -1427,10 +1759,20 @@ def _h_answer_plan_build(state: GraphState) -> dict:
 # §1 output: draft_response
 def _h_answer_generate(state: GraphState) -> dict:
     metadata: dict[str, Any] = {}
+    rc = state.get("rewrite_count", 0)
+    violations = state.get("answer_verify_violations") or []
+
+    # Build conversation continuity from current session state --------
+    cc = _build_conversation_continuity(state)
+
     txt = generate_answer(
         state.get("answer_plan") or {},
         state.get("evidence_pack") or {},
         metadata_out=metadata,
+        rewrite_count=rc,
+        previous_violations=violations,
+        in_graph=True,
+        conversation_continuity=cc,
     )
     return {
         "draft_response": txt,
@@ -1439,7 +1781,14 @@ def _h_answer_generate(state: GraphState) -> dict:
         "llm_verbalizer_error": metadata.get("llm_verbalizer_error"),
         "generated_llm_answer_before_fallback": metadata.get("generated_llm_answer_before_fallback", ""),
         "llm_verbalizer_violation": metadata.get("violation"),
-        **_log(state, "answer_generate"),
+        # Save verification/rewrite states to GraphState
+        "answer_verify_passed": metadata.get("answer_verify_passed", True),
+        "answer_verify_violations": metadata.get("answer_verify_violations") or [],
+        "rewrite_needed": metadata.get("rewrite_needed", False),
+        "rewrite_reason": metadata.get("rewrite_reason", ""),
+        "fallback_reason": metadata.get("fallback_reason", ""),
+        "final_safety_status": metadata.get("final_safety_status", "safe"),
+        **_log(state, "answer_generate", answer_source=metadata.get("answer_source", "template"), rewrite_count=rc, fallback_reason=metadata.get("fallback_reason", "")),
     }
 
 
@@ -1449,7 +1798,6 @@ def _h_answer_generate(state: GraphState) -> dict:
 # §1 output: verify_result
 def _h_answer_verify(state: GraphState) -> dict:
     evidence = state.get("evidence_pack") or {}
-    answer_plan = state.get("answer_plan") or {}
     task_type = getattr(state.get("execution_plan"), "task_type", "") or (
         state.get("execution_plan", {}).get("task_type", "") if isinstance(state.get("execution_plan"), dict) else ""
     )
@@ -1458,14 +1806,24 @@ def _h_answer_verify(state: GraphState) -> dict:
             "verify_result": "pass",
             "error_code": "",
             "error_message": "",
+            "answer_verify_passed": True,
+            "answer_verify_violations": [],
+            "rewrite_needed": False,
             **_log(state, "answer_verify"),
         }
     report = verify_answer(state.get("draft_response", ""), evidence, task_type)
+    passed = report.get("passed", False)
+    violations = report.get("issues", [])
+    
     return {
-        "verify_result": "pass" if report.get("passed") else "rewrite_needed",
-        "error_code": "" if report.get("passed") else "ANSWER_VERIFIER_FAILED",
-        "error_message": "" if report.get("passed") else report.get("suggested_fix", ""),
-        **_log(state, "answer_verify"),
+        "verify_result": "pass" if passed else "rewrite_needed",
+        "error_code": "" if passed else "ANSWER_VERIFIER_FAILED",
+        "error_message": "" if passed else report.get("suggested_fix", ""),
+        "answer_verify_passed": passed,
+        "answer_verify_violations": violations,
+        "rewrite_needed": not passed,
+        "rewrite_reason": violations[0] if violations else "",
+        **_log(state, "answer_verify", passed=passed, violations=violations, final_safety_status="safe" if passed else "violated"),
     }
 
 
@@ -1489,7 +1847,7 @@ def _h_final_response(state: GraphState) -> dict:
     txt = state.get("draft_response", "")
     return {
         "final_response": txt,
-        **_log(state, "final_response_build"),
+        **_log(state, "final_response_build", answer_source=state.get("answer_source", ""), final_safety_status=state.get("final_safety_status", "safe")),
     }
 
 
@@ -1541,30 +1899,46 @@ def _h_clarify_response(state: GraphState) -> dict:
 # §1 input:  error_code, evidence_pack
 # §1 output: final_response
 def _h_fallback_answer(state: GraphState) -> dict:
-    evidence = state.get("evidence_pack")
-    evidence_dict = _to_dict(evidence)
-    status = ""
-    snapshot = evidence_dict.get("ranking_snapshot") or {}
-    if isinstance(snapshot, dict):
-        status = str(snapshot.get("status", "") or "")
-    if not status:
-        tr = state.get("tool_result_set") or state.get("tool_results", {})
-        for result in tr.values():
-            value = result.result_status.value if hasattr(result, "result_status") else str(_to_dict(result).get("result_status", ""))
-            status = value
-            if value in ("failed", "circuit_open"):
-                break
-    if status == "circuit_open":
-        response = "优惠券服务暂时不可用，请稍后再试。"
-    elif status == "failed":
-        response = "获取优惠券信息失败，建议稍后再试。"
-    elif status == "unknown":
-        response = "暂时无法确认优惠券情况，请稍后再试。"
-    else:
-        response = "抱歉，暂时无法处理您的请求，请稍后再试。"
+    # 5. rewrite 后仍失败，进入安全 fallback。
+    # 6. fallback 不能编造事实，只能基于模板和 EvidencePack 输出保守回答。
+    from .. import config as cfg
+    from ..answer.generator import generate_answer as original_generate_answer
+    old_val = cfg.ENABLE_LLM_VERBALIZER
+    cfg.ENABLE_LLM_VERBALIZER = False
+    try:
+        response = original_generate_answer(
+            state.get("answer_plan") or {},
+            state.get("evidence_pack") or {},
+        )
+    finally:
+        cfg.ENABLE_LLM_VERBALIZER = old_val
+
+    if not response or response.strip() == "暂时无法确认这家店的相关信息。":
+        evidence_dict = _to_dict(state.get("evidence_pack") or {})
+        status = ""
+        snapshot = evidence_dict.get("ranking_snapshot") or {}
+        if isinstance(snapshot, dict):
+            status = str(snapshot.get("status", "") or "")
+        if not status:
+            tr = state.get("tool_result_set") or state.get("tool_results", {})
+            for result in tr.values():
+                value = result.result_status.value if hasattr(result, "result_status") else str(_to_dict(result).get("result_status", ""))
+                status = value
+                if value in ("failed", "circuit_open"):
+                    break
+        if status == "circuit_open":
+            response = "优惠券服务暂时不可用，请稍后再试。"
+        elif status == "failed":
+            response = "获取优惠券信息失败，建议稍后再试。"
+        elif status == "unknown":
+            response = "暂时无法确认优惠券情况，请稍后再试。"
+        else:
+            response = "抱歉，暂时无法处理您的请求，请稍后再试。"
+
     return {
         "final_response": response,
         "answer_source": "template_fallback",
+        "final_safety_status": "fallback",
         **_log(state, "fallback_answer"),
     }
 
@@ -1837,10 +2211,16 @@ def _route_tool_execute(state: GraphState) -> str:
     plan_is_available = bool(required_by_call_id)
     for _call_id, result in tr.items():
         required = required_by_call_id.get(_call_id, True)
-        status = result.result_status.value if hasattr(result, "result_status") else str(_to_dict(result).get("result_status", ""))
-        if plan_is_available and required and status in ("failed", "circuit_open", "unknown"):
+        # ToolResultStatus extraction: handle both Pydantic model (has .result_status
+        # enum with .value) and serialized dict.
+        if hasattr(result, "result_status"):
+            raw = result.result_status
+            status = str(raw.value) if hasattr(raw, "value") else str(raw)
+        else:
+            status = get_tool_result_status(_to_dict(result))
+        if plan_is_available and required and status in TOOL_FAILURE_STATUSES:
             return "fallback_answer"
-        if not plan_is_available and status in ("failed", "circuit_open"):
+        if not plan_is_available and status in ("failed", "circuit_open", "error", "backend_unavailable"):
             return "fallback_answer"
     return "evidence_build"
 
@@ -1943,7 +2323,7 @@ def build_graph() -> CompiledStateGraph:
 
     # 1. Add all nodes
     for name, handler in _HANDLERS.items():
-        builder.add_node(name, handler)
+        builder.add_node(name, _instrument_handler(name, handler))
 
     # 2. START 鈫?receive_input
     builder.add_edge(START, "receive_input")
@@ -2120,6 +2500,11 @@ _GRAPH_STATE_FIELDS: list[str] = [
     # 鎵ц璁″垝
     "execution_plan",
     "validated_plan",  # §1 鏂囨。瀛楁
+    "tool_plan",
+    "tool_plan_source",
+    "tool_plan_validated",
+    "tool_plan_fallback_reason",
+    "tool_plan_reason",
     # 宸ュ叿缁撴灉
     "tool_results",
     "tool_result_set",  # §1 鏂囨。瀛楁

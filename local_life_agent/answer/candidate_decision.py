@@ -121,7 +121,7 @@ class CandidateEvaluator:
                 data["tags"] = d.get("tags", [])
                 data["rating"] = d.get("rating")
                 data["avg_price"] = d.get("avg_price")
-            elif ev.detail and ev.detail.get("result_status") in ("failed", "circuit_open"):
+            elif ev.detail and ev.detail.get("result_status") in ("failed", "circuit_open", "error", "backend_unavailable"):
                 data["detail_failed"] = True
                 
             if not data["shop_name"] and ev.detail and ev.detail.get("data"):
@@ -384,7 +384,7 @@ def build_candidate_decision_plan(
                 facts["tags"] = d.get("tags", [])
             else:
                 unknown_facts.append("detail")
-                if evidence.detail and evidence.detail.get("result_status") in ("failed", "circuit_open"):
+                if evidence.detail and evidence.detail.get("result_status") in ("failed", "circuit_open", "error", "backend_unavailable"):
                     failed_facts.append("detail")
                     
             # open_status
@@ -392,7 +392,7 @@ def build_candidate_decision_plan(
                 facts["open_status"] = evidence.open_status["data"].get("open_status", "unknown")
             else:
                 unknown_facts.append("open_status")
-                if evidence.open_status and evidence.open_status.get("result_status") in ("failed", "circuit_open"):
+                if evidence.open_status and evidence.open_status.get("result_status") in ("failed", "circuit_open", "error", "backend_unavailable"):
                     failed_facts.append("open_status")
                     
             # coupon
@@ -404,7 +404,7 @@ def build_candidate_decision_plan(
                 facts["coupon_titles"] = []
             else:
                 unknown_facts.append("coupon")
-                if evidence.coupon and evidence.coupon.get("result_status") in ("failed", "circuit_open"):
+                if evidence.coupon and evidence.coupon.get("result_status") in ("failed", "circuit_open", "error", "backend_unavailable"):
                     failed_facts.append("coupon")
                     
             # distance
@@ -413,7 +413,7 @@ def build_candidate_decision_plan(
                 facts["eta_minutes"] = evidence.distance["data"].get("eta_minutes")
             else:
                 unknown_facts.append("distance")
-                if evidence.distance and evidence.distance.get("result_status") in ("failed", "circuit_open"):
+                if evidence.distance and evidence.distance.get("result_status") in ("failed", "circuit_open", "error", "backend_unavailable"):
                     failed_facts.append("distance")
                     
         shop_name = facts.get("shop_name", "")

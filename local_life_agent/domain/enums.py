@@ -37,11 +37,49 @@ class Facet(str, Enum):
 
 class ToolResultStatus(str, Enum):
     ok = "ok"
+    partial = "partial"
     empty = "empty"
     unknown = "unknown"
     failed = "failed"
+    error = "error"
     circuit_open = "circuit_open"
     backend_unavailable = "backend_unavailable"
+
+
+class RefineAction(str, Enum):
+    """Normalised follow-up refinement actions from the semantic parser.
+
+    These values are used in ``follow_up.refine_action`` to express
+    *what* the user is asking for in a follow-up turn.  The parser
+    prompt defines these explicitly so the LLM picks from a fixed set
+    instead of inventing synonyms.
+
+    Allowed values:
+        - ``cheaper``: user wants a lower price
+        - ``closer``: user wants a shorter distance
+        - ``higher_rating``: user wants a better rating/score
+        - ``better_environment``: user wants better environment
+        - ``better_taste``: user wants better taste/flavour
+        - ``coupon_lookup``: user is asking about coupons
+        - ``open_status_lookup``: user is asking about open hours/status
+        - ``distance_lookup``: user is asking about distance/ETA
+        - ``comparison``: user wants to compare candidates
+        - ``select_candidate``: user selects a candidate (\"first one\", \"this one\")
+        - ``restart``: user explicitly wants a fresh start / new direction
+        - ``other``: any refinement that doesn't fit the above
+    """
+    cheaper = "cheaper"
+    closer = "closer"
+    higher_rating = "higher_rating"
+    better_environment = "better_environment"
+    better_taste = "better_taste"
+    coupon_lookup = "coupon_lookup"
+    open_status_lookup = "open_status_lookup"
+    distance_lookup = "distance_lookup"
+    comparison = "comparison"
+    select_candidate = "select_candidate"
+    restart = "restart"
+    other = "other"
 
 
 class ErrorCode(str, Enum):

@@ -20,6 +20,7 @@ from .schemas import (
     ResolveShopResult,
     SemanticFrame,
     ToolResult,
+    ToolPlan,
 )
 from .state import SessionState, SessionWriteDirective
 
@@ -69,6 +70,7 @@ class GraphState(TypedDict, total=False):
     # === 执行计划 (Execution Plan) — write: task_plan/facet_planner/comparison_planner, read: plan_validator/tool_execute ===
     execution_plan: Optional[ExecutionPlan]
     validated_plan: Optional[ExecutionPlan]  # §1 文档字段：plan_validator 校验通过后的输出
+    tool_plan: Optional[ToolPlan]
 
     # === 工具结果 (Tool Results) — write: tool_execute, read: evidence_build/answer_verify ===
     tool_results: dict[str, ToolResult]
@@ -108,9 +110,24 @@ class GraphState(TypedDict, total=False):
     draft_response: str
     semantic_source: str
     fallback_reason: str
+    tool_plan_source: str
+    tool_plan_validated: bool
+    tool_plan_fallback_reason: str
+    tool_plan_reason: str
+    answer_fallback_reason: str
     llm_called: bool
     llm_backend: str
     answer_source: str
     llm_verbalizer_violation: Optional[str]
+    llm_verbalizer_error: Optional[str]
+    generated_llm_answer_before_fallback: str
     comparison_target_resolution: Optional[ComparisonTargetResolution]
+    reference_resolution_source: str
+    answer_verify_passed: bool
+    answer_verify_violations: list[str]
+    rewrite_needed: bool
+    rewrite_reason: str
+    final_safety_status: str
+    recommendation_query: str
+
 

@@ -189,10 +189,216 @@ class ToolResult(BaseModel):
             "get_coupon_list",
             "check_open_status",
             "get_distance_eta",
+            "get_deal_list",
         }
         if self.tool_name in shop_scoped_tools and not self.shop_id.strip():
             raise ValueError(f"Tool '{self.tool_name}' requires shop_id")
         return self
+
+
+class ToolTrace(BaseModel):
+    """Debug trace embedded in the new query tool payloads."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tool_name: str = ""
+    backend_source: str = "unknown"
+    duration_ms: int | None = None
+    input: dict[str, Any] = Field(default_factory=dict)
+    status: str = ""
+    item_count: int | None = None
+    missing_shop_ids: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    error_type: str | None = None
+    error_message: str | None = None
+
+
+class ToolIntent(BaseModel):
+    """LLM 提议的受限工具意图，只描述候选，不包含执行参数。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tool_name: str = ""
+    purpose: str = ""
+    required: bool = False
+    facet: str | None = None
+    priority: int = 0
+    depends_on: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class ToolPlan(BaseModel):
+    """LLM ToolPlanner 的候选计划，仅作为建议输入。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_type: str = ""
+    primary_task: str = ""
+    purpose: str = ""
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    tool_intents: list[ToolIntent] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+    raw_text: str = ""
+    semantic_source: str = ""
+    llm_backend: str = ""
+
+
+ToolPlanItem = ToolIntent
+
+
+class ShopCardInput(BaseModel):
+    """Input contract for get_shop_cards."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    shop_ids: list[str] = Field(default_factory=list)
+    user_location: dict[str, Any] | None = None
+    need_coupon_brief: bool = True
+    need_open_status: bool = True
+    need_distance_eta: bool = True
+    max_items: int | None = None
+
+
+class ShopCardItem(BaseModel):
+    """A lightweight shop card used in recommendation and comparison."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    shop_id: str = ""
+    name: str = ""
+    alias: list[str] = Field(default_factory=list)
+    category: str | None = None
+    address: str | None = None
+    rating: float | None = None
+    avg_price: float | None = None
+    price_level: str | None = None
+    distance_m: int | None = None
+    eta_minutes: int | None = None
+    is_open: bool | None = None
+    open_status_text: str | None = None
+    coupon_count: int | None = None
+    has_coupon: bool | None = None
+    top_coupon_title: str | None = None
+    top_tags: list[str] = Field(default_factory=list)
+    scene_tags: list[str] = Field(default_factory=list)
+    source_fields: list[str] = Field(default_factory=list)
+
+
+class ShopCardsResult(BaseModel):
+    """Output contract for get_shop_cards."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: str = "empty"
+    items: list[ShopCardItem] = Field(default_factory=list)
+    missing_shop_ids: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    trace: ToolTrace = Field(default_factory=ToolTrace)
+
+
+class ShopReviewSummaryInput(BaseModel):
+    """Input contract for get_shop_review_summary."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    shop_ids: list[str] = Field(default_factory=list)
+    aspects: list[str] = Field(default_factory=list)
+    scene: str | None = None
+    max_reviews: int | None = None
+
+
+class ReviewSceneFit(BaseModel):
+    """Scene fit summary for a specific use case."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scene: str | None = None
+    score: float | None = None
+    label: str | None = None
+    reasons: list[str] = Field(default_factory=list)
+
+
+class ShopReviewSummaryItem(BaseModel):
+    """Structured review summary for a single shop."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    shop_id: str = ""
+    name: str = ""
+    rating: float | None = None
+    review_count: int | None = None
+    taste_score: float | None = None
+    environment_score: float | None = None
+    service_score: float | None = None
+    price_score: float | None = None
+    positive_tags: list[str] = Field(default_factory=list)
+    negative_tags: list[str] = Field(default_factory=list)
+    scene_tags: list[str] = Field(default_factory=list)
+    scene_fit: ReviewSceneFit = Field(default_factory=ReviewSceneFit)
+    highlights: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    summary: str | None = None
+    source_fields: list[str] = Field(default_factory=list)
+
+
+class ShopReviewSummaryResult(BaseModel):
+    """Output contract for get_shop_review_summary."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: str = "empty"
+    items: list[ShopReviewSummaryItem] = Field(default_factory=list)
+    missing_shop_ids: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    trace: ToolTrace = Field(default_factory=ToolTrace)
+
+
+class DealListInput(BaseModel):
+    """Input contract for get_deal_list."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    shop_id: str = ""
+    people_count: int | None = None
+    budget_per_person: float | None = None
+    deal_type: str | None = None
+    only_available: bool = True
+
+
+class DealItem(BaseModel):
+    """Structured deal / group-buy fact."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    deal_id: str = ""
+    title: str = ""
+    deal_type: str | None = None
+    price: float | None = None
+    original_price: float | None = None
+    discount_rate: float | None = None
+    people_count_min: int | None = None
+    people_count_max: int | None = None
+    avg_price_per_person: float | None = None
+    available: bool | None = None
+    valid_time_text: str | None = None
+    use_time_rules: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+    included_items: list[str] = Field(default_factory=list)
+    recommend_tags: list[str] = Field(default_factory=list)
+    source_fields: list[str] = Field(default_factory=list)
+
+
+class DealListResult(BaseModel):
+    """Output contract for get_deal_list."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: str = "empty"
+    shop_id: str = ""
+    shop_name: str | None = None
+    items: list[DealItem] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    trace: ToolTrace = Field(default_factory=ToolTrace)
 
 
 # ===================================================================
@@ -357,6 +563,21 @@ class AllowedClaim(BaseModel):
     verbalization_hint: str = ""
 
 
+class AnswerClaim(BaseModel):
+    """A factual claim extracted from the agent's natural response."""
+    model_config = ConfigDict(extra="forbid")
+
+    claim_id: str = ""
+    claim_type: str = ""  # shop_existence | coupon | open_status | distance | price | rating | ranking | comparison_winner | scene_match | tool_success | all_targets_covered
+    shop_id: str | None = None
+    shop_name: str | None = None
+    value: Any = None
+    polarity: str = "positive"  # positive | negative | unknown | comparative
+    text_span: str = ""
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
+
 class AnswerPlan(BaseModel):
     """Structured plan for generating the final answer.
 
@@ -437,6 +658,7 @@ class DecisionPlan(BaseModel):
     decision_context: dict[str, Any] = Field(default_factory=dict)
     candidate_summaries: list[dict[str, Any]] = Field(default_factory=list)
     must_mention_unknowns: list[str] = Field(default_factory=list)
+    conversation_continuity: dict[str, Any] = Field(default_factory=dict)
 
 
 DecisionPlan.model_rebuild()

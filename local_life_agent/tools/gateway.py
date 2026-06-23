@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .. import config
+from ..observability.metrics import record_tool_call_metric
 from .circuit_breaker import get_circuit_breaker_manager
 from .executor import (
     JavaToolExecutor,
@@ -37,6 +38,8 @@ class ToolCallGateway:
 
     async def call(self, tool_name: str, kwargs: dict[str, Any]) -> dict[str, Any]:
         """Execute a single tool call through the full Gateway pipeline."""
+        _start = time.monotonic()
+
         tool_def = self._registry.get(tool_name)
         if tool_def is None:
             return normalize_validation_error(
@@ -70,12 +73,17 @@ class ToolCallGateway:
         except Exception as exc:
             backend = self._executor.backend_source if hasattr(self._executor, "backend_source") else "unknown"
             result = {
+                "call_id": kwargs.get("call_id", ""),
+                "shop_id": kwargs.get("shop_id", ""),
+                "tool_name": tool_name,
                 "success": False,
                 "result_status": "unknown",
                 "data": None,
                 "error_code": "NETWORK_ERROR",
                 "error_message": str(exc),
                 "source": backend,
+                "tool_backend": backend,
+                "backend_source": backend,
                 "degraded": True,
             }
 
@@ -105,12 +113,19 @@ class ToolCallGateway:
                         "error_code": fallback_raw.error_code,
                         "error_message": fallback_raw.error_message,
                         "source": "mock",
-                        "degraded": True,
+                        "tool_backend": "mock",
                         "backend_source": "mock",
                         "fallback_from": "java_api",
+                        "degraded": True,
+                        "http_status": getattr(fallback_raw, "http_status", None),
+                        "endpoint": getattr(fallback_raw, "endpoint", None),
                     }
             except Exception:
                 pass  # keep the original failed result
+
+        _duration = (time.monotonic() - _start) * 1000.0
+        _success = bool(result.get("success", False))
+        record_tool_call_metric(tool_name, _duration, _success)
 
         return normalize_tool_result(tool_name, result)
 
@@ -199,6 +214,9 @@ class BatchToolExecutor:
             "tool_backend": self._backend_source,
             "backend_source": self._backend_source,
             "degraded": not call.required,
+            "fallback_from": None,
+            "http_status": None,
+            "endpoint": None,
         }
 
     async def _run_one(self, call: _BatchToolCall, semaphore: asyncio.Semaphore, deadline: float) -> tuple[str, dict[str, Any]]:
@@ -235,6 +253,9 @@ class BatchToolExecutor:
                     "tool_backend": self._backend_source,
                     "backend_source": self._backend_source,
                     "degraded": not call.required,
+                    "fallback_from": None,
+                    "http_status": None,
+                    "endpoint": None,
                 }
 
     async def execute(self, tool_calls: list[Any]) -> dict[str, dict[str, Any]]:
@@ -254,7 +275,7 @@ class BatchToolExecutor:
         return results
 
     def execute_sync(self, tool_calls: list[Any]) -> dict[str, dict[str, Any]]:
-        return asyncio.run(self.execute(tool_calls))
+        return _run_coroutine_sync(self.execute(tool_calls))
 
 
 _gateway_instance: ToolCallGateway | None = None
@@ -268,4 +289,20 @@ def get_gateway() -> ToolCallGateway:
 
 
 def dispatch_tool_call(tool_name: str, kwargs: dict[str, Any]) -> dict[str, Any]:
-    return asyncio.run(get_gateway().call(tool_name, kwargs))
+    return _run_coroutine_sync(get_gateway().call(tool_name, kwargs))
+
+
+def _run_coroutine_sync(coro: Any) -> Any:
+    """Run a coroutine in a synchronous context, reusing a running event loop if present."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is not None and loop.is_running():
+        import nest_asyncio
+        nest_asyncio.apply(loop)
+        return loop.run_until_complete(coro)
+    else:
+        return asyncio.run(coro)
+

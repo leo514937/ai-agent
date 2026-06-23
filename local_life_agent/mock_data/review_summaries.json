@@ -1,0 +1,98 @@
+[
+  {
+    "shop_id": "shop_001",
+    "rating": 4.3,
+    "review_count": 128,
+    "positive_tags": ["安静", "有WiFi", "环境好"],
+    "negative_tags": ["价格稍高"],
+    "scene_tags": ["约会", "朋友聚餐"],
+    "highlights": ["环境安静", "适合聊天"],
+    "risks": ["高峰期座位紧张"],
+    "summary": "环境和氛围稳定，适合安静聊天和约会。",
+    "blog_summary": "店内空间偏安静，适合久坐。",
+    "facade_review_summary": "口碑稳定，整体环境加分。",
+    "taste_score": 4.2,
+    "environment_score": 4.6,
+    "service_score": 4.3,
+    "price_score": 3.7,
+    "scene_fit": {
+      "scene": "date",
+      "score": 0.82,
+      "label": "high",
+      "reasons": ["安静", "环境好"]
+    },
+    "source_fields": ["rating", "shop_tags", "blog_summary", "facade_review_summary"]
+  },
+  {
+    "shop_id": "shop_005",
+    "rating": 4.4,
+    "review_count": 260,
+    "positive_tags": ["咖啡", "外带", "学生党"],
+    "negative_tags": ["高峰期排队"],
+    "scene_tags": ["学生党", "朋友聚餐"],
+    "highlights": ["出品稳定", "价格友好"],
+    "risks": ["高峰期排队"],
+    "summary": "出品稳定，学生党友好，适合快速解决一杯咖啡。",
+    "blog_summary": "出餐速度快，适合课间/上班路上购买。",
+    "facade_review_summary": "评价偏稳定，出品和性价比较均衡。",
+    "taste_score": 4.3,
+    "environment_score": 4.1,
+    "service_score": 4.2,
+    "price_score": 4.6,
+    "scene_fit": {
+      "scene": "student",
+      "score": 0.91,
+      "label": "high",
+      "reasons": ["价格偏低", "标签匹配学生党"]
+    },
+    "source_fields": ["rating", "shop_tags", "blog_summary", "facade_review_summary"]
+  },
+  {
+    "shop_id": "shop_007",
+    "rating": 4.6,
+    "review_count": 512,
+    "positive_tags": ["服务好", "环境好", "聚餐"],
+    "negative_tags": ["排队久", "高峰期吵"],
+    "scene_tags": ["约会", "朋友聚餐", "家庭聚餐", "带长辈"],
+    "highlights": ["服务稳定", "适合多人聚餐"],
+    "risks": ["排队久", "晚高峰较吵"],
+    "summary": "口碑较稳，服务和聚餐场景认可度高，但高峰期排队明显。",
+    "blog_summary": "多人聚餐讨论度高，稳定性好。",
+    "facade_review_summary": "适合约会和聚餐，但要避开排队高峰。",
+    "taste_score": 4.7,
+    "environment_score": 4.4,
+    "service_score": 4.8,
+    "price_score": 3.9,
+    "scene_fit": {
+      "scene": "elderly",
+      "score": 0.74,
+      "label": "high",
+      "reasons": ["服务稳定", "适合多人聚餐"]
+    },
+    "source_fields": ["rating", "shop_tags", "blog_summary", "facade_review_summary"]
+  },
+  {
+    "shop_id": "shop_009",
+    "rating": 4.1,
+    "review_count": 86,
+    "positive_tags": ["实惠", "家常"],
+    "negative_tags": ["高峰期排队"],
+    "scene_tags": ["家庭聚餐", "带长辈"],
+    "highlights": ["价格友好", "家常菜更稳"],
+    "risks": ["排队时间偏长"],
+    "summary": "家常口味和价格较稳，适合家庭聚餐。",
+    "blog_summary": "适合周末家庭聚餐。",
+    "facade_review_summary": "家常路线，稳妥但高峰期需要等位。",
+    "taste_score": 4.0,
+    "environment_score": 3.8,
+    "service_score": 4.0,
+    "price_score": 4.4,
+    "scene_fit": {
+      "scene": "family",
+      "score": 0.79,
+      "label": "high",
+      "reasons": ["适合家庭聚餐", "价格友好"]
+    },
+    "source_fields": ["rating", "shop_tags", "blog_summary", "facade_review_summary"]
+  }
+]

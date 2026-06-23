@@ -182,10 +182,15 @@ def _extract_user_text(prompt: str, system_prompt: str) -> str:
     haystacks = (prompt, system_prompt)
     markers = (
         "User text:",
+        "User text：",
         "用户输入:",
+        "用户输入：",
         "Input:",
+        "Input：",
         "文本:",
+        "文本：",
         "TEXT:",
+        "TEXT：",
     )
     for haystack in haystacks:
         for marker in markers:
@@ -207,7 +212,7 @@ def _default_llm_backend(
     """Deterministic offline backend used when nothing is injected."""
     user_text = _extract_user_text(prompt, system_prompt)
     top_intent, confidence, reason = _classify_top_intent(user_text)
-    if "Local Life Semantic Parser" in prompt:
+    if "Local Life Semantic Parser" in prompt or "本地生活语义解析器" in prompt:
         from ..semantic.slot_extractor import extract_slots
 
         payload = extract_slots(user_text, top_intent)

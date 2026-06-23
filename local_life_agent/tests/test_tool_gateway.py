@@ -19,7 +19,7 @@ import asyncio
 from typing import Any
 
 from ..tools.circuit_breaker import get_circuit_breaker_manager
-from ..tools.executor import RawToolResult, ToolExecutor
+from ..tools.executor import MockToolExecutor, RawToolResult, ToolExecutor
 from ..tools.gateway import ToolCallGateway, dispatch_tool_call
 
 
@@ -37,7 +37,7 @@ def _gw(executor: ToolExecutor | None = None, reset_cb: bool = True) -> ToolCall
 
 def _mock_gw() -> ToolCallGateway:
     """Fresh Gateway wired with the real MockToolExecutor."""
-    return _gw()
+    return _gw(executor=MockToolExecutor())
 
 
 def _call(gw: ToolCallGateway, tool: str, kwargs: dict) -> dict[str, Any]:

@@ -8,8 +8,9 @@ from typing import Any, Callable
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ..config import LLM_TIMEOUT_MS, SEMANTIC_FALLBACK_ENABLED
-from ..domain.enums import Facet, TaskType, TopIntent
+from ..domain.enums import Facet, RefineAction, TaskType, TopIntent
 from ..domain.schemas import SemanticFrame
+from ..domain.session_context_summary import build_session_context_summary
 from ..input.normalizer import normalize_text
 from ..llm.client import call_llm, load_prompt
 from ..llm.json_parser import LLMJSONParseError, parse_json_response
@@ -108,11 +109,95 @@ def _validate_semantic_payload(payload: Any) -> dict[str, Any]:
                 len(_last_dropped_facets),
                 _last_dropped_facets,
             )
+
+    # Normalise refine_action in follow_up ---------------------------
+    if isinstance(payload, dict):
+        fu = payload.get("follow_up")
+        if isinstance(fu, dict) and fu.get("is_follow_up"):
+            ra = fu.get("refine_action")
+            if ra is not None and isinstance(ra, str):
+                normalised = _normalize_refine_action(ra)
+                fu["refine_action"] = normalised
+
     try:
         model = _SemanticFrameRouterResponse.model_validate(payload)
     except ValidationError as exc:
         raise ValueError(str(exc)) from exc
     return model.model_dump()
+
+
+def _normalize_refine_action(action: str) -> str:
+    """Normalise a free-form refine_action string to the RefineAction enum."""
+    normalized = action.strip().lower().replace(" ", "_").replace("-", "_")
+    # Direct match
+    try:
+        return RefineAction(normalized).value
+    except ValueError:
+        pass
+
+    # Synonym mapping
+    SYNONYMS: dict[str, str] = {
+        # cheaper
+        "lower_price": "cheaper",
+        "more_affordable": "cheaper",
+        "cheap": "cheaper",
+        "price_down": "cheaper",
+        "affordable": "cheaper",
+        "budget": "cheaper",
+        "less_expensive": "cheaper",
+        # closer
+        "nearer": "closer",
+        "nearby": "closer",
+        "shorter_distance": "closer",
+        "near": "closer",
+        "close": "closer",
+        "less_far": "closer",
+        "near_by": "closer",
+        # higher_rating
+        "rating_higher": "higher_rating",
+        "better_score": "higher_rating",
+        "better_rating": "higher_rating",
+        "high_score": "higher_rating",
+        # better_environment
+        "nicer_environment": "better_environment",
+        "better_ambiance": "better_environment",
+        # better_taste
+        "better_flavor": "better_taste",
+        "yummier": "better_taste",
+        "tastier": "better_taste",
+        # coupon_lookup
+        "coupon": "coupon_lookup",
+        "check_coupon": "coupon_lookup",
+        "any_coupon": "coupon_lookup",
+        "discount": "coupon_lookup",
+        # open_status_lookup
+        "open_status": "open_status_lookup",
+        "is_open": "open_status_lookup",
+        "opening_hours": "open_status_lookup",
+        # distance_lookup
+        "distance": "distance_lookup",
+        "how_far": "distance_lookup",
+        "eta": "distance_lookup",
+        # comparison
+        "compare": "comparison",
+        "which_better": "comparison",
+        # select_candidate
+        "select": "select_candidate",
+        "pick_one": "select_candidate",
+        "which_one": "select_candidate",
+        "first_one": "select_candidate",
+        "ordinal": "select_candidate",
+        "this_one": "select_candidate",
+        # restart
+        "fresh": "restart",
+        "new_search": "restart",
+        "start_over": "restart",
+        "reset": "restart",
+    }
+    if normalized in SYNONYMS:
+        return SYNONYMS[normalized]
+
+    return RefineAction.other.value
 
 
 def _fallback_intent(normalised_text: str, error_code: str = "") -> TopIntent:
@@ -254,8 +339,14 @@ def parse_semantic_frame(
     llm_call: Callable[..., dict[str, Any]] | None = None,
     *,
     allow_fallback: bool = SEMANTIC_FALLBACK_ENABLED,
+    session_state: Any = None,
 ) -> dict[str, Any]:
-    """Parse a semantic frame for the local-life flow."""
+    """Parse a semantic frame for the local-life flow.
+
+    When *session_state* is provided, a compressed ``{{SESSION_CONTEXT}}``
+    is injected into the LLM prompt so the parser can better understand
+    follow-ups, references, and task continuity.
+    """
     normalised_text = normalize_text(text)
     if not normalised_text.strip():
         frame = _annotate_frame(
@@ -307,7 +398,22 @@ def parse_semantic_frame(
         }
 
     prompt_template = load_prompt("local_life_parser")
-    rendered_prompt = prompt_template.replace("{{TEXT}}", normalised_text).replace("{{TOP_INTENT}}", top_intent)
+
+    # Build session context summary -----------------------------------
+    from ..domain.state import SessionState
+    ss = session_state
+    if ss is not None and not isinstance(ss, (SessionState, dict)):
+        ss = None
+    summary = build_session_context_summary(ss)
+    summary_json = summary.model_dump_json(ensure_ascii=False)
+
+    rendered_prompt = (
+        prompt_template
+        .replace("{{TEXT}}", normalised_text)
+        .replace("{{TOP_INTENT}}", top_intent)
+        .replace("{{SESSION_CONTEXT}}", summary_json)
+    )
+
     result = llm_call(
         rendered_prompt,
         system_prompt="",

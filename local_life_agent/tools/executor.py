@@ -151,6 +151,65 @@ class MockToolExecutor(ToolExecutor):
         return RawToolResult(data=result, success=True, backend_source=self.backend_source)
 
 
+class DbToolExecutor(ToolExecutor):
+    """Executes tools by querying MySQL directly via ``db_tools``.
+
+    Reads data from ``tb_shop``, ``tb_shop_type``, and ``tb_voucher``
+    tables using the ``db_client`` module.  This is the default executor
+    when ``TOOL_BACKEND=db`` (production mode).
+    """
+
+    def __init__(self):
+        import importlib
+        self._mod = importlib.import_module(".db_tools", package="local_life_agent.tools")
+
+    @property
+    def backend_source(self) -> str:
+        return "db"
+
+    async def execute(self, tool_def: dict, args: dict[str, Any]) -> RawToolResult:
+        tool_name = tool_def["name"]
+        fn = getattr(self._mod, tool_name, None)
+        if fn is None:
+            return RawToolResult(
+                data=None,
+                success=False,
+                error_code="TOOL_NOT_REGISTERED",
+                error_message=f"DB implementation for '{tool_name}' not found",
+                backend_source=self.backend_source,
+            )
+        try:
+            result = fn(**args)
+        except TimeoutError:
+            raise
+        except Exception as exc:
+            return RawToolResult(
+                data=None,
+                success=False,
+                error_code="NETWORK_ERROR",
+                error_message=str(exc),
+                backend_source=self.backend_source,
+            )
+
+        if isinstance(result, dict):
+            if "success" in result and "data" in result:
+                return RawToolResult(
+                    data=result.get("data"),
+                    success=result.get("success", False),
+                    error_code=result.get("error_code"),
+                    error_message=result.get("error_message", ""),
+                    backend_source=self.backend_source,
+                )
+            return RawToolResult(
+                data=result,
+                success=True,
+                error_code=result.get("error_code"),
+                error_message=result.get("error_message", ""),
+                backend_source=self.backend_source,
+            )
+        return RawToolResult(data=result, success=True, backend_source=self.backend_source)
+
+
 class JavaToolExecutor(ToolExecutor):
     """Executes tools by forwarding calls to the Java backend via HTTP.
 
@@ -213,19 +272,27 @@ def build_tool_executor() -> ToolExecutor:
     """Create a ToolExecutor based on ``config.TOOL_BACKEND``.
 
     Returns:
-        ``MockToolExecutor`` when TOOL_BACKEND == "mock".
-        ``JavaToolExecutor`` when TOOL_BACKEND == "java_api".
+        ``DbToolExecutor``    when TOOL_BACKEND == "db".
+        ``MockToolExecutor``  when TOOL_BACKEND == "mock".
+        ``JavaToolExecutor``  when TOOL_BACKEND == "java_api".
 
     Raises:
         ValueError: When TOOL_BACKEND has an unexpected value (the
                     config module already validates it at import time).
     """
     backend = config.TOOL_BACKEND
+    if backend == "db":
+        return DbToolExecutor()
     if backend == "mock":
         return MockToolExecutor()
     if backend == "java_api":
         return JavaToolExecutor()
     raise ValueError(f"Unknown TOOL_BACKEND: {backend!r}")
+
+
+def build_db_executor() -> ToolExecutor:
+    """Return a DbToolExecutor for direct DB access."""
+    return DbToolExecutor()
 
 
 def build_fallback_executor() -> ToolExecutor:

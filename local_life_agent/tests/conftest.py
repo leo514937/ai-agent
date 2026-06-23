@@ -9,6 +9,12 @@ from typing import Any
 
 import pytest
 
+# ── Force mock tool backend for all tests ──────────────────────────────
+# Tests use mock data (shop IDs like shop_sc_01), not the real DB or
+# Java API.  Override at the module level so every import path sees it.
+import local_life_agent.config as _cfg
+_cfg.TOOL_BACKEND = "mock"
+
 LLM_SENTINEL_PREFIX = "LLM_SENTINEL_"
 
 
@@ -76,7 +82,7 @@ class SpyRealLLMBackend:
 
         if "## DecisionPlan" in prompt:
             response = self._verbalizer_response(prompt, timeout_ms, kwargs)
-        elif "# Top Intent Router" in prompt:
+        elif "# Top Intent Router" in prompt or "# 顶层意图路由" in prompt:
             response = self._top_intent_response(prompt, timeout_ms, kwargs)
         else:
             response = self._semantic_response(prompt, timeout_ms, kwargs)
@@ -85,10 +91,11 @@ class SpyRealLLMBackend:
         return response
 
     def _extract_user_text(self, prompt: str) -> str:
-        marker = "User text:"
-        if marker not in prompt:
-            return prompt.strip()
-        return prompt.split(marker, 1)[1].strip().splitlines()[0].strip()
+        markers = ["User text:", "用户输入：", "用户输入:"]
+        for marker in markers:
+            if marker in prompt:
+                return prompt.split(marker, 1)[1].strip().splitlines()[0].strip()
+        return prompt.strip()
 
     def _top_intent_response(self, prompt: str, timeout_ms: int, kwargs: dict[str, Any]) -> dict[str, Any]:
         text = self._extract_user_text(prompt)

@@ -231,16 +231,18 @@ def _comparison_issues(answer: str, evidence: dict[str, Any]) -> list[str]:
 
 def _build_suggested_fix(issues: list[str]) -> str:
     parts: list[str] = []
-    if any(issue == "ranking_changed_by_llm" for issue in issues):
+    if any(issue in {"ranking_changed_by_llm", "ranking_changed"} for issue in issues):
         parts.append("\u8bf7\u4e25\u683c\u6309 evidence \u4e2d\u7684\u6392\u5e8f\u8f93\u51fa\uff0c\u4e0d\u8981\u91cd\u6392\u5019\u9009\u5e97\u3002")
-    if any(issue == "unknown_claimed_as_worse" for issue in issues):
+    if any(issue in {"unknown_claimed_as_worse", "unknown_as_false"} for issue in issues):
         parts.append("\u4e0d\u8981\u628a unknown \u4fe1\u606f\u8bf4\u6210\u66f4\u5dee\u6216\u66f4\u5f31\uff0c\u53ea\u80fd\u8bf4\u660e\u6682\u65f6\u65e0\u6cd5\u786e\u8ba4\u3002")
-    if any(issue in {"shop_not_in_matrix"} for issue in issues) or any(issue.startswith("shop_mismatch:") for issue in issues):
+    if any(issue in {"shop_not_in_matrix", "hallucinated_shop_name", "shop_mismatch"} or any(issue.startswith("shop_mismatch:") for issue in issues) for issue in issues):
         parts.append("\u53ea\u80fd\u6bd4\u8f83 evidence \u77e9\u9635\u91cc\u51fa\u73b0\u7684\u5e97\u94fa\u3002")
-    if any(issue == "unprovided_dimension_winner" for issue in issues):
+    if any(issue in {"unprovided_dimension_winner", "unsupported_comparison_winner", "comparison_matrix_mismatch"} for issue in issues):
         parts.append("\u4e0d\u8981\u58f0\u79f0\u672a\u5728 comparison_matrix.dimension_winners \u91cc\u63d0\u4f9b\u7684\u7ef4\u5ea6\u80dc\u51fa\u3002")
-    if any(issue.startswith("forbidden_claim:") for issue in issues):
+    if any(issue.startswith("forbidden_claim:") or "forbidden_claim" in issue for issue in issues):
         parts.append("\u5220\u9664\u672a\u88ab evidence \u652f\u6301\u7684\u65ad\u8a00\uff0c\u53ea\u4fdd\u7559\u53ef\u9a8c\u8bc1\u4e8b\u5b9e\u3002")
+    if any("unsupported_" in issue or "tool_failure" in issue or "empty_result" in issue for issue in issues):
+        parts.append("\u4e0d\u8981\u7f16\u9020\u6216\u4f7f\u7528\u672a\u88ab evidence \u652f\u6301\u7684\u4fe1\u606f\u3002")
     if not parts:
         parts.append("\u8bf7\u53ea\u8f93\u51fa evidence \u652f\u6301\u7684\u5185\u5bb9\u3002")
     return "".join(parts)
@@ -251,18 +253,47 @@ def verify_answer(answer: str, evidence: dict, task_type: str) -> dict:
     evidence_dict = _to_dict(evidence)
     issues: list[str] = []
 
+    # A. Run B2MiniVerifier checks
+    from .b2_mini_verifier import B2MiniVerifier
+    from .generator import _build_decision_plan
+    
+    mock_answer_plan = {
+        "answer_type": task_type,
+        "forbidden_claims": evidence_dict.get("forbidden_claims") or [],
+        "must_mention_unknowns": [
+            item.get("shop_name", "") if isinstance(item, dict) else str(item)
+            for item in (evidence_dict.get("unknown_items") or [])
+            if (item.get("shop_name", "") if isinstance(item, dict) else str(item))
+        ]
+    }
+    plan = _build_decision_plan(mock_answer_plan, evidence_dict)
+    
+    verifier = B2MiniVerifier()
+    res = verifier.verify(plan, answer)
+    if not res["passed"]:
+        for v in res["violations"]:
+            if v not in issues:
+                issues.append(v)
+
+    # B. Legacy check rules (to preserve existing test behaviors)
     forbidden_claims = evidence_dict.get("forbidden_claims") or []
     for claim in forbidden_claims:
         if isinstance(claim, str) and claim and claim in answer:
-            issues.append(f"forbidden_claim:{claim}")
+            if f"forbidden_claim:{claim}" not in issues:
+                issues.append(f"forbidden_claim:{claim}")
 
     if task_type == "comparison" or (evidence_dict.get("comparison_matrix") or {}).get("rows"):
         issues.extend(_comparison_issues(answer, evidence_dict))
-        passed = len(issues) == 0
+        # Deduplicate
+        unique_issues = []
+        for issue in issues:
+            if issue not in unique_issues:
+                unique_issues.append(issue)
+        passed = len(unique_issues) == 0
         return {
             "passed": passed,
-            "issues": issues,
-            "suggested_fix": "" if passed else _build_suggested_fix(issues),
+            "issues": unique_issues,
+            "suggested_fix": "" if passed else _build_suggested_fix(unique_issues),
             "task_type": task_type,
         }
 
@@ -276,7 +307,8 @@ def verify_answer(answer: str, evidence: dict, task_type: str) -> dict:
     }
     for name in _known_shop_names_in_answer(answer):
         if allowed_shop_names and name not in allowed_shop_names:
-            issues.append(f"shop_mismatch:{name}")
+            if f"shop_mismatch:{name}" not in issues:
+                issues.append(f"shop_mismatch:{name}")
 
     facet_results = _extract_facet_results(evidence_dict, task_type)
     for item in facet_results:
@@ -288,16 +320,25 @@ def verify_answer(answer: str, evidence: dict, task_type: str) -> dict:
     if len(expected_names) >= 2:
         mentioned_order = _extract_mentioned_order(answer, expected_names)
         if len(mentioned_order) >= 2 and mentioned_order != expected_names[: len(mentioned_order)]:
-            issues.append("ranking_changed_by_llm")
+            if "ranking_changed_by_llm" not in issues:
+                issues.append("ranking_changed_by_llm")
     if task_type == "recommendation" and len(expected_names) >= 3:
         mentioned_order = _extract_mentioned_order(answer, expected_names)
         if len(mentioned_order) != 3:
-            issues.append("recommendation_top_k_mismatch")
+            if "recommendation_top_k_mismatch" not in issues:
+                issues.append("recommendation_top_k_mismatch")
 
-    passed = len(issues) == 0
+    # Deduplicate issues
+    unique_issues = []
+    for issue in issues:
+        if issue not in unique_issues:
+            unique_issues.append(issue)
+
+    passed = len(unique_issues) == 0
     return {
         "passed": passed,
-        "issues": issues,
-        "suggested_fix": "" if passed else _build_suggested_fix(issues),
+        "issues": unique_issues,
+        "suggested_fix": "" if passed else _build_suggested_fix(unique_issues),
         "task_type": task_type,
     }
+

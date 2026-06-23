@@ -303,8 +303,7 @@ def test_context_recovery_receives_raw_text():
     )
     assert "resolved_target" in recovered
     target = recovered["resolved_target"]
-    shop = target["resolved_shop"] if isinstance(target, dict) else target.resolved_shop
-    assert shop["shop_id"] == "shop_sc_05"
+    assert target.resolved_shop.shop_id == "shop_sc_05"
 
 
 def test_first_item_reference_uses_raw_text_or_semantic_reference():
@@ -321,8 +320,7 @@ def test_first_item_reference_uses_raw_text_or_semantic_reference():
     )
 
     target = recovered["resolved_target"]
-    shop = target["resolved_shop"] if isinstance(target, dict) else target.resolved_shop
-    assert shop["shop_id"] == "shop_sc_05"
+    assert target.resolved_shop.shop_id == "shop_sc_05"
 
 
 def test_this_shop_after_recommendation_list_must_clarify():
@@ -351,8 +349,7 @@ def test_this_shop_reference_not_lost_due_to_empty_text():
     )
 
     target = recovered["resolved_target"]
-    shop = target["resolved_shop"] if isinstance(target, dict) else target.resolved_shop
-    assert shop["shop_id"] == "shop_sc_05"
+    assert target.resolved_shop.shop_id == "shop_sc_05"
 
 
 def test_pending_reply_recommend_first_not_topic_switch():

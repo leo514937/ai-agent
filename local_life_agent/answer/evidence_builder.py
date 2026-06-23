@@ -46,28 +46,31 @@ def _facet_name_from_tool(tool_name: str) -> str:
         "get_coupon_list": "coupon",
         "check_open_status": "open_status",
         "get_distance_eta": "distance",
+        "get_shop_cards": "shop_cards",
+        "get_shop_review_summary": "review_summary",
+        "get_deal_list": "deal",
     }.get(tool_name, "unknown")
 
 
 def _facet_claims_for_status(facet: str, status: str) -> list[str]:
     if facet == "coupon":
-        if status in {"unknown", "failed", "circuit_open"}:
+        if status in {"unknown", "failed", "circuit_open", "error", "backend_unavailable"}:
             return ["有券", "有可用券", "当前暂无可用券", "暂无可用券", "没有券"]
     elif facet == "open_status":
-        if status in {"unknown", "failed", "circuit_open"}:
+        if status in {"unknown", "failed", "circuit_open", "error", "backend_unavailable"}:
             return ["营业中", "正在营业", "已打烊", "已关门", "不营业"]
     elif facet == "distance":
-        if status in {"unknown", "failed", "circuit_open"}:
+        if status in {"unknown", "failed", "circuit_open", "error", "backend_unavailable"}:
             return ["很近", "不远", "很远", "x公里", "km"]
     return []
 
 
 def _facet_status_summary(result_status: str, data: Any) -> str:
-    if result_status in {"failed", "circuit_open", "unknown"}:
+    if result_status in {"failed", "error", "circuit_open", "unknown", "backend_unavailable"}:
         return result_status
     if result_status == "empty":
         return "empty"
-    if result_status == "ok":
+    if result_status in {"ok", "partial"}:
         return "ok"
     return "unknown"
 
@@ -93,7 +96,25 @@ def _facet_result_payload(facet: str, result_status: str, data: Any) -> dict[str
                 "distance_km": data.get("distance_km"),
                 "eta_minutes": data.get("eta_minutes"),
             }
+    elif facet == "shop_cards":
+        if result_status in {"ok", "partial"} and isinstance(data, dict):
+            payload["value"] = [item.get("name", "") for item in data.get("items", []) if isinstance(item, dict) and item.get("name")]
+    elif facet == "review_summary":
+        if result_status in {"ok", "partial"} and isinstance(data, dict):
+            payload["value"] = [item.get("summary", "") for item in data.get("items", []) if isinstance(item, dict) and item.get("summary")]
+    elif facet == "deal":
+        if result_status in {"ok", "partial"} and isinstance(data, dict):
+            payload["value"] = [item.get("title", "") for item in data.get("items", []) if isinstance(item, dict) and item.get("title")]
     return payload
+
+
+def _items_from_tool_data(data: Any) -> list[dict[str, Any]]:
+    if isinstance(data, dict):
+        items = data.get("items", [])
+        return [item for item in items if isinstance(item, dict)]
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    return []
 
 
 def _candidate_from_shop(shop: Any) -> dict[str, Any]:
@@ -101,10 +122,15 @@ def _candidate_from_shop(shop: Any) -> dict[str, Any]:
     if not candidate:
         return {}
     candidate.setdefault("shop_id", "")
-    candidate.setdefault("shop_name", "")
+    candidate.setdefault("shop_name", candidate.get("name", ""))
     candidate.setdefault("category", "")
-    candidate.setdefault("tags", [])
+    candidate.setdefault("tags", candidate.get("scene_tags") or candidate.get("top_tags") or [])
     candidate.setdefault("rating", 0)
+    if candidate.get("distance_km") is None and candidate.get("distance_m") is not None:
+        try:
+            candidate["distance_km"] = float(candidate.get("distance_m")) / 1000.0
+        except Exception:
+            candidate["distance_km"] = None
     candidate.setdefault("distance_km", None)
     candidate.setdefault("eta_minutes", None)
     candidate.setdefault("open_status", candidate.get("open_status", "unknown"))
@@ -117,21 +143,30 @@ def _search_result_candidates(tool_results: dict, plan_calls: dict[str, dict[str
     for call_id, tool_result in (tool_results or {}).items():
         result = _to_dict(tool_result)
         tool_name = str(result.get("tool_name", ""))
-        if tool_name != "search_shops":
-            continue
         data = result.get("data")
-        if not isinstance(data, list):
-            continue
-        limit = config.RECOMMENDATION_CANDIDATE_TOP_K
-        call_plan = plan_calls.get(str(call_id), {})
-        try:
-            limit = min(limit, int(call_plan.get("args", {}).get("limit", config.SEARCH_LIMIT)))
-        except Exception:
+        if tool_name == "search_shops":
+            if not isinstance(data, list):
+                continue
             limit = config.RECOMMENDATION_CANDIDATE_TOP_K
-        for item in data[:limit]:
-            candidate = _candidate_from_shop(item)
-            if candidate.get("shop_id"):
-                candidates.append(candidate)
+            call_plan = plan_calls.get(str(call_id), {})
+            try:
+                limit = min(limit, int(call_plan.get("args", {}).get("limit", config.SEARCH_LIMIT)))
+            except Exception:
+                limit = config.RECOMMENDATION_CANDIDATE_TOP_K
+            for item in data[:limit]:
+                candidate = _candidate_from_shop(item)
+                if candidate.get("shop_id"):
+                    candidates.append(candidate)
+        elif tool_name == "get_shop_cards":
+            card_items = []
+            if isinstance(data, dict):
+                card_items = list(data.get("items", []) or [])
+            elif isinstance(data, list):
+                card_items = list(data)
+            for item in card_items:
+                candidate = _candidate_from_shop(item)
+                if candidate.get("shop_id"):
+                    candidates.append(candidate)
     return candidates
 
 
@@ -266,6 +301,52 @@ def _build_comparison_evidence(
         data = result.get("data")
         call_plan = plan_calls.get(str(call_id), {})
         shop_id = str(result.get("shop_id", "") or call_plan.get("target_shop_id", "")).strip()
+        if tool_name in {"get_shop_cards", "get_shop_review_summary"}:
+            for item in _items_from_tool_data(data):
+                item_shop_id = str(item.get("shop_id", "")).strip()
+                if not item_shop_id:
+                    continue
+                row = rows_by_shop_id.setdefault(
+                    item_shop_id,
+                    {
+                        "shop_id": item_shop_id,
+                        "shop_name": str(item.get("name", "") or item.get("shop_name", "")).strip(),
+                        "detail_status": "unknown",
+                        "open_status": "unknown",
+                        "coupon_status": "unknown",
+                        "rating": None,
+                        "distance_km": None,
+                        "eta_minutes": None,
+                        "coupon_titles": [],
+                        "avg_price": None,
+                        "tags": [],
+                        "address": "",
+                    },
+                )
+                if tool_name == "get_shop_cards":
+                    row["shop_name"] = str(item.get("name", "") or row.get("shop_name", "")).strip()
+                    row["rating"] = item.get("rating", row.get("rating"))
+                    row["avg_price"] = item.get("avg_price", row.get("avg_price"))
+                    row["tags"] = item.get("top_tags") or item.get("scene_tags") or row.get("tags", [])
+                    row["address"] = item.get("address", row.get("address", ""))
+                    row["open_status"] = str(item.get("open_status_text", item.get("open_status", "unknown")) or "unknown")
+                    row["coupon_status"] = "has_coupon" if item.get("has_coupon") else "empty" if item.get("has_coupon") is False else row.get("coupon_status", "unknown")
+                    row["coupon_titles"] = [item.get("top_coupon_title")] if item.get("top_coupon_title") else row.get("coupon_titles", [])
+                    if item.get("distance_m") is not None:
+                        try:
+                            row["distance_km"] = float(item.get("distance_m")) / 1000.0
+                        except Exception:
+                            pass
+                    if item.get("eta_minutes") is not None:
+                        row["eta_minutes"] = item.get("eta_minutes")
+                else:
+                    row["shop_name"] = str(item.get("name", "") or row.get("shop_name", "")).strip()
+                    row["rating"] = item.get("rating", row.get("rating"))
+                    row["tags"] = item.get("scene_tags") or item.get("positive_tags") or row.get("tags", [])
+                    scene_fit = item.get("scene_fit") if isinstance(item.get("scene_fit"), dict) else {}
+                    if scene_fit:
+                        row["scene_fit"] = scene_fit
+            continue
         if not shop_id:
             continue
         row = rows_by_shop_id.setdefault(
@@ -347,7 +428,7 @@ def _build_comparison_evidence(
         s_lower = str(s or "").lower()
         if s_lower in {"ok", "has_coupon", "empty", "open", "closed"}:
             return "ok"
-        if s_lower in {"failed", "circuit_open"}:
+        if s_lower in {"failed", "circuit_open", "error", "backend_unavailable"}:
             return s_lower
         return "unknown"
 
@@ -427,7 +508,7 @@ def _build_comparison_evidence(
             cells.append(cell)
             if cell["status"] == "unknown":
                 unknown_cells.append(cell)
-            elif cell["status"] in {"failed", "circuit_open"}:
+            elif cell["status"] in {"failed", "circuit_open", "error", "backend_unavailable"}:
                 failed_cells.append(cell)
 
     dimension_winners: dict[str, list[dict[str, Any]]] = {}
@@ -552,10 +633,10 @@ def build_evidence(
     for call_id, tool_result in (tool_results or {}).items():
         result = _to_dict(tool_result)
         tool_name = result.get("tool_name", "")
-        facet = _facet_name_from_tool(tool_name)
+        call_plan = plan_calls.get(str(call_id), {})
+        facet = str(call_plan.get("facet") or _facet_name_from_tool(tool_name))
         result_status = _status_value(result.get("result_status", "unknown"))
         data = result.get("data")
-        call_plan = plan_calls.get(str(call_id), {})
         requested_facets.append(facet)
         facet_statuses[facet] = _facet_status_summary(result_status, data)
         facet_results.append(
@@ -705,11 +786,30 @@ def build_evidence(
                         "source_type": "tool",
                     }
                 )
+        elif facet in {"shop_cards", "review_summary", "scene_fit", "environment", "taste", "service", "price"}:
+            if result_status in {"ok", "partial"} and isinstance(data, dict):
+                items = _items_from_tool_data(data)
+                first_item = items[0] if items else {}
+                if facet == "shop_cards":
+                    value = [item.get("name", "") for item in items if item.get("name")]
+                elif facet == "review_summary":
+                    value = [item.get("summary", "") for item in items if item.get("summary")]
+                elif facet == "scene_fit":
+                    value = first_item.get("scene_fit", {})
+                elif facet == "environment":
+                    value = first_item.get("environment_score")
+                elif facet == "taste":
+                    value = first_item.get("taste_score")
+                elif facet == "service":
+                    value = first_item.get("service_score")
+                else:
+                    value = first_item.get("price_score")
+                facet_results[-1]["value"] = value
 
     required_statuses = [item["status"] for item in facet_results if item["required"]]
     if any(status == "circuit_open" for status in required_statuses):
         overall_status = "circuit_open"
-    elif any(status == "failed" for status in required_statuses):
+    elif any(status in {"failed", "error", "backend_unavailable"} for status in required_statuses):
         overall_status = "failed"
     elif any(status == "unknown" for status in required_statuses):
         overall_status = "unknown"
@@ -740,7 +840,7 @@ def build_evidence(
 
     forbidden_claims: list[str] = []
     for facet, status in facet_statuses.items():
-        if status in {"unknown", "failed", "circuit_open"}:
+        if status in {"unknown", "failed", "circuit_open", "error", "backend_unavailable"}:
             forbidden_claims.extend(_facet_claims_for_status(facet, status))
 
     comparison_matrix = {
@@ -799,6 +899,76 @@ def _build_recommendation_evidence(
         data = result.get("data")
         call_plan = plan_calls.get(str(call_id), {})
         shop_id = str(result.get("shop_id", "") or call_plan.get("target_shop_id", "")).strip()
+        if tool_name in {"get_shop_cards", "get_shop_review_summary"}:
+            for item in _items_from_tool_data(data):
+                item_shop_id = str(item.get("shop_id", "")).strip()
+                if not item_shop_id:
+                    continue
+                candidate = candidates_by_shop_id.setdefault(item_shop_id, {"shop_id": item_shop_id, "shop_name": ""})
+                candidate["shop_name"] = str(item.get("name", "") or item.get("shop_name", "") or candidate.get("shop_name", "")).strip()
+                if tool_name == "get_shop_cards":
+                    candidate.update(
+                        {
+                            "category": item.get("category", candidate.get("category")),
+                            "rating": item.get("rating", candidate.get("rating")),
+                            "avg_price": item.get("avg_price", candidate.get("avg_price")),
+                            "distance_km": item.get("distance_m", candidate.get("distance_km")),
+                            "eta_minutes": item.get("eta_minutes", candidate.get("eta_minutes")),
+                            "open_status": str(item.get("open_status_text", item.get("open_status", "unknown")) or "unknown"),
+                            "coupon_count": item.get("coupon_count", candidate.get("coupon_count")),
+                            "tags": item.get("top_tags") or item.get("scene_tags") or candidate.get("tags", []),
+                        }
+                    )
+                    if candidate.get("distance_km") is not None:
+                        try:
+                            candidate["distance_km"] = float(candidate["distance_km"]) / 1000.0
+                        except Exception:
+                            pass
+                    evidence_items.append(
+                        {
+                            "evidence_id": f"evi_shop_card_{item_shop_id}",
+                            "shop_id": item_shop_id,
+                            "shop_name": candidate.get("shop_name", ""),
+                            "facet": "shop_cards",
+                            "tool_name": "get_shop_cards",
+                            "call_id": call_id,
+                            "result_status": result_status,
+                            "field_path": "data.items",
+                            "value": {
+                                "rating": item.get("rating"),
+                                "avg_price": item.get("avg_price"),
+                                "distance_m": item.get("distance_m"),
+                                "eta_minutes": item.get("eta_minutes"),
+                                "open_status_text": item.get("open_status_text"),
+                                "coupon_count": item.get("coupon_count"),
+                            },
+                            "confidence": 1.0,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "source_type": "tool",
+                        }
+                    )
+                else:
+                    candidate["review_summary"] = str(item.get("summary", "") or "")
+                    candidate["scene_fit"] = item.get("scene_fit", candidate.get("scene_fit"))
+                    candidate["positive_tags"] = item.get("positive_tags", candidate.get("positive_tags", []))
+                    candidate["negative_tags"] = item.get("negative_tags", candidate.get("negative_tags", []))
+                    evidence_items.append(
+                        {
+                            "evidence_id": f"evi_review_{item_shop_id}",
+                            "shop_id": item_shop_id,
+                            "shop_name": candidate.get("shop_name", ""),
+                            "facet": "review_summary",
+                            "tool_name": "get_shop_review_summary",
+                            "call_id": call_id,
+                            "result_status": result_status,
+                            "field_path": "data.items",
+                            "value": candidate.get("review_summary", ""),
+                            "confidence": 1.0,
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "source_type": "tool",
+                        }
+                    )
+            continue
         if not shop_id:
             continue
 

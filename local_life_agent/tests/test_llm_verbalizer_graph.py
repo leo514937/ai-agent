@@ -108,6 +108,29 @@ def _mock_llm_client(content: str | dict | None = None, ok: bool = True) -> Any:
     return MockBackend()
 
 
+def _sequence_llm_client(contents: list[str]) -> Any:
+    class MockBackend:
+        llm_backend = "fake_llm"
+
+        def __init__(self, responses: list[str]):
+            self._responses = list(responses)
+            self._call_count = 0
+
+        def __call__(self, prompt: str, system_prompt: str = "", temperature: float = 0.0, timeout_ms: int = 3000) -> str:
+            if "DecisionPlan" in prompt or "DecisionPlan" in system_prompt:
+                import json
+
+                index = min(self._call_count, len(self._responses) - 1)
+                payload = {"natural_response": self._responses[index]}
+                self._call_count += 1
+                return json.dumps(payload, ensure_ascii=False)
+            from local_life_agent.llm.client import _default_llm_backend
+
+            return _default_llm_backend(prompt, system_prompt, temperature, timeout_ms)
+
+    return MockBackend(contents)
+
+
 def test_graph_verbalizer_recommendation_success():
     client = _mock_llm_client()
     set_llm_backend(client)
@@ -128,6 +151,14 @@ def test_graph_verbalizer_recommendation_violation_fallback():
     assert response.debug is not None
     assert response.debug.answer_source == "template_fallback"
     assert response.debug.llm_verbalizer_violation == "hallucinated_shop_name"
+    assert response.debug.rewrite_count == 1
+    assert response.debug.fallback_reason == "b2_mini_verifier:hallucinated_shop_name"
+    assert response.debug.final_safety_status == "fallback"
+    debug_dict = response.to_dict()["debug"]
+    assert debug_dict["fallback_reason"] == "b2_mini_verifier:hallucinated_shop_name"
+    assert debug_dict["answer_source"] == "template_fallback"
+    assert debug_dict["final_safety_status"] == "fallback"
+    assert debug_dict["answer_verify_violations"]
 
 
 def test_graph_verbalizer_comparison_success():
@@ -195,3 +226,56 @@ def test_graph_verbalizer_unknown_as_false_violation_fallback(monkeypatch):
     assert response.debug is not None
     assert response.debug.answer_source == "template_fallback"
     assert response.debug.llm_verbalizer_violation == "unknown_as_false"
+
+
+def test_graph_verbalizer_rewrite_success_keeps_safe_answer():
+    client = _sequence_llm_client(
+        [
+            "对比川味轩(知春路店)和海底捞(牡丹园店)：在综合排序里，川味轩(知春路店)更好。",
+            "对比海底捞(牡丹园店)和川味轩(知春路店)：在综合排序里，海底捞(牡丹园店)更好。",
+        ]
+    )
+    set_llm_backend(client)
+    get_session_store().save("graph_comp_rewrite_success", SessionState(last_recommendation_list=[SHOP_A, SHOP_B]))
+
+    response = run_agent_graph("第一家和第二家哪个更好？", "graph_comp_rewrite_success")
+    assert response.debug is not None
+    assert response.debug.answer_verify_passed is True
+    assert response.debug.rewrite_count >= 1
+    assert response.debug.answer_source == "llm_verbalizer_rewrite"
+    assert response.debug.fallback_reason == ""
+    assert response.debug.final_safety_status == "safe"
+    assert response.debug.answer_verify_violations == []
+    assert "没有券" not in response.answer_text
+    assert "海底捞(牡丹园店)" in response.answer_text
+    assert "川味轩(知春路店)" in response.answer_text
+    assert "川味轩(知春路店)更好" not in response.answer_text
+    debug_dict = response.to_dict()["debug"]
+    assert debug_dict["answer_source"] == "llm_verbalizer_rewrite"
+    assert debug_dict["rewrite_count"] >= 1
+    assert debug_dict["fallback_reason"] == ""
+    assert debug_dict["final_safety_status"] == "safe"
+
+
+def test_graph_verbalizer_rewrite_then_fallback_metadata_complete():
+    client = _sequence_llm_client(
+        [
+            "对比川味轩(知春路店)和海底捞(牡丹园店)：在综合排序里，川味轩(知春路店)更好。",
+            "对比川味轩(知春路店)和海底捞(牡丹园店)：在综合排序里，川味轩(知春路店)更好。",
+        ]
+    )
+    set_llm_backend(client)
+    get_session_store().save("graph_comp_rewrite_fallback", SessionState(last_recommendation_list=[SHOP_A, SHOP_B]))
+
+    response = run_agent_graph("第一家和第二家哪个更好？", "graph_comp_rewrite_fallback")
+    assert response.debug is not None
+    assert response.debug.answer_source == "template_fallback"
+    assert response.debug.rewrite_count == 1
+    assert response.debug.fallback_reason == "b2_mini_verifier:ranking_changed"
+    assert response.debug.final_safety_status == "fallback"
+    assert "川味轩(知春路店)更好" not in response.answer_text
+    debug_dict = response.to_dict()["debug"]
+    assert debug_dict["fallback_reason"] == "b2_mini_verifier:ranking_changed"
+    assert debug_dict["answer_source"] == "template_fallback"
+    assert debug_dict["final_safety_status"] == "fallback"
+    assert debug_dict["answer_verify_violations"]

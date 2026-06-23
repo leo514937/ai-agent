@@ -538,18 +538,21 @@ class TestEnums:
 
     def test_tool_result_status_values(self):
         assert ToolResultStatus.ok.value == "ok"
+        assert ToolResultStatus.partial.value == "partial"
         assert ToolResultStatus.empty.value == "empty"
         assert ToolResultStatus.unknown.value == "unknown"
         assert ToolResultStatus.failed.value == "failed"
+        assert ToolResultStatus.error.value == "error"
         assert ToolResultStatus.circuit_open.value == "circuit_open"
         assert ToolResultStatus.backend_unavailable.value == "backend_unavailable"
-        assert len(ToolResultStatus) == 6
+        assert len(ToolResultStatus) == 8
 
     def test_error_code_values(self):
         codes = [
             ErrorCode.TOOL_TIMEOUT,
             ErrorCode.NETWORK_ERROR,
             ErrorCode.CIRCUIT_OPEN,
+            ErrorCode.BACKEND_UNAVAILABLE,
             ErrorCode.INVALID_ARGUMENT,
             ErrorCode.SHOP_NOT_FOUND,
             ErrorCode.AMBIGUOUS_SHOP,
@@ -560,6 +563,7 @@ class TestEnums:
             ErrorCode.LLM_ENUM_OUT_OF_RANGE,
             ErrorCode.ANSWER_VERIFIER_FAILED,
         ]
-        assert len(codes) == 12
+        assert len(codes) == 13
         assert ErrorCode.TOOL_TIMEOUT.value == "TOOL_TIMEOUT"
+        assert ErrorCode.BACKEND_UNAVAILABLE.value == "BACKEND_UNAVAILABLE"
         assert ErrorCode.ANSWER_VERIFIER_FAILED.value == "ANSWER_VERIFIER_FAILED"

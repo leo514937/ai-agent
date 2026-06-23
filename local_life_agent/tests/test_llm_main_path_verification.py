@@ -343,7 +343,7 @@ def _fail_semantic_only(error_code: str = "LLM_TIMEOUT"):
     """
     def _call(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
         prompt = _args[0] if _args else _kwargs.get("prompt", "")
-        if "Local Life Semantic Parser" in prompt:
+        if "Local Life Semantic Parser" in prompt or "本地生活语义解析器" in prompt:
             return {
                 "ok": False,
                 "content": None,

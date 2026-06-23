@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 from ..domain.schemas import DecisionPlan
 from .candidate_decision import (
@@ -155,6 +156,14 @@ def _to_dict(value: Any) -> dict[str, Any]:
         dumped = model_dump()
         return dumped if isinstance(dumped, dict) else {}
     return dict(getattr(value, "__dict__", {}) or {})
+
+
+def _normalize_coupon_phrase(text: str) -> str:
+    if not text:
+        return text
+    text = re.sub(r"有(?:可用)?优惠券(?:可用|可领|可用券)?", "有券", text)
+    text = re.sub(r"当前有券可领", "有券", text)
+    return text
 
 
 def _shop_display_name(evidence: dict[str, Any]) -> str:
@@ -347,7 +356,12 @@ def _comparison_sentence(evidence: dict[str, Any]) -> str:
     return "".join(parts)
 
 
-def _build_decision_plan(answer_plan: dict, evidence: dict) -> DecisionPlan:
+def _build_decision_plan(
+    answer_plan: dict,
+    evidence: dict,
+    *,
+    conversation_continuity: dict[str, Any] | None = None,
+) -> DecisionPlan:
     ap = _to_dict(answer_plan)
     ev = _to_dict(evidence)
 
@@ -412,7 +426,14 @@ def _build_decision_plan(answer_plan: dict, evidence: dict) -> DecisionPlan:
         )
 
         # 6. Map to legacy DecisionPlan
-        return map_candidate_decision_plan_to_decision_plan(candidate_plan)
+        plan = map_candidate_decision_plan_to_decision_plan(candidate_plan)
+        if decision_type == "recommendation" and shop_ids:
+            shop_id_to_index = {str(sid): i for i, sid in enumerate(shop_ids)}
+            plan.overall_ranking.sort(key=lambda x: shop_id_to_index.get(str(x.get("shop_id", "")), 999))
+            plan.selected_targets.sort(key=lambda x: shop_id_to_index.get(str(x.get("shop_id", "")), 999))
+            if plan.overall_ranking:
+                plan.main_recommendation = plan.overall_ranking[0]
+        return plan
 
     selected_targets = []
     omitted_targets = []
@@ -446,7 +467,7 @@ def _build_decision_plan(answer_plan: dict, evidence: dict) -> DecisionPlan:
                 c_status = row_dict.get("coupon_status")
                 if c_status == "has_coupon":
                     titles = row_dict.get("coupon_titles") or []
-                    facts.append(f"有可用优惠券：{'、'.join(str(t) for t in titles[:3])}" if titles else "有可用优惠券")
+                    facts.append(f"有券：{'、'.join(str(t) for t in titles[:3])}" if titles else "有券")
                 elif c_status == "empty":
                     facts.append("当前暂无可用优惠券")
                 elif c_status == "unknown":
@@ -503,7 +524,7 @@ def _build_decision_plan(answer_plan: dict, evidence: dict) -> DecisionPlan:
                         cnt = int(coupon_count)
                     except Exception:
                         cnt = 0
-                    facts.append("有优惠券" if cnt > 0 else "暂无可用券")
+                    facts.append("有券" if cnt > 0 else "暂无可用券")
                 factual_points.append(f"{sname}: {'; '.join(facts)}")
 
         if overall_ranking:
@@ -511,41 +532,187 @@ def _build_decision_plan(answer_plan: dict, evidence: dict) -> DecisionPlan:
 
     else:
         facet_results = ev.get("facet_results") or []
+        evidence_items = ev.get("evidence_items") or []
+        unknown_items = ev.get("unknown_items") or []
         sname = _shop_display_name(ev)
-        selected_targets.append({"shop_name": sname})
+        
+        target_dict = {
+            "shop_name": sname,
+            "shop_id": ev.get("shop_id") or ev.get("target_shop_id") or "",
+            "open_status": "unknown",
+            "coupon_status": "unknown",
+            "distance_km": None,
+            "avg_price": None,
+            "rating": None,
+            "unknown_facts": [],
+            "failed_facts": [],
+        }
 
-        facts = []
+        # Check ranking_snapshot for basic values
+        if ranking_snapshot:
+            if ranking_snapshot.get("open_status"):
+                target_dict["open_status"] = str(ranking_snapshot.get("open_status")).lower()
+            if ranking_snapshot.get("coupon_status"):
+                target_dict["coupon_status"] = str(ranking_snapshot.get("coupon_status")).lower()
+            if ranking_snapshot.get("distance_km") is not None:
+                target_dict["distance_km"] = ranking_snapshot.get("distance_km")
+            if ranking_snapshot.get("avg_price") is not None:
+                target_dict["avg_price"] = ranking_snapshot.get("avg_price")
+            if ranking_snapshot.get("rating") is not None:
+                target_dict["rating"] = ranking_snapshot.get("rating")
+
+        # Overlay evidence_items values
+        for ei in evidence_items:
+            ei_dict = _to_dict(ei)
+            facet = ei_dict.get("facet")
+            val = ei_dict.get("value")
+            if facet == "open_status" and val:
+                target_dict["open_status"] = str(val).lower()
+            elif facet == "coupon":
+                if isinstance(val, list):
+                    target_dict["coupon_status"] = "has_coupon" if val else "empty"
+                elif val:
+                    target_dict["coupon_status"] = str(val).lower()
+            elif facet == "distance" and val is not None:
+                try:
+                    if isinstance(val, dict):
+                        target_dict["distance_km"] = float(val.get("distance_km"))
+                    else:
+                        target_dict["distance_km"] = float(val)
+                except (ValueError, TypeError):
+                    pass
+            elif facet == "rating" and val is not None:
+                target_dict["rating"] = val
+            elif facet == "avg_price" and val is not None:
+                target_dict["avg_price"] = val
+
+        # Handle facet_results status overrides
         for item in facet_results:
             item_dict = _to_dict(item)
             facet = item_dict.get("facet")
             status = item_dict.get("status")
+            val = item_dict.get("value")
+            
+            is_failed = status in ("failed", "circuit_open")
+            is_unknown = status not in ("ok", "empty") or is_failed
+
             if facet == "coupon":
                 if status == "ok":
-                    titles = ranking_snapshot.get("coupon_titles") or []
-                    facts.append(f"有可用优惠券：{'、'.join(str(t) for t in titles[:3])}" if titles else "有可用优惠券")
+                    if isinstance(val, list):
+                        target_dict["coupon_status"] = "has_coupon" if val else "empty"
+                    elif val:
+                        target_dict["coupon_status"] = str(val).lower()
+                    else:
+                        target_dict["coupon_status"] = "has_coupon"
                 elif status == "empty":
-                    facts.append("当前暂无可用优惠券")
+                    target_dict["coupon_status"] = "empty"
                 else:
-                    uncertainty_notes.append(f"无法确认 {sname} 的优惠情况")
+                    target_dict["coupon_status"] = status if status else "unknown"
+                
+                if is_unknown:
+                    target_dict["unknown_facts"].append("coupon")
+                if is_failed:
+                    target_dict["failed_facts"].append("coupon")
+
             elif facet == "open_status":
-                open_status = str(ranking_snapshot.get("open_status", "")).lower()
                 if status == "ok":
-                    if open_status == "open":
-                        facts.append("营业状态为：目前营业中")
-                    elif open_status == "closed":
-                        facts.append("营业状态为：目前已打烊")
+                    if val:
+                        target_dict["open_status"] = str(val).lower()
+                    elif target_dict["open_status"] == "unknown":
+                        target_dict["open_status"] = "open"
                 else:
-                    uncertainty_notes.append(f"无法确认 {sname} 的营业状态")
+                    target_dict["open_status"] = status if status else "unknown"
+                
+                if is_unknown:
+                    target_dict["unknown_facts"].append("open_status")
+                if is_failed:
+                    target_dict["failed_facts"].append("open_status")
+
             elif facet == "distance":
-                distance_km = ranking_snapshot.get("distance_km")
-                eta_minutes = ranking_snapshot.get("eta_minutes")
-                if status == "ok" and distance_km is not None:
-                    dist_str = f"距离为 {distance_km} 公里"
-                    if eta_minutes is not None:
-                        dist_str += f"，预计时间 {eta_minutes} 分钟"
-                    facts.append(dist_str)
-                else:
-                    uncertainty_notes.append(f"无法确认 {sname} 的距离/时间")
+                if status == "ok" and val is not None:
+                    try:
+                        if isinstance(val, dict):
+                            target_dict["distance_km"] = float(val.get("distance_km"))
+                        else:
+                            target_dict["distance_km"] = float(val)
+                    except (ValueError, TypeError):
+                        pass
+                
+                if is_unknown:
+                    target_dict["unknown_facts"].append("distance")
+                if is_failed:
+                    target_dict["failed_facts"].append("distance")
+
+            elif facet in ("detail", "rating", "avg_price"):
+                if status == "ok" and val is not None:
+                    if isinstance(val, dict):
+                        if val.get("rating") is not None:
+                            target_dict["rating"] = val.get("rating")
+                        if val.get("avg_price") is not None:
+                            target_dict["avg_price"] = val.get("avg_price")
+                    elif facet == "rating":
+                        target_dict["rating"] = val
+                    elif facet == "avg_price":
+                        target_dict["avg_price"] = val
+                
+                if is_unknown:
+                    target_dict["unknown_facts"].append("detail")
+                if is_failed:
+                    target_dict["failed_facts"].append("detail")
+
+        # Map unknown_items
+        for ui in unknown_items:
+            ui_dict = _to_dict(ui)
+            f = ui_dict.get("facet")
+            if f:
+                if f == "coupon":
+                    if "coupon" not in target_dict["unknown_facts"]:
+                        target_dict["unknown_facts"].append("coupon")
+                    if target_dict["coupon_status"] not in ("empty", "has_coupon", "failed", "circuit_open"):
+                        target_dict["coupon_status"] = "unknown"
+                elif f == "open_status":
+                    if "open_status" not in target_dict["unknown_facts"]:
+                        target_dict["unknown_facts"].append("open_status")
+                    if target_dict["open_status"] not in ("open", "closed", "failed", "circuit_open"):
+                        target_dict["open_status"] = "unknown"
+                elif f == "distance":
+                    if "distance" not in target_dict["unknown_facts"]:
+                        target_dict["unknown_facts"].append("distance")
+                elif f in ("detail", "rating", "avg_price"):
+                    if "detail" not in target_dict["unknown_facts"]:
+                        target_dict["unknown_facts"].append("detail")
+
+        selected_targets.append(target_dict)
+
+        # Build facts text list for backward compatibility
+        facts = []
+        if target_dict["open_status"] == "open":
+            facts.append("营业状态为：目前营业中")
+        elif target_dict["open_status"] == "closed":
+            facts.append("营业状态为：目前已打烊")
+        elif "open_status" in target_dict["unknown_facts"]:
+            uncertainty_notes.append(f"无法确认 {sname} 的营业状态")
+            
+        if target_dict["coupon_status"] == "has_coupon":
+            titles = target_dict.get("coupon_titles") or ranking_snapshot.get("coupon_titles") or []
+            facts.append(f"有券：{'、'.join(str(t) for t in titles[:3])}" if titles else "有券")
+        elif target_dict["coupon_status"] == "empty":
+            facts.append("当前暂无可用优惠券")
+        elif "coupon" in target_dict["unknown_facts"]:
+            uncertainty_notes.append(f"无法确认 {sname} 的优惠情况")
+            
+        if target_dict["distance_km"] is not None:
+            dist_str = f"距离为 {target_dict['distance_km']} 公里"
+            eta = target_dict.get("eta_minutes") or ranking_snapshot.get("eta_minutes")
+            if eta is not None:
+                dist_str += f"，预计时间 {eta} 分钟"
+            facts.append(dist_str)
+        elif "distance" in target_dict["unknown_facts"]:
+            uncertainty_notes.append(f"无法确认 {sname} 的距离/时间")
+            
+        if target_dict["rating"] is not None:
+            facts.append(f"评分为 {target_dict['rating']}")
+            
         if facts:
             factual_points.append(f"{sname}: {'; '.join(facts)}")
 
@@ -563,6 +730,7 @@ def _build_decision_plan(answer_plan: dict, evidence: dict) -> DecisionPlan:
         factual_points=factual_points,
         uncertainty_notes=uncertainty_notes,
         forbidden_claims=forbidden_claims,
+        conversation_continuity=conversation_continuity or {},
     )
 
 
@@ -572,6 +740,10 @@ def generate_answer(
     *,
     llm_client: Any | None = None,
     metadata_out: dict | None = None,
+    rewrite_count: int = 0,
+    previous_violations: list[str] | None = None,
+    in_graph: bool = False,
+    conversation_continuity: dict[str, Any] | None = None,
 ) -> str:
     """Generate a final natural language answer.
 
@@ -667,14 +839,28 @@ def generate_answer(
         metadata["llm_verbalizer_enabled"] = True
         from ..llm.client import call_llm
         client = llm_client or call_llm
-        plan = _build_decision_plan(answer_plan, evidence)
-        verbalized = verbalize_decision_plan(plan, llm_client=client, fallback_text=template_text, metadata_out=metadata_out, timeout_ms=config.LLM_TIMEOUT_MS)
+        plan = _build_decision_plan(answer_plan, evidence, conversation_continuity=conversation_continuity)
+        verbalized = verbalize_decision_plan(
+            plan,
+            llm_client=client,
+            fallback_text=template_text,
+            metadata_out=metadata_out,
+            timeout_ms=config.LLM_TIMEOUT_MS,
+            rewrite_count=rewrite_count,
+            previous_violations=previous_violations,
+            in_graph=in_graph,
+        )
         if verbalized != template_text:
             metadata["llm_used"] = True
-            metadata["answer_source"] = "llm_verbalizer"
+            if rewrite_count > 0:
+                metadata["answer_source"] = "llm_verbalizer_rewrite"
+            else:
+                metadata["answer_source"] = "llm_verbalizer"
             metadata["answer_fallback_reason"] = ""
         else:
             metadata["answer_source"] = "template_fallback"
+
+        verbalized = _normalize_coupon_phrase(verbalized)
 
         if metadata_out is not None:
             metadata_out.update(metadata)
@@ -682,4 +868,5 @@ def generate_answer(
 
     if metadata_out is not None:
         metadata_out.update(metadata)
-    return template_text
+    return _normalize_coupon_phrase(template_text)
+

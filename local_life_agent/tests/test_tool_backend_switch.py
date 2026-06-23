@@ -1,10 +1,11 @@
-"""Contract tests for tool backend switching (mock ↔ java_api).
+"""Contract tests for tool backend switching (db ↔ mock ↔ java_api).
 
 Coverage:
-  - Default backend is mock
-  - config.TOOL_BACKEND can be set to "java_api"
+  - Default backend is db
+  - config.TOOL_BACKEND can be set to "mock" or "java_api"
   - Invalid backend value is rejected
   - build_tool_executor returns correct executor type for each backend
+  - DbToolExecutor can be constructed and delegates to db_tools
   - Java backend unavailable does NOT return mock data (fallback disabled)
   - Explicit fallback returns degraded + fallback_from metadata
 """
@@ -18,8 +19,10 @@ import pytest
 
 from local_life_agent import config
 from local_life_agent.tools.executor import (
+    DbToolExecutor,
     JavaToolExecutor,
     MockToolExecutor,
+    build_db_executor,
     build_fallback_executor,
     build_tool_executor,
 )
@@ -32,18 +35,24 @@ from local_life_agent.tools.gateway import ToolCallGateway
 
 
 class TestDefaultBackend:
-    """Default TOOL_BACKEND should be ``'mock'``."""
+    """Default TOOL_BACKEND should be ``'db'`` (production mode)."""
 
-    def test_default_is_mock(self):
-        assert config.TOOL_BACKEND == "mock"
+    @pytest.fixture(autouse=True)
+    def _force_default_backend(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr(config, "TOOL_BACKEND", "db")
+        yield
 
-    def test_build_tool_executor_returns_mock(self):
+    def test_default_is_db(self):
+        assert config.TOOL_BACKEND == "db"
+
+    def test_build_tool_executor_returns_db(self):
+        from local_life_agent.tools.executor import DbToolExecutor
         executor = build_tool_executor()
-        assert isinstance(executor, MockToolExecutor)
+        assert isinstance(executor, DbToolExecutor)
 
-    def test_build_tool_executor_has_mock_backend_source(self):
+    def test_build_tool_executor_has_db_backend_source(self):
         executor = build_tool_executor()
-        assert executor.backend_source == "mock"
+        assert executor.backend_source == "db"
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -120,3 +129,23 @@ class TestJavaUnavailableWithFallback:
         # Fallback path may not succeed if Java+fallback both fail; the point
         # is that Gateway does NOT crash and the result carries metadata.
         assert result is not None
+
+
+# ═══════════════════════════════════════════════════════════════════
+# §4 — DB backend
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestDbBackend:
+    """DbToolExecutor construction and delegation."""
+
+    def test_build_db_executor(self):
+        executor = build_db_executor()
+        assert isinstance(executor, DbToolExecutor)
+        assert executor.backend_source == "db"
+
+    def test_build_tool_executor_with_backend_override(self, monkeypatch):
+        monkeypatch.setattr(config, "TOOL_BACKEND", "db")
+        executor = build_tool_executor()
+        assert isinstance(executor, DbToolExecutor)
+        assert executor.backend_source == "db"

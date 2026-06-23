@@ -29,6 +29,15 @@ public class AgentToolResponse {
         return r;
     }
 
+    public static AgentToolResponse partial(Object data) {
+        AgentToolResponse r = new AgentToolResponse();
+        r.success = true;
+        r.resultStatus = "partial";
+        r.data = data;
+        r.backendSource = "java_api";
+        return r;
+    }
+
     public static AgentToolResponse empty() {
         AgentToolResponse r = new AgentToolResponse();
         r.success = true;
@@ -42,6 +51,16 @@ public class AgentToolResponse {
         AgentToolResponse r = new AgentToolResponse();
         r.success = false;
         r.resultStatus = "failed";
+        r.errorCode = errorCode;
+        r.errorMessage = errorMessage;
+        r.backendSource = "java_api";
+        return r;
+    }
+
+    public static AgentToolResponse error(String errorCode, String errorMessage) {
+        AgentToolResponse r = new AgentToolResponse();
+        r.success = false;
+        r.resultStatus = "error";
         r.errorCode = errorCode;
         r.errorMessage = errorMessage;
         r.backendSource = "java_api";

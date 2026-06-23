@@ -1,0 +1,6 @@
+{"case_id":"verifier_001","category":"verifier","turns":[{"user":"附近推荐火锅"}],"expected":{"must_not_include_violation":["unknown_as_false"],"max_rewrite_count":1}}
+{"case_id":"verifier_002","category":"verifier","turns":[{"user":"海底捞(牡丹园店)和川味轩哪个好？"}],"expected":{"task_type":"comparison","max_rewrite_count":1}}
+{"case_id":"verifier_003","category":"verifier","turns":[{"user":"川味轩有券吗"}],"expected":{"top_intent":"local_life","max_rewrite_count":1}}
+{"case_id":"verifier_004","category":"verifier","turns":[{"user":"附近推荐火锅"},{"user":"推荐的第一家现在营业吗"}],"expected":{"top_intent":"local_life","turn_assertions":[{"task_type":"recommendation"},{"reference_resolution_source":"semantic_frame"}]}}
+{"case_id":"verifier_005","category":"verifier","turns":[{"user":"附近推荐火锅"},{"user":"第一个怎么样"}],"expected":{"top_intent":"local_life","turn_assertions":[{"task_type":"recommendation"},{"reference_resolution_source":"semantic_frame"}]}}
+{"case_id":"verifier_006","category":"real_llm_optional","turns":[{"user":"附近推荐火锅"}],"expected":{"top_intent":"local_life","allow_skipped_if_no_api_key":true}}

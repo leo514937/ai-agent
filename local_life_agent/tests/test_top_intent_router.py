@@ -54,7 +54,7 @@ def test_local_life_text_is_classified_as_local_life():
     assert result["top_intent"] == TopIntent.local_life
     assert result["confidence"] == 0.97
     assert calls
-    assert "User text:" in calls[0]["prompt"]
+    assert any(m in calls[0]["prompt"] for m in ("User text:", "用户输入：", "用户输入:"))
 
 
 def test_invalid_llm_return_falls_back_to_out_of_scope():

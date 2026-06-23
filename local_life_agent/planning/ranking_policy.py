@@ -32,6 +32,16 @@ def _as_list(value: Any) -> list[str]:
 def infer_recommendation_query(semantic_frame: dict[str, Any]) -> str:
     """Infer the search query used for recommendation recall."""
     frame = _to_dict(semantic_frame)
+    direct_query = str(frame.get("query", "") or frame.get("search_query", "") or "").strip()
+    if direct_query:
+        return direct_query
+
+    constraints = _to_dict(frame.get("constraints"))
+    for key in ("cuisine", "category"):
+        value = str(constraints.get(key, "") or "").strip()
+        if value:
+            return value
+
     mentions = frame.get("merchant_mentions") or []
     if mentions:
         return str(mentions[0]).strip()

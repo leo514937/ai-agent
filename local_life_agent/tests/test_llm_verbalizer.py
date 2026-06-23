@@ -195,7 +195,10 @@ def test_verbalizer_uncertainty_notes_fallback(monkeypatch: pytest.MonkeyPatch):
     assert "优惠暂时无法确认" in res
 
 
-def test_recommendation_count_dynamic():
+def test_recommendation_count_dynamic(monkeypatch: pytest.MonkeyPatch):
+    # 这个用例验证的是 template 路径的动态数量表达，不应受 verbalizer 默认开关影响。
+    monkeypatch.setattr("local_life_agent.config.ENABLE_LLM_VERBALIZER", False)
+
     # Verify template count is dynamic
     answer_plan = {"answer_type": "recommendation"}
     
@@ -248,4 +251,3 @@ def test_verbalizer_unknown_as_false_violation(monkeypatch: pytest.MonkeyPatch):
     assert res == "暂时无法确认川味轩(知春路店)的优惠情况。"
     assert metadata_out.get("violation") == "unknown_as_false"
     assert "unknown_as_false" in metadata_out.get("violations", [])
-

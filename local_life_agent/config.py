@@ -67,6 +67,8 @@ _DOTENV_PATH = os.path.join(_CONFIG_DIR, ".env")
 
 def _parse_dotenv(path: str) -> dict[str, str]:
     """Parse a .env file into a dict. No external dependency needed."""
+    if "PYTEST_CURRENT_TEST" in os.environ:
+        return {}
     result: dict[str, str] = {}
     try:
         with open(path, "r") as f:
@@ -161,6 +163,7 @@ LLM_TIMEOUT_MS: int = _llm_cfg_int("REAL_LLM_TIMEOUT_MS", "LLM_TIMEOUT_MS", REAL
 REAL_LLM_API_KEY_ENV: str = _llm_cfg_str("REAL_LLM_API_KEY_ENV", "REAL_LLM_API_KEY_ENV", "LLM_API_KEY")
 
 ENABLE_LLM_VERBALIZER = _llm_cfg_bool("ENABLE_LLM_VERBALIZER", "ENABLE_LLM_VERBALIZER", False)
+ENABLE_LLM_TOOL_PLANNER = _llm_cfg_bool("ENABLE_LLM_TOOL_PLANNER", "ENABLE_LLM_TOOL_PLANNER", False)
 
 # --- Tools ---
 TOOL_DEFAULT_TIMEOUT_MS = 2000
@@ -184,11 +187,11 @@ DEBUG_ENABLED = True  # Set to False in production
 # Any other value triggers a ValueError at import time.
 # Default: "mock" — ensures existing tests keep passing.
 # Override via: LOCAL_LIFE_TOOL_BACKEND
-_TOOL_BACKEND_RAW = _env_str("LOCAL_LIFE_TOOL_BACKEND", "mock")
-if _TOOL_BACKEND_RAW not in ("mock", "java_api"):
+_TOOL_BACKEND_RAW = _env_str("LOCAL_LIFE_TOOL_BACKEND", "db")
+if _TOOL_BACKEND_RAW not in ("mock", "java_api", "db"):
     raise ValueError(
         f"LOCAL_LIFE_TOOL_BACKEND={_TOOL_BACKEND_RAW!r} is invalid. "
-        "Accepted values: 'mock', 'java_api'."
+        "Accepted values: 'mock', 'java_api', 'db'."
     )
 TOOL_BACKEND: str = _TOOL_BACKEND_RAW  # "mock" | "java_api"
 

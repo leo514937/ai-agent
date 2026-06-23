@@ -1,6 +1,5 @@
 package com.hmdp.dto;
 
-import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
@@ -8,12 +7,33 @@ import java.util.List;
 
 @Data
 @NoArgsConstructor
-@AllArgsConstructor
 public class Result {
     private Boolean success;
     private String errorMsg;
     private Object data;
     private Long total;
+
+    // Compatibility fields for the Next.js frontend
+    private Integer code;
+    private String message;
+
+    public Result(Boolean success, String errorMsg, Object data, Long total) {
+        this.success = success;
+        this.errorMsg = errorMsg;
+        this.data = data;
+        this.total = total;
+        this.code = success ? 200 : 500;
+        this.message = success ? "success" : errorMsg;
+    }
+
+    public Result(Boolean success, String errorMsg, Object data, Long total, Integer code, String message) {
+        this.success = success;
+        this.errorMsg = errorMsg;
+        this.data = data;
+        this.total = total;
+        this.code = code;
+        this.message = message;
+    }
 
     public static Result ok(){
         return new Result(true, null, null, null);

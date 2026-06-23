@@ -171,8 +171,8 @@ def test_top_intent_router_uses_injected_spy_backend(spy_backend: SpyRealLLMBack
 
     frame = _assert_main_llm_metadata(response)
     assert spy.call_count >= 2
-    assert any("# Top Intent Router" in prompt for prompt in spy.prompts)
-    assert any("# Local Life Semantic Parser" in prompt for prompt in spy.prompts)
+    assert any(h in prompt for prompt in spy.prompts for h in ("# Top Intent Router", "# 顶层意图路由"))
+    assert any(h in prompt for prompt in spy.prompts for h in ("# Local Life Semantic Parser", "# 本地生活语义解析器"))
     assert frame.get("ranking_signals", {}).get("spy_marker") == spy.sentinel_id
 
 

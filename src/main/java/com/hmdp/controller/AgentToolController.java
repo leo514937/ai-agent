@@ -83,4 +83,33 @@ public class AgentToolController {
         AgentLocation location = request != null ? request.getLocation() : null;
         return ResponseEntity.ok(agentToolService.getDistanceEta(shopId, location));
     }
+
+    /**
+     * POST /internal/agent/tools/shop-cards
+     * Batch fetch lightweight facts for multiple shops.
+     */
+    @PostMapping("/shop-cards")
+    public ResponseEntity<AgentToolResponse> getShopCards(@RequestBody AgentShopCardsRequest request) {
+        return ResponseEntity.ok(agentToolService.getShopCards(request));
+    }
+
+    /**
+     * POST /internal/agent/tools/shop-review-summary
+     * Batch fetch structured review summaries.
+     */
+    @PostMapping("/shop-review-summary")
+    public ResponseEntity<AgentToolResponse> getShopReviewSummary(@RequestBody AgentReviewSummaryRequest request) {
+        return ResponseEntity.ok(agentToolService.getShopReviewSummary(request));
+    }
+
+    /**
+     * POST /internal/agent/tools/shops/{shopId}/deals
+     * Get deal / group-buy facts for one shop.
+     */
+    @PostMapping("/shops/{shopId}/deals")
+    public ResponseEntity<AgentToolResponse> getDealList(
+            @PathVariable Long shopId,
+            @RequestBody(required = false) AgentDealListRequest request) {
+        return ResponseEntity.ok(agentToolService.getDealList(shopId, request));
+    }
 }

@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from local_life_agent.semantic.slot_extractor import _extract_deictic
-from local_life_agent.target.reference_resolver import resolve_references
+from local_life_agent.target.context_recovery import recover_context
 from local_life_agent.answer.evidence_builder import build_evidence
 from local_life_agent.domain.schemas import ComparisonMatrix, EvidencePack, ComparisonCell
 from local_life_agent.domain.state import SessionState
@@ -35,13 +35,15 @@ def test_group_deictic_extraction():
 
 
 def test_group_deictic_size_parsing():
-    """Verify group deictic reference sizes are parsed correctly via resolve_references."""
+    """Verify group deictic reference sizes are parsed correctly via recover_context."""
     session = SessionState(last_recommendation_list=[SHOP_A, SHOP_B, SHOP_C])
 
-    res_three = resolve_references(session, {"deictic_references": ["这三家"]})
+    frame_three = {"task_type": "comparison", "deictic_references": ["这三家"]}
+    res_three = recover_context(session, frame_three)
     assert len(res_three.get("comparison_targets", [])) == 3
 
-    res_several = resolve_references(session, {"deictic_references": ["这几家"]})
+    frame_several = {"task_type": "comparison", "deictic_references": ["这几家"]}
+    res_several = recover_context(session, frame_several)
     assert len(res_several.get("comparison_targets", [])) == 3
 
 
@@ -52,11 +54,12 @@ def test_resolve_deictic_reference_with_group():
     )
 
     # "这三家" -> should resolve first 3 shops
-    res_three = resolve_references(session, {"deictic_references": ["这三家"]})
+    frame = {"task_type": "comparison", "deictic_references": ["这三家"]}
+    res_three = recover_context(session, frame)
     targets_three = res_three.get("comparison_targets", [])
-    assert res_three["status"] == "resolved"
+    assert res_three["context_resolution"]["status"] == "RESOLVED"
     assert len(targets_three) == 3
-    assert targets_three[2].get("resolved_shop", {}).get("shop_id") == SHOP_C["shop_id"]
+    assert targets_three[2].get("shop_id") == SHOP_C["shop_id"]
 
 
 def test_deictic_priority_clarification():
@@ -66,14 +69,16 @@ def test_deictic_priority_clarification():
         current_shop={}
     )
 
-    res = resolve_references(session, {
+    frame = {
+        "task_type": "comparison",
         "deictic_references": ["这家"],
         "comparison_targets": [
             {"reference": "deictic", "source_text": "这家", "shop_name": "这家"},
             {"reference": "explicit", "source_text": "海底捞", "shop_name": "海底捞"}
         ]
-    })
-    assert res.get("status") in ("unresolved", "resolved")
+    }
+    res = recover_context(session, frame)
+    assert res["context_resolution"]["status"] == "NEED_CLARIFICATION"
 
 
 def test_comparison_matrix_cells_validation():

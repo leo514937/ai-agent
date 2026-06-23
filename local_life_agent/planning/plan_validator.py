@@ -138,6 +138,7 @@ class ExecutionPlanValidator:
         )
         self._forbidden_tools: dict[str, list[str]] = {
             "single_shop_query": ["search_shops"],
+            "coupon_query": ["search_shops"],
         }
 
     def validate(
@@ -160,6 +161,7 @@ class ExecutionPlanValidator:
         self._check_tool_registered(plan, report)
         self._check_arg_schemas(plan, report)
         self._check_max_tool_calls(plan, report)
+        self._check_comparison_target_limit(plan, report)
         self._check_forbidden_tools(plan, report)
         self._check_depends_on_cycles(plan, report)
         self._check_shop_ids(plan, resolved_shop_ids, report)
@@ -202,6 +204,13 @@ class ExecutionPlanValidator:
                 shop_id = str(args.get("shop_id", "")).strip()
                 placeholder = shop_id.startswith("$search_result[") and shop_id.endswith(".shop_id")
                 if placeholder:
+                    continue
+                shop_ids = args.get("shop_ids")
+                if isinstance(shop_ids, str) and shop_ids.strip() == "$search_result.shop_ids":
+                    continue
+                if isinstance(shop_ids, list) and any(
+                    isinstance(item, str) and item.strip().startswith("$search_result[") for item in shop_ids
+                ):
                     continue
 
             validator = Draft7Validator(schema)
@@ -288,6 +297,32 @@ class ExecutionPlanValidator:
             report.errors.append(
                 f"Plan exceeds max_tool_calls limit: {len(plan.tool_calls)} > {config.MAX_TOOL_CALLS}"
             )
+
+    def _check_comparison_target_limit(self, plan: ExecutionPlan, report: ValidationReport) -> None:
+        if plan.task_type != "comparison":
+            return
+
+        target_shop_ids = [str(item).strip() for item in plan.target_shop_ids or [] if str(item).strip()]
+        if len(target_shop_ids) > config.COMPARISON_MAX_SHOP_LIMIT:
+            report.errors.append(
+                f"comparison_target_limit_exceeded: plan.target_shop_ids has {len(target_shop_ids)} items > {config.COMPARISON_MAX_SHOP_LIMIT}"
+            )
+
+        for tc in plan.tool_calls:
+            if tc.tool_name not in {"get_shop_cards", "get_shop_review_summary"}:
+                continue
+            args = dict(tc.args or {}) if isinstance(tc.args, dict) else {}
+            shop_ids = args.get("shop_ids")
+            if isinstance(shop_ids, list):
+                concrete_shop_ids = [
+                    str(item).strip()
+                    for item in shop_ids
+                    if isinstance(item, str) and str(item).strip() and not str(item).strip().startswith("$search_result")
+                ]
+                if len(concrete_shop_ids) > config.COMPARISON_MAX_SHOP_LIMIT:
+                    report.errors.append(
+                        f"comparison_target_limit_exceeded: tool '{tc.tool_name}' (call_id={tc.call_id}) args.shop_ids has {len(concrete_shop_ids)} items > {config.COMPARISON_MAX_SHOP_LIMIT}"
+                    )
 
     # ------------------------------------------------------------------
     # Rule 7: forbidden_tools check by task_type

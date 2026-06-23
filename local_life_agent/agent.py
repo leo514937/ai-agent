@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+from time import perf_counter
 from typing import Any
 from . import config
 from .domain.state import SessionState, SessionWriteDirective
@@ -19,6 +20,8 @@ from .engine import (
     route,
     route_with_status,
 )
+from .observability.metrics import record_turn_metric
+from .observability.trace import build_turn_trace
 
 
 _GRAPH_CACHE: Any = None
@@ -33,7 +36,7 @@ def _debug_dump(value: Any, _seen: set[int] | None = None) -> Any:
         obj_id = id(value)
         if obj_id in _seen:
             return "<recursive>"
-        _seen.add(obj_id)
+        _seen = _seen | {obj_id}
     model_dump = getattr(value, "model_dump", None)
     if callable(model_dump):
         return _debug_dump(model_dump(), _seen)
@@ -49,6 +52,7 @@ def _debug_dump(value: Any, _seen: set[int] | None = None) -> Any:
 @dataclass
 class DebugInfo:
     execution_trace: list = field(default_factory=list)
+    turn_trace: dict = field(default_factory=dict)
     semantic_frame: dict = field(default_factory=dict)
     execution_plan: dict = field(default_factory=dict)
     tool_results: dict = field(default_factory=dict)
@@ -58,9 +62,17 @@ class DebugInfo:
     state_update_plan: dict = field(default_factory=dict)
     answer_source: str = ""
     answer_fallback_reason: str = ""
+    fallback_reason: str = ""
     llm_verbalizer_error: str | None = None
     generated_llm_answer_before_fallback: str = ""
     llm_verbalizer_violation: str | None = None
+    answer_verify_passed: bool = True
+    answer_verify_violations: list = field(default_factory=list)
+    rewrite_needed: bool = False
+    rewrite_count: int = 0
+    rewrite_reason: str = ""
+    final_safety_status: str = "safe"
+
 
 
 
@@ -84,6 +96,7 @@ class AgentResponse:
         if config.DEBUG_ENABLED and self.debug is not None:
             result["debug"] = {
                 "execution_trace": self.debug.execution_trace,
+                "turn_trace": _debug_dump(self.debug.turn_trace),
                 "semantic_frame": _debug_dump(self.debug.semantic_frame),
                 "execution_plan": _debug_dump(self.debug.execution_plan),
                 "tool_results": _debug_dump(self.debug.tool_results),
@@ -93,10 +106,18 @@ class AgentResponse:
                 "state_update_plan": _debug_dump(self.debug.state_update_plan),
                 "answer_source": self.debug.answer_source,
                 "answer_fallback_reason": self.debug.answer_fallback_reason,
+                "fallback_reason": self.debug.fallback_reason,
                 "llm_verbalizer_error": self.debug.llm_verbalizer_error,
                 "generated_llm_answer_before_fallback": self.debug.generated_llm_answer_before_fallback,
                 "llm_verbalizer_violation": self.debug.llm_verbalizer_violation,
+                "answer_verify_passed": self.debug.answer_verify_passed,
+                "answer_verify_violations": self.debug.answer_verify_violations,
+                "rewrite_needed": self.debug.rewrite_needed,
+                "rewrite_count": self.debug.rewrite_count,
+                "rewrite_reason": self.debug.rewrite_reason,
+                "final_safety_status": self.debug.final_safety_status,
             }
+
 
         else:
             result["debug"] = {}
@@ -421,6 +442,8 @@ def run_agent_graph(input_text: str, session_id: str = "") -> AgentResponse:
     It builds the graph, invokes it with the initial state, and
     returns an ``AgentResponse`` built from the final state.
     """
+    started_at = perf_counter()
+    final_state: dict[str, Any] = {}
     from .domain.graph_state import GraphState
     from .engine.graph_builder import build_graph
 
@@ -452,6 +475,10 @@ def run_agent_graph(input_text: str, session_id: str = "") -> AgentResponse:
         "resolve_shop_result": None,
         "execution_plan": None,
         "validated_plan": None,
+        "tool_plan": None,
+        "tool_plan_source": "",
+        "tool_plan_validated": True,
+        "tool_plan_fallback_reason": "",
         "tool_results": {},
         "tool_result_set": {},
         "evidence_pack": None,
@@ -473,39 +500,63 @@ def run_agent_graph(input_text: str, session_id: str = "") -> AgentResponse:
         "semantic_source": "",
         "llm_backend": "",
         "fallback_reason": "",
+        "answer_fallback_reason": "",
         "llm_called": False,
         "answer_source": "",
+        "llm_verbalizer_error": None,
+        "generated_llm_answer_before_fallback": "",
         "llm_verbalizer_violation": None,
         "comparison_target_resolution": None,
+        "reference_resolution_source": "",
+        "answer_verify_passed": True,
+        "answer_verify_violations": [],
+        "rewrite_needed": False,
+        "rewrite_reason": "",
+        "final_safety_status": "safe",
+        "recommendation_query": "",
     }
     # Some valid multi-turn paths exceed LangGraph's default recursion limit
     # of 25 because every node transition counts as a step.
-    final_state = graph.invoke(initial, config={"recursion_limit": 64})
+    try:
+        final_state = graph.invoke(initial, config={"recursion_limit": 64})
 
-    answer = final_state.get("final_response", "")
-    trace_id = final_state.get("trace_id", "")
-    sid = final_state.get("session_id", session_id)
-    event_log = final_state.get("event_log", [])
+        answer = final_state.get("final_response", "")
+        trace_id = final_state.get("trace_id", "")
+        sid = final_state.get("session_id", session_id)
+        event_log = final_state.get("event_log", [])
+        elapsed_ms = (perf_counter() - started_at) * 1000.0
+        turn_trace = build_turn_trace(final_state, user_text=input_text, total_duration_ms=int(elapsed_ms))
 
-    response = AgentResponse(
-        answer_text=answer,
-        trace_id=trace_id,
-        session_id=sid,
-        debug=DebugInfo(
-            execution_trace=event_log,
-            semantic_frame=_debug_dump(final_state.get("semantic_frame") or {}),
-            execution_plan=_debug_dump(final_state.get("execution_plan") or {}),
-            tool_results=_debug_dump(final_state.get("tool_result_set") or final_state.get("tool_results") or {}),
-            evidence_pack=_debug_dump(final_state.get("evidence_pack") or {}),
-            session_state_before=_debug_dump(final_state.get("session_state_before") or {}),
-            session_state_after=_debug_dump(final_state.get("session_state_after") or {}),
-            state_update_plan=_debug_dump(final_state.get("state_update_plan") or {}),
-            answer_source=final_state.get("answer_source", ""),
-            answer_fallback_reason=final_state.get("answer_fallback_reason", ""),
-            llm_verbalizer_error=final_state.get("llm_verbalizer_error"),
-            generated_llm_answer_before_fallback=final_state.get("generated_llm_answer_before_fallback", ""),
-            llm_verbalizer_violation=final_state.get("llm_verbalizer_violation"),
-        ) if config.DEBUG_ENABLED else None,
-    )
+        response = AgentResponse(
+            answer_text=answer,
+            trace_id=trace_id,
+            session_id=sid,
+            debug=DebugInfo(
+                execution_trace=event_log,
+                turn_trace=turn_trace.to_dict(),
+                semantic_frame=_debug_dump(final_state.get("semantic_frame") or {}),
+                execution_plan=_debug_dump(final_state.get("execution_plan") or {}),
+                tool_results=_debug_dump(final_state.get("tool_result_set") or final_state.get("tool_results") or {}),
+                evidence_pack=_debug_dump(final_state.get("evidence_pack") or {}),
+                session_state_before=_debug_dump(final_state.get("session_state_before") or {}),
+                session_state_after=_debug_dump(final_state.get("session_state_after") or {}),
+                state_update_plan=_debug_dump(final_state.get("state_update_plan") or {}),
+                answer_source=final_state.get("answer_source", ""),
+                answer_fallback_reason=final_state.get("answer_fallback_reason", ""),
+                fallback_reason=final_state.get("fallback_reason", ""),
+                llm_verbalizer_error=final_state.get("llm_verbalizer_error"),
+                generated_llm_answer_before_fallback=final_state.get("generated_llm_answer_before_fallback", ""),
+                llm_verbalizer_violation=final_state.get("llm_verbalizer_violation"),
+                answer_verify_passed=final_state.get("answer_verify_passed", True),
+                answer_verify_violations=final_state.get("answer_verify_violations", []),
+                rewrite_needed=final_state.get("rewrite_needed", False),
+                rewrite_count=final_state.get("rewrite_count", 0),
+                rewrite_reason=final_state.get("rewrite_reason", ""),
+                final_safety_status=final_state.get("final_safety_status", "safe"),
+            ) if config.DEBUG_ENABLED else None,
+        )
+        return response
+    finally:
+        elapsed_ms = (perf_counter() - started_at) * 1000.0
+        record_turn_metric(final_state.get("trace_id", initial.get("trace_id", "")), elapsed_ms)
 
-    return response

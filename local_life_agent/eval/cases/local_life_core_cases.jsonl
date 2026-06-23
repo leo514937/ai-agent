@@ -1,0 +1,7 @@
+{"case_id":"rec_001","category":"recommendation","turns":[{"user":"附近推荐火锅"}],"expected":{"top_intent":"local_life","task_type":"recommendation","selected_flow":"recommendation_flow","min_candidate_count":1,"max_rewrite_count":1}}
+{"case_id":"rec_002","category":"recommendation","turns":[{"user":"附近有没有适合约会、现在营业、最好有券的火锅？"}],"expected":{"top_intent":"local_life","task_type":"recommendation","selected_flow":"recommendation_flow","min_candidate_count":1}}
+{"case_id":"rec_003","category":"recommendation","turns":[{"user":"北邮附近推荐个便宜点的火锅"}],"expected":{"top_intent":"local_life","task_type":"recommendation","selected_flow":"recommendation_flow","min_candidate_count":1}}
+{"case_id":"single_001","category":"single_shop","turns":[{"user":"海底捞(牡丹园店)怎么样？"}],"expected":{"top_intent":"local_life","selected_flow":"single_shop_query_flow","max_rewrite_count":1}}
+{"case_id":"single_002","category":"single_shop","turns":[{"user":"川味轩有券吗，顺便看看现在营业吗？"}],"expected":{"top_intent":"local_life","max_rewrite_count":1}}
+{"case_id":"comp_001","category":"comparison","turns":[{"user":"海底捞(牡丹园店)和川味轩哪个好？"}],"expected":{"top_intent":"local_life","task_type":"comparison","selected_flow":"comparison_flow","decision_type":"comparison","min_candidate_count":2,"max_rewrite_count":1}}
+{"case_id":"comp_002","category":"comparison","turns":[{"user":"海底捞(牡丹园店)和川味轩哪个更便宜？"}],"expected":{"top_intent":"local_life","task_type":"comparison","selected_flow":"comparison_flow","decision_type":"comparison","min_candidate_count":2,"max_rewrite_count":1}}

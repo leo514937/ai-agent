@@ -27,6 +27,9 @@ JAVA_TOOL_ENDPOINTS: dict[str, str] = {
     "get_coupon_list": "/internal/agent/tools/shops/{shop_id}/coupons",
     "check_open_status": "/internal/agent/tools/shops/{shop_id}/open-status",
     "get_distance_eta": "/internal/agent/tools/shops/{shop_id}/distance-eta",
+    "get_shop_cards": "/internal/agent/tools/shop-cards",
+    "get_shop_review_summary": "/internal/agent/tools/shop-review-summary",
+    "get_deal_list": "/internal/agent/tools/shops/{shop_id}/deals",
 }
 
 _SUPPORTED_TOOLS = frozenset(JAVA_TOOL_ENDPOINTS.keys())
@@ -36,6 +39,9 @@ _SUPPORTED_TOOLS = frozenset(JAVA_TOOL_ENDPOINTS.keys())
 _POST_METHOD_TOOLS = frozenset({
     "check_open_status",
     "get_distance_eta",
+    "get_shop_cards",
+    "get_shop_review_summary",
+    "get_deal_list",
 })
 
 
