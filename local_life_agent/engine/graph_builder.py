@@ -1637,6 +1637,9 @@ def _h_tool_execute(state: GraphState) -> dict:
                 except Exception:
                     pass
 
+        # --- Batch: resolve all specs, then execute concurrently ---
+        resolved_batch: list[dict[str, Any]] = []
+        error_results: dict[str, dict[str, Any]] = {}
         for spec in remaining_specs:
             call = spec.model_dump() if hasattr(spec, "model_dump") else _to_dict(spec)
             resolved_call = call
@@ -1647,7 +1650,7 @@ def _h_tool_execute(state: GraphState) -> dict:
             shop_id = str(resolved_call.get("target_shop_id", "") or resolved_call.get("args", {}).get("shop_id", "")).strip()
             if not shop_id:
                 unresolved_shop_ref = str(call.get("target_shop_id", "") or call.get("args", {}).get("shop_id", "")).strip()
-                raw_results[call_id] = {
+                error_results[call_id] = {
                     "call_id": call_id,
                     "shop_id": unresolved_shop_ref,
                     "tool_name": resolved_call.get("tool_name", ""),
@@ -1662,7 +1665,11 @@ def _h_tool_execute(state: GraphState) -> dict:
                     "degraded": not resolved_call.get("required", True),
                 }
                 continue
-            raw_results.update(batch_executor.execute_sync([resolved_call]))
+            resolved_batch.append(resolved_call)
+
+        if resolved_batch:
+            raw_results.update(batch_executor.execute_sync(resolved_batch))
+        raw_results.update(error_results)
 
         for spec in tool_calls:
             call = spec.model_dump() if hasattr(spec, "model_dump") else _to_dict(spec)
