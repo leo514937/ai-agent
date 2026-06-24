@@ -25,6 +25,12 @@ JSON 对象之外的任何说明文字。
   "hard_constraints": {},
   "soft_preferences": {},
   "ranking_signals": {},
+  "candidate_source": null,
+  "candidate_category": "",
+  "candidate_limit": null,
+  "candidate_sort_by": [],
+  "candidate_filters": {},
+  "candidate_source_origin": null,
   "follow_up": null,
   "confidence": 0.0,
   "need_context": false

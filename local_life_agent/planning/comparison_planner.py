@@ -1,4 +1,10 @@
-"""Comparison planner for multi-shop comparison flows."""
+"""Comparison planner for multi-shop comparison flows.
+
+P1: EvidencePlanner-compatible shell.
+When a CandidateSet is available in the graph state, delegates to
+``evidence_planner.plan_evidence()``. Otherwise falls back to the
+legacy ``plan_comparison()`` behaviour.
+"""
 
 from __future__ import annotations
 
@@ -6,6 +12,9 @@ from typing import Any
 
 from .. import config
 from ..config import TOOL_DEFAULT_TIMEOUT_MS
+from ..domain.candidate import CandidateSet, LocalLifeGoalDraft
+from ..domain.schemas import ExecutionPlan
+from .evidence_planner import plan_evidence
 
 
 def _to_dict(value: Any) -> dict[str, Any]:
@@ -167,3 +176,24 @@ def plan_comparison(
         ],
         "target_shop_ids": target_shop_ids,
     }
+
+
+def plan_comparison_with_candidate_set(
+    goal: LocalLifeGoalDraft,
+    candidate_set: CandidateSet,
+    semantic_frame: dict[str, Any] | None = None,
+    comparison_targets: list[dict[str, Any]] | None = None,
+    location: dict[str, Any] | None = None,
+) -> ExecutionPlan:
+    """Shell that delegates to EvidencePlanner when a CandidateSet is available.
+
+    This is the P1-compatible entry point called by the graph builder when
+    a CandidateSet is present for comparison flows.
+    """
+    return plan_evidence(
+        goal=goal,
+        candidate_set=candidate_set,
+        semantic_frame=semantic_frame,
+        comparison_targets=comparison_targets,
+        location=location,
+    )

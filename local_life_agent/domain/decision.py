@@ -1,0 +1,218 @@
+"""Decision domain models for P2 DecisionPlanner + DecisionReview.
+
+Defines the structured DecisionPlan output (replaces the legacy DecisionPlan
+in ``domain/schemas.py`` for P2 flows) and DecisionReviewResult.
+"""
+
+from __future__ import annotations
+
+from enum import Enum
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+from ..planning.review_policy import NextAction
+
+# Re-export DomainGoalDraft for assignment in graph_builder
+try:
+    from .schemas import DomainGoalDraft
+except ImportError:
+    DomainGoalDraft = None  # type: ignore
+
+
+def decision_to_answer_plan(decision_plan: DecisionPlan, evidence_pack: Any = None) -> dict:
+    """Convert a P2 DecisionPlan to an AnswerPlan-compatible dict.
+
+    This bridges the P2 DecisionPlan (produced by DecisionPlanner) into the
+    AnswerPlan format consumed by AnswerGenerator / answer_plan_build.
+
+    ``evidence_pack`` may be a dict or an EvidencePack Pydantic model.
+    """
+    from .schemas import AnswerPlan
+
+    decision_type = decision_plan.decision_type
+    target_shop_ids: list[str] = []
+    if decision_plan.winner_shop_id:
+        target_shop_ids = [decision_plan.winner_shop_id]
+    elif decision_plan.candidates:
+        target_shop_ids = decision_plan.candidates[:]
+
+    # Build response sections based on decision plan
+    response_sections: list[dict[str, Any]] = [
+        {
+            "section_id": "summary",
+            "section_type": "summary",
+            "target_shop_ids": target_shop_ids,
+            "status": "ok" if decision_plan.winner_shop_id else "unknown",
+        },
+    ]
+
+    # Facet sections from answerable facets
+    for facet in decision_plan.answerable_facets:
+        response_sections.append({
+            "section_id": f"facet_{facet}",
+            "section_type": facet,
+            "required": True,
+            "status": "ok",
+        })
+
+    # Unknown facets
+    for facet in decision_plan.unknown_facets:
+        response_sections.append({
+            "section_id": f"facet_{facet}",
+            "section_type": facet,
+            "required": True,
+            "status": "unknown",
+        })
+
+    # Failed facets
+    for facet in decision_plan.failed_facets:
+        response_sections.append({
+            "section_id": f"facet_{facet}",
+            "section_type": facet,
+            "required": False,
+            "status": "failed",
+        })
+
+    # Map claims to allowed_claims
+    allowed_claims: list[dict[str, Any]] = []
+    claims = decision_plan.claims or []
+    for idx, claim in enumerate(claims, start=1):
+        claim_id = claim.get("claim_id", f"claim_{idx}")
+        allowed_claims.append({
+            "claim_id": claim_id,
+            "shop_id": claim.get("shop_id", decision_plan.winner_shop_id or ""),
+            "facet": claim.get("facet", "unknown"),
+            "evidence_ids": claim.get("evidence_ids", []),
+            "claim_type": claim.get("claim_type", "factual"),
+            "value": claim.get("value", ""),
+            "verbalization_hint": claim.get("verbalization_hint", ""),
+        })
+
+    # Normalize evidence_pack: accept both dict and Pydantic model
+    evidence: dict[str, Any] = {}
+    if evidence_pack is not None:
+        if isinstance(evidence_pack, dict):
+            evidence = evidence_pack
+        elif hasattr(evidence_pack, "model_dump"):
+            evidence = evidence_pack.model_dump()
+        elif hasattr(evidence_pack, "dict"):
+            evidence = evidence_pack.dict()
+        else:
+            try:
+                evidence = dict(evidence_pack)
+            except (TypeError, ValueError):
+                evidence = {}
+
+    snapshot = evidence.get("ranking_snapshot") or {}
+    comparison_matrix = evidence.get("comparison_matrix") or {}
+
+    return {
+        "answer_type": _map_decision_type_to_answer_type(decision_type),
+        "target_shop_ids": target_shop_ids,
+        "response_sections": response_sections,
+        "allowed_claims": allowed_claims,
+        "required_claims": [],
+        "must_mention_unknowns": decision_plan.must_mention_unknowns or decision_plan.unknown_facets[:],
+        "forbidden_claims": decision_plan.forbidden_claims or evidence.get("forbidden_claims", []),
+        "ranking_snapshot_id": snapshot.get("snapshot_id", ""),
+        "comparison_matrix_id": comparison_matrix.get("matrix_id", ""),
+        "tone": decision_plan.decision_context.get("tone", "neutral") if isinstance(decision_plan.decision_context, dict) else "neutral",
+        "fallback_template_type": _map_fallback_template(decision_plan, evidence),
+    }
+
+
+def _map_decision_type_to_answer_type(dt: DecisionType) -> str:
+    mapping: dict[DecisionType, str] = {
+        DecisionType.RECOMMENDATION: "recommendation",
+        DecisionType.COMPARISON: "comparison",
+        DecisionType.SINGLE_SHOP_QUERY: "single_shop_query",
+        DecisionType.COUPON_QUERY: "single_shop_query",
+        DecisionType.OPEN_STATUS_QUERY: "single_shop_query",
+        DecisionType.DISTANCE_QUERY: "single_shop_query",
+        DecisionType.UNSUPPORTED: "error",
+        DecisionType.DEGRADED: "single_shop_query",
+    }
+    return mapping.get(dt, "single_shop_query")
+
+
+def _map_fallback_template(decision_plan: DecisionPlan, evidence: dict) -> str:
+    """Map decision plan state to fallback template type."""
+    if decision_plan.winner_shop_id:
+        if decision_plan.unknown_facets or decision_plan.failed_facets:
+            return "multi_facet_partial"
+        return "multi_facet_ok"
+    if decision_plan.failed_facets and not decision_plan.answerable_facets:
+        return "multi_facet_failed"
+    if decision_plan.unknown_facets and not decision_plan.answerable_facets:
+        return "multi_facet_empty"
+    if decision_plan.decision_type == DecisionType.UNSUPPORTED:
+        return "unsupported"
+    return "multi_facet_partial"
+
+
+class DecisionType(str, Enum):
+    """Type of decision being made."""
+    RECOMMENDATION = "recommendation"
+    COMPARISON = "comparison"
+    SINGLE_SHOP_QUERY = "single_shop_query"
+    COUPON_QUERY = "coupon_query"
+    OPEN_STATUS_QUERY = "open_status_query"
+    DISTANCE_QUERY = "distance_query"
+    UNSUPPORTED = "unsupported"
+    DEGRADED = "degraded"
+
+
+class DecisionPlan(BaseModel):
+    """Structured decision plan produced by DecisionPlanner.
+
+    This is the authoritative plan consumed by AnswerGenerator.
+    It is based solely on EvidencePack — no new facts, no LLM winner changes.
+
+    All claims must be bindable to EvidencePack entries.
+    """
+    decision_type: DecisionType = DecisionType.UNSUPPORTED
+    goal_id: str = ""                    # Ties back to the goal that spawned this decision
+    candidates: list[str] = Field(default_factory=list)  # shop_ids considered
+    answerable_facets: list[str] = Field(default_factory=list)
+    unknown_facets: list[str] = Field(default_factory=list)
+    failed_facets: list[str] = Field(default_factory=list)
+
+    # Ranking / winner — must be evidence-backed
+    winner_shop_id: str | None = None
+    ranking: list[dict[str, Any]] = Field(default_factory=list)
+    ranking_source: str = ""             # evidence | forbidden
+
+    # Per-facet claims bound to evidence
+    claims: list[dict[str, Any]] = Field(default_factory=list)
+
+    # Caveats about missing/unreliable data
+    caveats: list[str] = Field(default_factory=list)
+
+    # Optional next goal for multi-goal flows
+    next_goal: dict[str, Any] | None = None
+
+    # Decision context
+    decision_context: dict[str, Any] = Field(default_factory=dict)
+    style_hints: list[str] = Field(default_factory=list)
+
+    # For AnswerGenerator: forbidden claims, unknowns to mention
+    forbidden_claims: list[str] = Field(default_factory=list)
+    must_mention_unknowns: list[str] = Field(default_factory=list)
+
+
+class DecisionReviewResult(BaseModel):
+    """Output from DecisionReview — evaluates DecisionPlan sufficiency.
+
+    Written to ``GraphState.review_results["decision_review"]``.
+    """
+    stage: str = "decision_review"
+    status: str = "sufficient"     # sufficient | insufficient | partial | unsupported
+    next_action: NextAction = NextAction.FINISH
+    reason: str = ""
+    can_degrade: bool = False
+    missing_facets: list[str] = Field(default_factory=list)
+    unknown_facets: list[str] = Field(default_factory=list)
+    failed_facets: list[str] = Field(default_factory=list)
+    is_deterministic_winner: bool = False
+    trace_payload: dict[str, Any] = Field(default_factory=dict)

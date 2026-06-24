@@ -73,7 +73,7 @@ def _base_state(text: str, session_id: str) -> dict:
 
 
 def _invoke(text: str, session_id: str = "sess") -> dict:
-    return GRAPH.invoke(_base_state(text, session_id))
+    return GRAPH.invoke(_base_state(text, session_id), config={"recursion_limit": 40})
 
 
 def _tool_names(state: dict) -> list[str]:

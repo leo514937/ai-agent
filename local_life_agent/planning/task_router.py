@@ -1,4 +1,11 @@
-"""Task router for the single-shop coupon flow."""
+"""Task router compatibility shell for P2.
+
+P2: ``task_router`` is degraded to a compatibility shell.
+The authoritative routing is now handled by ``GoalPlanner`` + ``GoalReview``.
+
+This file is kept for backward compatibility during the transition period.
+It should not be used as the primary routing source for new code.
+"""
 
 from __future__ import annotations
 
@@ -8,11 +15,13 @@ from ..domain.enums import TaskType
 
 
 def route_task(semantic_frame: dict, resolved_target: dict) -> str:
-    """Determine the task type for this turn.
+    """Determine the legacy task type for backward compat.
 
-    Stage 10 only supports the coupon-query path. If the frame has a
-    resolved shop and the semantic intent is coupon-oriented, route to
-    ``coupon_query``; otherwise keep the request in a clarification path.
+    P2: This is a compatibility shell.  The authoritative routing is
+    handled by ``GoalPlanner`` + ``GoalReview``.  This function is kept
+    for code paths that still reference ``task_type`` directly.
+
+    Returns a TaskType string to satisfy existing downstream consumers.
     """
     if not isinstance(semantic_frame, dict):
         return TaskType.clarification_reply.value
@@ -35,7 +44,6 @@ def route_task(semantic_frame: dict, resolved_target: dict) -> str:
         return TaskType.clarification_reply.value
 
     if task_type == TaskType.coupon_query.value:
-        # Normalize coupon_query → single_shop_query (保留 enum 值以兼容 LLM)
         return TaskType.single_shop_query.value
     if task_type == TaskType.single_shop_query.value:
         return task_type

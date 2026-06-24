@@ -34,6 +34,7 @@ from ..engine.graph_builder import (
     _route_answer_verify,
     _route_check_pending,
     _route_clarify_decide,
+    _route_evidence_review,
     _route_frame_validator,
     _route_hard_guard,
     _route_plan_validator,
@@ -138,8 +139,8 @@ class TestNodeTableCompleteness:
     def test_all_nodes_have_handlers(self):
         """All nodes registered including clarify_decide."""
         assert len(_HANDLERS) == len(ALL_NODE_NAMES)
-        # 27 doc nodes (26 original + clarify_decide) + 2 runtime (EMIT, PERSIST)
-        assert len(_HANDLERS) == 29
+        # 29 doc nodes (26 original + clarify_decide + evidence_planner + evidence_review) + 2 runtime (EMIT, PERSIST)
+        assert len(_HANDLERS) == 36  # 31 P0/P1 + 5 P2 (goal_planner, goal_review, expand_search, decision_planner, decision_review)
 
     def test_every_execution_node_has_handler(self):
         """Every ExecutionNode enum member has a handler (including CLARIFY_DECIDE)."""
@@ -285,7 +286,12 @@ class TestNormalFlow:
             "guard_result": "",
             "verify_result": "",
             "draft_response": "",
-        })
+            # P1 evidence fields
+            "candidate_set": None,
+            "local_life_goal_draft": None,
+            "candidate_spec": None,
+            "review_results": None,
+        }, config={"recursion_limit": 40})
         assert "final_response" in result
         assert len(result.get("event_log", [])) > 0
         log = result["event_log"]
@@ -346,7 +352,12 @@ class TestNormalFlow:
                 "guard_result": "",
                 "verify_result": "",
                 "draft_response": "",
-            })
+                # P1 evidence fields
+                "candidate_set": None,
+                "local_life_goal_draft": None,
+                "candidate_spec": None,
+                "review_results": None,
+            }, config={"recursion_limit": 40})
             assert result["top_intent"] == TopIntent.local_life
         finally:
             clear_llm_backend()
@@ -613,6 +624,53 @@ class TestConditionalBranching:
         assert result["plan_validation_result"] == "pass"
         assert result["validated_plan"] is plan
 
+    # --- _route_evidence_review ---
+
+    def test_evidence_review_finish_routes_to_answer_plan_build(self):
+        """FINISH next_action routes to answer_plan_build."""
+        from ..domain.evidence import EvidenceReviewResult
+        from ..planning.review_policy import NextAction
+        review = EvidenceReviewResult(next_action=NextAction.FINISH)
+        route = _route_evidence_review({"review_results": {"evidence_review": review}})
+        assert route == "answer_plan_build"
+
+    def test_evidence_review_degrade_routes_to_answer_plan_build(self):
+        """DEGRADE_ANSWER next_action routes to answer_plan_build."""
+        from ..domain.evidence import EvidenceReviewResult
+        from ..planning.review_policy import NextAction
+        review = EvidenceReviewResult(next_action=NextAction.DEGRADE_ANSWER)
+        route = _route_evidence_review({"review_results": {"evidence_review": review}})
+        assert route == "answer_plan_build"
+
+    def test_evidence_review_fallback_routes_to_fallback(self):
+        """FALLBACK next_action routes to fallback_answer."""
+        from ..domain.evidence import EvidenceReviewResult
+        from ..planning.review_policy import NextAction
+        review = EvidenceReviewResult(next_action=NextAction.FALLBACK)
+        route = _route_evidence_review({"review_results": {"evidence_review": review}})
+        assert route == "fallback_answer"
+
+    def test_evidence_review_replan_routes_to_fallback(self):
+        """REPLAN_EVIDENCE next_action routes to fallback_answer (P1 degrade)."""
+        from ..domain.evidence import EvidenceReviewResult
+        from ..planning.review_policy import NextAction
+        review = EvidenceReviewResult(next_action=NextAction.REPLAN_EVIDENCE)
+        route = _route_evidence_review({"review_results": {"evidence_review": review}})
+        assert route == "fallback_answer"
+
+    def test_evidence_review_clarify_routes_to_clarify(self):
+        """CLARIFY next_action routes to clarify_response."""
+        from ..domain.evidence import EvidenceReviewResult
+        from ..planning.review_policy import NextAction
+        review = EvidenceReviewResult(next_action=NextAction.CLARIFY)
+        route = _route_evidence_review({"review_results": {"evidence_review": review}})
+        assert route == "clarify_response"
+
+    def test_evidence_review_missing_review_falls_through(self):
+        """Missing review_results defaults to answer_plan_build."""
+        route = _route_evidence_review({"review_results": {}})
+        assert route == "answer_plan_build"
+
 
 # ===================================================================
 # Node Handler Behaviour
@@ -800,6 +858,49 @@ class TestNodeHandlers:
     def test_fallback_answer_has_template(self):
         result = _HANDLERS["fallback_answer"]({})
         assert "抱歉" in result["final_response"]
+
+    # --- _h_evidence_review ---
+
+    def test_evidence_review_skipped_when_missing_goal_or_pack(self):
+        """Handler returns SKIPPED when goal or evidence_pack is missing."""
+        result = _HANDLERS["evidence_review"]({
+            "review_results": {},
+        })
+        assert "review_results" not in result
+
+    def test_evidence_review_writes_review_results(self):
+        """Handler writes EvidenceReviewResult to review_results."""
+        from ..domain.candidate import (
+            LocalLifeGoalDraft, GoalType,
+        )
+        from ..domain.schemas import EvidencePack
+
+        goal = LocalLifeGoalDraft(
+            goal_type=GoalType.RECOMMENDATION,
+            required_facets=["rating"],
+            candidate_category="美食",
+        )
+        pack = EvidencePack(
+            facet_results=[
+                {
+                    "facet": "rating",
+                    "result_status": "ok",
+                    "shop_id": "shop_1",
+                    "shop_name": "测试店",
+                    "tool_name": "get_shop_reputation",
+                }
+            ],
+        )
+        result = _HANDLERS["evidence_review"]({
+            "local_life_goal_draft": goal,
+            "evidence_pack": pack,
+            "tool_result_set": {},
+            "review_results": {},
+        })
+        assert "review_results" in result
+        review = result["review_results"].get("evidence_review")
+        assert review is not None
+        assert review.next_action.value == "FINISH"
 
 
 # ===================================================================

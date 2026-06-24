@@ -102,6 +102,15 @@ def _comparison_target_ids(state: dict[str, Any]) -> list[str]:
         if sid and sid not in target_ids:
             target_ids.append(sid)
     if not target_ids:
+        # Fall back to candidate_set (P0 CandidateSet flow)
+        cs = state.get("candidate_set")
+        if cs is not None:
+            cs_dict = _to_dict(cs)
+            for c in cs_dict.get("candidates", []) or []:
+                sid = str(c.get("shop_id", "")).strip()
+                if sid and sid not in target_ids:
+                    target_ids.append(sid)
+    if not target_ids:
         resolved = _single_shop_id(state)
         if resolved:
             target_ids.append(resolved)

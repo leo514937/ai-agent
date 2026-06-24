@@ -42,6 +42,8 @@ class ToolResultStatus(str, Enum):
     unknown = "unknown"
     failed = "failed"
     error = "error"
+    timeout = "timeout"
+    unsupported = "unsupported"
     circuit_open = "circuit_open"
     backend_unavailable = "backend_unavailable"
 

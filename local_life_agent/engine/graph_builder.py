@@ -8,6 +8,7 @@ per §2 Node Table; conditional edges follow §3 Conditional Edge Table.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from enum import Enum
 from time import perf_counter, time
 from typing import Any
 
@@ -17,6 +18,7 @@ from pydantic import ValidationError
 
 from .. import config
 from ..config import MOCK_LOCATION, TOOL_DEFAULT_TIMEOUT_MS
+from ..domain.candidate import CandidateSet, CandidateSource, CandidateSpec, LocalLifeGoalDraft
 from ..domain.enums import TaskType, ToolResultStatus, TopIntent
 from ..domain.graph_state import GraphState
 from ..domain.schemas import (
@@ -57,6 +59,25 @@ from ..tools.gateway import BatchToolExecutor
 from ..target.shop_resolver import resolve_shop
 from ..target.clarification import build_pending_clarification, format_pending_prompt, handle_clarification_reply
 from ..target.context_recovery import recover_context
+from ..target.candidate_resolver import CandidateResolver
+from ..planning.goal_draft import build_candidate_spec, build_local_life_goal_draft
+from ..planning.candidate_review import review_candidate_set
+from ..planning.review_policy import NextAction
+from ..planning.evidence_planner import plan_evidence as plan_evidence_from_candidates
+from ..planning.evidence_review import review_evidence as review_evidence_sufficiency
+from ..domain.evidence import EvidenceReviewResult
+from ..domain.goal import GoalPlan, GoalReviewResult
+from ..domain.decision import DecisionPlan as P2DecisionPlan, DecisionReviewResult
+from ..planning.goal_planner import plan_goal as p2_plan_goal
+from ..planning.goal_review import review_goal as p2_review_goal
+from ..planning.decision_planner import plan_decision as p2_plan_decision
+from ..planning.decision_review import review_decision as p2_review_decision
+from ..planning.replan_policy import (
+    check_expand_search_allowed,
+    check_replan_evidence_allowed,
+    increment_expand_search,
+    increment_replan_evidence,
+)
 from ..session.store import get_session_store
 from .nodes import ExecutionNode
 from .session_write import get_directive, resolve_scenario
@@ -84,8 +105,10 @@ _TRACE_STAGE_MAP: dict[str, str] = {
     "target_resolve": "shop_resolver",
     "clarify_decide": "reference_resolver",
     "task_plan": "task_router",
+    "evidence_planner": "execution_plan",
     "facet_plan": "execution_plan",
     "comparison_planner": "candidate_decision_plan",
+    "evidence_review": "evidence_review",
     "plan_validator": "execution_plan",
     "tool_execute": "tool_call",
     "evidence_build": "evidence_builder",
@@ -157,6 +180,17 @@ def _to_dict(value: Any) -> dict[str, Any]:
         dumped = model_dump()
         return dumped if isinstance(dumped, dict) else {}
     return dict(getattr(value, "__dict__", {}) or {})
+
+
+def _user_location(state: GraphState) -> dict[str, Any]:
+    """Extract user location from graph state, falling back to MOCK_LOCATION."""
+    loc = state.get("user_location")
+    if isinstance(loc, dict) and loc.get("lat") and loc.get("lng"):
+        return dict(loc)
+    session = state.get("session_state_before") or state.get("session_state") or {}
+    if hasattr(session, "location") and session.location is not None:
+        return dict(session.location)
+    return dict(config.MOCK_LOCATION)
 
 
 def _coerce_str(value: Any) -> str:
@@ -883,10 +917,188 @@ def _h_context_recovery(state: GraphState) -> dict:
     }
 
 
+# --- 11b. goal_planner (P2) ---
+# §1 input:  semantic_frame, session_state, raw_text
+# §1 output: goal_plan
+def _h_goal_planner(state: GraphState) -> dict:
+    """P2 GoalPlanner: generate a structured GoalPlan from the semantic frame."""
+    sf = state.get("semantic_frame")
+    session = state.get("session_state_before") or state.get("session_state")
+    raw_text = str(state.get("raw_text", "") or "")
+    plan = p2_plan_goal(sf, session, raw_text)
+    result: dict[str, Any] = {
+        "goal_plan": plan,
+        **_log(state, "goal_planner",
+              goal_type=plan.goal_type,
+              candidate_source=plan.candidate_source,
+              unsupported=plan.unsupported),
+    }
+    # P2: persist active_goal for multi-turn context recovery
+    ss = _session_store_state(state)
+    ss.active_goal = plan.model_dump()
+    result["session_state"] = ss
+    return result
+
+
+# --- 11c. goal_review (P2) ---
+# §1 input:  goal_plan, raw_text
+# §1 output: goal_review_result, local_life_goal_draft (if FINISH)
+def _h_goal_review(state: GraphState) -> dict:
+    """P2 GoalReview: check if the goal is clear, executable, and supported."""
+    gp = state.get("goal_plan")
+    raw_text = str(state.get("raw_text", "") or "")
+    session = state.get("session_state_before") or state.get("session_state")
+    if gp is None:
+        return {
+            "goal_review_result": GoalReviewResult(
+                status="unsupported",
+                next_action="UNSUPPORTED_ANSWER",
+                reason="no_goal_plan_produced",
+            ),
+            **_log(state, "goal_review", status="unsupported", reason="no_goal_plan"),
+        }
+    review = p2_review_goal(gp, raw_text, session)
+    result: dict[str, Any] = {
+        "goal_review_result": review,
+    }
+    # If FINISH: map GoalPlan → LocalLifeGoalDraft for legacy CandidateResolver compat
+    if review.next_action == "FINISH":
+        from ..domain.goal import goal_plan_to_draft
+        draft = goal_plan_to_draft(gp)
+        result["local_life_goal_draft"] = draft
+        result["candidate_source_origin"] = gp.candidate_source
+    # P2: persist goal_review result to SessionState
+    ss = _session_store_state(state)
+    rr = dict(ss.review_results or {})
+    rr["goal_review"] = review
+    ss.review_results = rr
+    result["session_state"] = ss
+    return {
+        **result,
+        **_log(state, "goal_review",
+              status=review.status,
+              next_action=review.next_action,
+              reason=review.reason),
+    }
+
+
 # --- 12. target_resolve ---
 # §1 input:  merchant_mentions, reference_mentions, session_state_before
 # §1 output: resolve_shop_result
+
+# Feature flag: when enabled, the CandidateSet path is tried first for eligible frames.
+ENABLE_CANDIDATE_SET_REVIEW = True
+
+
 def _h_target_resolve(state: GraphState) -> dict:
+    """Thin dispatch: CandidateSet path (if eligible) → legacy path (fallback)."""
+    # ── 1. CandidateSet path (when semantic_frame has candidate_source) ──────────
+    if ENABLE_CANDIDATE_SET_REVIEW:
+        sf = state.get("semantic_frame")
+        sf_source = getattr(sf, "candidate_source", None) if sf is not None else None
+        if sf_source is not None and sf_source:
+            return _h_target_resolve_candidate_set(state, sf)
+
+    # ── 2. Legacy path ────────────────────────────────────────────────────────────
+    return _h_target_resolve_legacy(state)
+
+
+def _h_target_resolve_candidate_set(state: GraphState, sf: Any) -> dict:
+    """CandidateSet resolution path — builds goal → spec → resolver → review → route."""
+    resolver = CandidateResolver()
+
+    # 1. Get goal draft (prefer pre-built from goal_review, else build from frame)
+    goal = state.get("local_life_goal_draft")
+    if goal is None:
+        goal = build_local_life_goal_draft(sf, state)
+    if goal is None or (hasattr(goal, "goal_type") and (goal.goal_type is None or goal.goal_type.value == "unsupported")):
+        return _h_target_resolve_legacy(state)
+
+    # 2. Build candidate spec
+    spec = build_candidate_spec(goal, sf, state)
+
+    # 3. Resolve candidates
+    candidate_set = resolver.resolve(goal, spec, state)
+
+    # 4. Review candidates
+    review = review_candidate_set(goal, candidate_set)
+
+    # 5. Build state update payload
+    payload: dict[str, Any] = {
+        "local_life_goal_draft": goal,
+        "candidate_spec": spec,
+        "candidate_set": candidate_set,
+        "review_results": {"candidate_review": review},
+    }
+
+    # P2: persist last_candidate_set/spec for multi-turn "这两家" / "刚才那几家" references
+    ss = _session_store_state(state)
+    ss.last_candidate_set = [
+        c.model_dump() if hasattr(c, "model_dump") else dict(c)
+        for c in (candidate_set.candidates or [])
+    ]
+    ss.last_candidate_spec = (
+        spec.model_dump() if hasattr(spec, "model_dump") else _to_dict(spec)
+    )
+    payload["session_state"] = ss
+
+    # 6. Route based on next_action
+    if review.next_action == NextAction.FINISH:
+        candidates = list(candidate_set.candidates or [])
+        if candidates:
+            first = candidates[0]
+            resolved = ResolveShopResult(
+                status="RESOLVED",
+                resolved_shop=ShopRef(shop_id=first.shop_id, shop_name=first.shop_name),
+                confidence=1.0,
+                reason=f"candidate_set_{candidate_set.source.value}",
+            )
+            payload["resolve_shop_result"] = resolved
+            payload["resolved_target"] = resolved
+        else:
+            resolved = ResolveShopResult(status="NOT_FOUND", confidence=0.0, reason="candidate_set_empty")
+            payload["resolve_shop_result"] = resolved
+        payload["reference_resolution_source"] = "candidate_set"
+        payload.update(_log(state, "target_resolve", status="RESOLVED",
+                            source=candidate_set.source.value,
+                            next_action="FINISH",
+                            candidates=len(candidates)))
+        return payload
+
+    if review.next_action == NextAction.CLARIFY:
+        reason = review.reason or "candidate_set_need_clarification"
+        resolved = ResolveShopResult(status="NOT_FOUND", confidence=0.0, reason=reason)
+        pending = build_pending_clarification(
+            original_text=str(state.get("raw_text", "") or ""),
+            original_semantic_frame=sf.model_dump(mode="json") if hasattr(sf, "model_dump") else _session_state_dict(sf),
+            original_task_type=getattr(sf, "task_type", "") or state.get("task_type", ""),
+            candidate_targets=[
+                {"shop_id": c.shop_id, "shop_name": c.shop_name}
+                for c in (candidate_set.candidates or [])
+            ],
+            reason=reason,
+            source_node="target_resolve",
+        )
+        payload["resolve_shop_result"] = resolved
+        payload["pending_clarification"] = pending
+        payload["final_response"] = format_pending_prompt(pending)
+        payload.update(_log(state, "target_resolve", status="NEED_CLARIFICATION",
+                            next_action="CLARIFY", reason=reason))
+        return payload
+
+    # FALLBACK
+    resolved = ResolveShopResult(status="NOT_FOUND", confidence=0.0,
+                                  reason=review.reason or "candidate_set_fallback")
+    payload["resolve_shop_result"] = resolved
+    payload["final_response"] = "暂时无法完成这个请求，请换个说法试试。"
+    payload["candidate_source_origin"] = candidate_set.source.value
+    payload["fallback_reason"] = review.reason or "candidate_set_fallback"
+    payload.update(_log(state, "target_resolve", status="NOT_FOUND",
+                        next_action="FALLBACK", reason=review.reason))
+    return payload
+
+
+def _h_target_resolve_legacy(state: GraphState) -> dict:
     sf = state.get("semantic_frame")
     sf_task_type = getattr(sf, "task_type", None) if sf is not None else None
     comparison_requested = sf_task_type == TaskType.comparison or sf_task_type == TaskType.comparison.value
@@ -1453,7 +1665,40 @@ def _h_comparison_planner(state: GraphState) -> dict:
     }
 
 
-# --- 16. plan_validator ---
+# --- 16. evidence_planner (P1) ---
+# §1 input:  local_life_goal_draft, candidate_set, semantic_frame, comparison_targets
+# §1 output: execution_plan
+def _h_evidence_planner(state: GraphState) -> dict:
+    goal = state.get("local_life_goal_draft")
+    candidate_set = state.get("candidate_set")
+    if goal is None or candidate_set is None:
+        # Fallback: delegate to legacy task_plan routing
+        legacy = _h_task_plan(state)
+        legacy.update(_log(state, "evidence_planner", status="FALLBACK",
+                           reason="missing_goal_or_candidate_set"))
+        return legacy
+    sf = state.get("semantic_frame")
+    frame_dict = sf.model_dump() if hasattr(sf, "model_dump") else _to_dict(sf)
+    comparison_targets = list(state.get("comparison_targets", []) or [])
+    plan = plan_evidence_from_candidates(
+        goal=goal,
+        candidate_set=candidate_set,
+        semantic_frame=frame_dict,
+        comparison_targets=comparison_targets or None,
+        location=_user_location(state),
+    )
+    task_type = str(plan.task_type or "")
+    return {
+        "execution_plan": plan,
+        "task_type": task_type,
+        "task_type_source": "evidence_planner",
+        "reference_resolution_source": "candidate_set",
+        **_log(state, "evidence_planner", tool_calls=len(plan.tool_calls),
+              task_type=task_type, candidate_count=len(candidate_set.candidates or [])),
+    }
+
+
+# --- 17. plan_validator ---
 # §1 input:  execution_plan
 # §1 output: validated_plan (or error_code)
 def _h_plan_validator(state: GraphState) -> dict:
@@ -1738,26 +1983,222 @@ def _h_evidence_build(state: GraphState) -> dict:
     }
 
 
-# --- 19. answer_plan_build ---
-# §1 input:  evidence_pack, semantic_frame
+# --- 19. evidence_review (P1) ---
+# §1 input:  evidence_pack, local_life_goal_draft, tool_results
+# §1 output: review_results.evidence_review
+def _h_evidence_review(state: GraphState) -> dict:
+    goal = state.get("local_life_goal_draft")
+    evidence_pack = state.get("evidence_pack")
+    if goal is None or evidence_pack is None:
+        return {
+            **_log(state, "evidence_review", status="SKIPPED",
+                  reason="missing_goal_or_evidence_pack"),
+        }
+    pack_dict = evidence_pack.model_dump() if hasattr(evidence_pack, "model_dump") else _to_dict(evidence_pack)
+    tool_results = state.get("tool_result_set") or state.get("tool_results", {})
+    review = review_evidence_sufficiency(
+        goal=goal,
+        evidence_pack=pack_dict,
+        tool_results=tool_results,
+    )
+    review_results = dict(state.get("review_results") or {})
+    review_results["evidence_review"] = review
+    result: dict[str, Any] = {
+        "review_results": review_results,
+        **_log(state, "evidence_review",
+              next_action=review.next_action, status=review.status,
+              required_ok=len(review.required_ok),
+              required_failed=len(review.required_failed),
+              unknown_as_false=review.unknown_as_false_detected,
+              failed_as_empty=review.failed_as_empty_detected,
+              reason=review.reason),
+    }
+    # P2: persist evidence_review result to SessionState for replay
+    ss = _session_store_state(state)
+    rr = dict(ss.review_results or {})
+    rr["evidence_review"] = review
+    ss.review_results = rr
+    result["session_state"] = ss
+    return result
+
+
+# --- 19a. expand_search (P2) ---
+# §1 input:  local_life_goal_draft, candidate_spec, candidate_set
+# §1 output: expanded candidate_set, updated candidate_spec
+def _h_expand_search(state: GraphState) -> dict:
+    """P2 expand_search: relax candidate constraints and re-resolve.
+
+    Called when DecisionReview determines more candidates are needed.
+    Increments the expand_search counter, creates a relaxed CandidateSpec
+    (higher limit, removed filters, no sort_by), and re-runs CandidateResolver.
+    """
+    goal = state.get("local_life_goal_draft")
+    spec = state.get("candidate_spec")
+    if goal is None or spec is None:
+        # Can't expand — fallback to direct call
+        return {
+            "fallback_reason": "expand_search_missing_goal_or_spec",
+            **_log(state, "expand_search", status="FALLBACK",
+                  reason="missing_goal_or_candidate_spec"),
+        }
+
+    # Build a relaxed spec from the current one
+    from copy import deepcopy
+    relaxed = deepcopy(spec)
+    if isinstance(relaxed, CandidateSpec):
+        # Increase limit: double + 5 (ensures meaningful expansion)
+        old_limit = relaxed.limit or 3
+        relaxed.limit = old_limit * 2 + 5
+        # Remove filters that could restrict results
+        relaxed.filters = {}
+        # Remove sort requirements to get broader results
+        relaxed.sort_by = []
+    elif isinstance(relaxed, dict):
+        old_limit = int(relaxed.get("limit", 3) or 3)
+        relaxed["limit"] = old_limit * 2 + 5
+        relaxed["filters"] = {}
+        relaxed["sort_by"] = []
+
+    # Re-run resolver with relaxed spec
+    resolver = CandidateResolver()
+    expanded_candidate_set = resolver.resolve(goal, relaxed, state)
+
+    # Re-review the expanded set
+    review = review_candidate_set(goal, expanded_candidate_set)
+
+    payload: dict[str, Any] = {
+        "candidate_spec": relaxed,
+        "candidate_set": expanded_candidate_set,
+        "review_results": dict(state.get("review_results") or {}),
+    }
+    payload["review_results"]["candidate_review"] = review
+
+    # Persist relaxed spec to SessionState for multi-turn awareness
+    ss = _session_store_state(state)
+    ss.last_candidate_set = [
+        c.model_dump() if hasattr(c, "model_dump") else dict(c)
+        for c in (expanded_candidate_set.candidates or [])
+    ]
+    ss.last_candidate_spec = (
+        relaxed.model_dump() if hasattr(relaxed, "model_dump") else deepcopy(relaxed)
+    )
+    payload["session_state"] = ss
+
+    payload.update(_log(state, "expand_search",
+                        old_limit=old_limit,
+                        new_limit=relaxed.limit if isinstance(relaxed, CandidateSpec) else relaxed.get("limit"),
+                        candidates_before=len(state.get("candidate_set", {}).candidates if hasattr(state.get("candidate_set"), "candidates") else []),
+                        candidates_after=len(expanded_candidate_set.candidates or []),
+                        review_action=review.next_action,
+                        review_status=review.status))
+    return payload
+
+
+# --- 19b. decision_planner (P2) ---
+# §1 input:  goal_plan, candidate_set, evidence_pack, evidence_review
+# §1 output: p2_decision_plan
+def _h_decision_planner(state: GraphState) -> dict:
+    """P2 DecisionPlanner: generate a structured DecisionPlan from evidence."""
+    gp = state.get("goal_plan") or state.get("local_life_goal_draft")
+    cs = state.get("candidate_set")
+    ep = state.get("evidence_pack")
+    ev = None
+    rr = state.get("review_results") or {}
+    if isinstance(rr, dict):
+        ev = rr.get("evidence_review")
+
+    decision_plan = p2_plan_decision(
+        goal_plan=gp,
+        candidate_set=cs,
+        evidence_pack=ep,
+        evidence_review=ev,
+    )
+    result: dict[str, Any] = {
+        "p2_decision_plan": decision_plan,
+        **_log(state, "decision_planner",
+              decision_type=decision_plan.decision_type.value if hasattr(decision_plan.decision_type, "value") else str(decision_plan.decision_type),
+              answerable=len(decision_plan.answerable_facets),
+              unknown=len(decision_plan.unknown_facets),
+              failed=len(decision_plan.failed_facets),
+              has_winner=decision_plan.winner_shop_id is not None),
+    }
+    # P2: persist last_decision_plan for multi-turn consistency
+    ss = _session_store_state(state)
+    ss.last_decision_plan = decision_plan.model_dump()
+    result["session_state"] = ss
+    return result
+
+
+# --- 19c. decision_review (P2) ---
+# §1 input:  p2_decision_plan, goal_plan, review_results
+# §1 output: decision_review_result
+def _h_decision_review(state: GraphState) -> dict:
+    """P2 DecisionReview: evaluate DecisionPlan sufficiency."""
+    dp = state.get("p2_decision_plan")
+    gp = state.get("goal_plan")
+    rr = state.get("review_results") or {}
+    ev = rr.get("evidence_review") if isinstance(rr, dict) else None
+    cr = rr.get("candidate_review") if isinstance(rr, dict) else None
+    # Read counters from SessionState (not GraphState — those fields don't exist)
+    ss = _session_store_state(state)
+    esc = int(ss.replan_counters.get("expand_search", 0))
+    rec = int(ss.replan_counters.get("replan_evidence", 0))
+
+    review = p2_review_decision(
+        decision_plan=dp,
+        goal_plan=gp,
+        evidence_review=ev,
+        candidate_review=cr,
+        expand_search_count=esc,
+        replan_evidence_count=rec,
+    )
+    # Write to review_results for trace
+    updated_rr = dict(rr) if isinstance(rr, dict) else {}
+    updated_rr["decision_review"] = review
+    result: dict[str, Any] = {
+        "decision_review_result": review,
+        "review_results": updated_rr,
+        **_log(state, "decision_review",
+              status=review.status,
+              next_action=review.next_action,
+              reason=review.reason,
+              is_deterministic=review.is_deterministic_winner),
+    }
+    # P2: persist decision_review result to SessionState for replay
+    srr = dict(ss.review_results or {})
+    srr["decision_review"] = review
+    ss.review_results = srr
+    result["session_state"] = ss
+    return result
+
+
+# --- 20. answer_plan_build ---
+# §1 input:  evidence_pack, semantic_frame / p2_decision_plan (P2)
 # §1 output: answer_plan
 def _h_answer_plan_build(state: GraphState) -> dict:
-    execution_plan = state.get("execution_plan")
-    task_type = ""
-    if hasattr(execution_plan, "task_type"):
-        task_type = getattr(execution_plan, "task_type", "")
-    elif isinstance(execution_plan, dict):
-        task_type = execution_plan.get("task_type", "")
-    plan = AnswerPlan.model_validate(
-        build_answer_plan(
+    from ..domain.decision import decision_to_answer_plan
+
+    p2_dp = state.get("p2_decision_plan")
+    if p2_dp is not None:
+        # P2 path: convert DecisionPlan to AnswerPlan
+        plan_data = decision_to_answer_plan(p2_dp, state.get("evidence_pack") or {})
+    else:
+        # Legacy P1 path: build from task_type + evidence
+        execution_plan = state.get("execution_plan")
+        task_type = ""
+        if hasattr(execution_plan, "task_type"):
+            task_type = getattr(execution_plan, "task_type", "")
+        elif isinstance(execution_plan, dict):
+            task_type = execution_plan.get("task_type", "")
+        plan_data = build_answer_plan(
             task_type,
             state.get("evidence_pack") or {},
             None,
         )
-    )
+    plan = AnswerPlan.model_validate(plan_data)
     return {
         "answer_plan": plan,
-        **_log(state, "answer_plan_build"),
+        **_log(state, "answer_plan_build", p2_path=p2_dp is not None),
     }
 
 
@@ -2056,14 +2497,21 @@ _HANDLERS: dict[str, GraphNodeFunc] = {
     "slot_extractor": _h_slot_extractor,
     "frame_validator": _h_frame_validator,
     "context_recovery": _h_context_recovery,
+    "goal_planner": _h_goal_planner,
+    "goal_review": _h_goal_review,
     "target_resolve": _h_target_resolve,
     "clarify_decide": _h_clarify_decide,
     "task_plan": _h_task_plan,
+    "evidence_planner": _h_evidence_planner,
     "facet_plan": _h_facet_plan,
     "comparison_planner": _h_comparison_planner,
     "plan_validator": _h_plan_validator,
     "tool_execute": _h_tool_execute,
     "evidence_build": _h_evidence_build,
+    "evidence_review": _h_evidence_review,
+    "expand_search": _h_expand_search,
+    "decision_planner": _h_decision_planner,
+    "decision_review": _h_decision_review,
     "answer_plan_build": _h_answer_plan_build,
     "answer_generate": _h_answer_generate,
     "answer_verify": _h_answer_verify,
@@ -2086,11 +2534,15 @@ _NORMAL_EDGES: dict[str, str] = {
     "load_session_state": "check_pending_clarification",
     "normalize_text": "hard_guard",
     "slot_extractor": "context_recovery",
-    "context_recovery": "target_resolve",
-    "target_resolve": "clarify_decide",  # §2: target_resolve 鈫?clarify_decide
+    "context_recovery": "goal_planner",       # P2: context_recovery → goal_planner
+    "goal_planner": "goal_review",            # P2: goal_planner → goal_review
+    "target_resolve": "clarify_decide",        # §2: target_resolve → clarify_decide
+    "evidence_planner": "plan_validator",
     "facet_plan": "plan_validator",
     "comparison_planner": "plan_validator",
-    "evidence_build": "answer_plan_build",
+    "decision_planner": "decision_review",    # P2: decision_planner → decision_review
+    "evidence_build": "evidence_review",
+    "expand_search": "evidence_planner",
     "answer_plan_build": "answer_generate",
     "answer_generate": "answer_verify",
     "rewrite": "answer_generate",
@@ -2203,12 +2655,128 @@ def _route_plan_validator(state: GraphState) -> str:
 
 
 def _route_task_plan(state: GraphState) -> str:
-    """Route task_plan based on the resolved task type."""
+    """Route task_plan: if CandidateSet present → evidence_planner, else legacy."""
+    goal = state.get("local_life_goal_draft")
+    candidate_set = state.get("candidate_set")
+    if goal is not None and candidate_set is not None:
+        return "evidence_planner"
     task_type = state.get("task_type")
     task_type_value = task_type.value if hasattr(task_type, "value") else str(task_type or "")
     if task_type_value == TaskType.comparison.value:
         return "comparison_planner"
     return "facet_plan"
+
+
+def _route_goal_review(state: GraphState) -> str:
+    """Route from goal_review based on next_action."""
+    gr = state.get("goal_review_result")
+    if gr is None:
+        return "target_resolve"
+    next_action = getattr(gr, "next_action", "FINISH") or "FINISH"
+    if isinstance(next_action, Enum):
+        next_action = next_action.value
+    if next_action in ("FINISH",):
+        return "target_resolve"
+    if next_action in ("CLARIFY",):
+        return "clarify_response"
+    if next_action in ("UNSUPPORTED_ANSWER",):
+        return "emit_response"
+    if next_action in ("FALLBACK",):
+        return "fallback_answer"
+    return "target_resolve"
+
+
+def _route_decision_review(state: GraphState) -> str:
+    """Route from decision_review based on next_action."""
+    dr = state.get("decision_review_result")
+    if dr is None:
+        return "answer_generate"
+    next_action = getattr(dr, "next_action", "FINISH") or "FINISH"
+    if isinstance(next_action, Enum):
+        next_action = next_action.value
+
+    # Track replan counters for loop prevention — read from SessionState.replan_counters
+    if next_action in ("REPLAN_EVIDENCE",):
+        session = state.get("session_state")
+        current = 0
+        if isinstance(session, SessionState):
+            current = session.replan_counters.get("replan_evidence", 0)
+        if current >= config.MAX_REPLAN_EVIDENCE_ROUNDS:
+            return "fallback_answer"
+        if session is not None:
+            increment_replan_evidence(session)
+        return "evidence_planner"
+
+    if next_action in ("EXPAND_SEARCH",):
+        session = state.get("session_state")
+        current = 0
+        if isinstance(session, SessionState):
+            current = session.replan_counters.get("expand_search", 0)
+        if current >= config.MAX_EXPAND_SEARCH_ROUNDS:
+            return "fallback_answer"
+        if session is not None:
+            increment_expand_search(session)
+        return "expand_search"
+
+    if next_action in ("DEGRADE_ANSWER",):
+        return "answer_plan_build"
+
+    if next_action in ("FALLBACK",):
+        return "fallback_answer"
+
+    if next_action in ("UNSUPPORTED_ANSWER",):
+        return "emit_response"
+
+    if next_action in ("CLARIFY",):
+        return "clarify_response"
+
+    # FINISH → answer_plan_build for DecisionPlan → AnswerPlan conversion
+    return "answer_plan_build"
+
+
+def _route_evidence_review(state: GraphState) -> str:
+    """Route from evidence_review based on next_action.
+
+    P2: routes to decision_planner (when active) or legacy answer_plan_build.
+    """
+    review_results = state.get("review_results") or {}
+    evidence_review = review_results.get("evidence_review") if isinstance(review_results, dict) else None
+
+    # Check if P2 DecisionPlanner path is active
+    has_goal_plan = state.get("goal_plan") is not None
+    p2_active = has_goal_plan
+
+    if evidence_review is None:
+        if p2_active:
+            return "decision_planner"
+        return "answer_plan_build"
+    next_action = getattr(evidence_review, "next_action", "FINISH") or "FINISH"
+    if isinstance(next_action, Enum):
+        next_action = next_action.value
+
+    if next_action in ("REPLAN_EVIDENCE",):
+        session = state.get("session_state")
+        current = 0
+        if isinstance(session, SessionState):
+            current = session.replan_counters.get("replan_evidence", 0)
+        if current >= config.MAX_REPLAN_EVIDENCE_ROUNDS or not p2_active:
+            return "fallback_answer"
+        if session is not None:
+            increment_replan_evidence(session)
+        return "evidence_planner"
+
+    if next_action in ("FALLBACK",):
+        return "fallback_answer"
+
+    if next_action in ("CLARIFY",):
+        return "clarify_response"
+
+    if next_action in ("DEGRADE_ANSWER", "FINISH"):
+        if p2_active:
+            return "decision_planner"
+        return "answer_plan_build"
+
+    return "decision_planner" if p2_active else "answer_plan_build"
 
 
 def _route_tool_execute(state: GraphState) -> str:
@@ -2293,8 +2861,34 @@ _PLAN_VALIDATOR_ROUTES: dict[Any, str] = {
 }
 
 _TASK_PLAN_ROUTES: dict[Any, str] = {
+    "evidence_planner": "evidence_planner",
     "facet_plan": "facet_plan",
     "comparison_planner": "comparison_planner",
+}
+
+_GOAL_REVIEW_ROUTES: dict[Any, str] = {
+    "target_resolve": "target_resolve",
+    "clarify_response": "clarify_response",
+    "emit_response": "emit_response",
+    "fallback_answer": "fallback_answer",
+}
+
+_DECISION_REVIEW_ROUTES: dict[Any, str] = {
+    "answer_plan_build": "answer_plan_build",
+    "evidence_planner": "evidence_planner",
+    "target_resolve": "target_resolve",
+    "expand_search": "expand_search",
+    "fallback_answer": "fallback_answer",
+    "emit_response": "emit_response",
+    "clarify_response": "clarify_response",
+}
+
+_EVIDENCE_REVIEW_ROUTES: dict[Any, str] = {
+    "decision_planner": "decision_planner",
+    "answer_plan_build": "answer_plan_build",
+    "fallback_answer": "fallback_answer",
+    "clarify_response": "clarify_response",
+    "evidence_planner": "evidence_planner",
 }
 
 _TOOL_EXECUTE_ROUTES: dict[Any, str] = {
@@ -2371,6 +2965,11 @@ def build_graph() -> CompiledStateGraph:
         _FRAME_VALIDATOR_ROUTES,
     )
     builder.add_conditional_edges(
+        "goal_review",
+        _route_goal_review,
+        _GOAL_REVIEW_ROUTES,
+    )
+    builder.add_conditional_edges(
         "clarify_decide",
         _route_clarify_decide,
         _CLARIFY_DECIDE_ROUTES,
@@ -2381,6 +2980,11 @@ def build_graph() -> CompiledStateGraph:
         _TASK_PLAN_ROUTES,
     )
     builder.add_conditional_edges(
+        "decision_review",
+        _route_decision_review,
+        _DECISION_REVIEW_ROUTES,
+    )
+    builder.add_conditional_edges(
         "plan_validator",
         _route_plan_validator,
         _PLAN_VALIDATOR_ROUTES,
@@ -2389,6 +2993,11 @@ def build_graph() -> CompiledStateGraph:
         "tool_execute",
         _route_tool_execute,
         _TOOL_EXECUTE_ROUTES,
+    )
+    builder.add_conditional_edges(
+        "evidence_review",
+        _route_evidence_review,
+        _EVIDENCE_REVIEW_ROUTES,
     )
     builder.add_conditional_edges(
         "answer_verify",
@@ -2433,15 +3042,22 @@ _NODE_TABLE_NEXT_HOPS: dict[str, list[str]] = {
     "semantic_parse": ["slot_extractor", "frame_validator", "clarify_response"],
     "slot_extractor": ["context_recovery"],
     "frame_validator": ["context_recovery", "clarify_response"],
-    "context_recovery": ["target_resolve"],
-    "target_resolve": ["clarify_decide"],  # §2: 鏃犳潯浠惰浆鍏?clarify_decide
-    "clarify_decide": ["clarify_response", "task_plan", "emit_response"],  # §2: 鐙珛鍐崇瓥鑺傜偣
+    "context_recovery": ["goal_planner"],                 # P2: 改为goal_planner
+    "goal_planner": ["goal_review"],                      # P2: goal_planner → goal_review
+    "goal_review": ["target_resolve", "clarify_response", "emit_response", "fallback_answer"],
+    "target_resolve": ["clarify_decide"],  # §2: 无条件转入clarify_decide
+    "clarify_decide": ["clarify_response", "task_plan", "emit_response"],  # §2: 独立决策节点
     "task_plan": ["facet_plan", "comparison_planner", "tool_execute"],
     "facet_plan": ["plan_validator"],
     "comparison_planner": ["plan_validator"],
+    "evidence_planner": ["plan_validator"],
     "plan_validator": ["tool_execute", "fallback_answer"],
     "tool_execute": ["fallback_answer", "evidence_build"],
-    "evidence_build": ["answer_plan_build"],
+    "evidence_build": ["evidence_review"],
+    "evidence_review": ["decision_planner", "answer_plan_build", "fallback_answer", "clarify_response", "evidence_planner"],
+    "expand_search": ["evidence_planner"],                  # P2: expand_search → evidence_planner
+    "decision_planner": ["decision_review"],               # P2: decision_planner → decision_review
+    "decision_review": ["answer_generate", "evidence_planner", "expand_search", "target_resolve", "fallback_answer", "emit_response", "clarify_response"],
     "answer_plan_build": ["answer_generate"],
     "answer_generate": ["answer_verify"],
     "answer_verify": ["final_response_build", "rewrite", "fallback_answer"],
@@ -2517,6 +3133,10 @@ _GRAPH_STATE_FIELDS: list[str] = [
     "tool_result_set",  # §1 鏂囨。瀛楁
     # 璇佹嵁灞?
     "evidence_pack",
+    "review_results",
+    "candidate_set",
+    "local_life_goal_draft",
+    "candidate_spec",
     # 鍥炵瓟灞?
     "answer_plan",
     "final_response",

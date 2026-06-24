@@ -67,6 +67,14 @@ class _SemanticFrameRouterResponse(BaseModel):
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
     need_context: bool = False
 
+    # Candidate-resolution fields
+    candidate_source: str | None = None
+    candidate_category: str = ""
+    candidate_limit: int | None = None
+    candidate_sort_by: list[dict[str, Any]] = Field(default_factory=list)
+    candidate_filters: dict[str, Any] = Field(default_factory=dict)
+    candidate_source_origin: str | None = None
+
 
 _SemanticFrameRouterResponse.model_rebuild()
 
@@ -205,6 +213,29 @@ def _fallback_intent(normalised_text: str, error_code: str = "") -> TopIntent:
     if not compact:
         return TopIntent.invalid
     if error_code:
+        # When LLM fails, still classify based on content rather than
+        # blindly returning out_of_scope.  Check business keywords and
+        # CJK characters before giving up.
+        if any(
+            hint in compact
+            for hint in (
+                "对比",
+                "比较",
+                "比一比",
+                "比好",
+                "这三家",
+                "这几家",
+                "第一家",
+                "第二家",
+                "第三家",
+                "哪个更",
+                "哪家更",
+                "谁更",
+            )
+        ):
+            return TopIntent.local_life
+        if any("\u4e00" <= ch <= "\u9fff" for ch in compact):
+            return TopIntent.local_life
         return TopIntent.out_of_scope
     if any(
         hint in compact
@@ -405,7 +436,7 @@ def parse_semantic_frame(
     if ss is not None and not isinstance(ss, (SessionState, dict)):
         ss = None
     summary = build_session_context_summary(ss)
-    summary_json = summary.model_dump_json(ensure_ascii=False)
+    summary_json = summary.model_dump_json()
 
     rendered_prompt = (
         prompt_template

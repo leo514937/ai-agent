@@ -18,6 +18,8 @@ TOOL_FAILURE_STATUSES = frozenset(
     {
         "failed",
         "error",
+        "timeout",
+        "unsupported",
         "circuit_open",
         "backend_unavailable",
         "unknown",

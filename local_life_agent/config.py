@@ -204,3 +204,9 @@ JAVA_BACKEND_MAX_RETRIES: int = 1
 # to MockToolExecutor, marking the result as degraded+fallback_from.
 # When False (default): Java failure → backend_unavailable, no mock.
 ALLOW_TOOL_BACKEND_FALLBACK: bool = _env_bool("LOCAL_LIFE_ALLOW_TOOL_BACKEND_FALLBACK", False)
+
+# === P2: Replan limits ===
+# Maximum number of expand_search rounds before hard stop
+MAX_EXPAND_SEARCH_ROUNDS: int = _env_int("LOCAL_LIFE_MAX_EXPAND_SEARCH", 1)
+# Maximum number of replan_evidence rounds before hard stop
+MAX_REPLAN_EVIDENCE_ROUNDS: int = _env_int("LOCAL_LIFE_MAX_REPLAN_EVIDENCE", 1)

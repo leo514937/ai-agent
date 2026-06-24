@@ -10,7 +10,10 @@ from __future__ import annotations
 
 from typing import Optional, TypedDict
 
+from .candidate import CandidateSet, CandidateSpec, LocalLifeGoalDraft
 from .enums import TaskType, TopIntent
+from .goal import GoalPlan, GoalReviewResult
+from .decision import DecisionPlan, DecisionReviewResult
 from .schemas import (
     AnswerPlan,
     ComparisonTargetResolution,
@@ -63,6 +66,16 @@ class GraphState(TypedDict, total=False):
     recommendation_candidates: list
     precomputed_tool_results: dict[str, ToolResult]
 
+    # === P2 目标 (Goal) — write: goal_planner/goal_review, read: candidate_resolve/evidence_planner/decision_planner ===
+    goal_plan: Optional[GoalPlan]
+    goal_review_result: Optional[GoalReviewResult]
+
+    # === 候选集 (CandidateSet) — write: goal_draft/candidate_resolve/candidate_review, read: task_plan/evidence_build/answer_plan ===
+    local_life_goal_draft: Optional[LocalLifeGoalDraft]
+    candidate_spec: Optional[CandidateSpec]
+    candidate_set: Optional[CandidateSet]
+    review_results: Optional[dict]
+
     # === 解析结果 (Resolve Result) — write: target_resolve/clarify_decide, read: task_plan/clarify_decide ===
     resolved_target: Optional[ResolveShopResult]
     resolve_shop_result: Optional[ResolveShopResult]  # §1 文档字段：target_resolve 直接输出
@@ -78,6 +91,10 @@ class GraphState(TypedDict, total=False):
 
     # === 证据层 (Evidence Pack) — write: evidence_build, read: answer_plan_build/answer_verify ===
     evidence_pack: Optional[EvidencePack]
+
+    # === P2 决策 (Decision) — write: decision_planner/decision_review, read: answer_generate ===
+    p2_decision_plan: Optional[DecisionPlan]
+    decision_review_result: Optional[DecisionReviewResult]
 
     # === 回答层 (Answer Layer) — write: answer_plan_build/answer_generate/final_response_build, read: answer_verify/emit_response ===
     answer_plan: Optional[AnswerPlan]
@@ -96,6 +113,10 @@ class GraphState(TypedDict, total=False):
     # === 会话快照 (Session Snapshot) — write: load_session_state, read: top_intent_router/context_recovery/target_resolve/state_update_plan ===
     session_state_before: Optional[SessionState]  # §1 文档字段：加载时的会话快照
     session_state_after: Optional[SessionState]
+
+    # === P2 Replan counters — write: graph routing, read: graph routing ===
+    expand_search_count: int
+    replan_evidence_count: int
 
     # === 运行时辅助 (Runtime aux — not in doc §1 but required for graph operation) ===
     rewrite_count: int

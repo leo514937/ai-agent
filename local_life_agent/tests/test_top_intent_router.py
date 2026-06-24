@@ -69,9 +69,30 @@ def test_invalid_llm_return_falls_back_to_out_of_scope():
             "attempts": 2,
         }
 
-    result = TopIntentRouter(llm_call=fake_call_llm).route("\u9644\u8fd1\u63a8\u8350\u706b\u9505")
+    # Non-CJK input should fall back to out_of_scope when LLM fails.
+    # CJK input falls back to local_life via CJK heuristic (tested separately).
+    result = TopIntentRouter(llm_call=fake_call_llm).route("how to fix my car")
 
     assert result["top_intent"] == TopIntent.out_of_scope
+    assert result["error_code"] == "LLM_JSON_PARSE_ERROR"
+
+
+def test_invalid_llm_fallback_cjk_goes_to_local_life():
+    """CJK text should fall back to local_life when LLM fails."""
+    def fake_call_llm(prompt, **kwargs):
+        return {
+            "ok": False,
+            "content": None,
+            "raw": "not json",
+            "confidence": 0.0,
+            "error_code": "LLM_JSON_PARSE_ERROR",
+            "error_message": "bad json",
+            "attempts": 2,
+        }
+
+    result = TopIntentRouter(llm_call=fake_call_llm).route("\u9644\u8fd1\u63a8\u8350\u706b\u9505")
+
+    assert result["top_intent"] == TopIntent.local_life
     assert result["error_code"] == "LLM_JSON_PARSE_ERROR"
 
 

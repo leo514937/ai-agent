@@ -545,7 +545,7 @@ class TestEnums:
         assert ToolResultStatus.error.value == "error"
         assert ToolResultStatus.circuit_open.value == "circuit_open"
         assert ToolResultStatus.backend_unavailable.value == "backend_unavailable"
-        assert len(ToolResultStatus) == 8
+        assert len(ToolResultStatus) == 10
 
     def test_error_code_values(self):
         codes = [

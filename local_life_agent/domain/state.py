@@ -13,7 +13,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class SessionState(BaseModel):
-    """Persistent session context across turns."""
+    """Persistent session context across turns.
+    
+    P2 adds multi-turn tracking fields: last_candidate_spec, last_candidate_set,
+    active_goal, review_results, last_decision_plan, replan_counters.
+    """
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     current_shop: dict | None = None
@@ -23,6 +27,27 @@ class SessionState(BaseModel):
     comparison_targets: list[dict] = Field(default_factory=list)
     comparison_result: Any = None
     suggested_shop: dict | None = None
+
+    # === P2: Multi-turn tracking fields ===
+    # Last candidate spec/set for "这两家" / "刚才那几家" reference
+    last_candidate_spec: dict[str, Any] | None = Field(default=None)
+    last_candidate_set: list[dict[str, Any]] = Field(default_factory=list)
+
+    # Active goal for the current/recent turn
+    active_goal: dict[str, Any] | None = Field(default=None)
+
+    # Review results from previous turn (for trace replay)
+    review_results: dict[str, Any] = Field(default_factory=dict)
+
+    # Last DecisionPlan (for multi-turn consistency)
+    last_decision_plan: dict[str, Any] | None = Field(default=None)
+
+    # Replan counters to prevent infinite loops
+    replan_counters: dict[str, int] = Field(default_factory=lambda: {
+        "expand_search": 0,
+        "replan_evidence": 0,
+        "rewrite": 0,
+    })
 
 
 class SessionWriteDirective:

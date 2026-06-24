@@ -1,10 +1,19 @@
-"""Facet planner for the single-shop multi-facet flow."""
+"""Facet planner for the single-shop multi-facet flow.
+
+P1: EvidencePlanner-compatible shell.
+When a CandidateSet is available in the graph state, delegates to
+``evidence_planner.plan_evidence()``. Otherwise falls back to the
+legacy ``plan_facets()`` behaviour.
+"""
 
 from __future__ import annotations
 
 from typing import Any
 
+from ..domain.candidate import CandidateSet, LocalLifeGoalDraft
 from ..domain.enums import Facet
+from ..domain.schemas import ExecutionPlan
+from .evidence_planner import plan_evidence
 
 
 def _facet_name(item: Any) -> str:
@@ -45,3 +54,25 @@ def plan_facets(task_type: str, semantic_frame: dict) -> list[dict[str, Any]]:
         ordered.append({"name": name, "required": _facet_required(item)})
 
     return ordered
+
+
+def plan_facets_with_candidate_set(
+    goal: LocalLifeGoalDraft,
+    candidate_set: CandidateSet,
+    semantic_frame: dict[str, Any] | None = None,
+    comparison_targets: list[dict[str, Any]] | None = None,
+    location: dict[str, Any] | None = None,
+) -> ExecutionPlan:
+    """Shell that delegates to EvidencePlanner when a CandidateSet is available.
+
+    This is the P1-compatible entry point called by the graph builder when
+    a CandidateSet is present. Falls back to legacy plan_facets logic when
+    the CandidateSet is empty or goal is unsupported.
+    """
+    return plan_evidence(
+        goal=goal,
+        candidate_set=candidate_set,
+        semantic_frame=semantic_frame,
+        comparison_targets=comparison_targets,
+        location=location,
+    )

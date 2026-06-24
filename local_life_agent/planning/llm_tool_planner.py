@@ -61,7 +61,7 @@ def _render_prompt(
 ) -> str:
     prompt_template = load_prompt("tool_planner")
     summary = build_session_context_summary(session_state)
-    summary_json = summary.model_dump_json(ensure_ascii=False)
+    summary_json = summary.model_dump_json()
     frame_json = ToolPlan.model_validate(
         {
             "task_type": task_type,
@@ -74,7 +74,7 @@ def _render_prompt(
             "semantic_source": str(semantic_frame.get("semantic_source", "") or ""),
             "llm_backend": str(semantic_frame.get("llm_backend", "") or ""),
         }
-    ).model_dump_json(ensure_ascii=False)
+    ).model_dump_json()
     allowed_tools = sorted(_allowed_tool_names())
     return (
         prompt_template

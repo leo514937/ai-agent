@@ -92,6 +92,14 @@ class SemanticFrame(BaseModel):
     llm_called: bool = False
     llm_backend: str = ""
 
+    # Candidate-resolution fields (populated by the Candidate layer)
+    candidate_source: str | None = None
+    candidate_category: str = ""
+    candidate_limit: int | None = None
+    candidate_sort_by: list[dict[str, Any]] = Field(default_factory=list)
+    candidate_filters: dict[str, Any] = Field(default_factory=dict)
+    candidate_source_origin: str | None = None
+
     @field_validator("facets", mode="before")
     @classmethod
     def _coerce_facets(cls, value: Any) -> list[Any]:
@@ -176,6 +184,7 @@ class ToolResult(BaseModel):
     error_message: str = ""
     source: str = ""
     degraded: bool = False
+    retriable: bool = True
     backend_source: str = ""
     http_status: int | None = None
     endpoint: str | None = None

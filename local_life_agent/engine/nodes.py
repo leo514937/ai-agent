@@ -1,4 +1,4 @@
-﻿"""Execution node definitions for the state machine.
+"""Execution node definitions for the state machine.
 
 Mirrors the node table from `todo/05_LangGraph鑺傜偣杈圭姸鎬佸瓧娈佃〃.md`
 and the transition rules from `todo/02_鐘舵€佽浆绉讳笌璺敱鍐崇瓥琛?md`.
@@ -32,10 +32,15 @@ class ExecutionNode(str, Enum):
     TARGET_RESOLVE = "target_resolve"
     CLARIFY_DECIDE = "clarify_decide"
 
+    # --- P2: Goal Planning ---
+    GOAL_PLANNER = "goal_planner"
+    GOAL_REVIEW = "goal_review"
+
     # --- Planning ---
     TASK_PLAN = "task_plan"
     FACET_PLAN = "facet_plan"
     COMPARISON_PLANNER = "comparison_planner"
+    EVIDENCE_PLANNER = "evidence_planner"
     PLAN_VALIDATOR = "plan_validator"
 
     # --- Execution ---
@@ -43,7 +48,14 @@ class ExecutionNode(str, Enum):
 
     # --- Evidence & Answer ---
     EVIDENCE_BUILD = "evidence_build"
+    EVIDENCE_REVIEW = "evidence_review"
     ANSWER_PLAN_BUILD = "answer_plan_build"
+
+    # --- P2: Decision Planning ---
+    DECISION_PLANNER = "decision_planner"
+    DECISION_REVIEW = "decision_review"
+
+    # --- Answer ---
     ANSWER_GENERATE = "answer_generate"
     ANSWER_VERIFY = "answer_verify"
     REWRITE = "rewrite"
