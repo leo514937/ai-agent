@@ -125,13 +125,8 @@ _NOISE_RE = re.compile(r"[\s,\.\?!;:()\[\]{}<>/\\|\"'\u3001\uff0c\u3002\uff01\uf
 
 @lru_cache(maxsize=1)
 def _load_mock_catalog() -> list[dict]:
-    """只在 fallback 规则解析时读取 mock 店铺目录，避免依赖 mock tool 实现。"""
-    path = Path(__file__).resolve().parent.parent / "mock_data" / "shops.json"
-    try:
-        data = json.loads(path.read_text(encoding="utf-8-sig"))
-    except Exception:
-        return []
-    return data if isinstance(data, list) else []
+    # Static mock data removed in P1; returns empty
+    return []
 
 
 def _dedupe(items: list[str]) -> list[str]:

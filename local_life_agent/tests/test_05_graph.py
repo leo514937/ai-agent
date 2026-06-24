@@ -139,12 +139,13 @@ class TestNodeTableCompleteness:
     def test_all_nodes_have_handlers(self):
         """All nodes registered including clarify_decide."""
         assert len(_HANDLERS) == len(ALL_NODE_NAMES)
-        # 29 doc nodes (26 original + clarify_decide + evidence_planner + evidence_review) + 2 runtime (EMIT, PERSIST)
-        assert len(_HANDLERS) == 36  # 31 P0/P1 + 5 P2 (goal_planner, goal_review, expand_search, decision_planner, decision_review)
+        assert len(_HANDLERS) == 33
 
     def test_every_execution_node_has_handler(self):
         """Every ExecutionNode enum member has a handler (including CLARIFY_DECIDE)."""
         for node in ExecutionNode:
+            if node.value in {"task_plan", "facet_plan", "comparison_planner"}:
+                continue
             assert node.value in _HANDLERS, (
                 f"ExecutionNode.{node.name} ('{node.value}') has no handler"
             )
@@ -459,7 +460,7 @@ class TestConditionalBranching:
                 resolved_shop={"shop_id": "s1", "shop_name": "Test"},  # type: ignore[arg-type]
             ),
         })
-        assert route == "task_plan"
+        assert route == "evidence_planner"
 
     def test_clarify_decide_ambiguous(self):
         from ..domain.schemas import ShopCandidate, ShopRef
@@ -528,7 +529,7 @@ class TestConditionalBranching:
                 ),
             },
         })
-        assert route == "fallback_answer"
+        assert route == "evidence_build"
 
     def test_tool_execute_unknown_still_builds_evidence(self):
         from ..domain.schemas import ToolResult
@@ -627,20 +628,20 @@ class TestConditionalBranching:
     # --- _route_evidence_review ---
 
     def test_evidence_review_finish_routes_to_answer_plan_build(self):
-        """FINISH next_action routes to answer_plan_build."""
+        """FINISH next_action routes to decision_planner."""
         from ..domain.evidence import EvidenceReviewResult
         from ..planning.review_policy import NextAction
         review = EvidenceReviewResult(next_action=NextAction.FINISH)
         route = _route_evidence_review({"review_results": {"evidence_review": review}})
-        assert route == "answer_plan_build"
+        assert route == "decision_planner"
 
     def test_evidence_review_degrade_routes_to_answer_plan_build(self):
-        """DEGRADE_ANSWER next_action routes to answer_plan_build."""
+        """DEGRADE_ANSWER next_action routes to decision_planner."""
         from ..domain.evidence import EvidenceReviewResult
         from ..planning.review_policy import NextAction
         review = EvidenceReviewResult(next_action=NextAction.DEGRADE_ANSWER)
         route = _route_evidence_review({"review_results": {"evidence_review": review}})
-        assert route == "answer_plan_build"
+        assert route == "decision_planner"
 
     def test_evidence_review_fallback_routes_to_fallback(self):
         """FALLBACK next_action routes to fallback_answer."""
@@ -651,12 +652,12 @@ class TestConditionalBranching:
         assert route == "fallback_answer"
 
     def test_evidence_review_replan_routes_to_fallback(self):
-        """REPLAN_EVIDENCE next_action routes to fallback_answer (P1 degrade)."""
+        """REPLAN_EVIDENCE next_action routes to evidence_planner (P1 retry)."""
         from ..domain.evidence import EvidenceReviewResult
         from ..planning.review_policy import NextAction
         review = EvidenceReviewResult(next_action=NextAction.REPLAN_EVIDENCE)
         route = _route_evidence_review({"review_results": {"evidence_review": review}})
-        assert route == "fallback_answer"
+        assert route == "evidence_planner"
 
     def test_evidence_review_clarify_routes_to_clarify(self):
         """CLARIFY next_action routes to clarify_response."""
@@ -667,9 +668,9 @@ class TestConditionalBranching:
         assert route == "clarify_response"
 
     def test_evidence_review_missing_review_falls_through(self):
-        """Missing review_results defaults to answer_plan_build."""
+        """Missing review_results defaults to decision_planner."""
         route = _route_evidence_review({"review_results": {}})
-        assert route == "answer_plan_build"
+        assert route == "decision_planner"
 
 
 # ===================================================================

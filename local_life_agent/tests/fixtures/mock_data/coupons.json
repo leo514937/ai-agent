@@ -1,0 +1,18 @@
+[
+  {"coupon_id":"cpn_001","shop_id":"shop_001","title":"北邮科技咖啡厅8折券","description":"全场饮品8折，限周一至周五使用","discount_type":"percentage","discount_value":20,"min_consume":15.0,"valid_from":"2026-01-01","valid_until":"2026-12-31","stock":500},
+  {"coupon_id":"cpn_002","shop_id":"shop_002","title":"麦当劳麦辣鸡腿堡套餐立减5元","description":"购买麦辣鸡腿堡套餐立减5元","discount_type":"fixed","discount_value":5.0,"min_consume":25.0,"valid_from":"2026-06-01","valid_until":"2026-08-31","stock":1000},
+  {"coupon_id":"cpn_003","shop_id":"shop_002","title":"麦当劳早餐6折券","description":"早餐时段任意套餐6折","discount_type":"percentage","discount_value":40,"min_consume":12.0,"valid_from":"2026-01-01","valid_until":"2026-12-31","stock":300},
+  {"coupon_id":"cpn_004","shop_id":"shop_003","title":"好利来满50减10","description":"全场满50元减10元","discount_type":"fixed","discount_value":10.0,"min_consume":50.0,"valid_from":"2026-01-01","valid_until":"2026-12-31","stock":200},
+  {"coupon_id":"cpn_005","shop_id":"shop_005","title":"瑞幸咖啡9.9元优惠券","description":"指定饮品仅需9.9元","discount_type":"fixed","discount_value":8.0,"min_consume":17.0,"valid_from":"2026-06-01","valid_until":"2026-07-31","stock":2000},
+  {"coupon_id":"cpn_006","shop_id":"shop_006","title":"味多美满30减5","description":"全场满30元减5元","discount_type":"fixed","discount_value":5.0,"min_consume":30.0,"valid_from":"2026-01-01","valid_until":"2026-12-31","stock":500},
+  {"coupon_id":"cpn_007","shop_id":"shop_007","title":"海底捞午市88折券","description":"周一至周五14:00-17:00消费88折","discount_type":"percentage","discount_value":12,"min_consume":100.0,"valid_from":"2026-01-01","valid_until":"2026-12-31","stock":300},
+  {"coupon_id":"cpn_008","shop_id":"shop_009","title":"金谷园饺子满40减8","description":"全场满40元减8元","discount_type":"fixed","discount_value":8.0,"min_consume":40.0,"valid_from":"2026-01-01","valid_until":"2026-12-31","stock":400},
+  {"coupon_id":"cpn_009","shop_id":"shop_010","title":"肯德基疯狂星期四9.9元","description":"每周四指定产品9.9元","discount_type":"fixed","discount_value":10.0,"min_consume":19.0,"valid_from":"2026-01-01","valid_until":"2026-12-31","stock":9999},
+  {"coupon_id":"cpn_sc_05_01","shop_id":"shop_sc_05","title":"川味轩满100减20","description":"全场满100元减20元","discount_type":"fixed","discount_value":20.0,"min_consume":100.0,"valid_from":"2026-01-01","valid_until":"2026-12-31","stock":500},
+  {"coupon_id":"cpn_sc_05_02","shop_id":"shop_sc_05","title":"川味轩招牌水煮鱼8折券","description":"招牌水煮鱼8折优惠","discount_type":"percentage","discount_value":20,"min_consume":60.0,"valid_from":"2026-06-01","valid_until":"2026-08-31","stock":200},
+  {"coupon_id":"cpn_sc_07_01","shop_id":"shop_sc_07","title":"永和大王豆浆油条套餐减3元","description":"购买豆浆油条套餐立减3元","discount_type":"fixed","discount_value":3.0,"min_consume":10.0,"valid_from":"2026-01-01","valid_until":"2026-12-31","stock":1000},
+  {"coupon_id":"cpn_sc_12_01","shop_id":"shop_sc_12","title":"法式餐厅双人浪漫套餐8折","description":"双人浪漫套餐8折优惠","discount_type":"percentage","discount_value":20,"min_consume":500.0,"valid_from":"2026-01-01","valid_until":"2026-12-31","stock":100},
+  {"coupon_id":"cpn_sc_13_01","shop_id":"shop_sc_13","title":"兰州拉面满20减5","description":"全场满20元减5元","discount_type":"fixed","discount_value":5.0,"min_consume":20.0,"valid_from":"2026-01-01","valid_until":"2026-12-31","stock":600},
+  {"coupon_id":"cpn_sc_14a_01","shop_id":"shop_sc_14a","title":"老北京炸酱面套餐9折","description":"招牌炸酱面套餐9折","discount_type":"percentage","discount_value":10,"min_consume":15.0,"valid_from":"2026-01-01","valid_until":"2026-12-31","stock":300},
+  {"coupon_id":"cpn_sc_14b_01","shop_id":"shop_sc_14b","title":"老北京炸酱面(花园路)满30减8","description":"满30元减8元","discount_type":"fixed","discount_value":8.0,"min_consume":30.0,"valid_from":"2026-01-01","valid_until":"2026-12-31","stock":200}
+]

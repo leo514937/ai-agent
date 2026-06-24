@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..config import ENABLE_LLM_VERBALIZER, LLM_VERBALIZER_FALLBACK_TO_TEMPLATE, MAX_REWRITE_ATTEMPTS
+from ..config import ENABLE_LLM_VERBALIZER, MAX_REWRITE_ATTEMPTS
 from ..domain.schemas import DecisionPlan
 from ..llm.client import load_prompt
 
@@ -125,23 +124,8 @@ class VerbalizerResponse(BaseModel):
 
 
 def _load_all_known_shop_names() -> list[str]:
-    mock_file = Path(__file__).resolve().parent.parent / "mock_data" / "shops.json"
-    if not mock_file.exists():
-        return []
-    try:
-        with open(mock_file, "r", encoding="utf-8-sig") as f:
-            data = json.load(f)
-            names = []
-            for item in data:
-                if item.get("shop_name"):
-                    names.append(str(item["shop_name"]).strip())
-                if item.get("alias"):
-                    names.append(str(item["alias"]).strip())
-                for a in item.get("aliases", []) or []:
-                    names.append(str(a).strip())
-            return list(set(names))
-    except Exception:
-        return []
+    # Static mock data removed in P1; returns empty
+    return []
 
 
 def _check_boundary(plan: DecisionPlan, text: str) -> bool:
@@ -200,33 +184,36 @@ def _invoke_verbalizer_llm(
 
     if callable(llm_client):
         try:
-            return llm_client(
+            result = llm_client(
                 prompt=prompt,
                 system_prompt=system_prompt,
                 timeout_ms=timeout_ms,
                 response_validator=validator,
             )
+            return result if isinstance(result, dict) else {"ok": False, "error_message": "llm_response_not_dict"}
         except TypeError as exc:
             if "response_validator" not in str(exc):
                 raise
             from ..llm.client import call_llm
-            return call_llm(
+            result = call_llm(
                 prompt=prompt,
                 system_prompt=system_prompt,
                 timeout_ms=timeout_ms,
                 response_validator=validator,
                 backend=llm_client,
             )
+            return result if isinstance(result, dict) else {"ok": False, "error_message": "llm_response_not_dict"}
 
     call_fn = getattr(llm_client, "call_llm", getattr(llm_client, "call", None))
     if not call_fn:
         raise AttributeError("llm_call_missing_callable")
-    return call_fn(
+    result = call_fn(
         prompt=prompt,
         system_prompt=system_prompt,
         timeout_ms=timeout_ms,
         response_validator=validator,
     )
+    return result if isinstance(result, dict) else {"ok": False, "error_message": "llm_response_not_dict"}
 
 
 def verbalize_decision_plan(
@@ -242,16 +229,7 @@ def verbalize_decision_plan(
 ) -> str:
     # Check client
     if not llm_client:
-        if metadata_out is not None:
-            metadata_out["answer_fallback_reason"] = "llm_client_unavailable"
-            metadata_out["llm_verbalizer_error"] = "llm_client_unavailable"
-            metadata_out["answer_verify_passed"] = False
-            metadata_out["answer_verify_violations"] = ["llm_client_unavailable"]
-            metadata_out["rewrite_needed"] = False
-            metadata_out["rewrite_count"] = rewrite_count
-            metadata_out["fallback_reason"] = "llm_client_unavailable"
-            metadata_out["final_safety_status"] = "fallback"
-        return fallback_text
+        raise RuntimeError("llm_client_unavailable")
 
     try:
         system_prompt, _ = _load_verbalizer_prompts()
@@ -265,7 +243,7 @@ def verbalize_decision_plan(
             metadata_out["rewrite_count"] = rewrite_count
             metadata_out["fallback_reason"] = "prompt_load_failed"
             metadata_out["final_safety_status"] = "fallback"
-        return fallback_text
+        raise RuntimeError(f"prompt_load_failed:{exc}") from exc
 
     user_prompt = _render_user_prompt(plan, rewrite_count=rewrite_count, previous_violations=previous_violations)
 
@@ -278,28 +256,10 @@ def verbalize_decision_plan(
                 timeout_ms=timeout_ms,
             )
         except AttributeError:
-            if metadata_out is not None:
-                metadata_out["answer_fallback_reason"] = "llm_call_missing_callable"
-                metadata_out["llm_verbalizer_error"] = "llm_call_missing_callable"
-                metadata_out["answer_verify_passed"] = False
-                metadata_out["answer_verify_violations"] = ["llm_call_missing_callable"]
-                metadata_out["rewrite_needed"] = False
-                metadata_out["rewrite_count"] = rewrite_count
-                metadata_out["fallback_reason"] = "llm_call_missing_callable"
-                metadata_out["final_safety_status"] = "fallback"
-            return fallback_text
+            raise RuntimeError("llm_call_missing_callable")
 
         if not res or not res.get("ok"):
-            if metadata_out is not None:
-                metadata_out["answer_fallback_reason"] = "llm_call_failed"
-                metadata_out["llm_verbalizer_error"] = str((res or {}).get("error_message", "") or (res or {}).get("error_code", "") or "llm_call_failed")
-                metadata_out["answer_verify_passed"] = False
-                metadata_out["answer_verify_violations"] = ["llm_call_failed"]
-                metadata_out["rewrite_needed"] = False
-                metadata_out["rewrite_count"] = rewrite_count
-                metadata_out["fallback_reason"] = "llm_call_failed"
-                metadata_out["final_safety_status"] = "fallback"
-            return fallback_text
+            raise RuntimeError(str((res or {}).get("error_message", "") or (res or {}).get("error_code", "") or "llm_call_failed"))
 
         content = res.get("content")
         if isinstance(content, VerbalizerResponse):
@@ -307,28 +267,10 @@ def verbalize_decision_plan(
         elif isinstance(content, dict):
             natural_text = content.get("natural_response", "")
         else:
-            if metadata_out is not None:
-                metadata_out["answer_fallback_reason"] = "llm_output_invalid"
-                metadata_out["llm_verbalizer_error"] = "missing_natural_response"
-                metadata_out["answer_verify_passed"] = False
-                metadata_out["answer_verify_violations"] = ["missing_natural_response"]
-                metadata_out["rewrite_needed"] = False
-                metadata_out["rewrite_count"] = rewrite_count
-                metadata_out["fallback_reason"] = "llm_output_invalid"
-                metadata_out["final_safety_status"] = "fallback"
-            return fallback_text
+            raise RuntimeError("missing_natural_response")
 
         if not natural_text:
-            if metadata_out is not None:
-                metadata_out["answer_fallback_reason"] = "llm_output_invalid"
-                metadata_out["llm_verbalizer_error"] = "empty_natural_response"
-                metadata_out["answer_verify_passed"] = False
-                metadata_out["answer_verify_violations"] = ["empty_natural_response"]
-                metadata_out["rewrite_needed"] = False
-                metadata_out["rewrite_count"] = rewrite_count
-                metadata_out["fallback_reason"] = "llm_output_invalid"
-                metadata_out["final_safety_status"] = "fallback"
-            return fallback_text
+            raise RuntimeError("empty_natural_response")
 
         if metadata_out is not None:
             metadata_out["generated_llm_answer_before_fallback"] = natural_text
@@ -353,7 +295,7 @@ def verbalize_decision_plan(
             # If in graph and rewrite is still under limit, return natural_text to let verifier fail & trigger rewrite
             if in_graph and rewrite_count < _GRAPH_REWRITE_LIMIT:
                 return natural_text
-            return fallback_text
+            raise RuntimeError(f"b2_mini_verifier:{verification_result['violation'] or 'unknown'}")
 
         if metadata_out is not None:
             metadata_out["answer_verify_passed"] = True
@@ -366,15 +308,6 @@ def verbalize_decision_plan(
 
         return natural_text
     except Exception as exc:
-        if metadata_out is not None:
-            metadata_out["answer_fallback_reason"] = "llm_verbalizer_exception"
-            metadata_out["llm_verbalizer_error"] = str(exc)
-            metadata_out["answer_verify_passed"] = False
-            metadata_out["answer_verify_violations"] = [str(exc)]
-            metadata_out["rewrite_needed"] = False
-            metadata_out["rewrite_count"] = rewrite_count
-            metadata_out["fallback_reason"] = "llm_verbalizer_exception"
-            metadata_out["final_safety_status"] = "fallback"
-        return fallback_text
+        raise RuntimeError(str(exc)) from exc
 
 

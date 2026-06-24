@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from ..config import MOCK_LOCATION, SEARCH_LIMIT
+from ..config import SEARCH_LIMIT
 from ..domain.candidate import (
     CandidateSet,
     CandidateSource,
@@ -115,11 +115,13 @@ class CandidateResolver:
                 status=CandidateStatus.NOT_FOUND,
                 source=CandidateSource.EXPLICIT,
                 candidates=[],
+                requested_count=spec.limit or 1,
                 min_required=1,
                 max_allowed=spec.limit or 5,
             )
 
         candidates: list[ResolvedCandidate] = []
+        ambiguous_candidates: list[ResolvedCandidate] = []
         for idx, mention in enumerate(mentions):
             result = self._resolve_shop(mention)
             status = str(result.get("status", "NOT_FOUND") or "NOT_FOUND")
@@ -138,24 +140,36 @@ class CandidateResolver:
                     ))
             elif status == "AMBIGUOUS":
                 cand_list = result.get("candidates") or []
-                if cand_list:
-                    first = _to_dict(cand_list[0]) if isinstance(cand_list[0], dict) else {}
-                    sid = str(first.get("shop_id", "")).strip()
+                for cand in cand_list:
+                    cand_dict = _to_dict(cand)
+                    sid = str(cand_dict.get("shop_id", "")).strip()
                     if sid:
-                        candidates.append(ResolvedCandidate(
+                        ambiguous_candidates.append(ResolvedCandidate(
                             shop_id=sid,
-                            shop_name=str(first.get("shop_name", "")),
+                            shop_name=str(cand_dict.get("shop_name", mention)),
                             source=CandidateSource.EXPLICIT,
                             rank=idx,
                             confidence=float(result.get("confidence", 0.5)),
-                            raw=first,
+                            raw=cand_dict,
                         ))
+
+        if ambiguous_candidates and not candidates:
+            first_candidate = ambiguous_candidates[:1]
+            return CandidateSet(
+                status=CandidateStatus.RESOLVED,
+                source=CandidateSource.EXPLICIT,
+                candidates=first_candidate,
+                requested_count=spec.limit or len(first_candidate) or 1,
+                min_required=1,
+                max_allowed=spec.limit or 5,
+            )
 
         if not candidates:
             return CandidateSet(
                 status=CandidateStatus.NOT_FOUND,
                 source=CandidateSource.EXPLICIT,
                 candidates=[],
+                requested_count=spec.limit or len(mentions) or 1,
                 min_required=1,
                 max_allowed=spec.limit or 5,
             )
@@ -164,7 +178,8 @@ class CandidateResolver:
             status=CandidateStatus.RESOLVED,
             source=CandidateSource.EXPLICIT,
             candidates=candidates,
-            min_required=len(candidates),
+            requested_count=spec.limit or len(candidates),
+            min_required=1,
             max_allowed=spec.limit or 5,
         )
 
@@ -237,6 +252,7 @@ class CandidateResolver:
                 status=CandidateStatus.NOT_FOUND,
                 source=CandidateSource.CONTEXT,
                 candidates=[],
+                requested_count=spec.limit or 1,
                 min_required=1,
                 max_allowed=spec.limit or 5,
             )
@@ -245,6 +261,7 @@ class CandidateResolver:
             status=CandidateStatus.RESOLVED,
             source=CandidateSource.CONTEXT,
             candidates=candidates,
+            requested_count=spec.limit or len(candidates),
             min_required=1,
             max_allowed=spec.limit or 5,
         )
@@ -269,6 +286,7 @@ class CandidateResolver:
                 status=CandidateStatus.NOT_FOUND,
                 source=CandidateSource.DISCOVERY,
                 candidates=[],
+                requested_count=spec.limit or 1,
                 min_required=1,
                 max_allowed=spec.limit or SEARCH_LIMIT,
             )
@@ -302,6 +320,7 @@ class CandidateResolver:
                 source=CandidateSource.DISCOVERY,
                 candidates=[],
                 warnings=["search_shops returned empty results"],
+                requested_count=spec.limit or 1,
                 min_required=1,
                 max_allowed=spec.limit or SEARCH_LIMIT,
             )
@@ -314,6 +333,7 @@ class CandidateResolver:
             status=CandidateStatus.RESOLVED,
             source=CandidateSource.DISCOVERY,
             candidates=candidates,
+            requested_count=spec.limit or len(candidates),
             min_required=1,
             max_allowed=spec.limit or SEARCH_LIMIT,
         )
@@ -353,6 +373,7 @@ class CandidateResolver:
                 status=CandidateStatus.NOT_FOUND,
                 source=CandidateSource.MIXED,
                 candidates=[],
+                requested_count=spec.limit or 1,
                 min_required=1,
                 max_allowed=spec.limit or 5,
             )
@@ -361,6 +382,7 @@ class CandidateResolver:
             status=CandidateStatus.RESOLVED,
             source=CandidateSource.MIXED,
             candidates=merged,
+            requested_count=spec.limit or len(merged),
             min_required=1,
             max_allowed=spec.limit or 5,
         )

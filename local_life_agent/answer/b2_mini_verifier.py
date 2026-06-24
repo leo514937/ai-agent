@@ -11,23 +11,8 @@ from ..domain.schemas import DecisionPlan
 
 
 def _load_all_known_shop_names() -> list[str]:
-    mock_file = Path(__file__).resolve().parent.parent / "mock_data" / "shops.json"
-    if not mock_file.exists():
-        return []
-    try:
-        with open(mock_file, "r", encoding="utf-8-sig") as f:
-            data = json.load(f)
-            names = []
-            for item in data:
-                if item.get("shop_name"):
-                    names.append(str(item["shop_name"]).strip())
-                if item.get("alias"):
-                    names.append(str(item["alias"]).strip())
-                for a in item.get("aliases", []) or []:
-                    names.append(str(a).strip())
-            return list(set(names))
-    except Exception:
-        return []
+    # Static mock data removed in P1; returns empty (no name-based verification)
+    return []
 
 
 def _is_number(s: Any) -> bool:

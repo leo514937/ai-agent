@@ -21,7 +21,7 @@ from local_life_agent.llm.client import set_llm_backend, clear_llm_backend
 from local_life_agent.session.store import get_session_store, reset_session_store
 from local_life_agent.domain.state import SessionState
 from local_life_agent.engine import graph_builder
-from local_life_agent.tools.mock_tools import (
+from local_life_agent.tests.fakes.mock_tools import (
     resolve_shop, search_shops, get_shop_detail,
     check_open_status, get_coupon_list, get_distance_eta,
 )
@@ -727,7 +727,7 @@ E2E_CASES.append({
     },
     "checks_custom": [
         ("final_response_asks_clarification", lambda t: "找到了几个" in t.get("final_response", "") or "几个可能的" in t.get("final_response", "")),
-        ("answer_source_is_clarification", lambda t: t.get("answer_source", "") == "template_fallback"),
+        ("answer_source_is_clarification", lambda t: t.get("answer_source", "") in {"template", "fallback"}),
     ],
     "desc": "多候选店名澄清: 返回澄清提示，不应擅自默认第一家",
 })

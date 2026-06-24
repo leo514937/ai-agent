@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import pytest
 
-from ..tools.mock_tools import (
+from .fakes.mock_tools import (
     get_shop_detail,
     search_shops,
     get_coupon_list,

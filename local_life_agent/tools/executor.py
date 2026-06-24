@@ -1,8 +1,8 @@
 """Tool executor — abstract interface and concrete implementations.
 
 Defines the ``ToolExecutor`` abstract base class that all executor
-implementations (Mock / HTTP / DB) must follow, ensuring the upper
-layers (Planner, Gateway) remain source-agnostic.
+implementations (HTTP / DB) must follow, ensuring the upper layers
+(Planner, Gateway) remain source-agnostic.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ class RawToolResult:
         error_code: str | None = None,
         error_message: str = "",
         *,
-        backend_source: str = "mock",
+        backend_source: str = "unknown",
         http_status: int | None = None,
         endpoint: str | None = None,
         fallback_from: str | None = None,
@@ -46,9 +46,9 @@ class RawToolResult:
 class ToolExecutor(ABC):
     """Abstract interface for tool execution.
 
-    All executor implementations (MockToolExecutor, JavaToolExecutor)
-    must implement ``execute()``.  The Gateway calls this method without
-    knowing whether the source is local JSON, a remote HTTP API, or a DB.
+        All executor implementations must implement ``execute()``.  The
+        Gateway calls this method without knowing whether the source is a
+        remote HTTP API or a DB.
     """
 
     @abstractmethod
@@ -67,88 +67,11 @@ class ToolExecutor(ABC):
 
     @property
     def backend_source(self) -> str:
-        """Return the source identifier: 'mock' or 'java_api'.
+        """Return the source identifier.
 
-        Default implementation returns 'mock' so that simple test
-        executors (e.g. ``_DetExecutor``) do not need to override it.
+        Test executors may keep the default ``unknown`` value.
         """
-        return "mock"
-
-
-class MockToolExecutor(ToolExecutor):
-    """Mock executor that delegates to ``mock_tools`` module functions.
-
-    Reads static JSON files from ``mock_data/``.  This is the default
-    executor for development and testing.  Replacing it with
-    ``JavaToolExecutor`` (HTTP) requires zero changes to the
-    Gateway or Planner.
-    """
-
-    def __init__(self):
-        import importlib
-        self._mod = importlib.import_module(".mock_tools", package="local_life_agent.tools")
-
-    @property
-    def backend_source(self) -> str:
-        return "mock"
-
-    async def execute(self, tool_def: dict, args: dict[str, Any]) -> RawToolResult:
-        """Execute a tool via mock_tools.
-
-        The tool function is looked up by ``tool_def["name"]`` on the
-        mock_tools module.  If the function raises ``TimeoutError`` it
-        is propagated to the Gateway for retry / normalisation.
-
-        Args:
-            tool_def: Tool definition from the registry.
-            args: Arguments for this call.
-
-        Returns:
-            ``RawToolResult`` wrapping the mock function output.
-
-        Raises:
-            TimeoutError: For tools that simulate a timeout.
-        """
-        tool_name = tool_def["name"]
-        fn = getattr(self._mod, tool_name, None)
-        if fn is None:
-            return RawToolResult(
-                data=None,
-                success=False,
-                error_code="TOOL_NOT_REGISTERED",
-                error_message=f"Mock implementation for '{tool_name}' not found",
-                backend_source=self.backend_source,
-            )
-        try:
-            result = fn(**args)
-        except TimeoutError:
-            raise
-        except Exception as exc:
-            return RawToolResult(
-                data=None,
-                success=False,
-                error_code="NETWORK_ERROR",
-                error_message=str(exc),
-                backend_source=self.backend_source,
-            )
-
-        if isinstance(result, dict):
-            if "success" in result and "data" in result:
-                return RawToolResult(
-                    data=result.get("data"),
-                    success=result.get("success", False),
-                    error_code=result.get("error_code"),
-                    error_message=result.get("error_message", ""),
-                    backend_source=self.backend_source,
-                )
-            return RawToolResult(
-                data=result,
-                success=True,
-                error_code=result.get("error_code"),
-                error_message=result.get("error_message", ""),
-                backend_source=self.backend_source,
-            )
-        return RawToolResult(data=result, success=True, backend_source=self.backend_source)
+        return "unknown"
 
 
 class DbToolExecutor(ToolExecutor):
@@ -273,18 +196,14 @@ def build_tool_executor() -> ToolExecutor:
 
     Returns:
         ``DbToolExecutor``    when TOOL_BACKEND == "db".
-        ``MockToolExecutor``  when TOOL_BACKEND == "mock".
         ``JavaToolExecutor``  when TOOL_BACKEND == "java_api".
 
     Raises:
-        ValueError: When TOOL_BACKEND has an unexpected value (the
-                    config module already validates it at import time).
+        ValueError: When TOOL_BACKEND has an unexpected value.
     """
     backend = config.TOOL_BACKEND
     if backend == "db":
         return DbToolExecutor()
-    if backend == "mock":
-        return MockToolExecutor()
     if backend == "java_api":
         return JavaToolExecutor()
     raise ValueError(f"Unknown TOOL_BACKEND: {backend!r}")
@@ -293,8 +212,3 @@ def build_tool_executor() -> ToolExecutor:
 def build_db_executor() -> ToolExecutor:
     """Return a DbToolExecutor for direct DB access."""
     return DbToolExecutor()
-
-
-def build_fallback_executor() -> ToolExecutor:
-    """Return a MockToolExecutor for degraded fallback."""
-    return MockToolExecutor()

@@ -196,6 +196,16 @@ def review_evidence(
         evidence_pack, req, opt,
     )
 
+    print(f"[DEBUG review_evidence] req={req} opt={opt}")
+    print(f"[DEBUG review_evidence] required_evidence count={len(required_evidence)}")
+    for fe in required_evidence:
+        print(f"  [DEBUG] required: facet={fe.facet} status={fe.status} tool={fe.tool_name}")
+    print(f"[DEBUG review_evidence] optional_evidence count={len(optional_evidence)}")
+    for fe in optional_evidence:
+        print(f"  [DEBUG] optional: facet={fe.facet} status={fe.status} tool={fe.tool_name}")
+    fr = evidence_pack.get("facet_results") if isinstance(evidence_pack, dict) else []
+    print(f"[DEBUG review_evidence] facet_results count={len(list(fr or []))}")
+
     result = EvidenceReviewResult()
 
     # Classify required facets

@@ -5,8 +5,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from ..tools.mock_tools import _all_shops
-
 
 def _to_dict(value: Any) -> dict[str, Any]:
     if value is None:
@@ -31,12 +29,8 @@ def _match_any_regex(text: str, patterns: list[str]) -> bool:
 
 
 def _known_shop_names_in_answer(answer: str) -> list[str]:
-    matches: list[str] = []
-    for shop in _all_shops():
-        name = shop.get("shop_name", "")
-        if isinstance(name, str) and name and name in answer:
-            matches.append(name)
-    return matches
+    # Static shop data removed in P1; returns empty (no name-based verification)
+    return []
 
 
 def _extract_facet_results(evidence: dict[str, Any], task_type: str) -> list[dict[str, Any]]:

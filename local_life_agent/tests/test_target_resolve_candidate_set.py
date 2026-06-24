@@ -15,17 +15,20 @@ Pipeline under test:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
 from ..domain.candidate import CandidateSource, GoalType, LocalLifeGoalDraft
+from ..domain.graph_state import GraphState
 from ..domain.schemas import SemanticFrame, TaskType
 from ..engine.graph_builder import (
-    ENABLE_CANDIDATE_SET_REVIEW,
     _h_target_resolve,
     _h_target_resolve_candidate_set,
 )
+from ..engine import graph_builder
+from .fakes import mock_tools
+from ..target.candidate_resolver import CandidateResolver
 from ..planning.review_policy import NextAction, ReviewStatus
 
 
@@ -39,9 +42,9 @@ def _state(
     raw_text: str = "",
     session_id: str = "test_cs",
     **extra: Any,
-) -> dict[str, Any]:
+) -> GraphState:
     """Build a minimal GraphState dict with a SemanticFrame."""
-    state: dict[str, Any] = {
+    state = {
         "raw_text": raw_text,
         "session_id": session_id,
         "semantic_frame": sf,
@@ -51,7 +54,7 @@ def _state(
         "final_response": "",
     }
     state.update(extra)
-    return state
+    return cast(GraphState, state)
 
 
 def _expect_routing(result: dict[str, Any], next_action: str) -> None:
@@ -74,9 +77,15 @@ def _expect_routing(result: dict[str, Any], next_action: str) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _ensure_flag() -> None:
-    """The CandidateSet feature flag MUST be on for these tests."""
-    assert ENABLE_CANDIDATE_SET_REVIEW, "ENABLE_CANDIDATE_SET_REVIEW must be True"
+def _fake_tool_search(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        graph_builder,
+        "CandidateResolver",
+        lambda: CandidateResolver(
+            resolve_shop_fn=mock_tools.resolve_shop,
+            search_shops_fn=mock_tools.search_shops,
+        ),
+    )
 
 
 # ===================================================================
@@ -201,35 +210,31 @@ class TestContextComparison:
 
 
 # ===================================================================
-# Legacy fallback (no candidate_source) — should NOT enter CandidateSet path
+# Missing/empty candidate_source — should still stay on CandidateSet path
 # ===================================================================
 
 
-class TestLegacyFallback:
-    """SemanticFrame without candidate_source → legacy _h_target_resolve_legacy."""
+class TestCandidateSourceBackfill:
+    """Missing candidate_source must be backfilled, not routed to legacy."""
 
-    def test_no_candidate_source_routes_to_legacy(self):
-        """Missing candidate_source → bypass CandidateSet path."""
+    def test_no_candidate_source_is_backfilled(self):
         sf = SemanticFrame(
             task_type=TaskType.comparison,
             merchant_mentions=["海底捞(牡丹园店)", "川味轩(知春路店)"],
-            # candidate_source NOT set — should go to legacy
         )
         result = _h_target_resolve(_state(sf, raw_text="海底捞和川味轩哪个好"))
-        # Legacy path does NOT set local_life_goal_draft
-        assert "local_life_goal_draft" not in result, (
-            "legacy path should NOT set local_life_goal_draft"
-        )
+        assert "local_life_goal_draft" in result
+        assert "candidate_set" in result
 
-    def test_empty_candidate_source_routes_to_legacy(self):
-        """candidate_source='' → bypass CandidateSet path."""
+    def test_empty_candidate_source_is_backfilled(self):
         sf = SemanticFrame(
             task_type=TaskType.comparison,
             candidate_source="",
             merchant_mentions=["海底捞(牡丹园店)", "川味轩(知春路店)"],
         )
         result = _h_target_resolve(_state(sf, raw_text="哪个好"))
-        assert "local_life_goal_draft" not in result
+        assert "local_life_goal_draft" in result
+        assert "candidate_set" in result
 
 
 # ===================================================================

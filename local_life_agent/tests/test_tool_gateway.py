@@ -18,8 +18,11 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import pytest
+
+from .fakes import mock_tools
 from ..tools.circuit_breaker import get_circuit_breaker_manager
-from ..tools.executor import MockToolExecutor, RawToolResult, ToolExecutor
+from ..tools.executor import RawToolResult, ToolExecutor
 from ..tools.gateway import ToolCallGateway, dispatch_tool_call
 
 
@@ -36,8 +39,8 @@ def _gw(executor: ToolExecutor | None = None, reset_cb: bool = True) -> ToolCall
 
 
 def _mock_gw() -> ToolCallGateway:
-    """Fresh Gateway wired with the real MockToolExecutor."""
-    return _gw(executor=MockToolExecutor())
+    """Fresh Gateway wired with a tests-only fake executor."""
+    return _gw(executor=_FakeExecutor())
 
 
 def _call(gw: ToolCallGateway, tool: str, kwargs: dict) -> dict[str, Any]:
@@ -68,6 +71,37 @@ class _DetExecutor(ToolExecutor):
             error_code=p.get("error_code"),
             error_message=p.get("error_message", ""),
         )
+
+
+class _FakeExecutor(ToolExecutor):
+    @property
+    def backend_source(self) -> str:
+        return "tests_fake"
+
+    async def execute(self, tool_def: dict, args: dict[str, Any]) -> RawToolResult:
+        tool_name = tool_def["name"]
+        if tool_name == "resolve_shop":
+            data = mock_tools.resolve_shop(str(args.get("query", "")), location=args.get("location"), session_shop_ids=args.get("session_shop_ids"))
+            return RawToolResult(data=data, success=True, backend_source=self.backend_source)
+        if tool_name == "search_shops":
+            data = mock_tools.search_shops(str(args.get("query", "")), location=args.get("location"), limit=args.get("limit"))
+            return RawToolResult(data=data.get("data"), success=True, backend_source=self.backend_source)
+        if tool_name == "get_shop_detail":
+            data = mock_tools.get_shop_detail(str(args.get("shop_id", "")))
+            return RawToolResult(data=data.get("data"), success=data.get("success", False), error_code=data.get("error_code"), error_message=data.get("error_message", ""), backend_source=self.backend_source)
+        if tool_name == "get_coupon_list":
+            try:
+                data = mock_tools.get_coupon_list(str(args.get("shop_id", "")))
+            except TimeoutError:
+                raise
+            return RawToolResult(data=data.get("data"), success=data.get("success", False), error_code=data.get("error_code"), error_message=data.get("error_message", ""), backend_source=self.backend_source)
+        if tool_name == "check_open_status":
+            data = mock_tools.check_open_status(str(args.get("shop_id", "")))
+            return RawToolResult(data=data.get("data"), success=data.get("success", False), error_code=data.get("error_code"), error_message=data.get("error_message", ""), backend_source=self.backend_source)
+        if tool_name == "get_distance_eta":
+            data = mock_tools.get_distance_eta(str(args.get("shop_id", "")), args.get("from_location") or {"lat": 39.9609, "lng": 116.3581})
+            return RawToolResult(data=data.get("data"), success=data.get("success", False), error_code=data.get("error_code"), error_message=data.get("error_message", ""), backend_source=self.backend_source)
+        return RawToolResult(data=None, success=False, error_code="TOOL_NOT_REGISTERED", backend_source=self.backend_source)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -265,7 +299,8 @@ class TestOutputShape:
 class TestDispatchToolCall:
     """The module-level sync convenience wrapper."""
 
-    def test_success(self):
+    def test_success(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr("local_life_agent.tools.gateway._gateway_instance", ToolCallGateway(executor=_FakeExecutor()))
         r = dispatch_tool_call("get_shop_detail", {"shop_id": "shop_sc_01"})
         assert r["success"] is True
         assert r["result_status"] == "ok"
@@ -277,7 +312,8 @@ class TestDispatchToolCall:
         assert r["result_status"] == "failed"
         assert r["error_code"] == "SCHEMA_VALIDATION_FAILED"
 
-    def test_empty(self):
+    def test_empty(self, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setattr("local_life_agent.tools.gateway._gateway_instance", ToolCallGateway(executor=_FakeExecutor()))
         r = dispatch_tool_call("get_coupon_list", {"shop_id": "shop_sc_04"})
         assert r["result_status"] == "empty"
         assert r["data"] == []

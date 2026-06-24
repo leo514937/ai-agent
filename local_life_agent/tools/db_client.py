@@ -1,8 +1,7 @@
 """MySQL DB client — read-only connection wrapper for tool queries.
 
-Provides a shared DB connection (``connection``) and a set of query
-helpers used by ``db_tools``.  All queries are read-only (SELECT);
-no writes are performed.
+All queries open a fresh connection per call to avoid sharing a single
+mysql.connector connection across worker threads.
 """
 
 from __future__ import annotations
@@ -17,22 +16,12 @@ _logger = logging.getLogger(__name__)
 
 # ── Connection management ─────────────────────────────────────────
 
-_connection: Any = None  # mysql.connector connection singleton
-
 
 def _ensure_connection() -> Any:
-    """Return the shared DB connection, creating it on first call."""
-    global _connection
-    if _connection is not None:
-        try:
-            _connection.ping(reconnect=True, attempts=1)
-            return _connection
-        except Exception:
-            _connection = None
-
+    """Create a fresh DB connection for the current query."""
     import mysql.connector
 
-    _connection = mysql.connector.connect(
+    return mysql.connector.connect(
         host=config.DB_HOST,
         port=config.DB_PORT,
         database=config.DB_NAME,
@@ -41,18 +30,24 @@ def _ensure_connection() -> Any:
         charset="utf8mb4",
         autocommit=True,
     )
-    return _connection
+
+
+@contextmanager
+def _connection_cursor() -> Iterator[Any]:
+    conn = _ensure_connection()
+    try:
+        with conn.cursor(dictionary=True, buffered=True) as cur:
+            yield cur
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def close() -> None:
-    """Explicitly close the shared connection."""
-    global _connection
-    if _connection is not None:
-        try:
-            _connection.close()
-        except Exception:
-            pass
-        _connection = None
+    """Kept for compatibility; per-query connections close automatically."""
+    return None
 
 
 # ── Row helpers ───────────────────────────────────────────────────
@@ -124,7 +119,6 @@ def query_all_shops() -> list[dict[str, Any]]:
     Returns:
         List of shop dicts in tool output format.
     """
-    conn = _ensure_connection()
     sql = """
         SELECT
             s.id, s.name, s.type_id, s.images, s.area, s.address,
@@ -135,7 +129,7 @@ def query_all_shops() -> list[dict[str, Any]]:
         LEFT JOIN tb_shop_type t ON t.id = s.type_id
         ORDER BY s.id
     """
-    with conn.cursor(dictionary=True, buffered=True) as cur:
+    with _connection_cursor() as cur:
         cur.execute(sql)
         return [_row_to_shop(row) for row in cur.fetchall()]
 
@@ -149,7 +143,6 @@ def query_shop_by_id(shop_id: str) -> dict[str, Any] | None:
     Returns:
         Shop dict or None.
     """
-    conn = _ensure_connection()
     sql = """
         SELECT
             s.id, s.name, s.type_id, s.images, s.area, s.address,
@@ -164,7 +157,7 @@ def query_shop_by_id(shop_id: str) -> dict[str, Any] | None:
         sid = int(shop_id)
     except (ValueError, TypeError):
         return None
-    with conn.cursor(dictionary=True, buffered=True) as cur:
+    with _connection_cursor() as cur:
         cur.execute(sql, (sid,))
         row = cur.fetchone()
         return _row_to_shop(row) if row else None
@@ -179,7 +172,6 @@ def query_shop_by_name(name: str) -> list[dict[str, Any]]:
     Returns:
         List of matching shop dicts.
     """
-    conn = _ensure_connection()
     sql = """
         SELECT
             s.id, s.name, s.type_id, s.images, s.area, s.address,
@@ -193,7 +185,7 @@ def query_shop_by_name(name: str) -> list[dict[str, Any]]:
         ORDER BY s.id
     """
     pattern = f"%{name}%"
-    with conn.cursor(dictionary=True, buffered=True) as cur:
+    with _connection_cursor() as cur:
         cur.execute(sql, (pattern, name))
         return [_row_to_shop(row) for row in cur.fetchall()]
 
@@ -211,7 +203,6 @@ def query_shops_by_keyword(
     Returns:
         List of matched shop dicts.
     """
-    conn = _ensure_connection()
     sql = """
         SELECT
             s.id, s.name, s.type_id, s.images, s.area, s.address,
@@ -226,7 +217,7 @@ def query_shops_by_keyword(
         ORDER BY s.score DESC, s.sold DESC
     """
     pattern = f"%{keyword}%"
-    with conn.cursor(dictionary=True, buffered=True) as cur:
+    with _connection_cursor() as cur:
         cur.execute(sql, (pattern, pattern, pattern))
         rows = cur.fetchall()
     if limit is not None and limit > 0:
@@ -244,7 +235,6 @@ def query_coupons_by_shop_id(shop_id: str) -> list[dict[str, Any]]:
         List of coupon dicts. Empty list if shop has no vouchers
         or shop does not exist.
     """
-    conn = _ensure_connection()
     try:
         sid = int(shop_id)
     except (ValueError, TypeError):
@@ -255,14 +245,13 @@ def query_coupons_by_shop_id(shop_id: str) -> list[dict[str, Any]]:
         FROM tb_voucher
         WHERE shop_id = %s AND status = 1
     """
-    with conn.cursor(dictionary=True, buffered=True) as cur:
+    with _connection_cursor() as cur:
         cur.execute(sql, (sid,))
         return [_row_to_coupon(row) for row in cur.fetchall()]
 
 
 def query_all_type_names() -> dict[int, str]:
     """Return a mapping of type_id → type name."""
-    conn = _ensure_connection()
-    with conn.cursor(dictionary=True, buffered=True) as cur:
+    with _connection_cursor() as cur:
         cur.execute("SELECT id, name FROM tb_shop_type")
         return {row["id"]: str(row["name"]) for row in cur.fetchall()}

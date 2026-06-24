@@ -12,9 +12,7 @@ from ..observability.metrics import record_tool_call_metric
 from .circuit_breaker import get_circuit_breaker_manager
 from .executor import (
     JavaToolExecutor,
-    MockToolExecutor,
     ToolExecutor,
-    build_fallback_executor,
     build_tool_executor,
 )
 from .normalizer import (
@@ -93,36 +91,6 @@ class ToolCallGateway:
             else:
                 self._cb_manager.record_failure(tool_name)
 
-        # --- Fallback check: java_api failed and fallback is allowed ---
-        if (
-            not result.get("success", False)
-            and isinstance(self._executor, JavaToolExecutor)
-            and config.ALLOW_TOOL_BACKEND_FALLBACK
-        ):
-            fallback_executor = build_fallback_executor()
-            try:
-                fallback_raw = await fallback_executor.execute(tool_def, kwargs)
-                if fallback_raw.success:
-                    result = {
-                        "call_id": kwargs.get("call_id", ""),
-                        "shop_id": kwargs.get("shop_id", ""),
-                        "tool_name": tool_def["name"],
-                        "success": fallback_raw.success,
-                        "result_status": "ok" if fallback_raw.data is not None else "empty",
-                        "data": fallback_raw.data,
-                        "error_code": fallback_raw.error_code,
-                        "error_message": fallback_raw.error_message,
-                        "source": "mock",
-                        "tool_backend": "mock",
-                        "backend_source": "mock",
-                        "fallback_from": "java_api",
-                        "degraded": True,
-                        "http_status": getattr(fallback_raw, "http_status", None),
-                        "endpoint": getattr(fallback_raw, "endpoint", None),
-                    }
-            except Exception:
-                pass  # keep the original failed result
-
         _duration = (time.monotonic() - _start) * 1000.0
         _success = bool(result.get("success", False))
         record_tool_call_metric(tool_name, _duration, _success)
@@ -139,7 +107,10 @@ class ToolCallGateway:
             else:
                 status = "ok"
         else:
-            status = "unknown"
+            if raw.error_code in {"TOOL_NOT_REGISTERED", "TOOL_UNSUPPORTED", "UNSUPPORTED"}:
+                status = "unsupported"
+            else:
+                status = "failed"
         return {
             "call_id": kwargs.get("call_id", ""),
             "shop_id": kwargs.get("shop_id", ""),

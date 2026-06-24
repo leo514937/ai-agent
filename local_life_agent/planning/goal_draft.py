@@ -128,14 +128,28 @@ def build_local_life_goal_draft(
         if limit_str.isdigit():
             candidate_limit = int(limit_str)
 
-    # Apply defaults per goal type
-    if candidate_limit is None:
-        if goal_type == GoalType.COMPARISON:
-            candidate_limit = 2
-        elif goal_type == GoalType.RECOMMENDATION:
-            candidate_limit = 3
-        elif goal_type == GoalType.SINGLE_SHOP_QUERY:
-            candidate_limit = 1
+    # Apply explicit quantity semantics
+    requested_count: int
+    min_required: int
+    max_allowed: int
+    if goal_type == GoalType.COMPARISON:
+        requested_count = candidate_limit or 2
+        min_required = 2
+        max_allowed = candidate_limit or 5
+    elif goal_type == GoalType.RECOMMENDATION:
+        requested_count = candidate_limit or 3
+        min_required = 1
+        max_allowed = candidate_limit or 5
+    elif goal_type == GoalType.SINGLE_SHOP_QUERY:
+        requested_count = candidate_limit or 1
+        min_required = 1
+        max_allowed = candidate_limit or 1
+    else:
+        requested_count = candidate_limit or 1
+        min_required = 1
+        max_allowed = candidate_limit or 5
+
+    candidate_limit = requested_count
 
     # Extract evidence needs (required facets + focused facets)
     required_facets: list[str] = []
@@ -174,6 +188,9 @@ def build_local_life_goal_draft(
         evidence_needs=evidence_needs,
         required_facets=required_facets,
         optional_facets=optional_facets,
+        requested_count=requested_count,
+        min_required=min_required,
+        max_allowed=max_allowed,
         max_candidates=5,
         source_origin=source_origin,
     )

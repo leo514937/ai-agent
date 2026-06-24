@@ -14,7 +14,7 @@ from local_life_agent.llm.client import clear_llm_backend, set_llm_backend
 from local_life_agent.planning.llm_tool_planner import build_tool_plan
 from local_life_agent.planning.plan_validator import ExecutionPlanValidator
 from local_life_agent.domain.schemas import ExecutionPlan, ToolCallSpec
-from local_life_agent.tools import mock_tools
+from local_life_agent.tests.fakes import mock_tools
 from local_life_agent.planning.tool_plan_adapter import build_execution_plan_with_tool_planner
 
 

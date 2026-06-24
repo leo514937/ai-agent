@@ -41,6 +41,9 @@ class GoalPlan(BaseModel):
     candidate_source: str = ""        # explicit | context | discovery | mixed
     candidate_category: str | None = None
     candidate_limit: int | None = None
+    requested_count: int = 1
+    min_required: int = 1
+    max_allowed: int = 5
 
     # Evidence directives
     evidence_needs: list[str] = Field(default_factory=list)
@@ -111,6 +114,9 @@ def goal_plan_to_draft(plan: GoalPlan) -> Any:
         evidence_needs=list(plan.evidence_needs),
         required_facets=list(plan.required_facets),
         optional_facets=list(plan.optional_facets),
+        requested_count=plan.requested_count,
+        min_required=plan.min_required,
+        max_allowed=plan.max_allowed,
         max_candidates=5,
         source_origin=plan.source_origin,
     )

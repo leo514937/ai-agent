@@ -52,8 +52,7 @@ COMPARISON_MAX_SHOP_LIMIT = 5
 # --- LLM ---
 LLM_CONFIDENCE_THRESHOLD = 0.8
 SEMANTIC_FALLBACK_ENABLED = True
-ENABLE_LLM_VERBALIZER = False
-LLM_VERBALIZER_FALLBACK_TO_TEMPLATE = True
+ENABLE_LLM_VERBALIZER = True
 
 # --- LLM Config File (.env) ---
 # The config file lives at <project_root>/config/.env.
@@ -162,7 +161,7 @@ LLM_TIMEOUT_MS: int = _llm_cfg_int("REAL_LLM_TIMEOUT_MS", "LLM_TIMEOUT_MS", REAL
 
 REAL_LLM_API_KEY_ENV: str = _llm_cfg_str("REAL_LLM_API_KEY_ENV", "REAL_LLM_API_KEY_ENV", "LLM_API_KEY")
 
-ENABLE_LLM_VERBALIZER = _llm_cfg_bool("ENABLE_LLM_VERBALIZER", "ENABLE_LLM_VERBALIZER", False)
+ENABLE_LLM_VERBALIZER = _llm_cfg_bool("ENABLE_LLM_VERBALIZER", "ENABLE_LLM_VERBALIZER", True)
 ENABLE_LLM_TOOL_PLANNER = _llm_cfg_bool("ENABLE_LLM_TOOL_PLANNER", "ENABLE_LLM_TOOL_PLANNER", False)
 
 # --- Tools ---
@@ -177,33 +176,33 @@ CLARIFICATION_TTL_SECONDS = 300
 # --- Mock Data ---
 MOCK_LOCATION = {"name": "北京邮电大学", "lat": 39.9609, "lng": 116.3581}
 
+# --- Database ---
+DB_HOST: str = _env_str("LOCAL_LIFE_DB_HOST", "localhost")
+DB_PORT: int = _env_int("LOCAL_LIFE_DB_PORT", 3306)
+DB_NAME: str = _env_str("LOCAL_LIFE_DB_NAME", "hmdp")
+DB_USER: str = _env_str("LOCAL_LIFE_DB_USER", "root")
+DB_PASSWORD: str = _env_str("LOCAL_LIFE_DB_PASSWORD", "123456")
+
 # --- Debug ---
 DEBUG_ENABLED = True  # Set to False in production
 
 # ====================================================================
-# Tool Backend (14.5 — mock ↔ java_api switch)
+# Tool Backend
 # ====================================================================
-# Accepted values: "mock", "java_api"
-# Any other value triggers a ValueError at import time.
-# Default: "mock" — ensures existing tests keep passing.
+# Accepted values: "db", "java_api"
 # Override via: LOCAL_LIFE_TOOL_BACKEND
 _TOOL_BACKEND_RAW = _env_str("LOCAL_LIFE_TOOL_BACKEND", "db")
-if _TOOL_BACKEND_RAW not in ("mock", "java_api", "db"):
+if _TOOL_BACKEND_RAW not in ("db", "java_api"):
     raise ValueError(
         f"LOCAL_LIFE_TOOL_BACKEND={_TOOL_BACKEND_RAW!r} is invalid. "
-        "Accepted values: 'mock', 'java_api', 'db'."
+        "Accepted values: 'db', 'java_api'."
     )
-TOOL_BACKEND: str = _TOOL_BACKEND_RAW  # "mock" | "java_api"
+TOOL_BACKEND: str = _TOOL_BACKEND_RAW  # "db" | "java_api"
 
 # Java backend connection parameters (only used when TOOL_BACKEND="java_api")
 JAVA_BACKEND_BASE_URL: str = _env_str("LOCAL_LIFE_JAVA_BASE_URL", "http://localhost:8081")
 JAVA_BACKEND_TIMEOUT_MS: int = _env_int("LOCAL_LIFE_JAVA_TIMEOUT_MS", 3000)
 JAVA_BACKEND_MAX_RETRIES: int = 1
-
-# When True: if Java backend is unavailable the gateway may fall back
-# to MockToolExecutor, marking the result as degraded+fallback_from.
-# When False (default): Java failure → backend_unavailable, no mock.
-ALLOW_TOOL_BACKEND_FALLBACK: bool = _env_bool("LOCAL_LIFE_ALLOW_TOOL_BACKEND_FALLBACK", False)
 
 # === P2: Replan limits ===
 # Maximum number of expand_search rounds before hard stop

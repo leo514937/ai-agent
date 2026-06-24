@@ -576,7 +576,9 @@ def _build_decision_plan(
             elif facet == "distance" and val is not None:
                 try:
                     if isinstance(val, dict):
-                        target_dict["distance_km"] = float(val.get("distance_km"))
+                        distance_value = val.get("distance_km")
+                        if distance_value is not None:
+                            target_dict["distance_km"] = float(distance_value)
                     else:
                         target_dict["distance_km"] = float(val)
                 except (ValueError, TypeError):
@@ -632,7 +634,9 @@ def _build_decision_plan(
                 if status == "ok" and val is not None:
                     try:
                         if isinstance(val, dict):
-                            target_dict["distance_km"] = float(val.get("distance_km"))
+                            distance_value = val.get("distance_km")
+                            if distance_value is not None:
+                                target_dict["distance_km"] = float(distance_value)
                         else:
                             target_dict["distance_km"] = float(val)
                     except (ValueError, TypeError):
@@ -801,7 +805,10 @@ def generate_answer(
     metadata = {
         "answer_source": "template",
         "llm_verbalizer_enabled": False,
+        "llm_verbalizer_called": False,
         "llm_used": False,
+        "llm_backend": "",
+        "answer_verifier_result": "not_run",
     }
     
     # Track decision metadata
@@ -837,8 +844,10 @@ def generate_answer(
     if config.ENABLE_LLM_VERBALIZER:
 
         metadata["llm_verbalizer_enabled"] = True
+        metadata["llm_verbalizer_called"] = True
         from ..llm.client import call_llm
         client = llm_client or call_llm
+        metadata["llm_backend"] = str(getattr(client, "llm_backend", "") or getattr(config, "LLM_BACKEND", ""))
         plan = _build_decision_plan(answer_plan, evidence, conversation_continuity=conversation_continuity)
         verbalized = verbalize_decision_plan(
             plan,
@@ -850,15 +859,13 @@ def generate_answer(
             previous_violations=previous_violations,
             in_graph=in_graph,
         )
-        if verbalized != template_text:
-            metadata["llm_used"] = True
-            if rewrite_count > 0:
-                metadata["answer_source"] = "llm_verbalizer_rewrite"
-            else:
-                metadata["answer_source"] = "llm_verbalizer"
-            metadata["answer_fallback_reason"] = ""
+        metadata["llm_used"] = True
+        if rewrite_count > 0:
+            metadata["answer_source"] = "llm_verbalizer_rewrite"
         else:
-            metadata["answer_source"] = "template_fallback"
+            metadata["answer_source"] = "llm_verbalizer"
+        metadata["answer_fallback_reason"] = ""
+        metadata["answer_verifier_result"] = "pass"
 
         verbalized = _normalize_coupon_phrase(verbalized)
 

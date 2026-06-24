@@ -76,7 +76,7 @@ def test_build_turn_trace_captures_fallback_and_verifier():
             "execution_plan": {"tool_calls": [{"call_id": "a"}, {"call_id": "b"}]},
             "evidence_pack": {"comparison_matrix": {"rows": [{"shop_id": "1"}, {"shop_id": "2"}]}},
             "resolved_target": {"status": "RESOLVED", "reason": "comparison_targets_resolved"},
-            "answer_source": "template_fallback",
+            "answer_source": "fallback",
             "answer_verify_passed": False,
             "answer_verify_violations": ["ranking_changed"],
             "rewrite_count": 1,

@@ -60,7 +60,7 @@ def min_required_for_goal(goal: LocalLifeGoalDraft) -> int:
       - UNSUPPORTED: 0 (no candidate needed)
     """
     if goal.goal_type == GoalType.COMPARISON:
-        return max(2, goal.candidate_limit or 2)
+        return max(2, goal.min_required or 2)
     if goal.goal_type == GoalType.SINGLE_SHOP_QUERY:
         return 1
     if goal.goal_type == GoalType.RECOMMENDATION:
@@ -75,7 +75,7 @@ def default_limit_for_goal(goal: LocalLifeGoalDraft) -> int:
     if goal.goal_type == GoalType.COMPARISON:
         return 5
     if goal.goal_type == GoalType.RECOMMENDATION:
-        return 10
+        return 5
     return 5
 
 
@@ -142,8 +142,7 @@ def review_candidate_set(
         )
 
     # ── 3. Check min_required ──────────────────────────────────────
-    effective_min = min_required_for_goal(goal)
-    effective_min = max(1, min(effective_min, candidate_set.min_required or 2))
+    effective_min = max(1, goal.min_required or candidate_set.min_required or min_required_for_goal(goal))
 
     if deduped_count < effective_min:
         reason_parts: list[str] = []
@@ -176,7 +175,7 @@ def review_candidate_set(
             )
 
     # ── 5. Check max_allowed and auto-trim ─────────────────────────
-    effective_max = min(candidate_set.max_allowed or 5, default_limit_for_goal(goal))
+    effective_max = min(goal.max_allowed or candidate_set.max_allowed or 5, default_limit_for_goal(goal))
 
     if deduped_count > effective_max:
         # Auto-trim: keep first effective_max candidates
@@ -186,6 +185,8 @@ def review_candidate_set(
             "original_count": deduped_count,
             "kept_count": len(trimmed),
             "max_allowed": effective_max,
+            "requested_count": goal.requested_count,
+            "min_required": effective_min,
         }
         # Build a candidate_set-like representation for downstream
         return SufficiencyCheckResult(
@@ -205,6 +206,11 @@ def review_candidate_set(
         next_action=NextAction.FINISH,
         reason=f"{deduped_count} candidate(s) resolved and sufficient for {goal.goal_type.value}",
         affected_candidates=[c.shop_id for c in deduped],
-        trace_payload={"deduped_count": deduped_count, "min_required": effective_min, "max_allowed": effective_max},
+        trace_payload={
+            "deduped_count": deduped_count,
+            "requested_count": goal.requested_count,
+            "min_required": effective_min,
+            "max_allowed": effective_max,
+        },
         confidence="high",
     )

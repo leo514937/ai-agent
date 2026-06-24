@@ -27,7 +27,7 @@ def test_aggregate_turn_trace_metrics_counts_core_rates():
             reference_resolution_source="semantic_frame",
             candidate_count=2,
             decision_type="comparison",
-            answer_source="template_fallback",
+            answer_source="fallback",
             answer_verify_passed=False,
             answer_verify_violations=["ranking_changed"],
             rewrite_count=1,
@@ -54,7 +54,7 @@ def test_aggregate_turn_trace_metrics_handles_empty_input():
 
 def test_merge_eval_metrics_excludes_skipped_from_pass_rate():
     merged = merge_eval_metrics(
-        {"fallback_rate": 0.5, "rewrite_rate": 0.5, "template_fallback_rate": 0.5, "raw_text_fallback_rate": 0.0},
+        {"fallback_rate": 0.5, "rewrite_rate": 0.5, "template_fallback_rate": 0.0, "raw_text_fallback_rate": 0.0},
         total_cases=3,
         passed=1,
         failed=1,

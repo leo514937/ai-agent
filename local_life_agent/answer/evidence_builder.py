@@ -117,6 +117,15 @@ def _items_from_tool_data(data: Any) -> list[dict[str, Any]]:
     return []
 
 
+def _candidate_items_from_tool_data(data: Any) -> list[dict[str, Any]]:
+    items = _items_from_tool_data(data)
+    if items:
+        return items
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict) and str(item.get("shop_id", "")).strip()]
+    return []
+
+
 def _candidate_from_shop(shop: Any) -> dict[str, Any]:
     candidate = _to_dict(shop)
     if not candidate:
@@ -145,25 +154,18 @@ def _search_result_candidates(tool_results: dict, plan_calls: dict[str, dict[str
         tool_name = str(result.get("tool_name", ""))
         data = result.get("data")
         if tool_name == "search_shops":
-            if not isinstance(data, list):
-                continue
             limit = config.RECOMMENDATION_CANDIDATE_TOP_K
             call_plan = plan_calls.get(str(call_id), {})
             try:
                 limit = min(limit, int(call_plan.get("args", {}).get("limit", config.SEARCH_LIMIT)))
             except Exception:
                 limit = config.RECOMMENDATION_CANDIDATE_TOP_K
-            for item in data[:limit]:
+            for item in _candidate_items_from_tool_data(data)[:limit]:
                 candidate = _candidate_from_shop(item)
                 if candidate.get("shop_id"):
                     candidates.append(candidate)
         elif tool_name == "get_shop_cards":
-            card_items = []
-            if isinstance(data, dict):
-                card_items = list(data.get("items", []) or [])
-            elif isinstance(data, list):
-                card_items = list(data)
-            for item in card_items:
+            for item in _candidate_items_from_tool_data(data):
                 candidate = _candidate_from_shop(item)
                 if candidate.get("shop_id"):
                     candidates.append(candidate)
@@ -569,10 +571,33 @@ def _build_comparison_evidence(
     # Perform strict schemas validation
     ComparisonMatrix.model_validate(matrix_dict)
 
+    # Build facet_results from the cells collection, which already
+    # contains per-shop per-facet status/value data. Without this the
+    # evidence_review sees required facets as UNKNOWN.
+    facet_results = [
+        {
+            "facet": cell["facet"],
+            "result_status": cell.get("result_status", cell.get("status", "unknown")),
+            "shop_id": cell.get("shop_id", ""),
+            "shop_name": cell.get("shop_name", ""),
+            "value": cell.get("value"),
+        }
+        for cell in cells
+        if isinstance(cell, dict) and cell.get("facet")
+    ]
+    if facet_results and rows:
+        # Copy open_status and coupon_status into value for verifier compat
+        for fr in facet_results:
+            if fr["facet"] == "open_status" and fr.get("value") is None:
+                for r in rows:
+                    if r.get("shop_id") == fr.get("shop_id"):
+                        fr["value"] = r.get("open_status")
+                        fr["open_status"] = r.get("open_status", "")
+                        break
     return {
         "target_shop_ids": target_ids,
         "requested_facets": ["detail", "open_status", "coupon", "distance"],
-        "facet_results": [],
+        "facet_results": facet_results,
         "evidence_items": [],
         "unknown_items": [],
         "forbidden_claims": [],
@@ -877,8 +902,17 @@ def _build_recommendation_evidence(
     plan_calls: dict[str, dict[str, Any]],
     plan_dict: dict[str, Any],
 ) -> dict[str, Any]:
-    if not recommendation_candidates:
-        recommendation_candidates = _search_result_candidates(tool_results, plan_calls)
+    search_result_candidates = _search_result_candidates(tool_results, plan_calls)
+    merged_candidates: list[Any] = []
+    seen_shop_ids: set[str] = set()
+    for candidate in (search_result_candidates or []) + (recommendation_candidates or []):
+        candidate_dict = _candidate_from_shop(candidate)
+        shop_id = str(candidate_dict.get("shop_id", "")).strip()
+        if not shop_id or shop_id in seen_shop_ids:
+            continue
+        seen_shop_ids.add(shop_id)
+        merged_candidates.append(candidate)
+    recommendation_candidates = merged_candidates
     candidates_by_shop_id: dict[str, dict[str, Any]] = {}
     for raw_candidate in recommendation_candidates:
         candidate = _candidate_from_shop(raw_candidate)
@@ -1005,7 +1039,13 @@ def _build_recommendation_evidence(
         elif tool_name == "check_open_status":
             if result_status == "ok" and isinstance(data, dict):
                 open_status = str(data.get("open_status", "unknown"))
-                candidate["open_status"] = open_status
+                current_open_status = str(candidate.get("open_status", "unknown") or "unknown").lower()
+                if current_open_status not in {"open", "closed"}:
+                    candidate["open_status"] = open_status
+                elif current_open_status == "open" and open_status == "closed":
+                    candidate["open_status_check"] = open_status
+                else:
+                    candidate["open_status"] = open_status
                 open_status_by_shop_id[shop_id] = open_status
                 evidence_items.append(
                     {
@@ -1090,7 +1130,7 @@ def _build_recommendation_evidence(
             continue
         if candidate.get("detail_failed") or shop_id in detail_failed_shop_ids:
             continue
-        if str(candidate.get("open_status", "")).lower() == "closed":
+        if str(candidate.get("open_status", "")).lower() == "closed" and str(candidate.get("open_status_check", "")).lower() != "open":
             continue
         candidate["open_status"] = open_status_by_shop_id.get(shop_id, candidate.get("open_status", "unknown"))
         if "coupon_count" not in candidate:
@@ -1143,10 +1183,97 @@ def _build_recommendation_evidence(
         if candidate_dict.get("detail_failed"):
             forbidden_claims.append(str(candidate_dict.get("shop_name", "")))
 
+    # Build facet_results from evidence_items and ranking data.
+    # Without this the evidence_review sees required facets as UNKNOWN
+    # and routes to fallback_answer instead of answer_generate.
+    facet_results: list[dict[str, Any]] = []
+    seen_facets: set[str] = set()
+    for ei in evidence_items:
+        facet = str(ei.get("facet", "") or "").strip()
+        if facet and facet not in seen_facets:
+            seen_facets.add(facet)
+            result = {
+                "facet": facet,
+                "result_status": str(ei.get("result_status", "ok")),
+                "shop_id": str(ei.get("shop_id", "") or ""),
+                "shop_name": str(ei.get("shop_name", "") or ""),
+            }
+            # Include value field so the verifier can check answer content
+            val = ei.get("value")
+            if val is not None:
+                result["value"] = val
+                # For open_status, propagate value as open_status for verifier compatibility
+                if facet == "open_status" and isinstance(val, str):
+                    result["open_status"] = val
+            facet_results.append(result)
+    # Add distance facet from ranking snapshot (distance is rarely a separate tool call)
+    for item in ranked_snapshot:
+        d_km = item.get("distance_km")
+        facet_results.append({
+            "facet": "distance",
+            "result_status": "ok" if d_km is not None else "empty",
+            "shop_id": str(item.get("shop_id", "") or ""),
+            "shop_name": str(item.get("shop_name", "") or ""),
+            "distance_km": d_km,
+            "value": d_km,
+        })
+        seen_facets.add("distance")
+    # Add rating facet from ranking snapshot
+    if "rating" not in seen_facets:
+        for item in ranked_snapshot:
+            r = item.get("rating")
+            facet_results.append({
+                "facet": "rating",
+                "result_status": "ok" if r is not None else "empty",
+                "shop_id": str(item.get("shop_id", "") or ""),
+                "shop_name": str(item.get("shop_name", "") or ""),
+                "value": r,
+            })
+            seen_facets.add("rating")
+    # Add coupon/open_status facets from ranking snapshot if evidence_items didn't cover them
+    if "coupon" not in seen_facets:
+        for item in ranked_snapshot:
+            c = item.get("coupon_count")
+            facet_results.append({
+                "facet": "coupon",
+                "result_status": "ok" if (c or 0) > 0 else "empty",
+                "shop_id": str(item.get("shop_id", "") or ""),
+                "shop_name": str(item.get("shop_name", "") or ""),
+                "value": c,
+            })
+            seen_facets.add("coupon")
+    if "open_status" not in seen_facets:
+        for item in ranked_snapshot:
+            os_val = str(item.get("open_status", "unknown"))
+            facet_results.append({
+                "facet": "open_status",
+                "result_status": "ok" if os_val in ("open", "closed") else "unknown",
+                "shop_id": str(item.get("shop_id", "") or ""),
+                "shop_name": str(item.get("shop_name", "") or ""),
+                "open_status": os_val,
+                "value": os_val,
+            })
+            seen_facets.add("open_status")
+
+    print(f"[DEBUG _build_recommendation_evidence] ranked_snapshot={len(ranked_snapshot)}, facet_results={len(facet_results)}")
+    if facet_results:
+        for fr in facet_results:
+            print(f"  [DEBUG] facet={fr.get('facet')} result_status={fr.get('result_status')}")
+    elif evidence_items:
+        print(f"  [DEBUG] NO facet_results but {len(evidence_items)} evidence_items")
+        for ei in evidence_items[:5]:
+            print(f"  [DEBUG] ei facet={ei.get('facet')} result_status={ei.get('result_status')}")
+    else:
+        print(f"  [DEBUG] NO facet_results AND no evidence_items")
+        if ranked_snapshot:
+            print(f"  [DEBUG] first ranked item: {ranked_snapshot[0]}")
+        if candidates_by_shop_id:
+            print(f"  [DEBUG] first candidate: sid={list(candidates_by_shop_id.keys())[0]}, data={list(candidates_by_shop_id.values())[0]}")
+    
     return {
         "target_shop_ids": [item["shop_id"] for item in ranked_snapshot],
         "requested_facets": ["rating", "distance", "open_status", "coupon"],
-        "facet_results": [],
+        "facet_results": facet_results,
         "evidence_items": evidence_items,
         "unknown_items": unknown_items,
         "forbidden_claims": forbidden_claims,

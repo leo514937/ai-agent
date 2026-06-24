@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+import json
+import re
 
 import pytest
 
 from ..agent import run_agent_graph
 from ..config import RECOMMENDATION_CANDIDATE_TOP_K, SEARCH_LIMIT
+from ..llm.client import _default_llm_backend, clear_llm_backend, set_llm_backend
 from ..planning import execution_plan_builder
 from ..session.store import reset_session_store
 
@@ -15,8 +18,35 @@ from ..session.store import reset_session_store
 @pytest.fixture(autouse=True)
 def _reset_store() -> None:
     reset_session_store()
+    set_llm_backend(_mock_llm_backend)
     yield
+    clear_llm_backend()
     reset_session_store()
+
+
+def _mock_llm_backend(prompt: str, system_prompt: str = "", temperature: float = 0.0, timeout_ms: int = 3000, **kwargs) -> str:
+    if "DecisionPlan" not in prompt and "DecisionPlan" not in system_prompt:
+        return _default_llm_backend(prompt, system_prompt, temperature, timeout_ms)
+
+    selected: list[str] = []
+    for text in (prompt, system_prompt):
+        match = re.search(r'- 选择的目标店面:\s*(.*)', text)
+        if match:
+            selected = re.findall(r'"shop_name":\s*"([^"]+)"', match.group(1))
+            if selected:
+                break
+        match = re.search(r'- 综合排序:\s*(.*)', text)
+        if match:
+            selected = re.findall(r'"shop_name":\s*"([^"]+)"', match.group(1))
+            if selected:
+                break
+
+    if selected:
+        items = [f"{idx}. {name}" for idx, name in enumerate(selected[:3], 1)]
+        text = "附近我推荐这3家：" + "；".join(items) + "。"
+    else:
+        text = "附近我推荐这3家。"
+    return json.dumps({"natural_response": text}, ensure_ascii=False)
 
 
 def _to_dict(value):
@@ -517,8 +547,10 @@ def test_recommendation_failure_does_not_pollute_session(monkeypatch: pytest.Mon
         raise AssertionError(f"Unexpected tool: {tool_name}")
 
     from ..engine import graph_builder
+    from ..target import candidate_resolver
 
     monkeypatch.setattr(graph_builder, "dispatch_tool_call", _dispatch)
+    monkeypatch.setattr(candidate_resolver, "dispatch_tool_call", _dispatch)
     response = run_agent_graph("附近推荐火锅", "recommendation_empty_session")
 
     assert response.debug is not None

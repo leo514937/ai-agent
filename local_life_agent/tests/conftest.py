@@ -9,11 +9,11 @@ from typing import Any
 
 import pytest
 
-# ── Force mock tool backend for all tests ──────────────────────────────
-# Tests use mock data (shop IDs like shop_sc_01), not the real DB or
-# Java API.  Override at the module level so every import path sees it.
+# ── Force runtime backend away from removed mock executor ───────────────
+# Tests that need fake tool outputs must inject them explicitly from
+# ``tests.fakes`` instead of relying on a runtime mock backend.
 import local_life_agent.config as _cfg
-_cfg.TOOL_BACKEND = "mock"
+_cfg.TOOL_BACKEND = "db"
 
 LLM_SENTINEL_PREFIX = "LLM_SENTINEL_"
 
@@ -80,7 +80,7 @@ class SpyRealLLMBackend:
         self.requests.append(request)
         self.prompts.append(prompt)
 
-        if "## DecisionPlan" in prompt:
+        if "## DecisionPlan" in prompt or "DecisionPlan 事实数据" in prompt or "natural_response" in prompt:
             response = self._verbalizer_response(prompt, timeout_ms, kwargs)
         elif "# Top Intent Router" in prompt or "# 顶层意图路由" in prompt:
             response = self._top_intent_response(prompt, timeout_ms, kwargs)
@@ -268,7 +268,12 @@ class SpyRealLLMBackend:
         uncertainties = self._extract_json_list(prompt, "- 不确定项/无法确认项:")
         main_recommendation = self._extract_json_object(prompt, "- 主推荐店:")
 
-        shop_names = [str(item.get("shop_name", "")).strip() for item in ranking or selected if str(item.get("shop_name", "")).strip()]
+        source_items = ranking or selected
+        shop_names = [
+            str(item.get("shop_name", "")).strip()
+            for item in source_items
+            if isinstance(item, dict) and str(item.get("shop_name", "")).strip()
+        ]
         if answer_type == "comparison" and len(shop_names) >= 2:
             text = f"综合当前已知信息，我会优先推荐{shop_names[0]}，其次是{shop_names[1]}。"
         elif answer_type == "recommendation" and shop_names:
@@ -276,7 +281,7 @@ class SpyRealLLMBackend:
             text = f"附近这几家更值得优先看：{preview}。"
         elif answer_type == "single_shop":
             target_name = ""
-            if selected:
+            if selected and isinstance(selected[0], dict):
                 target_name = str(selected[0].get("shop_name", "")).strip()
             if not target_name and main_recommendation:
                 target_name = str(main_recommendation.get("shop_name", "")).strip()

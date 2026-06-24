@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Generator
 from typing import Any
 
 import pytest
@@ -14,7 +15,7 @@ from local_life_agent.engine import graph_builder
 from local_life_agent.llm.client import clear_llm_backend, set_llm_backend
 from local_life_agent.session.store import get_session_store, reset_session_store
 from local_life_agent.target.reference_resolver import resolve_references
-from local_life_agent.tools.mock_tools import (
+from local_life_agent.tests.fakes.mock_tools import (
     check_open_status,
     get_coupon_list,
     get_distance_eta,
@@ -126,7 +127,7 @@ def _resolve_shop_for_e2e(query: str, location: dict[str, Any] | None = None, se
 
 
 @pytest.fixture(autouse=True)
-def _setup(monkeypatch: pytest.MonkeyPatch) -> None:
+def _setup(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     reset_session_store()
     monkeypatch.setattr(config, "DEBUG_ENABLED", True)
     monkeypatch.setattr(config, "ENABLE_LLM_VERBALIZER", True)
@@ -195,6 +196,7 @@ def test_recommendation_main_path_uses_llm_end_to_end(
 
     frame = _assert_main_llm_metadata(response)
     decision_plan = _build_decision_artifact(response)
+    assert response.debug is not None
     ranked = response.debug.evidence_pack.get("ranking_snapshot", {}).get("ranked") or []
 
     assert response.debug.answer_source == "llm_verbalizer"
@@ -219,6 +221,7 @@ def test_comparison_main_path_uses_llm_end_to_end(
 
     _assert_main_llm_metadata(response)
     decision_plan = _build_decision_artifact(response)
+    assert response.debug is not None
     matrix = response.debug.evidence_pack.get("comparison_matrix", {})
     overall_ranked = matrix.get("overall_ranked") or []
 
@@ -241,6 +244,7 @@ def test_ordinal_reference_prefers_semantic_frame(
     response = run_agent_graph("第一家有券吗", "e2e_ordinal")
 
     frame = _assert_main_llm_metadata(response)
+    assert response.debug is not None
     resolved = resolve_references("第一家有券吗", response.debug.session_state_before, frame)
     recommendation_list = response.debug.session_state_before.get("last_recommendation_list") or []
 
@@ -250,7 +254,7 @@ def test_ordinal_reference_prefers_semantic_frame(
     assert resolved.get("target") is not None
     assert recommendation_list
     assert resolved["target"]["shop_id"] == recommendation_list[0]["shop_id"]
-    assert response.debug.answer_source in {"llm_verbalizer", "template", "template_fallback"}
+    assert response.debug.answer_source in {"llm_verbalizer", "template", "fallback"}
     assert spy.call_count >= 3
 
 
@@ -265,6 +269,7 @@ def test_recommendation_follow_up_stays_on_llm_main_path(
 
     frame = _assert_main_llm_metadata(response)
     decision_plan = _build_decision_artifact(response)
+    assert response.debug is not None
 
     assert frame.get("task_type") == "recommendation"
     assert frame.get("primary_task") == "recommendation_refine"
@@ -285,6 +290,7 @@ def test_deictic_comparison_clarifies_missing_current_shop(
     response = run_agent_graph("这家和海底捞比呢？", "e2e_deictic")
 
     frame = _assert_main_llm_metadata(response)
+    assert response.debug is not None
     trace = response.debug.execution_trace
 
     assert frame.get("task_type") == "comparison"

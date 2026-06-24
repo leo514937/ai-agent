@@ -18,7 +18,7 @@ from pydantic import ValidationError
 
 from .. import config
 from ..config import MOCK_LOCATION, TOOL_DEFAULT_TIMEOUT_MS
-from ..domain.candidate import CandidateSet, CandidateSource, CandidateSpec, LocalLifeGoalDraft
+from ..domain.candidate import CandidateSet, CandidateSource, CandidateSpec, CandidateStatus, GoalType, LocalLifeGoalDraft, ResolvedCandidate
 from ..domain.enums import TaskType, ToolResultStatus, TopIntent
 from ..domain.graph_state import GraphState
 from ..domain.schemas import (
@@ -36,7 +36,6 @@ from ..domain.schemas import (
     ToolResult,
 )
 from ..domain.state import SessionState, SessionWriteDirective
-from ..answer.answer_plan_builder import build_answer_plan
 from ..answer.evidence_builder import build_evidence
 from ..answer.generator import generate_answer
 from ..planning.state_update_planner import plan_state_update
@@ -48,9 +47,6 @@ from ..input.normalizer import normalize_text as input_normalize_text
 from ..input.receiver import receive_input as assemble_turn_input
 from ..input.validator import validate_basic_input
 from ..planning.plan_validator import ExecutionPlanValidator
-from ..planning.tool_plan_adapter import build_execution_plan_with_tool_planner
-from ..planning.facet_planner import plan_facets
-from ..planning.task_router import route_task
 from ..semantic.frame_validator import validate_frame
 from ..semantic.intent_parser import parse_semantic_frame, parse_top_intent
 from ..llm.client import call_llm
@@ -65,9 +61,10 @@ from ..planning.candidate_review import review_candidate_set
 from ..planning.review_policy import NextAction
 from ..planning.evidence_planner import plan_evidence as plan_evidence_from_candidates
 from ..planning.evidence_review import review_evidence as review_evidence_sufficiency
+from ..planning.execution_plan_builder import build_recommendation_execution_plan
 from ..domain.evidence import EvidenceReviewResult
 from ..domain.goal import GoalPlan, GoalReviewResult
-from ..domain.decision import DecisionPlan as P2DecisionPlan, DecisionReviewResult
+from ..domain.decision import DecisionPlan as P2DecisionPlan, DecisionReviewResult, decision_to_answer_plan
 from ..planning.goal_planner import plan_goal as p2_plan_goal
 from ..planning.goal_review import review_goal as p2_review_goal
 from ..planning.decision_planner import plan_decision as p2_plan_decision
@@ -104,15 +101,11 @@ _TRACE_STAGE_MAP: dict[str, str] = {
     "context_recovery": "context_recovery",
     "target_resolve": "shop_resolver",
     "clarify_decide": "reference_resolver",
-    "task_plan": "task_router",
     "evidence_planner": "execution_plan",
-    "facet_plan": "execution_plan",
-    "comparison_planner": "candidate_decision_plan",
     "evidence_review": "evidence_review",
     "plan_validator": "execution_plan",
     "tool_execute": "tool_call",
     "evidence_build": "evidence_builder",
-    "answer_plan_build": "candidate_evidence_collector",
     "answer_generate": "answer_generate",
     "answer_verify": "answer_verify",
     "rewrite": "rewrite",
@@ -334,7 +327,8 @@ def _instrument_handler(node_name: str, handler: GraphNodeFunc) -> GraphNodeFunc
 def _resolved_shop_ids_from_state(state: GraphState) -> set[str]:
     """Collect legitimate resolved shop IDs from the current turn state."""
     sf = state.get("semantic_frame")
-    sf_task_type = getattr(sf, "task_type", None) if sf is not None else None
+    sf_dict = _to_dict(sf)
+    sf_task_type = sf_dict.get("task_type") or getattr(sf, "task_type", None) if sf is not None else None
     resolved_ids: set[str] = set()
     if sf_task_type == TaskType.recommendation or sf_task_type == TaskType.recommendation.value:
         for item in state.get("recommendation_candidates", []) or []:
@@ -342,6 +336,14 @@ def _resolved_shop_ids_from_state(state: GraphState) -> set[str]:
             sid = str(data.get("shop_id", "")).strip()
             if sid:
                 resolved_ids.add(sid)
+        candidate_set = state.get("candidate_set") or state.get("effective_candidate_set")
+        if candidate_set is not None:
+            candidate_data = _to_dict(candidate_set)
+            for item in candidate_data.get("candidates", []) or []:
+                data = _to_dict(item)
+                sid = str(data.get("shop_id", "")).strip()
+                if sid:
+                    resolved_ids.add(sid)
     for source in (state.get("resolved_target"), state.get("resolve_shop_result")):
         if source is None:
             continue
@@ -986,39 +988,88 @@ def _h_goal_review(state: GraphState) -> dict:
 # §1 input:  merchant_mentions, reference_mentions, session_state_before
 # §1 output: resolve_shop_result
 
-# Feature flag: when enabled, the CandidateSet path is tried first for eligible frames.
-ENABLE_CANDIDATE_SET_REVIEW = True
-
-
 def _h_target_resolve(state: GraphState) -> dict:
-    """Thin dispatch: CandidateSet path (if eligible) → legacy path (fallback)."""
-    # ── 1. CandidateSet path (when semantic_frame has candidate_source) ──────────
-    if ENABLE_CANDIDATE_SET_REVIEW:
-        sf = state.get("semantic_frame")
-        sf_source = getattr(sf, "candidate_source", None) if sf is not None else None
-        if sf_source is not None and sf_source:
-            return _h_target_resolve_candidate_set(state, sf)
-
-    # ── 2. Legacy path ────────────────────────────────────────────────────────────
-    return _h_target_resolve_legacy(state)
+    sf = state.get("semantic_frame")
+    return _h_target_resolve_candidate_set(state, sf)
 
 
 def _h_target_resolve_candidate_set(state: GraphState, sf: Any) -> dict:
     """CandidateSet resolution path — builds goal → spec → resolver → review → route."""
     resolver = CandidateResolver()
+    session_snapshot = state.get("session_state_before") or state.get("session_state") or SessionState()
+    if hasattr(session_snapshot, "model_copy"):
+        session_snapshot = session_snapshot.model_copy(deep=True)
+
+    pre_resolved_target = state.get("resolved_target")
+    if pre_resolved_target is not None:
+        resolved_dict = _to_dict(pre_resolved_target)
+        if resolved_dict.get("status") == "RESOLVED":
+            resolved_shop = _to_dict(resolved_dict.get("resolved_shop") or resolved_dict.get("shop") or {})
+            candidate = ResolvedCandidate(
+                shop_id=str(resolved_shop.get("shop_id", "") or "").strip(),
+                shop_name=str(resolved_shop.get("shop_name", "") or "").strip(),
+                source=CandidateSource.CONTEXT,
+                confidence=float(resolved_dict.get("confidence", 1.0) or 1.0),
+                raw=resolved_shop,
+            )
+            candidate_set = CandidateSet(
+                status=CandidateStatus.RESOLVED,
+                source=CandidateSource.CONTEXT,
+                candidates=[candidate],
+                requested_count=1,
+                min_required=1,
+                max_allowed=1,
+            )
+            result = {
+                "resolve_shop_result": pre_resolved_target,
+                "resolved_target": pre_resolved_target,
+                "session_state_after": session_snapshot,
+                "candidate_set": candidate_set,
+                "effective_candidate_set": candidate_set,
+                "recommendation_candidates": [candidate.model_dump()],
+                "review_results": {
+                    "candidate_review": {
+                        "stage": "candidate_review",
+                        "status": "enough",
+                        "next_action": "FINISH",
+                        "reason": "resolved_target_short_circuit",
+                    }
+                },
+                "reference_resolution_source": str(state.get("reference_resolution_source") or "context_recovered"),
+                **_log(
+                    state,
+                    "target_resolve",
+                    status="RESOLVED",
+                    target_resolve_mode="resolved_target",
+                    candidate_source=str(state.get("candidate_source_origin") or "context"),
+                    candidate_count=1,
+                    candidate_review_status="resolved_target",
+                    candidate_review_next_action="FINISH",
+                    next_action="FINISH",
+                ),
+            }
+            return result
 
     # 1. Get goal draft (prefer pre-built from goal_review, else build from frame)
     goal = state.get("local_life_goal_draft")
     if goal is None:
         goal = build_local_life_goal_draft(sf, state)
     if goal is None or (hasattr(goal, "goal_type") and (goal.goal_type is None or goal.goal_type.value == "unsupported")):
-        return _h_target_resolve_legacy(state)
+        return {
+            "resolve_shop_result": ResolveShopResult(status="NOT_FOUND", confidence=0.0, reason="missing_goal_draft"),
+            "final_response": "暂时无法确认目标店铺，请补充更明确的店名或筛选条件。",
+            "session_state_after": session_snapshot,
+            **_log(state, "target_resolve", status="NOT_FOUND", reason="missing_goal_draft"),
+        }
 
     # 2. Build candidate spec
     spec = build_candidate_spec(goal, sf, state)
 
     # 3. Resolve candidates
     candidate_set = resolver.resolve(goal, spec, state)
+    candidate_set.requested_count = goal.requested_count
+    candidate_set.min_required = goal.min_required
+    candidate_set.max_allowed = goal.max_allowed
 
     # 4. Review candidates
     review = review_candidate_set(goal, candidate_set)
@@ -1028,6 +1079,11 @@ def _h_target_resolve_candidate_set(state: GraphState, sf: Any) -> dict:
         "local_life_goal_draft": goal,
         "candidate_spec": spec,
         "candidate_set": candidate_set,
+        "effective_candidate_set": candidate_set,
+        "recommendation_candidates": [
+            c.model_dump() if hasattr(c, "model_dump") else _to_dict(c)
+            for c in (candidate_set.candidates or [])
+        ],
         "review_results": {"candidate_review": review},
     }
 
@@ -1059,10 +1115,17 @@ def _h_target_resolve_candidate_set(state: GraphState, sf: Any) -> dict:
             resolved = ResolveShopResult(status="NOT_FOUND", confidence=0.0, reason="candidate_set_empty")
             payload["resolve_shop_result"] = resolved
         payload["reference_resolution_source"] = "candidate_set"
-        payload.update(_log(state, "target_resolve", status="RESOLVED",
-                            source=candidate_set.source.value,
-                            next_action="FINISH",
-                            candidates=len(candidates)))
+        payload.update(_log(
+            state,
+            "target_resolve",
+            status="RESOLVED",
+            target_resolve_mode="candidate_set",
+            candidate_source=candidate_set.source.value,
+            candidate_count=len(candidates),
+            candidate_review_status=str(review.status),
+            candidate_review_next_action=str(review.next_action),
+            next_action="FINISH",
+        ))
         return payload
 
     if review.next_action == NextAction.CLARIFY:
@@ -1082,470 +1145,41 @@ def _h_target_resolve_candidate_set(state: GraphState, sf: Any) -> dict:
         payload["resolve_shop_result"] = resolved
         payload["pending_clarification"] = pending
         payload["final_response"] = format_pending_prompt(pending)
-        payload.update(_log(state, "target_resolve", status="NEED_CLARIFICATION",
-                            next_action="CLARIFY", reason=reason))
+        payload["session_state_after"] = session_snapshot
+        payload.update(_log(
+            state,
+            "target_resolve",
+            status="NEED_CLARIFICATION",
+            target_resolve_mode="candidate_set",
+            candidate_source=candidate_set.source.value,
+            candidate_count=len(candidate_set.candidates or []),
+            candidate_review_status=str(review.status),
+            candidate_review_next_action=str(review.next_action),
+            next_action="CLARIFY",
+            reason=reason,
+        ))
         return payload
 
-    # FALLBACK
     resolved = ResolveShopResult(status="NOT_FOUND", confidence=0.0,
-                                  reason=review.reason or "candidate_set_fallback")
+                                  reason=review.reason or "candidate_set_unsupported")
     payload["resolve_shop_result"] = resolved
     payload["final_response"] = "暂时无法完成这个请求，请换个说法试试。"
     payload["candidate_source_origin"] = candidate_set.source.value
-    payload["fallback_reason"] = review.reason or "candidate_set_fallback"
-    payload.update(_log(state, "target_resolve", status="NOT_FOUND",
-                        next_action="FALLBACK", reason=review.reason))
-    return payload
-
-
-def _h_target_resolve_legacy(state: GraphState) -> dict:
-    sf = state.get("semantic_frame")
-    sf_task_type = getattr(sf, "task_type", None) if sf is not None else None
-    comparison_requested = sf_task_type == TaskType.comparison or sf_task_type == TaskType.comparison.value
-    if (sf_task_type == TaskType.recommendation or sf_task_type == TaskType.recommendation.value) and not comparison_requested:
-        synthetic = ResolveShopResult(
-            status="RESOLVED",
-            resolved_shop=ShopRef(shop_id="recommendation", shop_name="????"),
-            confidence=1.0,
-            reason="recommendation_flow",
-        )
-        return {
-            "resolve_shop_result": synthetic,
-            "resolved_target": synthetic,
-            "reference_resolution_source": "semantic_frame",
-            "task_type_source": "target_resolve_override",
-            **_log(state, "target_resolve", status="RESOLVED", query="recommendation_flow"),
-        }
-
-    # ★ Detect misclassified recommendation follow-up:
-    #   Query with no explicit shops (e.g. "便宜一点的呢") after a previous
-    #   recommendation → route as recommendation_refine regardless of LLM
-    #   task_type (which may be comparison, clarification_reply, etc.).
-    frame_dict = _to_dict(sf)
-    explicit_mentions = [str(item).strip() for item in (frame_dict.get("merchant_mentions") or []) if str(item).strip()]
-    has_structured_refs = bool(frame_dict.get("ordinal_references") or frame_dict.get("deictic_references"))
-    if not explicit_mentions and not has_structured_refs:
-        session = state.get("session_state_before") or state.get("session_state") or {}
-        if hasattr(session, "last_recommendation_list"):
-            prev_recs = list(session.last_recommendation_list)  # type: ignore[union-attr]
-        elif isinstance(session, dict):
-            prev_recs = list(session.get("last_recommendation_list") or [])
-        else:
-            prev_recs = []
-        if prev_recs:
-            synthetic = ResolveShopResult(
-                status="RESOLVED",
-                resolved_shop=ShopRef(shop_id="recommendation", shop_name="????"),
-                confidence=1.0,
-                reason="recommendation_refine",
-            )
-            return {
-                "resolve_shop_result": synthetic,
-                "resolved_target": synthetic,
-                "task_type": TaskType.recommendation.value,
-                "reference_resolution_source": "semantic_frame",
-                "task_type_source": "target_resolve_override",
-                **_log(state, "target_resolve", status="RESOLVED", query="recommendation_refine"),
-            }
-
-    if comparison_requested:
-        if len(explicit_mentions) >= 2 and not has_structured_refs:
-            direct_targets: list[dict[str, Any]] = []
-            seen: set[str] = set()
-            for mention in explicit_mentions:
-                raw = resolve_shop(mention, location=MOCK_LOCATION, session_shop_ids=_session_shop_ids(state))
-                payload = _unwrap_resolve_shop_result(raw)
-                status = str(payload.get("status", "NOT_FOUND") or "NOT_FOUND")
-                shop: dict[str, Any] | None = None
-                if status == "RESOLVED":
-                    shop = payload.get("shop") or {}
-                elif status in ("AMBIGUOUS", "LOW_CONFIDENCE"):
-                    candidates = payload.get("candidates", []) or []
-                    if candidates:
-                        candidate = candidates[0]
-                        candidate = candidate if isinstance(candidate, dict) else {}
-                        shop = {
-                            "shop_id": str(candidate.get("shop_id", "")).strip(),
-                            "shop_name": str(candidate.get("shop_name", "")).strip(),
-                        }
-                if hasattr(shop, "model_dump"):
-                    shop = shop.model_dump()
-                if isinstance(shop, dict):
-                    sid = str(shop.get("shop_id", "")).strip()
-                    sname = str(shop.get("shop_name", "")).strip()
-                    key = sid or sname
-                    if key and key not in seen and (sid or sname):
-                        seen.add(key)
-                        direct_targets.append({"shop_id": sid, "shop_name": sname, "source": "explicit_shop", "source_ref": mention})
-
-            if len(direct_targets) >= 2:
-                first_shop = direct_targets[0]
-                resolved_result = ResolveShopResult(
-                    status="RESOLVED",
-                    resolved_shop=ShopRef(shop_id=str(first_shop.get("shop_id", "")), shop_name=str(first_shop.get("shop_name", ""))),
-                    confidence=1.0,
-                    reason="comparison_targets_resolved",
-                )
-                simple_targets = [{"shop_id": item.get("shop_id", ""), "shop_name": item.get("shop_name", "")} for item in direct_targets]
-                return {
-                    "resolve_shop_result": resolved_result,
-                    "resolved_target": resolved_result,
-                    "comparison_targets": simple_targets,
-                    "reference_resolution_source": "semantic_frame",
-                    **_log(state, "target_resolve", status="RESOLVED", query="comparison_flow"),
-                }
-
-        resolved_targets: list[dict[str, Any]] = []
-
-        def _append_target(target: Any) -> None:
-            data = _to_dict(target)
-            resolved_shop = data.get("resolved_shop") or data.get("shop") or data
-            if hasattr(resolved_shop, "model_dump"):
-                resolved_shop = resolved_shop.model_dump()
-            if not isinstance(resolved_shop, dict):
-                return
-            shop_id = str(resolved_shop.get("shop_id", "")).strip()
-            shop_name = str(resolved_shop.get("shop_name", "")).strip()
-            if not shop_id and not shop_name:
-                return
-            dedupe_key = shop_id or shop_name
-            if any((str(item.get("shop_id", "")).strip() or str(item.get("shop_name", "")).strip()) == dedupe_key for item in resolved_targets):
-                return
-            resolved_targets.append(
-                {
-                    "shop_id": shop_id,
-                    "shop_name": shop_name,
-                    "source": str(data.get("source", "")),
-                    "source_ref": str(data.get("source_ref", "")),
-                }
-            )
-
-        for item in state.get("comparison_targets", []) or []:
-            _append_target(item)
-
-        comparison_resolution = _to_dict(state.get("comparison_target_resolution"))
-        for item in comparison_resolution.get("targets", []) or []:
-            _append_target(item)
-
-        existing_target = state.get("resolved_target")
-        if existing_target is not None and _to_dict(existing_target).get("status") == "RESOLVED":
-            _append_target(_to_dict(existing_target).get("resolved_shop") or {})
-
-        resolution_status = str(comparison_resolution.get("status", "") or "")
-        if resolution_status == "TOO_MANY":
-            reason = str(comparison_resolution.get("reason", "comparison_too_many_shops") or "comparison_too_many_shops")
-            final_response = comparison_resolution.get("prompt") or _comparison_reason_response(reason)
-            return {
-                "resolve_shop_result": ResolveShopResult(status="NOT_FOUND", confidence=0.0, reason=reason),
-                "final_response": final_response,
-                "comparison_target_resolution": comparison_resolution,
-                **_log(state, "target_resolve", status="TOO_MANY", query="comparison"),
-            }
-        if resolution_status == "NEED_CLARIFICATION":
-            ambiguous_target = comparison_resolution.get("ambiguous_target") or {}
-            ambiguous_ref = ""
-            if isinstance(ambiguous_target, dict):
-                ambiguous_ref = str(ambiguous_target.get("reference", "") or "").strip()
-
-            if ambiguous_ref == "deictic" or not comparison_resolution.get("unresolved_targets"):
-                reason = str(comparison_resolution.get("reason", "comparison_requires_at_least_two_shops") or "comparison_requires_at_least_two_shops")
-                if ambiguous_ref == "deictic":
-                    reco_list = []
-                    session = state.get("session_state_before") or state.get("session_state") or {}
-                    if session:
-                        session_dict = _to_dict(session)
-                        reco_list = session_dict.get("last_recommendation_list", []) or []
-                    
-                    pending_candidates = []
-                    candidates = []
-                    for item in reco_list:
-                        item = _to_dict(item)
-                        shop_id = item.get("shop_id")
-                        shop_name = item.get("shop_name")
-                        address = item.get("address", "")
-                        if shop_id and shop_name:
-                            pending_candidates.append({
-                                "shop_id": shop_id,
-                                "shop_name": shop_name,
-                                "address": address
-                            })
-                            candidates.append(ShopCandidate(shop=ShopRef(shop_id=shop_id, shop_name=shop_name)))
-                    
-                    if candidates:
-                        resolved_result = ResolveShopResult(
-                            status="AMBIGUOUS",
-                            candidates=candidates,
-                            confidence=0.5,
-                            reason="pronoun_without_current_shop",
-                        )
-                    else:
-                        resolved_result = ResolveShopResult(
-                            status="NOT_FOUND",
-                            confidence=0.0,
-                            reason="comparison_requires_at_least_two_shops",
-                        )
-                    pending = build_pending_clarification(
-                        original_text=str(state.get("raw_text", "") or ""),
-                        original_semantic_frame=sf.model_dump(mode="json") if hasattr(sf, "model_dump") else _session_state_dict(sf),
-                        original_task_type=(getattr(sf, "task_type", "") if getattr(sf, "task_type", None) is not None else state.get("task_type", "")),
-                        candidate_targets=pending_candidates,
-                        reason=resolved_result.reason,
-                        source_node="target_resolve",
-                        already_resolved_targets=resolved_targets,
-                        ambiguous_target_slot=str(ambiguous_target.get("source_ref", "") or "这家").strip(),
-                    )
-                    prompt = format_pending_prompt(pending)
-                    return {
-                        "resolve_shop_result": resolved_result,
-                        "pending_clarification": pending,
-                        "final_response": prompt,
-                        "reference_resolution_source": "semantic_frame",
-                        **_log(state, "target_resolve", status="NEED_CLARIFICATION", query="comparison"),
-                    }
-                else:
-                    final_response = comparison_resolution.get("prompt") or _comparison_reason_response(reason)
-                    return {
-                        "resolve_shop_result": ResolveShopResult(status="NOT_FOUND", confidence=0.0, reason=reason),
-                        "final_response": final_response,
-                        "comparison_target_resolution": comparison_resolution,
-                        "reference_resolution_source": "semantic_frame",
-                        **_log(state, "target_resolve", status="NEED_CLARIFICATION", query="comparison"),
-                    }
-
-        unresolved_targets = list(comparison_resolution.get("unresolved_targets", []) or [])
-        if not unresolved_targets and len(resolved_targets) < 2:
-            unresolved_targets = [{"query": query, "source_ref": query, "reference": "explicit"} for query in _comparison_structured_queries(sf)]
-
-        for item in unresolved_targets:
-            query = str(_to_dict(item).get("query", "") or "").strip()
-            source_ref = str(_to_dict(item).get("source_ref", "") or query).strip()
-            if not query:
-                continue
-            raw = resolve_shop(query, location=MOCK_LOCATION, session_shop_ids=_session_shop_ids(state))
-            payload = _unwrap_resolve_shop_result(raw)
-            status = payload.get("status", "NOT_FOUND")
-            if status == "RESOLVED":
-                shop = payload.get("shop") or {}
-                if hasattr(shop, "model_dump"):
-                    shop = shop.model_dump()
-                if isinstance(shop, dict):
-                    _append_target(
-                        {
-                            "shop_id": str(shop.get("shop_id", "")),
-                            "shop_name": str(shop.get("shop_name", "")),
-                            "source": "explicit_shop",
-                            "source_ref": source_ref,
-                        }
-                    )
-                continue
-            if status in ("AMBIGUOUS", "LOW_CONFIDENCE"):
-                frame_dict = _to_dict(sf)
-                explicit_compare_only = (
-                    comparison_requested
-                    and not (frame_dict.get("ordinal_references") or frame_dict.get("deictic_references"))
-                    and len(frame_dict.get("merchant_mentions") or []) >= 2
-                )
-                if explicit_compare_only and payload.get("candidates"):
-                    candidate = payload.get("candidates", [])[0] or {}
-                    if hasattr(candidate, "model_dump"):
-                        candidate = candidate.model_dump()
-                    shop_ref = candidate.get("shop") or {}
-                    if hasattr(shop_ref, "model_dump"):
-                        shop_ref = shop_ref.model_dump()
-                    shop_id = str(candidate.get("shop_id") or (shop_ref.get("shop_id", "") if isinstance(shop_ref, dict) else "")).strip()
-                    shop_name = str(candidate.get("shop_name") or (shop_ref.get("shop_name", "") if isinstance(shop_ref, dict) else "")).strip()
-                    if shop_id and shop_name:
-                        _append_target(
-                            {
-                                "shop_id": shop_id,
-                                "shop_name": shop_name,
-                                "source": "ambiguous_explicit_shop",
-                                "source_ref": source_ref,
-                            }
-                        )
-                        continue
-                candidates = []
-                pending_candidates = []
-                for candidate in payload.get("candidates", []):
-                    candidate = candidate if isinstance(candidate, dict) else {}
-                    shop_ref = candidate.get("shop") or {}
-                    if hasattr(shop_ref, "model_dump"):
-                        shop_ref = shop_ref.model_dump()
-                    shop_id = candidate.get("shop_id") or (shop_ref.get("shop_id", "") if isinstance(shop_ref, dict) else "")
-                    shop_name = candidate.get("shop_name") or (shop_ref.get("shop_name", "") if isinstance(shop_ref, dict) else "")
-                    address = candidate.get("address") or (shop_ref.get("address", "") if isinstance(shop_ref, dict) else "")
-                    candidates.append(ShopCandidate(shop=ShopRef(shop_id=shop_id, shop_name=shop_name)))
-                    if shop_id and shop_name:
-                        pending_candidates.append({"shop_id": shop_id, "shop_name": shop_name, "address": address})
-                resolved_result = ResolveShopResult(
-                    status=status,
-                    candidates=candidates,
-                    confidence=float(payload.get("confidence", 0.0)),
-                    reason="ambiguous_shop" if status == "AMBIGUOUS" else "low_confidence_shop",
-                )
-                pending = build_pending_clarification(
-                    original_text=str(state.get("raw_text", "") or ""),
-                    original_semantic_frame=sf.model_dump(mode="json") if hasattr(sf, "model_dump") else _session_state_dict(sf),
-                    original_task_type=(getattr(sf, "task_type", "") if getattr(sf, "task_type", None) is not None else state.get("task_type", "")),
-                    candidate_targets=pending_candidates,
-                    reason=resolved_result.reason,
-                    source_node="target_resolve",
-                    already_resolved_targets=resolved_targets,
-                    ambiguous_target_slot=source_ref,
-                )
-                prompt = format_pending_prompt(pending)
-                return {
-                    "resolve_shop_result": resolved_result,
-                    "pending_clarification": pending,
-                    "final_response": prompt,
-                    **_log(state, "target_resolve", status="AMBIGUOUS", query=query),
-                }
-
-        if len(resolved_targets) > config.COMPARISON_MAX_SHOP_LIMIT:
-            final_response = _comparison_reason_response("comparison_too_many_shops")
-            return {
-                "resolve_shop_result": ResolveShopResult(status="NOT_FOUND", confidence=0.0, reason="comparison_too_many_shops"),
-                "final_response": final_response,
-                **_log(state, "target_resolve", status="TOO_MANY", query="comparison"),
-            }
-        if len(resolved_targets) < 2:
-            final_response = _comparison_reason_response("comparison_requires_at_least_two_shops")
-            return {
-                "resolve_shop_result": ResolveShopResult(status="NOT_FOUND", confidence=0.0, reason="comparison_requires_at_least_two_shops"),
-                "final_response": final_response,
-                **_log(state, "target_resolve", status="NEED_CLARIFICATION", query="comparison"),
-            }
-
-        first_shop = resolved_targets[0]
-        resolved_result = ResolveShopResult(
-            status="RESOLVED",
-            resolved_shop=ShopRef(shop_id=str(first_shop.get("shop_id", "")), shop_name=str(first_shop.get("shop_name", ""))),
-            confidence=1.0,
-            reason="comparison_targets_resolved",
-        )
-        simple_targets = [{"shop_id": item.get("shop_id", ""), "shop_name": item.get("shop_name", "")} for item in resolved_targets]
-        return {
-            "resolve_shop_result": resolved_result,
-            "resolved_target": resolved_result,
-            "comparison_targets": simple_targets,
-            "reference_resolution_source": "semantic_frame",
-            **_log(state, "target_resolve", status="RESOLVED", query="comparison_flow"),
-        }
-
-    existing_target = state.get("resolved_target")
-    if existing_target is not None:
-        existing_dict = _session_state_dict(existing_target)
-        if existing_dict.get("status") == "RESOLVED":
-            return {
-                "resolve_shop_result": existing_target,
-                "resolved_target": existing_target,
-                "reference_resolution_source": "semantic_frame",
-                **_log(state, "target_resolve", status="RESOLVED", query="context_recovered"),
-            }
-
-    sf = state.get("semantic_frame")
-    mentions = []
-    if sf is not None:
-        mentions = list(getattr(sf, "merchant_mentions", []) or [])
-    query = mentions[0] if mentions else ""
-    if not query:
-        return {
-            "resolve_shop_result": ResolveShopResult(
-                status="NOT_FOUND",
-                confidence=0.0,
-                reason="missing_shop_name",
-            ),
-            "final_response": "请提供完整店名。",
-            **_log(state, "target_resolve", status="NOT_FOUND", query=query),
-        }
-    raw = resolve_shop(query, location=MOCK_LOCATION, session_shop_ids=_session_shop_ids(state))
-    payload = _unwrap_resolve_shop_result(raw)
-    status = payload.get("status", "NOT_FOUND")
-    if status == "RESOLVED":
-        shop = payload.get("shop") or {}
-        if hasattr(shop, "model_dump"):
-            shop = shop.model_dump()
-        resolved_result = ResolveShopResult(
-            status="RESOLVED",
-            resolved_shop=ShopRef(
-                shop_id=shop.get("shop_id", ""),
-                shop_name=shop.get("shop_name", ""),
-            ),
-            confidence=float(payload.get("confidence", 0.0)),
-            reason="resolved_by_target_resolve",
-        )
-        return {
-            "resolve_shop_result": resolved_result,
-            "resolved_target": resolved_result,
-            "reference_resolution_source": str(payload.get("resolution_source", "") or ""),
-            **_log(state, "target_resolve", status="RESOLVED", query=query),
-        }
-
-    if status in ("AMBIGUOUS", "LOW_CONFIDENCE"):
-        candidates = []
-        pending_candidates = []
-        for candidate in payload.get("candidates", []):
-            candidate = candidate if isinstance(candidate, dict) else {}
-            shop_ref = candidate.get("shop") or {}
-            if hasattr(shop_ref, "model_dump"):
-                shop_ref = shop_ref.model_dump()
-            shop_id = candidate.get("shop_id") or (shop_ref.get("shop_id", "") if isinstance(shop_ref, dict) else "")
-            shop_name = candidate.get("shop_name") or (shop_ref.get("shop_name", "") if isinstance(shop_ref, dict) else "")
-            address = candidate.get("address") or (shop_ref.get("address", "") if isinstance(shop_ref, dict) else "")
-            candidates.append(
-                ShopCandidate(
-                    shop=ShopRef(
-                        shop_id=shop_id,
-                        shop_name=shop_name,
-                    )
-                )
-            )
-            if shop_id and shop_name:
-                pending_candidates.append(
-                    {
-                        "shop_id": shop_id,
-                        "shop_name": shop_name,
-                        "address": address,
-                    }
-                )
-
-        resolved_result = ResolveShopResult(
-            status=status,
-            candidates=candidates,
-            confidence=float(payload.get("confidence", 0.0)),
-            reason="ambiguous_shop" if status == "AMBIGUOUS" else "low_confidence_shop",
-        )
-        pending = build_pending_clarification(
-            original_text=str(state.get("raw_text", "") or ""),
-            original_semantic_frame=sf.model_dump(mode="json") if hasattr(sf, "model_dump") else _session_state_dict(sf),
-            original_task_type=(
-                getattr(sf, "task_type", "")
-                if getattr(sf, "task_type", None) is not None
-                else state.get("task_type", "")
-            ),
-            candidate_targets=pending_candidates,
-            reason=resolved_result.reason,
-            source_node="target_resolve",
-        )
-        prompt = format_pending_prompt(pending)
-        return {
-            "resolve_shop_result": resolved_result,
-            "pending_clarification": pending,
-            "final_response": prompt,
-            "reference_resolution_source": str(payload.get("resolution_source", "") or ""),
-            **_log(state, "target_resolve", status="AMBIGUOUS", query=query),
-        }
-
-    resolved_result = ResolveShopResult(
+    payload["fallback_reason"] = review.reason or "candidate_set_unsupported"
+    payload["session_state_after"] = session_snapshot
+    payload.update(_log(
+        state,
+        "target_resolve",
         status="NOT_FOUND",
-        confidence=0.0,
-        reason=payload.get("error_code", "SHOP_NOT_FOUND") or "SHOP_NOT_FOUND",
-    )
-    return {
-        "resolve_shop_result": resolved_result,
-        "final_response": "没有找到这家店，请提供完整店名。",
-        **_log(state, "target_resolve", status="NOT_FOUND", query=query),
-    }
+        target_resolve_mode="candidate_set",
+        candidate_source=candidate_set.source.value,
+        candidate_count=len(candidate_set.candidates or []),
+        candidate_review_status=str(review.status),
+        candidate_review_next_action=str(review.next_action),
+        next_action="FALLBACK",
+        reason=review.reason,
+    ))
+    return payload
 
 
 # --- 12b. clarify_decide ---
@@ -1585,120 +1219,62 @@ def _h_clarify_decide(state: GraphState) -> dict:
     return _log(state, "clarify_decide", decision="no_result")
 
 
-# --- 13. task_plan ---
-# §1 input:  top_intent, task_type, resolved_target
-# §1 output: execution_plan
-def _h_task_plan(state: GraphState) -> dict:
-    sf = state.get("semantic_frame")
-    rt = state.get("resolved_target")
-    frame_dict = sf.model_dump() if hasattr(sf, "model_dump") else _to_dict(sf)
-    target_dict = rt.model_dump() if hasattr(rt, "model_dump") else _to_dict(rt)
-    task_type = route_task(frame_dict, target_dict)
-    return {
-        "task_type": task_type,
-        "task_type_source": "llm_semantic",
-        **_log(state, "task_plan", task_type=task_type),
-    }
-
-
-# --- 14. facet_plan ---
-# §1 input:  semantic_frame, resolved_target
-# §1 output: execution_plan.tool_calls
-def _h_facet_plan(state: GraphState) -> dict:
-    result = build_execution_plan_with_tool_planner(state)
-    plan = ExecutionPlan.model_validate(result.get("execution_plan", {}))
-    task_type = str(result.get("execution_plan", {}).get("task_type", "") if isinstance(result.get("execution_plan"), dict) else getattr(result.get("execution_plan"), "task_type", "") or "")
-    selected_flow = "recommendation_flow" if task_type == TaskType.recommendation.value else f"{task_type}_flow"
-    return {
-        **result,
-        "execution_plan": plan,
-        **_log(
-            state,
-            "facet_plan",
-            tool_calls=len(plan.tool_calls),
-            candidate_count=0,
-            selected_flow=selected_flow,
-            tool_plan_source=result.get("tool_plan_source"),
-            tool_plan_validated=result.get("tool_plan_validated"),
-            tool_plan_fallback_reason=result.get("tool_plan_fallback_reason"),
-            tool_plan_reason=result.get("tool_plan_reason"),
-        ),
-    }
-
-
-# --- 15. comparison_planner ---
-# §1 input:  comparison_targets, resolved_target
-# §1 output: execution_plan, comparison_matrix placeholder
-def _h_comparison_planner(state: GraphState) -> dict:
-    result = build_execution_plan_with_tool_planner(state)
-    plan = ExecutionPlan.model_validate(result.get("execution_plan", {}))
-    comparison_targets = list(state.get("comparison_targets", []) or [])
-    target_shop_ids: list[str] = []
-    for item in comparison_targets:
-        data = _to_dict(item)
-        resolved_shop = data.get("resolved_shop") or data.get("shop") or data
-        if hasattr(resolved_shop, "model_dump"):
-            resolved_shop = resolved_shop.model_dump()
-        if isinstance(resolved_shop, dict):
-            sid = str(resolved_shop.get("shop_id", "")).strip()
-            if sid:
-                target_shop_ids.append(sid)
-    return {
-        **result,
-        "execution_plan": plan,
-        "comparison_result": {
-            "status": "planned",
-            "target_shop_ids": target_shop_ids,
-            "mode": "comparison",
-        },
-        **_log(
-            state,
-            "comparison_planner",
-            target_count=len(comparison_targets),
-            tool_calls=len(plan.tool_calls),
-            selected_flow="comparison_flow",
-            tool_plan_source=result.get("tool_plan_source"),
-            tool_plan_validated=result.get("tool_plan_validated"),
-            tool_plan_fallback_reason=result.get("tool_plan_fallback_reason"),
-            tool_plan_reason=result.get("tool_plan_reason"),
-        ),
-    }
-
-
-# --- 16. evidence_planner (P1) ---
-# §1 input:  local_life_goal_draft, candidate_set, semantic_frame, comparison_targets
+# --- 13. evidence_planner ---
+# §1 input:  local_life_goal_draft, candidate_set
 # §1 output: execution_plan
 def _h_evidence_planner(state: GraphState) -> dict:
     goal = state.get("local_life_goal_draft")
-    candidate_set = state.get("candidate_set")
+    candidate_set = state.get("effective_candidate_set") or state.get("candidate_set")
     if goal is None or candidate_set is None:
-        # Fallback: delegate to legacy task_plan routing
-        legacy = _h_task_plan(state)
-        legacy.update(_log(state, "evidence_planner", status="FALLBACK",
-                           reason="missing_goal_or_candidate_set"))
-        return legacy
-    sf = state.get("semantic_frame")
-    frame_dict = sf.model_dump() if hasattr(sf, "model_dump") else _to_dict(sf)
-    comparison_targets = list(state.get("comparison_targets", []) or [])
-    plan = plan_evidence_from_candidates(
-        goal=goal,
-        candidate_set=candidate_set,
-        semantic_frame=frame_dict,
-        comparison_targets=comparison_targets or None,
-        location=_user_location(state),
-    )
+        return {
+            "error_code": "SCHEMA_VALIDATION_FAILED",
+            "error_message": "goal and effective_candidate_set are required",
+            "failed_stage": "evidence_planner",
+            **_log(
+                state,
+                "evidence_planner",
+                status="failed",
+                evidence_plan_source="strict",
+                missing_goal=goal is None,
+                missing_candidate_set=candidate_set is None,
+                reason="missing_goal_or_effective_candidate_set",
+            ),
+        }
+    if getattr(goal, "goal_type", None) == GoalType.RECOMMENDATION:
+        frame = state.get("semantic_frame")
+        frame_dict = _to_dict(frame)
+        plan_payload = build_recommendation_execution_plan(
+            frame_dict,
+            location=_user_location(state),
+            fallback_query=str(state.get("raw_text", "") or ""),
+        )
+        plan = ExecutionPlan.model_validate(plan_payload.get("plan", {}))
+    else:
+        plan = plan_evidence_from_candidates(
+            goal=goal,
+            candidate_set=candidate_set,
+            location=_user_location(state),
+        )
     task_type = str(plan.task_type or "")
     return {
         "execution_plan": plan,
         "task_type": task_type,
         "task_type_source": "evidence_planner",
         "reference_resolution_source": "candidate_set",
-        **_log(state, "evidence_planner", tool_calls=len(plan.tool_calls),
-              task_type=task_type, candidate_count=len(candidate_set.candidates or [])),
+        **_log(
+            state,
+            "evidence_planner",
+            evidence_plan_source="strict",
+            missing_goal=False,
+            missing_candidate_set=False,
+            tool_calls=len(plan.tool_calls),
+            task_type=task_type,
+            candidate_count=len(candidate_set.candidates or []),
+        ),
     }
 
 
-# --- 17. plan_validator ---
+# --- 14. plan_validator ---
 # §1 input:  execution_plan
 # §1 output: validated_plan (or error_code)
 def _h_plan_validator(state: GraphState) -> dict:
@@ -1748,7 +1324,7 @@ def _h_plan_validator(state: GraphState) -> dict:
     }
 
 
-# --- 17. tool_execute ---
+# --- 15. tool_execute ---
 # §1 input:  validated_plan
 # §1 output: tool_result_set
 def _h_tool_execute(state: GraphState) -> dict:
@@ -1763,11 +1339,6 @@ def _h_tool_execute(state: GraphState) -> dict:
         batch_executor = BatchToolExecutor(call_fn=dispatch_tool_call)
         search_calls = []
         remaining_specs = []
-        planned_tool_names = {
-            str((_to_dict(spec)).get("tool_name", "")).strip()
-            for spec in tool_calls
-            if str((_to_dict(spec)).get("tool_name", "")).strip()
-        }
         for spec in tool_calls:
             call = spec.model_dump() if hasattr(spec, "model_dump") else _to_dict(spec)
             if call.get("tool_name") == "search_shops":
@@ -1777,110 +1348,6 @@ def _h_tool_execute(state: GraphState) -> dict:
 
         if search_calls:
             raw_results.update(batch_executor.execute_sync(search_calls))
-
-        if config.TOOL_BACKEND != "mock":
-            hidden_calls: list[dict[str, Any]] = []
-            task_type_value = str(getattr(plan, "task_type", "") or _to_dict(plan).get("task_type", "") or "")
-            if task_type_value == TaskType.recommendation.value:
-                search_result = raw_results.get("call_search_shops", {})
-                search_data = _to_dict(search_result).get("data") or []
-                shop_ids = [
-                    str(item.get("shop_id", "")).strip()
-                    for item in search_data if isinstance(item, dict) and str(item.get("shop_id", "")).strip()
-                ][: config.RECOMMENDATION_CANDIDATE_TOP_K]
-                if shop_ids:
-                    if "get_shop_cards" not in planned_tool_names:
-                        hidden_calls.append(
-                            {
-                                "call_id": "call_shop_cards_auto",
-                                "tool_name": "get_shop_cards",
-                                "args": {
-                                    "shop_ids": shop_ids,
-                                    "user_location": state.get("user_context") and {
-                                        "lat": getattr(state.get("user_context"), "lat", MOCK_LOCATION["lat"]),
-                                        "lng": getattr(state.get("user_context"), "lng", MOCK_LOCATION["lng"]),
-                                    } or MOCK_LOCATION,
-                                    "need_coupon_brief": True,
-                                    "need_open_status": True,
-                                    "need_distance_eta": True,
-                                    "max_items": len(shop_ids),
-                                },
-                                "required": False,
-                                "timeout_ms": TOOL_DEFAULT_TIMEOUT_MS,
-                                "max_parallelism": 1,
-                            }
-                        )
-                    if "get_shop_review_summary" not in planned_tool_names:
-                        hidden_calls.append(
-                            {
-                                "call_id": "call_review_summary_auto",
-                                "tool_name": "get_shop_review_summary",
-                                "args": {
-                                    "shop_ids": shop_ids,
-                                    "aspects": [str(item) for item in (state.get("semantic_frame") and getattr(state.get("semantic_frame"), "focused_facets", []) or []) if str(item).strip()],
-                                    "scene": None,
-                                    "max_reviews": len(shop_ids),
-                                },
-                                "required": False,
-                                "timeout_ms": TOOL_DEFAULT_TIMEOUT_MS,
-                                "max_parallelism": 1,
-                            }
-                        )
-            elif task_type_value == TaskType.comparison.value:
-                target_ids = []
-                for item in state.get("comparison_targets", []) or []:
-                    data = _to_dict(item)
-                    resolved_shop = data.get("resolved_shop") or data.get("shop") or data
-                    if hasattr(resolved_shop, "model_dump"):
-                        resolved_shop = resolved_shop.model_dump()
-                    if isinstance(resolved_shop, dict):
-                        sid = str(resolved_shop.get("shop_id", "")).strip()
-                        if sid and sid not in target_ids:
-                            target_ids.append(sid)
-                    sid = str(data.get("shop_id", "")).strip()
-                    if sid and sid not in target_ids:
-                        target_ids.append(sid)
-                if len(target_ids) >= 2:
-                    if "get_shop_cards" not in planned_tool_names:
-                        hidden_calls.append(
-                            {
-                                "call_id": "call_shop_cards_auto",
-                                "tool_name": "get_shop_cards",
-                                "args": {
-                                    "shop_ids": target_ids[: config.COMPARISON_MAX_SHOP_LIMIT],
-                                    "user_location": MOCK_LOCATION,
-                                    "need_coupon_brief": True,
-                                    "need_open_status": True,
-                                    "need_distance_eta": True,
-                                    "max_items": len(target_ids),
-                                },
-                                "required": False,
-                                "timeout_ms": TOOL_DEFAULT_TIMEOUT_MS,
-                                "max_parallelism": 1,
-                            }
-                        )
-                    if "get_shop_review_summary" not in planned_tool_names:
-                        hidden_calls.append(
-                            {
-                                "call_id": "call_review_summary_auto",
-                                "tool_name": "get_shop_review_summary",
-                                "args": {
-                                    "shop_ids": target_ids[: config.COMPARISON_MAX_SHOP_LIMIT],
-                                    "aspects": ["review_summary"],
-                                    "scene": None,
-                                    "max_reviews": len(target_ids),
-                                },
-                                "required": False,
-                                "timeout_ms": TOOL_DEFAULT_TIMEOUT_MS,
-                                "max_parallelism": 1,
-                            }
-                        )
-
-            if hidden_calls:
-                try:
-                    raw_results.update(batch_executor.execute_sync(hidden_calls))
-                except Exception:
-                    pass
 
         # --- Batch: resolve all specs, then execute concurrently ---
         resolved_batch: list[dict[str, Any]] = []
@@ -1958,7 +1425,7 @@ def _h_tool_execute(state: GraphState) -> dict:
     }
 
 
-# --- 18. evidence_build ---
+# --- 16. evidence_build ---
 # §1 input:  tool_result_set
 # §1 output: evidence_pack
 def _h_evidence_build(state: GraphState) -> dict:
@@ -1983,7 +1450,7 @@ def _h_evidence_build(state: GraphState) -> dict:
     }
 
 
-# --- 19. evidence_review (P1) ---
+# --- 17. evidence_review ---
 # §1 input:  evidence_pack, local_life_goal_draft, tool_results
 # §1 output: review_results.evidence_review
 def _h_evidence_review(state: GraphState) -> dict:
@@ -2022,7 +1489,7 @@ def _h_evidence_review(state: GraphState) -> dict:
     return result
 
 
-# --- 19a. expand_search (P2) ---
+# --- 18. expand_search ---
 # §1 input:  local_life_goal_draft, candidate_spec, candidate_set
 # §1 output: expanded candidate_set, updated candidate_spec
 def _h_expand_search(state: GraphState) -> dict:
@@ -2094,7 +1561,7 @@ def _h_expand_search(state: GraphState) -> dict:
     return payload
 
 
-# --- 19b. decision_planner (P2) ---
+# --- 19. decision_planner ---
 # §1 input:  goal_plan, candidate_set, evidence_pack, evidence_review
 # §1 output: p2_decision_plan
 def _h_decision_planner(state: GraphState) -> dict:
@@ -2129,7 +1596,7 @@ def _h_decision_planner(state: GraphState) -> dict:
     return result
 
 
-# --- 19c. decision_review (P2) ---
+# --- 20. decision_review ---
 # §1 input:  p2_decision_plan, goal_plan, review_results
 # §1 output: decision_review_result
 def _h_decision_review(state: GraphState) -> dict:
@@ -2172,40 +1639,26 @@ def _h_decision_review(state: GraphState) -> dict:
     return result
 
 
-# --- 20. answer_plan_build ---
-# §1 input:  evidence_pack, semantic_frame / p2_decision_plan (P2)
+# --- 21. answer_plan_build ---
+# §1 input: decision_review_result, p2_decision_plan, evidence_pack
 # §1 output: answer_plan
 def _h_answer_plan_build(state: GraphState) -> dict:
-    from ..domain.decision import decision_to_answer_plan
-
     p2_dp = state.get("p2_decision_plan")
-    if p2_dp is not None:
-        # P2 path: convert DecisionPlan to AnswerPlan
-        plan_data = decision_to_answer_plan(p2_dp, state.get("evidence_pack") or {})
-    else:
-        # Legacy P1 path: build from task_type + evidence
-        execution_plan = state.get("execution_plan")
-        task_type = ""
-        if hasattr(execution_plan, "task_type"):
-            task_type = getattr(execution_plan, "task_type", "")
-        elif isinstance(execution_plan, dict):
-            task_type = execution_plan.get("task_type", "")
-        plan_data = build_answer_plan(
-            task_type,
-            state.get("evidence_pack") or {},
-            None,
-        )
-    plan = AnswerPlan.model_validate(plan_data)
+    answer_plan_payload = decision_to_answer_plan(p2_dp, state.get("evidence_pack") or {}) if p2_dp is not None else {}
+    answer_plan = AnswerPlan.model_validate(answer_plan_payload)
     return {
-        "answer_plan": plan,
-        **_log(state, "answer_plan_build", p2_path=p2_dp is not None),
+        "answer_plan": answer_plan,
+        **_log(state, "answer_plan_build", answer_plan_source="decision_plan", has_decision_plan=p2_dp is not None),
     }
 
 
-# --- 20. answer_generate ---
+# --- 22. answer_generate ---
 # §1 input:  answer_plan, evidence_pack
 # §1 output: draft_response
 def _h_answer_generate(state: GraphState) -> dict:
+    answer_plan = state.get("answer_plan")
+    if answer_plan is None:
+        answer_plan = AnswerPlan.model_validate(decision_to_answer_plan(state.get("p2_decision_plan"), state.get("evidence_pack") or {}))
     metadata: dict[str, Any] = {}
     rc = state.get("rewrite_count", 0)
     violations = state.get("answer_verify_violations") or []
@@ -2214,7 +1667,7 @@ def _h_answer_generate(state: GraphState) -> dict:
     cc = _build_conversation_continuity(state)
 
     txt = generate_answer(
-        state.get("answer_plan") or {},
+        answer_plan,
         state.get("evidence_pack") or {},
         metadata_out=metadata,
         rewrite_count=rc,
@@ -2223,12 +1676,16 @@ def _h_answer_generate(state: GraphState) -> dict:
         conversation_continuity=cc,
     )
     return {
+        "answer_plan": answer_plan,
         "draft_response": txt,
-        "answer_source": metadata.get("answer_source", "template"),
+        "answer_source": metadata.get("answer_source", "llm_verbalizer"),
         "answer_fallback_reason": metadata.get("answer_fallback_reason", ""),
         "llm_verbalizer_error": metadata.get("llm_verbalizer_error"),
         "generated_llm_answer_before_fallback": metadata.get("generated_llm_answer_before_fallback", ""),
         "llm_verbalizer_violation": metadata.get("violation"),
+        "llm_verbalizer_called": metadata.get("llm_verbalizer_called", True),
+        "llm_backend": metadata.get("llm_backend", ""),
+        "answer_verifier_result": metadata.get("answer_verifier_result", "unknown"),
         # Save verification/rewrite states to GraphState
         "answer_verify_passed": metadata.get("answer_verify_passed", True),
         "answer_verify_violations": metadata.get("answer_verify_violations") or [],
@@ -2241,11 +1698,12 @@ def _h_answer_generate(state: GraphState) -> dict:
 
 
 
-# --- 21. answer_verify ---
+# --- 23. answer_verify ---
 # §1 input:  draft_response, evidence_pack
 # §1 output: verify_result
 def _h_answer_verify(state: GraphState) -> dict:
     evidence = state.get("evidence_pack") or {}
+    evidence_dict = _to_dict(evidence)
     task_type = getattr(state.get("execution_plan"), "task_type", "") or (
         state.get("execution_plan", {}).get("task_type", "") if isinstance(state.get("execution_plan"), dict) else ""
     )
@@ -2262,6 +1720,25 @@ def _h_answer_verify(state: GraphState) -> dict:
     report = verify_answer(state.get("draft_response", ""), evidence, task_type)
     passed = report.get("passed", False)
     violations = report.get("issues", [])
+    
+    if not passed:
+        print(f"[DEBUG answer_verify FAIL] task_type={task_type} violations={violations}")
+        print(f"[DEBUG answer_verify FAIL] draft_prefix={state.get('draft_response', '')[:200]}")
+        print(f"[DEBUG answer_verify FAIL] evidence_items={len(evidence_dict.get('evidence_items') or [])}")
+        snapshot = evidence_dict.get("ranking_snapshot") or {}
+        ranked = snapshot.get("ranked") or snapshot.get("ranked_shops") or snapshot.get("shops") or []
+        print(f"[DEBUG answer_verify FAIL] ranked_count={len(ranked)}")
+        for i, r in enumerate(ranked[:5]):
+            if isinstance(r, dict):
+                print(f"  ranked[{i}] shop_name={r.get('shop_name')} shop_id={r.get('shop_id')}")
+            else:
+                print(f"  ranked[{i}]={r}")
+        fr = evidence_dict.get("facet_results") or snapshot.get("facet_results") or []
+        print(f"[DEBUG answer_verify FAIL] facet_results_count={len(fr)}")
+        for f in fr[:10]:
+            print(f"  facet={f.get('facet')} status={f.get('result_status')} shop_id={f.get('shop_id')}")
+    else:
+        print(f"[DEBUG answer_verify PASS] task_type={task_type}")
     
     return {
         "verify_result": "pass" if passed else "rewrite_needed",
@@ -2307,7 +1784,7 @@ def _h_clarify_response(state: GraphState) -> dict:
     if pending_result in {"expired", "invalid", "out_of_range"} and str(state.get("final_response", "") or "").strip():
         return {
             "final_response": state.get("final_response", ""),
-            "answer_source": "template_fallback",
+            "answer_source": "template",
             **_log(state, "clarify_response"),
         }
     pending = state.get("pending_clarification")
@@ -2319,26 +1796,26 @@ def _h_clarify_response(state: GraphState) -> dict:
         if prompt.strip():
             return {
                 "final_response": prompt,
-                "answer_source": "template_fallback",
+                "answer_source": "template",
                 **_log(state, "clarify_response"),
             }
     rs = state.get("resolve_shop_result")
     if rs is not None and getattr(rs, "status", "") in ("AMBIGUOUS", "LOW_CONFIDENCE"):
         return {
             "final_response": "店名有点模糊，请提供完整店名。",
-            "answer_source": "template_fallback",
+            "answer_source": "template",
             **_log(state, "clarify_response"),
         }
     clarification = (state.get("error_message", "") or "").strip()
     if clarification:
         return {
             "final_response": clarification,
-            "answer_source": "template_fallback",
+            "answer_source": "template",
             **_log(state, "clarify_response"),
         }
     return {
         "final_response": "请提供完整店名。",
-        "answer_source": "template_fallback",
+        "answer_source": "template",
         **_log(state, "clarify_response"),
     }
 
@@ -2347,45 +1824,28 @@ def _h_clarify_response(state: GraphState) -> dict:
 # §1 input:  error_code, evidence_pack
 # §1 output: final_response
 def _h_fallback_answer(state: GraphState) -> dict:
-    # 5. rewrite 后仍失败，进入安全 fallback。
-    # 6. fallback 不能编造事实，只能基于模板和 EvidencePack 输出保守回答。
-    from .. import config as cfg
-    from ..answer.generator import generate_answer as original_generate_answer
-    old_val = cfg.ENABLE_LLM_VERBALIZER
-    cfg.ENABLE_LLM_VERBALIZER = False
-    try:
-        response = original_generate_answer(
-            state.get("answer_plan") or {},
-            state.get("evidence_pack") or {},
-        )
-    finally:
-        cfg.ENABLE_LLM_VERBALIZER = old_val
+    response = "抱歉，暂时无法处理您的请求，请稍后再试。"
+    evidence_dict = _to_dict(state.get("evidence_pack") or {})
+    snapshot = evidence_dict.get("ranking_snapshot") or {}
+    status = str(snapshot.get("status", "") or "") if isinstance(snapshot, dict) else ""
+    if not status:
+        tr = state.get("tool_result_set") or state.get("tool_results", {})
+        for result in tr.values():
+            value = result.result_status.value if hasattr(result, "result_status") else str(_to_dict(result).get("result_status", ""))
+            status = value
+            if value in ("failed", "circuit_open", "unknown", "unsupported"):
+                break
 
-    if not response or response.strip() == "暂时无法确认这家店的相关信息。":
-        evidence_dict = _to_dict(state.get("evidence_pack") or {})
-        status = ""
-        snapshot = evidence_dict.get("ranking_snapshot") or {}
-        if isinstance(snapshot, dict):
-            status = str(snapshot.get("status", "") or "")
-        if not status:
-            tr = state.get("tool_result_set") or state.get("tool_results", {})
-            for result in tr.values():
-                value = result.result_status.value if hasattr(result, "result_status") else str(_to_dict(result).get("result_status", ""))
-                status = value
-                if value in ("failed", "circuit_open"):
-                    break
-        if status == "circuit_open":
-            response = "优惠券服务暂时不可用，请稍后再试。"
-        elif status == "failed":
-            response = "获取优惠券信息失败，建议稍后再试。"
-        elif status == "unknown":
-            response = "暂时无法确认优惠券情况，请稍后再试。"
-        else:
-            response = "抱歉，暂时无法处理您的请求，请稍后再试。"
+    if status == "circuit_open":
+        response = "相关服务暂时不可用，请稍后再试。"
+    elif status == "failed":
+        response = "查询失败，建议稍后再试。"
+    elif status in {"unknown", "unsupported"}:
+        response = "暂时无法确认相关信息，请稍后再试。"
 
     return {
         "final_response": response,
-        "answer_source": "template_fallback",
+        "answer_source": "fallback",
         "final_safety_status": "fallback",
         **_log(state, "fallback_answer"),
     }
@@ -2501,10 +1961,7 @@ _HANDLERS: dict[str, GraphNodeFunc] = {
     "goal_review": _h_goal_review,
     "target_resolve": _h_target_resolve,
     "clarify_decide": _h_clarify_decide,
-    "task_plan": _h_task_plan,
     "evidence_planner": _h_evidence_planner,
-    "facet_plan": _h_facet_plan,
-    "comparison_planner": _h_comparison_planner,
     "plan_validator": _h_plan_validator,
     "tool_execute": _h_tool_execute,
     "evidence_build": _h_evidence_build,
@@ -2538,8 +1995,6 @@ _NORMAL_EDGES: dict[str, str] = {
     "goal_planner": "goal_review",            # P2: goal_planner → goal_review
     "target_resolve": "clarify_decide",        # §2: target_resolve → clarify_decide
     "evidence_planner": "plan_validator",
-    "facet_plan": "plan_validator",
-    "comparison_planner": "plan_validator",
     "decision_planner": "decision_review",    # P2: decision_planner → decision_review
     "evidence_build": "evidence_review",
     "expand_search": "evidence_planner",
@@ -2635,7 +2090,7 @@ def _route_clarify_decide(state: GraphState) -> str:
         status = rs_dict.get("status", getattr(rs, "status", ""))
         reason = str(rs_dict.get("reason", getattr(rs, "reason", "")) or "")
         if status == "RESOLVED":
-            return "task_plan"
+            return "evidence_planner"
         if status in ("AMBIGUOUS", "LOW_CONFIDENCE"):
             return "clarify_response"
         if reason in {"comparison_requires_at_least_two_shops", "comparison_too_many_shops", "pronoun_without_current_shop", "ordinal_out_of_range"}:
@@ -2652,19 +2107,6 @@ def _route_plan_validator(state: GraphState) -> str:
     if err:
         return "fallback_answer"
     return "tool_execute"
-
-
-def _route_task_plan(state: GraphState) -> str:
-    """Route task_plan: if CandidateSet present → evidence_planner, else legacy."""
-    goal = state.get("local_life_goal_draft")
-    candidate_set = state.get("candidate_set")
-    if goal is not None and candidate_set is not None:
-        return "evidence_planner"
-    task_type = state.get("task_type")
-    task_type_value = task_type.value if hasattr(task_type, "value") else str(task_type or "")
-    if task_type_value == TaskType.comparison.value:
-        return "comparison_planner"
-    return "facet_plan"
 
 
 def _route_goal_review(state: GraphState) -> str:
@@ -2690,10 +2132,12 @@ def _route_decision_review(state: GraphState) -> str:
     """Route from decision_review based on next_action."""
     dr = state.get("decision_review_result")
     if dr is None:
-        return "answer_generate"
+        return "fallback_answer"
     next_action = getattr(dr, "next_action", "FINISH") or "FINISH"
     if isinstance(next_action, Enum):
         next_action = next_action.value
+    if next_action in (None, "", "None"):
+        return "fallback_answer"
 
     # Track replan counters for loop prevention — read from SessionState.replan_counters
     if next_action in ("REPLAN_EVIDENCE",):
@@ -2730,26 +2174,22 @@ def _route_decision_review(state: GraphState) -> str:
     if next_action in ("CLARIFY",):
         return "clarify_response"
 
-    # FINISH → answer_plan_build for DecisionPlan → AnswerPlan conversion
-    return "answer_plan_build"
+    if next_action in ("FINISH",):
+        return "answer_plan_build"
+
+    return "fallback_answer"
 
 
 def _route_evidence_review(state: GraphState) -> str:
     """Route from evidence_review based on next_action.
 
-    P2: routes to decision_planner (when active) or legacy answer_plan_build.
+    Routes only through the P2 decision path.
     """
     review_results = state.get("review_results") or {}
     evidence_review = review_results.get("evidence_review") if isinstance(review_results, dict) else None
 
-    # Check if P2 DecisionPlanner path is active
-    has_goal_plan = state.get("goal_plan") is not None
-    p2_active = has_goal_plan
-
     if evidence_review is None:
-        if p2_active:
-            return "decision_planner"
-        return "answer_plan_build"
+        return "decision_planner"
     next_action = getattr(evidence_review, "next_action", "FINISH") or "FINISH"
     if isinstance(next_action, Enum):
         next_action = next_action.value
@@ -2759,7 +2199,7 @@ def _route_evidence_review(state: GraphState) -> str:
         current = 0
         if isinstance(session, SessionState):
             current = session.replan_counters.get("replan_evidence", 0)
-        if current >= config.MAX_REPLAN_EVIDENCE_ROUNDS or not p2_active:
+        if current >= config.MAX_REPLAN_EVIDENCE_ROUNDS:
             return "fallback_answer"
         if session is not None:
             increment_replan_evidence(session)
@@ -2772,31 +2212,13 @@ def _route_evidence_review(state: GraphState) -> str:
         return "clarify_response"
 
     if next_action in ("DEGRADE_ANSWER", "FINISH"):
-        if p2_active:
-            return "decision_planner"
-        return "answer_plan_build"
+        return "decision_planner"
 
-    return "decision_planner" if p2_active else "answer_plan_build"
+    return "fallback_answer"
 
 
 def _route_tool_execute(state: GraphState) -> str:
     """§3 —Route tool_execute."""
-    tr = state.get("tool_result_set") or state.get("tool_results", {})
-    required_by_call_id = _plan_required_by_call_id(state.get("validated_plan") or state.get("execution_plan"))
-    plan_is_available = bool(required_by_call_id)
-    for _call_id, result in tr.items():
-        required = required_by_call_id.get(_call_id, True)
-        # ToolResultStatus extraction: handle both Pydantic model (has .result_status
-        # enum with .value) and serialized dict.
-        if hasattr(result, "result_status"):
-            raw = result.result_status
-            status = str(raw.value) if hasattr(raw, "value") else str(raw)
-        else:
-            status = get_tool_result_status(_to_dict(result))
-        if plan_is_available and required and status in TOOL_FAILURE_STATUSES:
-            return "fallback_answer"
-        if not plan_is_available and status in ("failed", "circuit_open", "error", "backend_unavailable"):
-            return "fallback_answer"
     return "evidence_build"
 
 
@@ -2850,7 +2272,7 @@ _FRAME_VALIDATOR_ROUTES: dict[Any, str] = {
 }
 
 _CLARIFY_DECIDE_ROUTES: dict[Any, str] = {
-    "task_plan": "task_plan",
+    "evidence_planner": "evidence_planner",
     "clarify_response": "clarify_response",
     "emit_response": "emit_response",
 }
@@ -2858,12 +2280,6 @@ _CLARIFY_DECIDE_ROUTES: dict[Any, str] = {
 _PLAN_VALIDATOR_ROUTES: dict[Any, str] = {
     "fallback_answer": "fallback_answer",
     "tool_execute": "tool_execute",
-}
-
-_TASK_PLAN_ROUTES: dict[Any, str] = {
-    "evidence_planner": "evidence_planner",
-    "facet_plan": "facet_plan",
-    "comparison_planner": "comparison_planner",
 }
 
 _GOAL_REVIEW_ROUTES: dict[Any, str] = {
@@ -2885,14 +2301,12 @@ _DECISION_REVIEW_ROUTES: dict[Any, str] = {
 
 _EVIDENCE_REVIEW_ROUTES: dict[Any, str] = {
     "decision_planner": "decision_planner",
-    "answer_plan_build": "answer_plan_build",
     "fallback_answer": "fallback_answer",
     "clarify_response": "clarify_response",
     "evidence_planner": "evidence_planner",
 }
 
 _TOOL_EXECUTE_ROUTES: dict[Any, str] = {
-    "fallback_answer": "fallback_answer",
     "evidence_build": "evidence_build",
 }
 
@@ -2975,11 +2389,6 @@ def build_graph() -> CompiledStateGraph:
         _CLARIFY_DECIDE_ROUTES,
     )
     builder.add_conditional_edges(
-        "task_plan",
-        _route_task_plan,
-        _TASK_PLAN_ROUTES,
-    )
-    builder.add_conditional_edges(
         "decision_review",
         _route_decision_review,
         _DECISION_REVIEW_ROUTES,
@@ -3046,18 +2455,15 @@ _NODE_TABLE_NEXT_HOPS: dict[str, list[str]] = {
     "goal_planner": ["goal_review"],                      # P2: goal_planner → goal_review
     "goal_review": ["target_resolve", "clarify_response", "emit_response", "fallback_answer"],
     "target_resolve": ["clarify_decide"],  # §2: 无条件转入clarify_decide
-    "clarify_decide": ["clarify_response", "task_plan", "emit_response"],  # §2: 独立决策节点
-    "task_plan": ["facet_plan", "comparison_planner", "tool_execute"],
-    "facet_plan": ["plan_validator"],
-    "comparison_planner": ["plan_validator"],
+    "clarify_decide": ["clarify_response", "evidence_planner", "emit_response"],
     "evidence_planner": ["plan_validator"],
     "plan_validator": ["tool_execute", "fallback_answer"],
-    "tool_execute": ["fallback_answer", "evidence_build"],
+    "tool_execute": ["evidence_build"],
     "evidence_build": ["evidence_review"],
-    "evidence_review": ["decision_planner", "answer_plan_build", "fallback_answer", "clarify_response", "evidence_planner"],
+    "evidence_review": ["decision_planner", "fallback_answer", "clarify_response", "evidence_planner"],
     "expand_search": ["evidence_planner"],                  # P2: expand_search → evidence_planner
     "decision_planner": ["decision_review"],               # P2: decision_planner → decision_review
-    "decision_review": ["answer_generate", "evidence_planner", "expand_search", "target_resolve", "fallback_answer", "emit_response", "clarify_response"],
+    "decision_review": ["answer_plan_build", "evidence_planner", "expand_search", "target_resolve", "fallback_answer", "emit_response", "clarify_response"],
     "answer_plan_build": ["answer_generate"],
     "answer_generate": ["answer_verify"],
     "answer_verify": ["final_response_build", "rewrite", "fallback_answer"],
@@ -3081,13 +2487,12 @@ _EDGE_TABLE_ROWS: list[tuple[str, str, str]] = [
     ("top_intent_router", "out_of_scope/unsafe/chat/capability/invalid", "emit_response"),
     ("top_intent_router", "local_life", "semantic_parse"),
     ("semantic_parse", "JSON parse fail after retry", "clarify_response"),
-    ("clarify_decide", "RESOLVED", "task_plan"),
+    ("clarify_decide", "RESOLVED", "evidence_planner"),
     ("clarify_decide", "AMBIGUOUS", "clarify_response"),
     ("clarify_decide", "LOW_CONFIDENCE", "clarify_response"),
     ("clarify_decide", "NOT_FOUND", "emit_response"),
     ("plan_validator", "invalid plan or unregistered tool", "fallback_answer"),
-    ("tool_execute", "required tool failed/unknown", "fallback_answer"),
-    ("tool_execute", "optional tool failed/unknown", "evidence_build"),
+    ("tool_execute", "all tool results", "evidence_build"),
     ("answer_verify", "pass", "final_response_build"),
     ("answer_verify", "rewrite attempts < 1", "rewrite"),
     ("answer_verify", "rewrite attempts >= 1", "fallback_answer"),

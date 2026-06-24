@@ -1,8 +1,4 @@
-"""Database-backed tool implementations — same signatures as mock_tools.
-
-Each function mirrors its counterpart in ``mock_tools`` but reads
-from MySQL via ``db_client`` instead of static JSON files.
-"""
+"""Database-backed tool implementations."""
 
 from __future__ import annotations
 
@@ -30,44 +26,6 @@ def _lookup_shop(shop_id: str) -> dict[str, Any] | None:
 
 def _normalize_query(query: str) -> str:
     return query.strip().lower()
-
-
-_DEAL_CATALOG: dict[str, list[dict[str, Any]]] = {
-    "1": [
-        {
-            "deal_id": "deal_1_1",
-            "title": "双人轻食套餐",
-            "deal_type": "double",
-            "price": 56.0,
-            "original_price": 68.0,
-            "people_count_min": 2,
-            "people_count_max": 2,
-            "available": True,
-            "valid_time_text": "全天可用",
-            "use_time_rules": ["午市可用", "晚市可用"],
-            "limitations": ["不可叠加优惠"],
-            "included_items": ["饮品*2", "甜品*1"],
-            "recommend_tags": ["双人餐", "约会"],
-        }
-    ],
-    "2": [
-        {
-            "deal_id": "deal_2_1",
-            "title": "早餐单人套餐",
-            "deal_type": "single",
-            "price": 18.0,
-            "original_price": 24.0,
-            "people_count_min": 1,
-            "people_count_max": 1,
-            "available": True,
-            "valid_time_text": "06:00-10:30",
-            "use_time_rules": ["早餐时段可用"],
-            "limitations": ["仅限早餐"],
-            "included_items": ["主食*1", "饮品*1"],
-            "recommend_tags": ["单人餐", "学生党"],
-        }
-    ],
-}
 
 
 # ── 6 registered tools ────────────────────────────────────────────
@@ -642,59 +600,22 @@ def get_deal_list(
             },
         }
 
-    deals = [dict(item) for item in _DEAL_CATALOG.get(str(shop_id), [])]
-    if not deals:
-        warnings.append("当前没有查到套餐数据，仅有 coupon 数据时不回退拼接")
-
-    filtered: list[dict[str, Any]] = []
-    for deal in deals:
-        if only_available and not deal.get("available", True):
-            continue
-        if deal_type and str(deal.get("deal_type", "")) and str(deal.get("deal_type")) != str(deal_type):
-            continue
-        price = deal.get("price")
-        original_price = deal.get("original_price")
-        discount_rate = round(float(price) / float(original_price), 4) if isinstance(price, (int, float)) and isinstance(original_price, (int, float)) and original_price else None
-        avg_price_per_person = None
-        if people_count and people_count > 0 and isinstance(price, (int, float)):
-            avg_price_per_person = round(float(price) / float(people_count), 2)
-        if budget_per_person is not None and avg_price_per_person is not None and avg_price_per_person > float(budget_per_person):
-            continue
-        filtered.append(
-            {
-                "deal_id": str(deal.get("deal_id", "")),
-                "title": str(deal.get("title", "")),
-                "deal_type": deal.get("deal_type"),
-                "price": price,
-                "original_price": original_price,
-                "discount_rate": discount_rate,
-                "people_count_min": deal.get("people_count_min"),
-                "people_count_max": deal.get("people_count_max"),
-                "avg_price_per_person": avg_price_per_person,
-                "available": deal.get("available"),
-                "valid_time_text": deal.get("valid_time_text"),
-                "use_time_rules": list(deal.get("use_time_rules") or []),
-                "limitations": list(deal.get("limitations") or []),
-                "included_items": list(deal.get("included_items") or []),
-                "recommend_tags": list(deal.get("recommend_tags") or []),
-                "source_fields": ["deal_catalog"],
-            }
-        )
-
-    status = "empty" if not filtered else "partial" if warnings else "ok"
+    warnings.append("套餐工具当前未实现 DB 数据查询")
     return {
-        "success": True,
-        "result_status": status,
+        "success": False,
+        "result_status": "unsupported",
+        "error_code": "TOOL_UNSUPPORTED",
+        "error_message": "get_deal_list is not implemented for db backend",
         "data": {
-            "status": status,
+            "status": "unsupported",
             "shop_id": str(shop_id),
             "shop_name": shop.get("shop_name"),
-            "items": filtered,
+            "items": [],
             "warnings": warnings,
             "trace": _make_trace(
                 "get_deal_list",
                 started,
-                status=status,
+                status="unsupported",
                 input_payload={
                     "shop_id": shop_id,
                     "people_count": people_count,
@@ -702,8 +623,10 @@ def get_deal_list(
                     "deal_type": deal_type,
                     "only_available": only_available,
                 },
-                item_count=len(filtered),
+                item_count=0,
                 warnings=warnings,
+                error_type="unsupported",
+                error_message="get_deal_list is not implemented for db backend",
             ),
         },
     }

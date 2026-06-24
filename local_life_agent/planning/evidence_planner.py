@@ -8,8 +8,6 @@ P1 responsibility:
   - Does NOT judge evidence sufficiency (that is EvidenceReview's job)
   - Does NOT execute tools, does NOT bypass ToolCallGateway
 
-Legacy facet_planner.py and comparison_planner.py are kept as thin shells
-that delegate here when a CandidateSet is present.
 """
 
 from __future__ import annotations
@@ -85,8 +83,6 @@ def _build_tool_call(
 def plan_evidence(
     goal: LocalLifeGoalDraft,
     candidate_set: CandidateSet,
-    semantic_frame: dict[str, Any] | None = None,
-    comparison_targets: list[dict[str, Any]] | None = None,
     location: dict[str, Any] | None = None,
 ) -> ExecutionPlan:
     """Generate a unified ExecutionPlan from CandidateSet + evidence needs.
@@ -101,19 +97,18 @@ def plan_evidence(
     Returns:
         An ExecutionPlan with tool calls for each candidate shop.
     """
+    if goal is None:
+        raise ValueError("goal is required")
+    if candidate_set is None:
+        raise ValueError("candidate_set is required")
+
     required_facets = list(goal.required_facets or [])
     optional_facets = list(goal.optional_facets or [])
+    if not required_facets and not optional_facets:
+        raise ValueError("required_facets or optional_facets is required")
     all_facets = required_facets + [f for f in optional_facets if f not in required_facets]
 
-    # Determine which shops to plan for
     candidates = list(candidate_set.candidates or [])
-    shop_ids_from_comparison: set[str] = set()
-
-    if comparison_targets:
-        for item in comparison_targets:
-            sid = str(item.get("shop_id", "") or "").strip()
-            if sid:
-                shop_ids_from_comparison.add(sid)
 
     # Deduplicate by shop_id + facet
     seen: set[str] = set()
@@ -138,31 +133,13 @@ def plan_evidence(
                 _build_tool_call(shop_id, shop_name, facet, required, index, location)
             )
 
-    # Second: process additional comparison targets not covered by CandidateSet
-    if comparison_targets:
-        for item in comparison_targets:
-            sid = str(item.get("shop_id", "") or "").strip()
-            sname = str(item.get("shop_name", "") or "").strip()
-            if not sid or sid in {c.shop_id for c in candidates}:
-                continue
-            for facet in all_facets:
-                dk = _dedup_key(sid, facet)
-                if dk in seen:
-                    continue
-                seen.add(dk)
-                index += 1
-                required = facet in required_facets
-                tool_calls.append(
-                    _build_tool_call(sid, sname, facet, required, index, location)
-                )
-
     task_type = _goal_type_to_task_type(goal.goal_type)
 
     plan = ExecutionPlan(
         plan_id=f"evidence_plan_{candidate_set.source.value}_{task_type}",
         task_type=task_type,
         tool_calls=tool_calls,
-        target_shop_ids=list({c.shop_id for c in candidates if c.shop_id} | shop_ids_from_comparison),
+        target_shop_ids=[c.shop_id for c in candidates if c.shop_id],
     )
 
     _logger.debug(

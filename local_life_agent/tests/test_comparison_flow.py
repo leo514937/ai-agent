@@ -14,7 +14,7 @@ from ..engine import graph_builder
 from ..planning.comparison_planner import plan_comparison
 from ..session.store import get_session_store, reset_session_store
 from ..domain.state import SessionState
-from ..tools.mock_tools import (
+from .fakes.mock_tools import (
     check_open_status,
     get_coupon_list,
     get_distance_eta,
@@ -33,7 +33,7 @@ SHOP_F = {"shop_id": "shop_009", "shop_name": "远方烧烤(清河店)"}
 
 
 @pytest.fixture(autouse=True)
-def _reset_store() -> None:
+def _reset_store():
     reset_session_store()
     yield
     reset_session_store()
@@ -137,7 +137,7 @@ def test_compare_three_from_last_recommendation_list(monkeypatch: pytest.MonkeyP
     assert response.debug.execution_plan.get("task_type") == "comparison"
     assert response.debug.session_state_after.get("comparison_targets", [])[:3] == [SHOP_A, SHOP_B, SHOP_C]
     assert "search_shops" not in _tool_names(response)
-    assert "comparison_planner" in _comparison_trace_nodes(response)
+    assert "evidence_planner" in _comparison_trace_nodes(response)
     assert len((response.debug.evidence_pack.get("comparison_matrix") or {}).get("rows", [])) == 3
 
 
@@ -182,7 +182,7 @@ def test_compare_this_shop_without_current_shop_must_clarify(monkeypatch: pytest
     assert response.debug is not None
     assert response.debug.session_state_after.get("pending_clarification") is not None
     assert response.debug.session_state_after.get("comparison_targets", []) in ([], None)
-    assert "comparison_planner" not in _comparison_trace_nodes(response)
+    assert "evidence_planner" not in _comparison_trace_nodes(response)
     assert "get_coupon_list" not in _tool_names(response)
 
 
@@ -222,7 +222,7 @@ def test_ambiguous_explicit_shop_goes_to_pending_clarification(monkeypatch: pyte
     assert pending is not None
     assert pending.get("original_task_type") == "comparison"
     assert pending.get("candidate_targets")
-    assert "comparison_planner" not in _comparison_trace_nodes(response)
+    assert "evidence_planner" not in _comparison_trace_nodes(response)
     assert _tool_names(response) == []
 
 
@@ -259,7 +259,7 @@ def test_pending_reply_restores_comparison_task(monkeypatch: pytest.MonkeyPatch)
     assert second.debug.session_state_after.get("pending_clarification") is None
     assert second.debug.execution_plan.get("task_type") == "comparison"
     assert len(second.debug.session_state_after.get("comparison_targets", [])) >= 2
-    assert "comparison_planner" in _comparison_trace_nodes(second)
+    assert "evidence_planner" in _comparison_trace_nodes(second)
 
 
 def test_two_or_three_shops_full_dimensions():
@@ -538,7 +538,7 @@ def test_comparison_flow_does_not_enter_recommendation_flow(monkeypatch: pytest.
 
     assert response.debug is not None
     assert "search_shops" not in _tool_names(response)
-    assert "comparison_planner" in _comparison_trace_nodes(response)
+    assert "evidence_planner" in _comparison_trace_nodes(response)
     assert response.debug.execution_plan.get("task_type") == "comparison"
 
 

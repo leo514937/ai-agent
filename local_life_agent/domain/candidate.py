@@ -66,6 +66,9 @@ class LocalLifeGoalDraft(BaseModel):
     evidence_needs: list[str] = Field(default_factory=list)
     required_facets: list[str] = Field(default_factory=list)
     optional_facets: list[str] = Field(default_factory=list)
+    requested_count: int = 1
+    min_required: int = 1
+    max_allowed: int = 5
     max_candidates: int = 5
     source_origin: str = "llm"  # llm | llm+fallback | fallback
 
@@ -103,5 +106,6 @@ class CandidateSet(BaseModel):
     candidates: list[ResolvedCandidate] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     original_spec: CandidateSpec | None = None
+    requested_count: int = 1
     min_required: int = 2
     max_allowed: int = 5

@@ -13,6 +13,7 @@ from ..engine.graph_builder import build_graph
 from ..llm.client import clear_llm_backend, set_llm_backend
 from ..target.context_recovery import recover_context
 from ..session.store import InMemorySessionStore, get_session_store, reset_session_store, set_session_store
+from .conftest import SpyRealLLMBackend
 
 
 GRAPH = build_graph()
@@ -272,6 +273,7 @@ def test_explicit_shop_overrides_current_shop():
 
 
 def test_first_item_reference_uses_last_recommendation_list():
+    set_llm_backend(SpyRealLLMBackend())
     get_session_store().save(
         "reco_1",
         SessionState(

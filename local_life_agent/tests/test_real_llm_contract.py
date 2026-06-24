@@ -220,8 +220,8 @@ class TestAnswerMetadataContract:
             assert metadata.get("answer_source") == "llm_verbalizer"
             assert metadata.get("llm_used") is True
 
-    def test_template_fallback_when_verbalizer_returns_template(self):
-        """Verbalizer ON but output == template → answer_source = template_fallback."""
+    def test_template_when_verbalizer_returns_template(self):
+        """Verbalizer ON but output == template → answer_source 保持 template。"""
         from ..answer.generator import generate_answer
 
         with patch("local_life_agent.config.ENABLE_LLM_VERBALIZER", True):
@@ -232,9 +232,7 @@ class TestAnswerMetadataContract:
                 llm_client=None,  # falls through to default backend
                 metadata_out=metadata,
             )
-            # rule_based backend returns template text → verbalizer
-            # boundary check treats it as fallback
-            assert metadata.get("answer_source") in ("template_fallback", "template")
+            assert metadata.get("answer_source") == "template"
 
 
 # ====================================================================

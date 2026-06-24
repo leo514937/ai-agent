@@ -80,7 +80,7 @@ def _get_candidate_source(frame: SemanticFrame | dict[str, Any] | None) -> str:
 
     if cs is not None:
         try:
-            return str(cs.value) if hasattr(cs, "value") else str(cs)
+            return str(getattr(cs, "value", cs))
         except Exception:
             pass
 
@@ -164,6 +164,20 @@ def _get_candidate_limit(
         "refinement": 1,
     }
     return defaults.get(goal_type_str, None)
+
+
+def _get_quantity_semantics(goal_type_str: str, candidate_limit: int | None) -> tuple[int, int, int]:
+    if goal_type_str == "comparison":
+        requested_count = candidate_limit or 2
+        return requested_count, 2, candidate_limit or 5
+    if goal_type_str == "recommendation":
+        requested_count = candidate_limit or 3
+        return requested_count, 1, candidate_limit or 5
+    if goal_type_str == "single_shop_query":
+        requested_count = candidate_limit or 1
+        return requested_count, 1, candidate_limit or 1
+    requested_count = candidate_limit or 1
+    return requested_count, 1, candidate_limit or 5
 
 
 def _detect_unsupported_intent(
@@ -272,6 +286,7 @@ def plan_goal(
                 candidate_category = str(hc.get("category", "") or "") or None
 
     candidate_limit = _get_candidate_limit(semantic_frame, goal_type_str)
+    requested_count, min_required, max_allowed = _get_quantity_semantics(goal_type_str, candidate_limit)
 
     # --- 5. Extract facets ---
     required_facets, optional_facets = _get_facets(semantic_frame)
@@ -306,6 +321,9 @@ def plan_goal(
         candidate_source=candidate_source,
         candidate_category=candidate_category,
         candidate_limit=candidate_limit,
+        requested_count=requested_count,
+        min_required=min_required,
+        max_allowed=max_allowed,
         evidence_needs=evidence_needs,
         required_facets=required_facets,
         optional_facets=optional_facets,

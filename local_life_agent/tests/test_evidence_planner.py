@@ -107,7 +107,7 @@ class TestPlanEvidence:
     def test_plan_id_contains_source_and_type(self):
         goal = LocalLifeGoalDraft(
             goal_type=GoalType.SINGLE_SHOP_QUERY,
-            required_facets=[],
+            required_facets=["coupon"],
         )
         cs = CandidateSet(
             status=CandidateStatus.RESOLVED,
@@ -136,7 +136,7 @@ class TestPlanEvidence:
         for tc in plan.tool_calls:
             assert tc.max_parallelism >= 1
 
-    def test_no_facets_produces_no_tool_calls(self):
+    def test_no_facets_raises(self):
         goal = LocalLifeGoalDraft(
             goal_type=GoalType.SINGLE_SHOP_QUERY,
         )
@@ -147,5 +147,5 @@ class TestPlanEvidence:
                 ResolvedCandidate(shop_id="s1", shop_name="Shop A", rank=1),
             ],
         )
-        plan = plan_evidence(goal, cs)
-        assert plan.tool_calls == []
+        with pytest.raises(ValueError):
+            plan_evidence(goal, cs)

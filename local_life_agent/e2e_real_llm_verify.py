@@ -33,12 +33,12 @@ from local_life_agent.llm.client import set_llm_backend, clear_llm_backend
 from local_life_agent.llm.openai_backend import OpenAICompatibleBackend
 from local_life_agent.session.store import get_session_store, reset_session_store
 from local_life_agent.target.reference_resolver import resolve_references
-from local_life_agent.tools.mock_tools import (
+from local_life_agent.tools.db_tools import (
     check_open_status,
     get_coupon_list,
     get_distance_eta,
     get_shop_detail,
-    resolve_shop as mock_resolve_shop,
+    resolve_shop,
     search_shops,
 )
 
@@ -98,7 +98,7 @@ def _resolve_shop_custom(query: str, location: dict | None = None,
             "candidates": [],
             "confidence": 0.95,
         }
-    return mock_resolve_shop(q, location=location, session_shop_ids=session_shop_ids)
+    return resolve_shop(q, location=location, session_shop_ids=session_shop_ids)
 
 
 def _accept_dispatch(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -265,52 +265,7 @@ def section_1_direct_probe() -> dict[str, Any]:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# Section 2: Mock Shop Resolution Probe
-# ═══════════════════════════════════════════════════════════════════
-
-def section_2_mock_shop_probe() -> list[dict[str, Any]]:
-    """Probe mock resolve_shop for known names."""
-    print("=" * 70)
-    print(" SECTION 2: Mock Shop Resolution Probe")
-    print("=" * 70)
-
-    names_to_try = ["海底捞", "川味轩", "山城一锅", "海底捞(牡丹园店)", "川味轩(知春路店)"]
-    rows: list[dict[str, Any]] = []
-
-    print(f"  {'输入店名':20s} {'resolve_status':20s} {'shop_id':20s} {'shop_name'}")
-    print(f"  {'-'*20} {'-'*20} {'-'*20} {'-'*30}")
-
-    for name in names_to_try:
-        result = mock_resolve_shop(name, location={"lat": 39.9609, "lng": 116.3581})
-        status = result.get("status", "?")
-        shop = result.get("shop") or {}
-        shop_id = shop.get("shop_id", "") if isinstance(shop, dict) else ""
-        shop_name = shop.get("shop_name", "") if isinstance(shop, dict) else ""
-        rows.append({
-            "query": name,
-            "status": status,
-            "shop_id": shop_id,
-            "shop_name": shop_name,
-        })
-        print(f"  {name:20s} {status:20s} {shop_id:20s} {shop_name}")
-
-    # Also try with our custom resolve (includes overrides)
-    print(f"\n  --- With custom resolve_shop (including overrides) ---")
-    print(f"  {'输入店名':20s} {'resolve_status':20s} {'shop_id':20s} {'shop_name'}")
-    print(f"  {'-'*20} {'-'*20} {'-'*20} {'-'*30}")
-    for name in names_to_try:
-        result = _resolve_shop_custom(name, location={"lat": 39.9609, "lng": 116.3581})
-        status = result.get("status", "?")
-        shop = result.get("shop") or {}
-        shop_id = shop.get("shop_id", "") if isinstance(shop, dict) else ""
-        shop_name = shop.get("shop_name", "") if isinstance(shop, dict) else ""
-        print(f"  {name:20s} {status:20s} {shop_id:20s} {shop_name}")
-
-    global _shop_resolutions
-    _shop_resolutions = rows
-    print()
-    return rows
-
+# Section 2: Mock Shop Resolution Probe (removed — mock_tools deleted in P1)
 
 # ═══════════════════════════════════════════════════════════════════
 # Helper: extract debug fields safely
@@ -912,8 +867,7 @@ def main() -> int:
     # Section 1: Direct probe
     section_1_direct_probe()
 
-    # Section 2: Mock shop probe
-    section_2_mock_shop_probe()
+    # Section 2: Mock shop probe (removed — mock_tools deleted in P1)
 
     # Install patches for graph scenarios
     _install_patches()
