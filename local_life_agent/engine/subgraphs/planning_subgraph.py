@@ -82,21 +82,34 @@ def h_planning_subgraph(state: GraphState) -> dict:
     working = _run_steps(working, [_h_target_resolve])
     resolve_result = working.get("resolve_shop_result") or working.get("resolved_target")
     resolve_dict = _to_dict(resolve_result)
-    if resolve_dict.get("status") != "RESOLVED":
-        if working.get("pending_clarification") is not None or resolve_dict.get("status") in {"AMBIGUOUS", "LOW_CONFIDENCE"}:
-            after = {**working, "planning_route": _OUTER_ROUTE_CLARIFY, "response_mode": _OUTER_ROUTE_CLARIFY}
-            return _state_delta(before, after, always_include={"planning_route", "response_mode"}, exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS)
-        fallback_route = _planning_failure_route(working)
-        after = {**working, "planning_route": fallback_route, "response_mode": fallback_route if fallback_route != _OUTER_ROUTE_EXECUTE else _OUTER_ROUTE_CLARIFY}
-        return _state_delta(before, after, always_include={"planning_route", "response_mode"}, exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS)
 
+    # Build execution plan regardless of target_resolve outcome.
+    # recommendation/discovery queries with 0 candidates still need
+    # a search plan; ambiguous shop references also go through tool
+    # execution rather than short-circuiting to clarify.
     working = _run_steps(working, [_h_evidence_planner, _h_plan_validator])
     if working.get("error_code"):
         fallback_route = _planning_failure_route(working)
         after = {**working, "planning_route": fallback_route, "response_mode": fallback_route}
         return _state_delta(before, after, always_include={"planning_route", "response_mode"}, exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS)
-    after = {**working, "planning_route": _OUTER_ROUTE_EXECUTE, "response_mode": "answer"}
-    return _state_delta(before, after, always_include={"planning_route", "response_mode"}, exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS)
+
+    if resolve_dict.get("status") == "RESOLVED":
+        after = {**working, "planning_route": _OUTER_ROUTE_EXECUTE, "response_mode": "answer"}
+        return _state_delta(before, after, always_include={"planning_route", "response_mode"}, exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS)
+
+    # Not RESOLVED — clear pending_clarification so response_subgraph
+    # does NOT enter the clarify branch.  Let Execute → Evidence Review
+    # → LLM Answer handle insufficient/ambiguous results naturally.
+    after = {
+        **working,
+        "planning_route": _OUTER_ROUTE_EXECUTE,
+        "response_mode": "answer",
+        "pending_clarification": None,
+        "final_response": "",
+    }
+    return _state_delta(before, after, always_include={
+        "planning_route", "response_mode", "pending_clarification", "final_response",
+    }, exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS)
 
 
 # ---------------------------------------------------------------------------
