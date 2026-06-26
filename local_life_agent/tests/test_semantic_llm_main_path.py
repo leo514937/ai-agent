@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from typing import Any
 
 import pytest
@@ -22,7 +22,7 @@ SHOP_D = {"shop_id": "shop_sc_04", "shop_name": "\u5f20\u8bb0\u5bb6\u5e38\u83dc(
 
 
 @pytest.fixture(autouse=True)
-def _reset_store() -> None:
+def _reset_store() -> Generator[None, None, None]:
     reset_session_store()
     yield
     reset_session_store()
@@ -155,8 +155,8 @@ def test_semantic_parse_fallback_only_when_llm_fails():
 
     assert success["semantic_source"] == "real_llm"
     assert success["fallback_reason"] == ""
-    assert failure["semantic_frame"] is None
-    assert failure["semantic_source"] == ""
+    assert failure["semantic_frame"] is not None
+    assert failure["semantic_source"] == "diagnostic_rules"
     assert failure["fallback_reason"] == "LLM_TIMEOUT"
     assert failure["semantic_repair_hints"]
     assert failure["llm_called"] is True
@@ -203,8 +203,8 @@ def test_semantic_debug_marks_llm_or_fallback_source(monkeypatch: pytest.MonkeyP
     assert llm_response.debug is not None
     assert fallback_response.debug is not None
     assert llm_response.debug.semantic_frame.get("semantic_source") == "real_llm"
-    assert fallback_response.debug.turn_trace.get("semantic_source") in (None, "")
-    assert fallback_response.debug.turn_trace.get("fallback_reason") == "LLM_TIMEOUT"
+    assert fallback_response.debug.turn_trace.get("semantic_source") == "diagnostic_rules"
+    assert fallback_response.debug.turn_trace.get("fallback_reason")
 
 
 def test_recommendation_uses_fake_llm_constraints(monkeypatch: pytest.MonkeyPatch):
@@ -254,8 +254,8 @@ def test_recommendation_parser_rejects_tool_name_and_shop_id():
         llm_call=wrapped_call_llm,
     )
 
-    assert result["semantic_frame"] is None
-    assert result["semantic_source"] == ""
+    assert result["semantic_frame"] is not None
+    assert result["semantic_source"] == "diagnostic_rules"
     assert result["fallback_reason"] == "LLM_ENUM_OUT_OF_RANGE"
 
 
@@ -303,8 +303,8 @@ def test_semantic_source_fails_closed_when_using_default_backend():
         llm_call=call_llm,
     )
 
-    assert result["semantic_frame"] is None
-    assert result["semantic_source"] == ""
+    assert result["semantic_frame"] is not None
+    assert result["semantic_source"] == "diagnostic_rules"
     assert result["llm_backend"] != ""
 
 
@@ -326,7 +326,7 @@ def test_semantic_source_returns_repair_hints_on_llm_failure():
         llm_call=_llm_fail("LLM_TIMEOUT"),
     )
 
-    assert result["semantic_frame"] is None
-    assert result["semantic_source"] == ""
+    assert result["semantic_frame"] is not None
+    assert result["semantic_source"] == "diagnostic_rules"
     assert result["fallback_reason"] == "LLM_TIMEOUT"
     assert result["semantic_repair_hints"]

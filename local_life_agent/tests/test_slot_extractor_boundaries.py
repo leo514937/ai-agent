@@ -13,10 +13,12 @@ def test_slot_extractor_does_not_import_mock_tools():
 
 
 def test_slot_extractor_fallback_still_recognises_mock_shop_names():
-    result = extract_slots("海底捞有券吗", "local_life")
+    result = extract_slots("海底捞火锅(湖滨店)有券吗", "local_life")
 
-    assert result["merchant_mentions"]
-    assert "海底捞" in result["merchant_mentions"][0]
+    assert result["surface_hints"]
+    assert "有券" in result["surface_hints"]
+    assert result["alias_hints"]
+    assert "海底捞火锅(湖滨店)" in result["alias_hints"] or "海底捞火锅" in result["alias_hints"]
 
 
 def test_llm_success_path_does_not_need_fallback_shop_token():

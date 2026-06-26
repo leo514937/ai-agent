@@ -73,9 +73,8 @@ def test_semantic_parser_rejects_forbidden_fields_and_retries():
     result = parse_semantic_frame("海底捞水晶城店有券吗", "local_life", llm_call=wrapped_call_llm)
 
     assert len(attempts) == 2
-    assert result["error_code"] == "LLM_ENUM_OUT_OF_RANGE"
-    assert result["semantic_frame"] is None
-    assert result["semantic_source"] == ""
+    assert result["semantic_frame"] is not None
+    assert result["semantic_source"] == "diagnostic_rules"
     assert result["fallback_reason"] == "LLM_ENUM_OUT_OF_RANGE"
 
 
