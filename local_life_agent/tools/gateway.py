@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .. import config
+from ..observability.file_logger import get_python_service_logger
 from ..observability.metrics import record_tool_call_metric
 from .circuit_breaker import get_circuit_breaker_manager
 from .executor import (
@@ -260,7 +261,21 @@ def get_gateway() -> ToolCallGateway:
 
 
 def dispatch_tool_call(tool_name: str, kwargs: dict[str, Any]) -> dict[str, Any]:
-    return _run_coroutine_sync(get_gateway().call(tool_name, kwargs))
+    _tool_logger = get_python_service_logger()
+    from ..observability.trace import sanitize_payload as _sanitize
+    call_id = str(kwargs.get("call_id", "") or "")[:40]
+    # Log tool entry with key args (sanitized, truncated)
+    safe_args = _sanitize(kwargs)
+    safe_args_str = str({k: v for k, v in safe_args.items() if k not in ("call_id",)})[:200]
+    _tool_logger.info("[TOOL_CALL] %s call_id=%s args=%s", tool_name, call_id, safe_args_str)
+    result = _run_coroutine_sync(get_gateway().call(tool_name, kwargs))
+    success = bool(result.get("success", False))
+    status = str(result.get("result_status", "") or "")
+    _tool_logger.info(
+        "[TOOL_RESULT] %s call_id=%s success=%s status=%s",
+        tool_name, call_id, success, status,
+    )
+    return result
 
 
 def _run_coroutine_sync(coro: Any) -> Any:

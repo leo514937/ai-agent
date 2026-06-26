@@ -267,9 +267,22 @@ def _instrument_handler(node_name: str, handler: GraphNodeFunc) -> GraphNodeFunc
         started_at = perf_counter()
         timestamp_ms = int(time() * 1000)
         input_summary = _trace_input_summary(state, node_name)
+
+        # — Node entry log —
+        _FILE_LOGGER.info(
+            "[NODE_ENTER] %s stage=%s raw_text=%s",
+            node_name, stage,
+            str(state.get("raw_text", "") or "")[:80],
+        )
+
         try:
             update = handler(state)
         except Exception as exc:
+            duration_ms = int((perf_counter() - started_at) * 1000)
+            _FILE_LOGGER.error(
+                "[NODE_EXIT] %s status=failed duration=%dms error=%s",
+                node_name, duration_ms, str(exc)[:200],
+            )
             try:
                 trace_id = str(state.get("trace_id", "") or "")
                 if trace_id:
@@ -282,7 +295,7 @@ def _instrument_handler(node_name: str, handler: GraphNodeFunc) -> GraphNodeFunc
                             "stage": stage,
                             "status": "failed",
                             "timestamp_ms": timestamp_ms,
-                            "duration_ms": int((perf_counter() - started_at) * 1000),
+                            "duration_ms": duration_ms,
                             "input_summary": input_summary,
                             "output_summary": {},
                             "error_code": "TRACE_HANDLER_EXCEPTION",
@@ -298,7 +311,17 @@ def _instrument_handler(node_name: str, handler: GraphNodeFunc) -> GraphNodeFunc
             log = list(update.get("event_log", []) or [])
             event_entry = log[-1] if log and isinstance(log[-1], dict) and str(log[-1].get("node", "")) == node_name else {}
             status = _event_status(node_name, update, event_entry)
+            duration_ms = int((perf_counter() - started_at) * 1000)
+            error_code = _coerce_str(update.get("error_code")) or ""
             output_summary = _trace_output_summary(update)
+
+            # — Node exit log —
+            _FILE_LOGGER.info(
+                "[NODE_EXIT] %s status=%s duration=%dms error=%s",
+                node_name, status, duration_ms,
+                error_code if error_code else "none",
+            )
+
             metadata = {
                 key: value
                 for key, value in event_entry.items()
@@ -312,10 +335,10 @@ def _instrument_handler(node_name: str, handler: GraphNodeFunc) -> GraphNodeFunc
                 "stage": stage,
                 "status": status,
                 "timestamp_ms": timestamp_ms,
-                "duration_ms": int((perf_counter() - started_at) * 1000),
+                "duration_ms": duration_ms,
                 "input_summary": input_summary,
                 "output_summary": output_summary,
-                "error_code": _coerce_str(update.get("error_code")) or None,
+                "error_code": error_code or None,
                 "error_message": _coerce_str(update.get("error_message")) or None,
                 "metadata": sanitize_payload(metadata),
             }
