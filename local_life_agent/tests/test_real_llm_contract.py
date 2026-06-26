@@ -182,7 +182,7 @@ class TestAnswerMetadataContract:
     """generate_answer must produce answer_source metadata."""
 
     def test_template_source_when_verbalizer_disabled(self):
-        """When ENABLE_LLM_VERBALIZER=False, answer_source must degrade explicitly."""
+        """When ENABLE_LLM_VERBALIZER=False, answer must indicate LLM not available."""
         from ..answer.generator import generate_answer
 
         with patch("local_life_agent.config.ENABLE_LLM_VERBALIZER", False):
@@ -192,12 +192,10 @@ class TestAnswerMetadataContract:
                 {"ranking_snapshot": {"status": "ok", "shop_name": "川味轩"}},
                 metadata_out=metadata,
             )
-            assert res == "川味轩信息已确认。"
-            assert metadata.get("answer_source") == "template_fallback"
-            assert metadata.get("template_degraded") is True
-            assert metadata.get("fallback_used") is True
+            assert "【LLM 服务未启用】" in res
+            assert metadata.get("answer_source") == "llm_disabled"
             assert metadata.get("llm_verbalizer_enabled") is False
-            assert metadata.get("llm_used") is False
+            assert metadata.get("llm_verbalizer_called") is False
 
     def test_verbalizer_source_when_llm_succeeds(self):
         """Verbalizer ON + LLM success → answer_source = llm_verbalizer."""
@@ -226,18 +224,19 @@ class TestAnswerMetadataContract:
             assert metadata.get("llm_used") is True
 
     def test_template_when_verbalizer_returns_template(self):
-        """Verbalizer ON but failing to call LLM should fail closed."""
+        """Verbalizer ON but failing to call LLM should return error message."""
         from ..answer.generator import generate_answer
 
         with patch("local_life_agent.config.ENABLE_LLM_VERBALIZER", True):
             metadata: dict[str, Any] = {}
-            with pytest.raises(RuntimeError, match="LLM_BACKEND_UNAVAILABLE"):
-                generate_answer(
-                    {"answer_type": "single_shop"},
-                    {"ranking_snapshot": {"status": "ok", "shop_name": "川味轩"}},
-                    llm_client=None,
-                    metadata_out=metadata,
-                )
+            res = generate_answer(
+                {"answer_type": "single_shop"},
+                {"ranking_snapshot": {"status": "ok", "shop_name": "川味轩"}},
+                llm_client=None,
+                metadata_out=metadata,
+            )
+            assert "【LLM 出错】" in res
+            assert metadata.get("answer_source") == "llm_verbalizer"
 
 
 # ====================================================================

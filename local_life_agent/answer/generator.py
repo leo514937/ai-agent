@@ -117,183 +117,6 @@ def _shop_display_name(evidence: dict[str, Any]) -> str:
     return "这家店"
 
 
-def _facet_sentence(facet: str, snapshot: dict[str, Any]) -> str:
-    status = snapshot.get("facet_statuses", {}).get(facet, snapshot.get("status", "unknown"))
-    shop_name = snapshot.get("shop_name") or "这家店"
-
-    if facet == "coupon":
-        titles = snapshot.get("coupon_titles") or []
-        if status == "ok":
-            if titles:
-                top_titles = "、".join(str(title) for title in titles[:3])
-                return f"{shop_name}有券，当前可用券包括：{top_titles}"
-            return f"{shop_name}有可用券"
-        if status == "empty":
-            return f"{shop_name}当前暂无可用券"
-        if status == "failed":
-            return f"获取{shop_name}优惠券信息失败，建议稍后再试"
-        if status == "circuit_open":
-            return f"{shop_name}优惠券服务暂时不可用，请稍后再试"
-        return f"暂时无法确认{shop_name}的优惠情况"
-
-    if facet == "open_status":
-        open_status = str(snapshot.get("open_status", "unknown") or "unknown").lower()
-        if status == "ok":
-            if open_status == "open":
-                return f"{shop_name}目前营业中"
-            if open_status == "closed":
-                return f"{shop_name}目前已打烊"
-            return f"{shop_name}营业状态暂时无法确认"
-        if status == "failed":
-            return f"获取{shop_name}营业状态失败，建议稍后再试"
-        if status == "circuit_open":
-            return f"{shop_name}营业状态服务暂时不可用，请稍后再试"
-        return f"暂时无法确认{shop_name}的营业状态"
-
-    if facet == "distance":
-        distance_km = snapshot.get("distance_km")
-        eta_minutes = snapshot.get("eta_minutes")
-        if status == "ok" and distance_km is not None:
-            if eta_minutes is not None:
-                return f"{shop_name}距离约{distance_km}公里，预计{eta_minutes}分钟可到"
-            return f"{shop_name}距离约{distance_km}公里"
-        if status == "failed":
-            return f"获取{shop_name}距离信息失败，建议稍后再试"
-        if status == "circuit_open":
-            return f"{shop_name}距离服务暂时不可用，请稍后再试"
-        return f"暂时无法确认{shop_name}的距离"
-
-    return ""
-
-
-def _recommendation_sentence(ranked_items: list[dict[str, Any]]) -> str:
-    parts: list[str] = []
-    for idx, item in enumerate(ranked_items[:3], start=1):
-        shop_name = str(item.get("shop_name", "")).strip()
-        if not shop_name:
-            continue
-        details: list[str] = []
-        distance_km = item.get("distance_km")
-        eta_minutes = item.get("eta_minutes")
-        open_status = str(item.get("open_status", "") or "").lower()
-        coupon_count = item.get("coupon_count")
-        rating = item.get("rating")
-        if distance_km is not None:
-            if eta_minutes is not None:
-                details.append(f"距离约{distance_km}公里，预计{eta_minutes}分钟可到")
-            else:
-                details.append(f"距离约{distance_km}公里")
-        if open_status == "open":
-            details.append("目前营业中")
-        elif open_status == "closed":
-            details.append("目前已打烊")
-        if coupon_count is not None:
-            try:
-                count = int(coupon_count)
-            except Exception:
-                count = None
-            if count is not None:
-                details.append("有券" if count > 0 else "暂无可用券")
-        if rating is not None:
-            details.append(f"评分{rating}")
-        tail = "，".join(details)
-        parts.append(f"{idx}. {shop_name}" + (f"：{tail}" if tail else ""))
-    if not parts:
-        return "暂时没有找到符合条件的店，建议稍后再试或者放宽一点条件。"
-    count = len(parts)
-    from ..config import RECOMMENDATION_FINAL_TOP_K
-    if count < RECOMMENDATION_FINAL_TOP_K:
-        prefix = f"符合条件的店较少，我先推荐这{count}家："
-    else:
-        prefix = f"附近我推荐这{count}家："
-    return prefix + "；".join(parts) + "。"
-
-
-def _comparison_sentence(evidence: dict[str, Any]) -> str:
-    matrix = evidence.get("comparison_matrix") or {}
-    rows = [row for row in (matrix.get("rows") or []) if isinstance(row, dict)]
-    if not rows:
-        return "暂时没有足够信息做对比。"
-
-    names = [str(row.get("shop_name", "")).strip() or str(row.get("shop_id", "")).strip() for row in rows]
-    parts: list[str] = []
-    if names:
-        parts.append("对比的是" + "、".join(names) + "。")
-
-    all_unknown = True
-    for row in rows:
-        row_parts: list[str] = []
-        shop_name = str(row.get("shop_name", "")).strip() or str(row.get("shop_id", "")).strip() or "这家店"
-        rating = row.get("rating")
-        distance_km = row.get("distance_km")
-        eta_minutes = row.get("eta_minutes")
-        open_status = str(row.get("open_status", "unknown") or "unknown").lower()
-        coupon_status = str(row.get("coupon_status", "unknown") or "unknown")
-
-        if rating is not None:
-            all_unknown = False
-            row_parts.append(f"评分{rating}")
-        if distance_km is not None:
-            all_unknown = False
-            if eta_minutes is not None:
-                row_parts.append(f"距离约{distance_km}公里，预计{eta_minutes}分钟可到")
-            else:
-                row_parts.append(f"距离约{distance_km}公里")
-        if open_status == "open":
-            all_unknown = False
-            row_parts.append("目前营业中")
-        elif open_status == "closed":
-            all_unknown = False
-            row_parts.append("目前已打烊")
-        else:
-            row_parts.append("营业状态暂时无法确认")
-
-        if coupon_status == "has_coupon":
-            all_unknown = False
-            titles = row.get("coupon_titles") or []
-            if titles:
-                row_parts.append("有券：" + "、".join(str(title) for title in titles[:3]))
-            else:
-                row_parts.append("有券")
-        elif coupon_status == "empty":
-            row_parts.append("暂无可用券")
-        else:
-            row_parts.append("优惠暂时无法确认")
-
-        parts.append(f"{shop_name}：" + "，".join(row_parts) + "。")
-
-    if all_unknown:
-        parts.append("目前可验证信息不足，暂时不能判断谁更好。")
-        return "".join(parts)
-
-    overall_ranked = [row for row in (matrix.get("overall_ranked") or []) if isinstance(row, dict)]
-    if len(overall_ranked) >= 2:
-        best = overall_ranked[0]
-        runner_up = overall_ranked[1]
-        best_name = str(best.get("shop_name", "")).strip() or str(best.get("shop_id", "")).strip()
-        if best_name and best.get("known_dimensions", 0) and best.get("overall_score", 0) != runner_up.get("overall_score", 0):
-            parts.append(f"在已知信息里，{best_name}相对更靠前。")
-
-    winners = matrix.get("dimension_winners") or {}
-    winner_notes: list[str] = []
-    for dim, label in (("rating", "评分"), ("distance", "距离"), ("open_status", "营业状态"), ("coupon", "优惠")):
-        items = winners.get(dim) or []
-        names = [str(item.get("shop_name", "")).strip() or str(item.get("shop_id", "")).strip() for item in items if isinstance(item, dict)]
-        if names:
-            if dim == "open_status" and len(names) > 1:
-                winner_notes.append("营业状态都在营业中")
-            else:
-                winner_notes.append(f"{label}领先的是" + "、".join(names))
-    if winner_notes:
-        parts.append("；".join(winner_notes) + "。")
-
-    notes = [str(item).strip() for item in (matrix.get("uncertainty_notes") or []) if str(item).strip()]
-    if notes:
-        parts.append("不确定项：" + "；".join(notes[:4]) + "。")
-
-    return "".join(parts)
-
-
 def _build_decision_plan(
     answer_plan: dict,
     evidence: dict,
@@ -697,7 +520,11 @@ def generate_answer(
     in_graph: bool = False,
     conversation_continuity: dict[str, Any] | None = None,
 ) -> str:
-    """Generate a final natural language answer.
+    """Generate a final natural language answer via LLM verbalizer only.
+
+    Template-based fallback has been removed — this function uses only the
+    LLM verbalizer path. If the LLM is unavailable or fails, an error
+    message is returned.
 
     When *metadata_out* is provided, the dict is populated with
     answer-source tracking keys so the caller can record which path
@@ -705,70 +532,14 @@ def generate_answer(
     """
     answer_plan = _to_dict(answer_plan)
     evidence = _to_dict(evidence)
-    snapshot = evidence.get("ranking_snapshot") or {}
-    facet_results = evidence.get("facet_results") or snapshot.get("facet_results") or []
-    status = snapshot.get("status", "unknown")
 
-    comparison_matrix = evidence.get("comparison_matrix") or {}
-    if answer_plan.get("answer_type") == "comparison" or (comparison_matrix.get("rows") or []):
-        template_text = _comparison_sentence(evidence)
-    elif answer_plan.get("answer_type") == "recommendation" or snapshot.get("ranked"):
-        ranked_items = snapshot.get("ranked") or snapshot.get("ranked_shops") or []
-        template_text = _recommendation_sentence([item for item in ranked_items if isinstance(item, dict)])
-    else:
-        shop_name = _shop_display_name(evidence)
-
-        if facet_results:
-            parts = []
-            for item in facet_results:
-                facet = item.get("facet", "")
-                sentence = _facet_sentence(facet, snapshot)
-                if sentence:
-                    parts.append(sentence)
-            if parts:
-                template_text = "；".join(parts) + "。"
-            else:
-                template_text = ""
-        else:
-            if status == "ok":
-                template_text = f"{shop_name}信息已确认。"
-            elif status == "empty":
-                template_text = f"{shop_name}当前暂无可用信息。"
-            elif status == "failed":
-                template_text = f"获取{shop_name}信息失败，建议稍后再试。"
-            elif status == "circuit_open":
-                template_text = f"{shop_name}相关服务暂时不可用，请稍后再试。"
-            elif answer_plan.get("answer_type") == "clarification":
-                clarification = answer_plan.get("response_sections", [{}])[0].get("clarification", "")
-                template_text = clarification if clarification else f"请提供更完整的{shop_name}店名。"
-            else:
-                template_text = f"暂时无法确认{shop_name}的相关信息。"
-
-    # Track answer source
-    # NOTE: verbalizer diagnostic fields (answer_fallback_reason,
-    # llm_verbalizer_error, generated_llm_answer_before_fallback) are set
-    # by verbalize_decision_plan() in metadata_out.  Do NOT include them
-    # here with defaults, otherwise metadata_out.update(metadata) below
-    # would overwrite the real diagnostic values.
-    metadata = {
-        "answer_source": "template_fallback",
-        "llm_verbalizer_enabled": False,
-        "llm_verbalizer_called": False,
-        "llm_used": False,
-        "llm_backend": "",
-        "answer_verifier_result": "not_run",
-        "template_degraded": True,
-        "fallback_used": True,
-        "template_fallback_used": True,
-    }
-    
     # Track decision metadata
     ap_dict = _to_dict(answer_plan)
     ev_dict = _to_dict(evidence)
     answer_type_meta = ap_dict.get("answer_type", "general")
     comparison_matrix_meta = ev_dict.get("comparison_matrix") or {}
     ranking_snapshot_meta = ev_dict.get("ranking_snapshot") or {}
-    
+
     decision_type_meta = "general"
     if answer_type_meta == "comparison" or (comparison_matrix_meta and (comparison_matrix_meta.get("rows") or comparison_matrix_meta.get("overall_ranked"))):
         decision_type_meta = "comparison"
@@ -776,7 +547,7 @@ def generate_answer(
         decision_type_meta = "recommendation"
     elif answer_type_meta == "single_shop" or (ranking_snapshot_meta and ranking_snapshot_meta.get("shop_id")):
         decision_type_meta = "single_shop"
-        
+
     candidate_count_meta = 0
     if decision_type_meta == "comparison":
         candidate_count_meta = len(comparison_matrix_meta.get("rows") or [])
@@ -784,52 +555,49 @@ def generate_answer(
         candidate_count_meta = len(ranking_snapshot_meta.get("ranked") or ranking_snapshot_meta.get("ranked_shops") or [])
     elif decision_type_meta == "single_shop":
         candidate_count_meta = 1
-        
-    metadata["decision_type"] = decision_type_meta
-    metadata["candidate_count"] = candidate_count_meta
 
-    # Check Verbalizer config and client
+    metadata: dict[str, Any] = {
+        "answer_source": "llm_verbalizer",
+        "llm_verbalizer_enabled": True,
+        "llm_verbalizer_called": True,
+        "llm_used": False,
+        "llm_backend": "",
+        "answer_verifier_result": "not_run",
+        "decision_type": decision_type_meta,
+        "candidate_count": candidate_count_meta,
+    }
+
     from .. import config
     from .llm_verbalizer import verbalize_decision_plan
 
-    if config.ENABLE_LLM_VERBALIZER:
-        metadata["llm_verbalizer_enabled"] = True
-        metadata["llm_verbalizer_called"] = True
-        from ..llm.client import call_llm
-        client = llm_client or call_llm
-        metadata["llm_backend"] = str(getattr(client, "llm_backend", "") or getattr(config, "LLM_BACKEND", ""))
-        plan = _build_decision_plan(answer_plan, evidence, conversation_continuity=conversation_continuity)
-        verbalized = verbalize_decision_plan(
-            plan,
-            llm_client=client,
-            fallback_text=template_text,
-            metadata_out=metadata_out,
-            timeout_ms=config.LLM_TIMEOUT_MS,
-            rewrite_count=rewrite_count,
-            previous_violations=previous_violations,
-            in_graph=in_graph,
-        )
-        metadata["llm_used"] = True
-        if not metadata.get("answer_verify_passed", True) and not metadata.get("rewrite_needed", False):
-            metadata["answer_source"] = "trusted_failure_message"
-            metadata["template_degraded"] = True
-            metadata["fallback_used"] = True
-            metadata["template_fallback_used"] = False
-        else:
-            metadata["answer_source"] = "llm_verbalizer_rewrite" if rewrite_count > 0 else "llm_verbalizer"
-            metadata["answer_fallback_reason"] = ""
-            metadata["answer_verifier_result"] = "pass"
-            metadata["template_degraded"] = False
-            metadata["fallback_used"] = False
-            metadata["template_fallback_used"] = False
-
-        verbalized = _normalize_coupon_phrase(verbalized)
-
+    if not config.ENABLE_LLM_VERBALIZER:
         if metadata_out is not None:
+            metadata["answer_source"] = "llm_disabled"
+            metadata["llm_verbalizer_enabled"] = False
+            metadata["llm_verbalizer_called"] = False
             metadata_out.update(metadata)
-        return verbalized
+        return "【LLM 服务未启用】无法生成自然语言回答。"
+
+    from ..llm.client import call_llm
+    client = llm_client or call_llm
+    metadata["llm_backend"] = str(getattr(client, "llm_backend", "") or getattr(config, "LLM_BACKEND", ""))
+
+    plan = _build_decision_plan(answer_plan, evidence, conversation_continuity=conversation_continuity)
+    verbalized = verbalize_decision_plan(
+        plan,
+        llm_client=client,
+        metadata_out=metadata_out,
+        timeout_ms=config.LLM_TIMEOUT_MS,
+        rewrite_count=rewrite_count,
+        previous_violations=previous_violations,
+        in_graph=in_graph,
+    )
+    metadata["llm_used"] = True
 
     if metadata_out is not None:
+        if not metadata_out.get("answer_source"):
+            metadata["answer_source"] = "llm_verbalizer_rewrite" if rewrite_count > 0 else "llm_verbalizer"
         metadata_out.update(metadata)
-    return _normalize_coupon_phrase(template_text)
+
+    return _normalize_coupon_phrase(verbalized)
 

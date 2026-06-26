@@ -4,7 +4,7 @@ import json
 from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..config import ENABLE_LLM_VERBALIZER, MAX_REWRITE_ATTEMPTS
+from ..config import MAX_REWRITE_ATTEMPTS
 from ..domain.schemas import DecisionPlan
 from ..llm.client import load_prompt
 
@@ -182,6 +182,22 @@ def _invoke_verbalizer_llm(
 ) -> dict[str, Any]:
     validator = VerbalizerResponse.model_validate
 
+    def _normalize(result: Any) -> dict[str, Any]:
+        """Normalize an LLM result to a dict with 'ok' and 'content'."""
+        if isinstance(result, dict):
+            return result
+        if isinstance(result, str):
+            # Try to parse JSON string response
+            import json
+            try:
+                parsed = json.loads(result)
+                if isinstance(parsed, dict):
+                    return {"ok": True, "content": validator(parsed)}
+            except (json.JSONDecodeError, ValueError, TypeError):
+                pass
+            return {"ok": False, "error_message": "llm_response_not_parsed"}
+        return {"ok": False, "error_message": "llm_response_not_dict"}
+
     if callable(llm_client):
         try:
             result = llm_client(
@@ -190,7 +206,7 @@ def _invoke_verbalizer_llm(
                 timeout_ms=timeout_ms,
                 response_validator=validator,
             )
-            return result if isinstance(result, dict) else {"ok": False, "error_message": "llm_response_not_dict"}
+            return _normalize(result)
         except TypeError as exc:
             if "response_validator" not in str(exc):
                 raise
@@ -202,7 +218,7 @@ def _invoke_verbalizer_llm(
                 response_validator=validator,
                 backend=llm_client,
             )
-            return result if isinstance(result, dict) else {"ok": False, "error_message": "llm_response_not_dict"}
+            return _normalize(result)
 
     call_fn = getattr(llm_client, "call_llm", getattr(llm_client, "call", None))
     if not call_fn:
@@ -213,57 +229,51 @@ def _invoke_verbalizer_llm(
         timeout_ms=timeout_ms,
         response_validator=validator,
     )
-    return result if isinstance(result, dict) else {"ok": False, "error_message": "llm_response_not_dict"}
+    return _normalize(result)
 
 
 def verbalize_decision_plan(
     plan: DecisionPlan,
     *,
     llm_client: Any | None = None,
-    fallback_text: str = "",
     metadata_out: dict | None = None,
     timeout_ms: int = 30000,
     rewrite_count: int = 0,
     previous_violations: list[str] | None = None,
     in_graph: bool = False,
 ) -> str:
+    """Verbalize a DecisionPlan into natural language via LLM.
+
+    No template fallback — on error, returns a descriptive error message.
+    """
     # Check client
     if not llm_client:
         if metadata_out is not None:
-            metadata_out["answer_fallback_reason"] = "llm_client_unavailable"
+            metadata_out["answer_source"] = "llm_error"
             metadata_out["llm_verbalizer_error"] = "llm_client_unavailable"
             metadata_out["answer_verify_passed"] = False
             metadata_out["answer_verify_violations"] = ["llm_client_unavailable"]
             metadata_out["rewrite_needed"] = False
             metadata_out["rewrite_count"] = rewrite_count
-            metadata_out["rewrite_reason"] = "llm_client_unavailable"
-            metadata_out["fallback_reason"] = "llm_client_unavailable"
-            metadata_out["final_safety_status"] = "fallback"
+            metadata_out["final_safety_status"] = "error"
             metadata_out["verifier_result"] = "fail"
             metadata_out["verifier_failure_code"] = "llm_client_unavailable"
-            metadata_out["verifier_unknown_fields"] = []
-            metadata_out["verifier_unsupported_claims"] = []
-            metadata_out["template_fallback_used"] = False
-        return fallback_text or ""
+        return "【LLM 出错】LLM 服务不可用，无法生成回答。"
 
     try:
         system_prompt, _ = _load_verbalizer_prompts()
     except (FileNotFoundError, ValueError, OSError) as exc:
         if metadata_out is not None:
-            metadata_out["answer_fallback_reason"] = "prompt_load_failed"
+            metadata_out["answer_source"] = "llm_error"
             metadata_out["llm_verbalizer_error"] = str(exc)
             metadata_out["answer_verify_passed"] = False
             metadata_out["answer_verify_violations"] = ["prompt_load_failed"]
             metadata_out["rewrite_needed"] = False
             metadata_out["rewrite_count"] = rewrite_count
-            metadata_out["fallback_reason"] = "prompt_load_failed"
-            metadata_out["final_safety_status"] = "fallback"
+            metadata_out["final_safety_status"] = "error"
             metadata_out["verifier_result"] = "fail"
             metadata_out["verifier_failure_code"] = "prompt_load_failed"
-            metadata_out["verifier_unknown_fields"] = []
-            metadata_out["verifier_unsupported_claims"] = []
-            metadata_out["template_fallback_used"] = True
-        return fallback_text or ""
+        return f"【LLM 出错】Verbalizer 提示词加载失败: {exc}"
 
     user_prompt = _render_user_prompt(plan, rewrite_count=rewrite_count, previous_violations=previous_violations)
 
@@ -279,7 +289,18 @@ def verbalize_decision_plan(
             raise RuntimeError("llm_call_missing_callable")
 
         if not res or not res.get("ok"):
-            raise RuntimeError(str((res or {}).get("error_message", "") or (res or {}).get("error_code", "") or "llm_call_failed"))
+            error_msg = str((res or {}).get("error_message", "") or (res or {}).get("error_code", "") or "llm_call_failed")
+            if metadata_out is not None:
+                metadata_out["answer_source"] = "llm_error"
+                metadata_out["llm_verbalizer_error"] = error_msg
+                metadata_out["answer_verify_passed"] = False
+                metadata_out["answer_verify_violations"] = [error_msg]
+                metadata_out["rewrite_needed"] = False
+                metadata_out["rewrite_count"] = rewrite_count
+                metadata_out["final_safety_status"] = "error"
+                metadata_out["verifier_result"] = "fail"
+                metadata_out["verifier_failure_code"] = error_msg
+            return f"【LLM 出错】LLM 调用失败: {error_msg}"
 
         content = res.get("content")
         if isinstance(content, VerbalizerResponse):
@@ -307,23 +328,23 @@ def verbalize_decision_plan(
             metadata_out["verifier_recoverable"] = bool(verification_result.get("recoverable", False))
         if not verification_result["passed"]:
             if metadata_out is not None:
+                violations = verification_result.get("violations") or [str(verification_result.get("violation", ""))]
                 metadata_out["violation"] = verification_result["violation"]
-                metadata_out["violations"] = verification_result["violations"]
-                metadata_out["answer_fallback_reason"] = f"b2_mini_verifier:{verification_result['violation'] or 'unknown'}"
-                metadata_out["llm_verbalizer_error"] = verification_result["violations"]
+                metadata_out["violations"] = violations
+                metadata_out["llm_verbalizer_error"] = violations
                 metadata_out["answer_verify_passed"] = False
-                metadata_out["answer_verify_violations"] = verification_result["violations"]
+                metadata_out["answer_verify_violations"] = violations
                 metadata_out["rewrite_needed"] = in_graph and rewrite_count < _GRAPH_REWRITE_LIMIT and bool(verification_result.get("recoverable", False))
                 metadata_out["rewrite_count"] = rewrite_count
                 metadata_out["rewrite_reason"] = verification_result["violation"]
-                metadata_out["fallback_reason"] = f"b2_mini_verifier:{verification_result['violation'] or 'unknown'}"
                 metadata_out["final_safety_status"] = "violated"
-                metadata_out["template_fallback_used"] = False
             
             # If in graph and rewrite is still under limit, return natural_text to let verifier fail & trigger rewrite
             if in_graph and rewrite_count < _GRAPH_REWRITE_LIMIT and bool(verification_result.get("recoverable", False)):
                 return natural_text
-            return fallback_text or natural_text
+            # Verification failed and no rewrite available — return natural_text + note
+            error_note = f"\n\n【注意】LLM 回答未通过可信性校验，可能存在不准确信息。"
+            return natural_text + error_note
 
         if metadata_out is not None:
             metadata_out["answer_verify_passed"] = True
@@ -331,27 +352,21 @@ def verbalize_decision_plan(
             metadata_out["rewrite_needed"] = False
             metadata_out["rewrite_count"] = rewrite_count
             metadata_out["rewrite_reason"] = ""
-            metadata_out["fallback_reason"] = ""
             metadata_out["final_safety_status"] = "safe"
-            metadata_out["template_fallback_used"] = False
 
         return natural_text
     except Exception as exc:
         if metadata_out is not None:
-            metadata_out["answer_fallback_reason"] = str(exc)
+            metadata_out["answer_source"] = "llm_error"
             metadata_out["llm_verbalizer_error"] = str(exc)
             metadata_out["answer_verify_passed"] = False
             metadata_out["answer_verify_violations"] = [str(exc)]
             metadata_out["rewrite_needed"] = False
             metadata_out["rewrite_count"] = rewrite_count
             metadata_out["rewrite_reason"] = str(exc)
-            metadata_out["fallback_reason"] = str(exc)
-            metadata_out["final_safety_status"] = "fallback"
+            metadata_out["final_safety_status"] = "error"
             metadata_out["verifier_result"] = "fail"
             metadata_out["verifier_failure_code"] = str(exc)
-            metadata_out["verifier_unknown_fields"] = []
-            metadata_out["verifier_unsupported_claims"] = []
-            metadata_out["template_fallback_used"] = False
-        return fallback_text or ""
+        return f"【LLM 出错】{exc}"
 
 
