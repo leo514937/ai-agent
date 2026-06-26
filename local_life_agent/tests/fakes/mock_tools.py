@@ -40,6 +40,12 @@ def _find_shop(shop_id: str) -> dict[str, Any] | None:
     return None
 
 
+def _calc_etas(distance_km: float) -> dict[str, int]:
+    """Calculate ETA minutes for walking/cycling/driving."""
+    speeds = {"walking": 5.0, "cycling": 15.0, "driving": 30.0}
+    return {mode: max(1, round(distance_km / (speed / 60))) for mode, speed in speeds.items()}
+
+
 def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     radius = 6371.0
     dlat = math.radians(lat2 - lat1)
@@ -104,6 +110,7 @@ def search_shops(query: str, location: dict[str, float] | None = None, limit: in
             if entry:
                 shop["distance_km"] = entry.get("distance_km")
                 shop["eta_minutes"] = entry.get("eta_minutes")
+                shop["etas"] = entry.get("etas") or _calc_etas(entry.get("distance_km", 0))
                 shop["traffic_level"] = entry.get("traffic_level", "low")
             enriched.append(shop)
         matched = enriched
@@ -137,13 +144,14 @@ def get_distance_eta(shop_id: str, from_location: dict[str, float]) -> dict[str,
     for entry in _all_distance_eta():
         if entry.get("shop_id") == shop_id:
             shop = _find_shop(shop_id)
-            return {"success": True, "result_status": "ok", "data": {"shop_id": shop_id, "shop_name": shop.get("shop_name", "") if shop else "", "distance_km": entry.get("distance_km"), "eta_minutes": entry.get("eta_minutes"), "traffic_level": entry.get("traffic_level", "low")}}
+            etas = entry.get("etas") or _calc_etas(entry.get("distance_km", 0))
+            return {"success": True, "result_status": "ok", "data": {"shop_id": shop_id, "shop_name": shop.get("shop_name", "") if shop else "", "distance_km": entry.get("distance_km"), "eta_minutes": etas.get("driving", entry.get("eta_minutes")), "etas": etas, "traffic_level": entry.get("traffic_level", "low")}}
     shop = _find_shop(shop_id)
     if shop is None:
         return {"success": False, "result_status": "failed", "error_code": "SHOP_NOT_FOUND", "data": None}
     distance = _haversine_km(float(from_location.get("lat", 39.9609)), float(from_location.get("lng", 116.3581)), float(shop.get("lat", 0)), float(shop.get("lng", 0)))
-    eta = max(1, round(distance / 0.5))
-    return {"success": True, "result_status": "ok", "data": {"shop_id": shop_id, "shop_name": shop.get("shop_name", ""), "distance_km": distance, "eta_minutes": eta, "traffic_level": "low"}}
+    etas = _calc_etas(distance)
+    return {"success": True, "result_status": "ok", "data": {"shop_id": shop_id, "shop_name": shop.get("shop_name", ""), "distance_km": distance, "eta_minutes": etas["driving"], "etas": etas, "traffic_level": "low"}}
 
 
 def get_shop_cards(shop_ids: list[str], user_location: dict[str, float] | None = None, need_coupon_brief: bool = True, need_open_status: bool = True, need_distance_eta: bool = True, max_items: int | None = None) -> dict[str, Any]:
@@ -167,7 +175,10 @@ def get_shop_cards(shop_ids: list[str], user_location: dict[str, float] | None =
             "avg_price": shop.get("avg_price"),
             "price_level": "low" if float(shop.get("avg_price", 0) or 0) <= 30 else "medium" if float(shop.get("avg_price", 0) or 0) <= 60 else "high",
             "distance_m": int(round(float(distance_meta.get("distance_km", 0)) * 1000)) if distance_meta and need_distance_eta else None,
+            "distance_km": float(distance_meta.get("distance_km", 0)) if distance_meta and need_distance_eta else None,
             "eta_minutes": int(distance_meta.get("eta_minutes", 0)) if distance_meta and need_distance_eta else None,
+            "etas": (distance_meta.get("etas") or _calc_etas(distance_meta.get("distance_km", 0))) if distance_meta and need_distance_eta else None,
+            "traffic_level": distance_meta.get("traffic_level", "low") if distance_meta and need_distance_eta else None,
             "is_open": True if shop.get("open_status") == "open" else False if shop.get("open_status") == "closed" else None,
             "open_status_text": shop.get("open_status", "unknown"),
             "coupon_count": len(coupons) if need_coupon_brief else None,

@@ -334,9 +334,15 @@ def _build_comparison_evidence(
                     row["open_status"] = str(item.get("open_status_text", item.get("open_status", "unknown")) or "unknown")
                     row["coupon_status"] = "has_coupon" if item.get("has_coupon") else "empty" if item.get("has_coupon") is False else row.get("coupon_status", "unknown")
                     row["coupon_titles"] = [item.get("top_coupon_title")] if item.get("top_coupon_title") else row.get("coupon_titles", [])
-                    if item.get("distance_m") is not None:
+                    raw_km = item.get("distance_km")
+                    if raw_km is not None:
                         try:
-                            row["distance_km"] = float(item.get("distance_m")) / 1000.0
+                            row["distance_km"] = float(raw_km)
+                        except Exception:
+                            pass
+                    elif item.get("distance_m") is not None:
+                        try:
+                            row["distance_km"] = float(item["distance_m"]) / 1000.0
                         except Exception:
                             pass
                     if item.get("eta_minutes") is not None:
@@ -941,23 +947,27 @@ def _build_recommendation_evidence(
                 candidate = candidates_by_shop_id.setdefault(item_shop_id, {"shop_id": item_shop_id, "shop_name": ""})
                 candidate["shop_name"] = str(item.get("name", "") or item.get("shop_name", "") or candidate.get("shop_name", "")).strip()
                 if tool_name == "get_shop_cards":
+                    # Prefer direct distance_km (now returned by the tool); fall back to distance_m/1000
+                    raw_km = item.get("distance_km")
+                    raw_m = item.get("distance_m")
+                    if raw_km is not None:
+                        resolved_km = float(raw_km)
+                    elif raw_m is not None:
+                        resolved_km = float(raw_m) / 1000.0
+                    else:
+                        resolved_km = candidate.get("distance_km")
                     candidate.update(
                         {
                             "category": item.get("category", candidate.get("category")),
                             "rating": item.get("rating", candidate.get("rating")),
                             "avg_price": item.get("avg_price", candidate.get("avg_price")),
-                            "distance_km": item.get("distance_m", candidate.get("distance_km")),
+                            "distance_km": resolved_km,
                             "eta_minutes": item.get("eta_minutes", candidate.get("eta_minutes")),
                             "open_status": str(item.get("open_status_text", item.get("open_status", "unknown")) or "unknown"),
                             "coupon_count": item.get("coupon_count", candidate.get("coupon_count")),
                             "tags": item.get("top_tags") or item.get("scene_tags") or candidate.get("tags", []),
                         }
                     )
-                    if candidate.get("distance_km") is not None:
-                        try:
-                            candidate["distance_km"] = float(candidate["distance_km"]) / 1000.0
-                        except Exception:
-                            pass
                     evidence_items.append(
                         {
                             "evidence_id": f"evi_shop_card_{item_shop_id}",
@@ -972,7 +982,10 @@ def _build_recommendation_evidence(
                                 "rating": item.get("rating"),
                                 "avg_price": item.get("avg_price"),
                                 "distance_m": item.get("distance_m"),
+                                "distance_km": item.get("distance_km"),
                                 "eta_minutes": item.get("eta_minutes"),
+                                "etas": item.get("etas"),
+                                "traffic_level": item.get("traffic_level"),
                                 "open_status_text": item.get("open_status_text"),
                                 "coupon_count": item.get("coupon_count"),
                             },

@@ -7,6 +7,25 @@ from typing import Any
 
 from . import db_client
 
+# ── Speed constants (km/h) ────────────────────────────────────────
+WALKING_SPEED_KMH = 5.0
+CYCLING_SPEED_KMH = 15.0
+DRIVING_SPEED_KMH = 30.0
+
+
+def _calc_etas(distance_km: float) -> dict[str, int]:
+    """Calculate ETA minutes for each travel mode based on distance."""
+    speeds = {
+        "walking": WALKING_SPEED_KMH,
+        "cycling": CYCLING_SPEED_KMH,
+        "driving": DRIVING_SPEED_KMH,
+    }
+    return {
+        mode: max(1, round(distance_km / (speed / 60)))
+        for mode, speed in speeds.items()
+    }
+
+
 # ── Internal helpers ──────────────────────────────────────────────
 
 
@@ -159,9 +178,10 @@ def search_shops(
             lat2 = shop.get("lat", 0)
             lng2 = shop.get("lng", 0)
             distance = _haversine_km(lat1, lng1, lat2, lng2)
-            eta = max(1, round(distance / 0.5))
+            etas = _calc_etas(distance)
             shop_copy["distance_km"] = distance
-            shop_copy["eta_minutes"] = eta
+            shop_copy["eta_minutes"] = etas["driving"]
+            shop_copy["etas"] = etas
             shop_copy["traffic_level"] = "low"
             enriched.append(shop_copy)
         matched = enriched
@@ -324,7 +344,7 @@ def get_distance_eta(shop_id: str, from_location: dict[str, float]) -> dict:
     lng2 = shop.get("lng", 0)
 
     distance = _haversine_km(lat1, lng1, lat2, lng2)
-    eta = max(1, round(distance / 0.5))
+    etas = _calc_etas(distance)
 
     return {
         "success": True,
@@ -333,7 +353,8 @@ def get_distance_eta(shop_id: str, from_location: dict[str, float]) -> dict:
             "shop_id": shop_id,
             "shop_name": shop["shop_name"],
             "distance_km": distance,
-            "eta_minutes": eta,
+            "eta_minutes": etas["driving"],
+            "etas": etas,
             "traffic_level": "low",
         },
     }
@@ -418,9 +439,10 @@ def get_shop_cards(
         if need_distance_eta and user_location:
             lat1 = user_location.get("lat", 39.9609)
             lng1 = user_location.get("lng", 116.3581)
-            distance_km = _haversine_km(lat1, lng1, shop.get("y", 0), shop.get("x", 0))
+            distance_km = _haversine_km(lat1, lng1, float(shop.get("lat", 0)), float(shop.get("lng", 0)))
             distance_m = int(round(distance_km * 1000))
-            eta_minutes = max(1, round(distance_km / 0.5))
+            etas = _calc_etas(distance_km)
+            eta_minutes = etas["driving"]
         coupons = db_client.query_coupons_by_shop_id(sid) if need_coupon_brief else []
         items.append(
             {
@@ -433,7 +455,10 @@ def get_shop_cards(
                 "avg_price": shop.get("avg_price"),
                 "price_level": _price_level(shop.get("avg_price")),
                 "distance_m": distance_m,
+                "distance_km": distance_km,
                 "eta_minutes": eta_minutes,
+                "etas": etas,
+                "traffic_level": "low",
                 "is_open": True if open_status == "open" else False if open_status == "closed" else None,
                 "open_status_text": open_status,
                 "coupon_count": len(coupons) if need_coupon_brief else None,
