@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
+import logging
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
@@ -21,7 +22,10 @@ from pydantic import BaseModel, Field, ValidationError
 
 from ..config import LLM_TIMEOUT_MS
 from ..input.normalizer import normalize_text
+from ..observability.file_logger import get_python_service_logger, log_kv
 from .json_parser import LLMJSONParseError, parse_json_response
+
+_LLM_LOGGER = get_python_service_logger()
 
 
 class LLMTimeoutError(RuntimeError):
@@ -337,6 +341,15 @@ def _validate_output_schema(
     return content if validated is None else validated
 
 
+def _prompt_tag(prompt: str) -> str:
+    """Extract a short 30-char tag from the first non-empty line."""
+    for line in prompt.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            return line[:60]
+    return prompt[:60]
+
+
 def call_llm(
     prompt: str,
     system_prompt: str = "",
@@ -353,19 +366,49 @@ def call_llm(
     returns ``ok=False`` with an ``error_code`` so the business layer can
     degrade gracefully.
     """
+    _start_ts = time.monotonic()
+    prompt_tag = _prompt_tag(prompt)
+    system_tag = _prompt_tag(system_prompt) if system_prompt else "(none)"
+
     effective_backend = backend or _LLM_BACKEND or _default_llm_backend
     if effective_backend is _default_llm_backend:
-        # No backend injected: fail closed instead of fabricating a
-        # successful rule-based semantic result.
         backend_kind = "rule_based"
     else:
-        # Injected test backend or explicit backend parameter.
-        # Tests may set llm_backend="fake" or llm_backend="real" as attributes.
         backend_kind = str(
             getattr(effective_backend, "llm_backend", None)
             or getattr(effective_backend, "backend_kind", None)
             or "real_llm"
         )
+    if response_validator is not None:
+        vname = getattr(response_validator, "__name__", type(response_validator).__name__)
+    else:
+        vname = "none"
+
+    log_kv(
+        _LLM_LOGGER,
+        logging.INFO,
+        "[LLM_CALL]",
+        tone="llm",
+        backend=backend_kind,
+        temperature=temperature,
+        timeout_ms=timeout_ms,
+        retries=max_retries,
+        prompt_tag=prompt_tag,
+        system_tag=system_tag,
+        prompt_len=len(prompt),
+        system_len=len(system_prompt),
+        validator=vname,
+    )
+    log_kv(
+        _LLM_LOGGER,
+        logging.DEBUG,
+        "[LLM_CALL_RAW]",
+        tone="llm",
+        backend=backend_kind,
+        prompt_preview=prompt,
+        system_preview=system_prompt,
+    )
+
     attempts = max(1, int(max_retries) + 1)
     last_error_code = ""
     last_error_message = ""
@@ -375,6 +418,7 @@ def call_llm(
     last_transport = ""
 
     for attempt in range(1, attempts + 1):
+        attempt_start = time.monotonic()
         try:
             raw_result = _invoke_backend(
                 effective_backend,
@@ -383,6 +427,7 @@ def call_llm(
                 temperature=temperature,
                 timeout_ms=timeout_ms,
             )
+            backend_elapsed = (time.monotonic() - attempt_start) * 1000.0
             raw_text, parsed_dict, confidence = _normalise_backend_result(raw_result)
             last_raw = raw_text
             if isinstance(raw_result, dict):
@@ -398,6 +443,33 @@ def call_llm(
             parsed = _validate_output_schema(parsed, response_validator=response_validator)
             if isinstance(parsed, dict):
                 confidence = float(parsed.get("confidence", confidence))
+
+            _total_elapsed = (time.monotonic() - _start_ts) * 1000.0
+            log_kv(
+                _LLM_LOGGER,
+                logging.INFO,
+                "[LLM_RESULT]",
+                tone="llm",
+                ok=True,
+                backend=backend_kind,
+                provider=last_provider,
+                model=last_model,
+                attempt=f"{attempt}/{attempts}",
+                backend_ms=int(backend_elapsed),
+                total_ms=int(_total_elapsed),
+                confidence=round(confidence, 4),
+                validator=vname,
+                raw_len=len(last_raw),
+            )
+            log_kv(
+                _LLM_LOGGER,
+                logging.DEBUG,
+                "[LLM_RESULT_RAW]",
+                tone="llm",
+                ok=True,
+                content_preview=parsed,
+                raw_preview=last_raw,
+            )
 
             return {
                 "ok": True,
@@ -430,8 +502,44 @@ def call_llm(
             last_error_code = "LLM_BACKEND_ERROR"
             last_error_message = str(exc)
 
+        _attempt_elapsed = (time.monotonic() - attempt_start) * 1000.0
+        log_kv(
+            _LLM_LOGGER,
+            logging.WARNING,
+            "[LLM_ERROR]",
+            tone="warn",
+            backend=backend_kind,
+            attempt=f"{attempt}/{attempts}",
+            elapsed_ms=int(_attempt_elapsed),
+            error_code=last_error_code,
+            error_message=last_error_message,
+            raw_preview=last_raw,
+        )
+
         if attempt < attempts:
+            log_kv(
+                _LLM_LOGGER,
+                logging.INFO,
+                "[LLM_RETRY]",
+                tone="warn",
+                attempt=f"{attempt}/{attempts}",
+                retrying_in_ms=int(0.02 * attempt * 1000),
+            )
             time.sleep(0.02 * attempt)
+
+    _total_elapsed = (time.monotonic() - _start_ts) * 1000.0
+    log_kv(
+        _LLM_LOGGER,
+        logging.ERROR,
+        "[LLM_FAILED]",
+        tone="error",
+        backend=backend_kind,
+        attempts=attempts,
+        total_ms=int(_total_elapsed),
+        error_code=last_error_code,
+        error_message=last_error_message,
+        raw_preview=last_raw,
+    )
 
     return {
         "ok": False,

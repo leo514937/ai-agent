@@ -8,6 +8,7 @@ to response.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from .._compat import (
@@ -31,11 +32,15 @@ from ...input.receiver import receive_input as assemble_turn_input
 from ...input.validator import validate_basic_input
 from ...semantic.intent_parser import parse_top_intent
 from ...session.store import get_session_store
+from ...observability.file_logger import get_python_service_logger, log_kv
+
+_LOGGER = get_python_service_logger()
 
 
 def h_intake_guard_router(state: GraphState) -> dict:
     """Outer wrapper: intake -> guard -> route."""
     before = dict(state)
+    log_kv(_LOGGER, logging.INFO, "[SUBGRAPH_ENTER]", tone="route", subgraph="intake_guard_router", trace_id=state.get("trace_id", ""), raw_text=state.get("raw_text", ""))
     working = _run_step(state, _h_receive_input)
     working = _run_step(working, _h_load_session)
     working = _run_step(working, _h_basic_validate)
@@ -61,6 +66,7 @@ def h_intake_guard_router(state: GraphState) -> dict:
             "intake_route": route,
             "response_mode": response_mode,
         }
+        log_kv(_LOGGER, logging.INFO, "[ROUTE_DECISION]", tone="route", subgraph="intake_guard_router", route=route, response_mode=response_mode, reason="hard_guard_or_input_error")
         return _state_delta(before, after, always_include={"intake_route", "response_mode"})
 
     working = _run_step(working, _h_top_intent_router)
@@ -90,6 +96,7 @@ def h_intake_guard_router(state: GraphState) -> dict:
         "intake_route": route,
         "response_mode": response_mode,
     }
+    log_kv(_LOGGER, logging.INFO, "[ROUTE_DECISION]", tone="route", subgraph="intake_guard_router", route=route, response_mode=response_mode, top_intent=top_intent, error_code=working.get("error_code", ""))
     return _state_delta(before, after, always_include={"intake_route", "response_mode"})
 
 

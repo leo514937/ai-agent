@@ -17,6 +17,7 @@ Responsibilities:
 
 from __future__ import annotations
 
+import logging
 from enum import Enum
 from typing import Any, Callable
 
@@ -25,7 +26,14 @@ from ...domain.enums import Facet
 from ...domain.goal import GoalPlan, GoalSource
 from ...domain.schemas import SemanticFrame
 from ...domain.state import SessionState
+from ...observability.file_logger import get_python_service_logger, log_kv
+from .unsupported_intent import (
+    build_booking_unsupported_reason,
+    detect_booking_unsupported,
+)
 from ..llm_utils import invoke_structured_llm, model_validate_or_error
+
+_LOGGER = get_python_service_logger()
 
 
 def _to_dict(value: Any) -> dict[str, Any]:
@@ -196,17 +204,12 @@ def _detect_unsupported_intent(
     if goal_type_str == "unsupported":
         return True, "goal_type_could_not_be_determined"
 
-    text = (raw_text or "").lower()
-    primary = (_get_primary_task(frame) or "").lower()
-
-    # Booking/reservation — no tool support
-    booking_keywords = [
-        "订座", "订位", "预约", "预订", "预定", "reserve", "booking",
-        "book a", "make a reservation",
-    ]
-    for kw in booking_keywords:
-        if kw in text or kw in primary:
-            return True, f"unsupported_intent: booking/reservation (no tool available): '{kw}'"
+    is_booking_intent, marker = detect_booking_unsupported(
+        raw_text,
+        _get_primary_task(frame),
+    )
+    if is_booking_intent:
+        return True, build_booking_unsupported_reason(marker)
 
     return False, ""
 
@@ -350,6 +353,16 @@ def plan_goal_with_llm(
     strict: bool = False,
 ) -> tuple[GoalPlan | None, dict[str, Any]]:
     """Plan the goal via LLM and return metadata for graph handlers."""
+    log_kv(
+        _LOGGER,
+        logging.INFO,
+        "[GOAL_PLANNER_START]",
+        tone="llm",
+        raw_text=raw_text,
+        semantic_frame=_to_dict(semantic_frame),
+        session_context=_to_dict(session_state),
+        strict=strict,
+    )
     replacements = {
         "{{TEXT}}": str(raw_text or ""),
         "{{SEMANTIC_FRAME}}": _to_dict(semantic_frame),
@@ -364,11 +377,13 @@ def plan_goal_with_llm(
         )
     except Exception as exc:
         error = {"error_code": "GOAL_PLANNER_PROMPT_ERROR", "error_message": str(exc), "llm_backend": "", "raw": ""}
+        log_kv(_LOGGER, logging.ERROR, "[GOAL_PLANNER_ERROR]", tone="error", error=error)
         if strict:
             return None, error
         plan = _plan_goal_rules(semantic_frame, session_state, raw_text)
         plan.planner_source = "deterministic_goal_planner"
         plan.planner_reason = f"llm_prompt_error:{exc}"
+        log_kv(_LOGGER, logging.WARNING, "[GOAL_PLANNER_FALLBACK]", tone="warn", plan=plan, error=error)
         return plan, error
 
     if not llm_result.get("ok"):
@@ -378,11 +393,13 @@ def plan_goal_with_llm(
             "llm_backend": llm_result.get("llm_backend", ""),
             "raw": llm_result.get("raw", ""),
         }
+        log_kv(_LOGGER, logging.WARNING, "[GOAL_PLANNER_LLM_FAILED]", tone="warn", error=error)
         if strict:
             return None, error
         plan = _plan_goal_rules(semantic_frame, session_state, raw_text)
         plan.planner_source = "deterministic_goal_planner"
         plan.planner_reason = str(error["error_code"])
+        log_kv(_LOGGER, logging.WARNING, "[GOAL_PLANNER_FALLBACK]", tone="warn", plan=plan, error=error)
         return plan, error
 
     payload = dict(llm_result.get("payload") or {})
@@ -394,11 +411,13 @@ def plan_goal_with_llm(
             "llm_backend": llm_result.get("llm_backend", ""),
             "raw": llm_result.get("raw", ""),
         }
+        log_kv(_LOGGER, logging.WARNING, "[GOAL_PLANNER_SCHEMA_INVALID]", tone="warn", error=error, payload=payload)
         if strict:
             return None, error
         plan = _plan_goal_rules(semantic_frame, session_state, raw_text)
         plan.planner_source = "deterministic_goal_planner"
         plan.planner_reason = "goal_plan_schema_invalid"
+        log_kv(_LOGGER, logging.WARNING, "[GOAL_PLANNER_FALLBACK]", tone="warn", plan=plan, error=error)
         return plan, error
 
     plan = model
@@ -409,17 +428,27 @@ def plan_goal_with_llm(
             "llm_backend": llm_result.get("llm_backend", ""),
             "raw": llm_result.get("raw", ""),
         }
+        log_kv(_LOGGER, logging.WARNING, "[GOAL_PLANNER_INCOMPLETE]", tone="warn", error=error, payload=payload)
         if strict:
             return None, error
         plan = _plan_goal_rules(semantic_frame, session_state, raw_text)
         plan.planner_source = "deterministic_goal_planner"
         plan.planner_reason = "goal_plan_incomplete"
+        log_kv(_LOGGER, logging.WARNING, "[GOAL_PLANNER_FALLBACK]", tone="warn", plan=plan, error=error)
         return plan, error
     if not plan.goal_source:
         plan.goal_source = GoalSource.SEMANTIC_FRAME
     plan.source_origin = plan.source_origin or "llm_goal_planner"
     plan.planner_source = plan.planner_source or "llm_goal_planner"
     plan.planner_reason = plan.planner_reason or "llm_structured_plan"
+    log_kv(
+        _LOGGER,
+        logging.INFO,
+        "[GOAL_PLANNER_RESULT]",
+        tone="llm",
+        goal_plan=plan,
+        llm_backend=llm_result.get("llm_backend", ""),
+    )
     return plan, {
         "error_code": "",
         "error_message": "",

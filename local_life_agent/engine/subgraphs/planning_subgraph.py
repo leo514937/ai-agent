@@ -10,6 +10,7 @@ This subgraph takes the parsed semantic frame and:
 
 from __future__ import annotations
 
+import logging
 from copy import deepcopy
 from typing import Any
 
@@ -64,22 +65,29 @@ from ...planning.policies.review_policy import NextAction
 from ...target.candidate_resolver import CandidateResolver
 from ...target.clarification import build_pending_clarification, format_pending_prompt, handle_clarification_reply
 from ... import config
+from ...observability.file_logger import get_python_service_logger, log_kv
+
+_LOGGER = get_python_service_logger()
 
 
 def h_planning_subgraph(state: GraphState) -> dict:
     """Outer wrapper: goal plan → review → target resolve → evidence → plan validate → route."""
     before = dict(state)
+    log_kv(_LOGGER, logging.INFO, "[SUBGRAPH_ENTER]", tone="route", subgraph="planning_subgraph", trace_id=state.get("trace_id", ""), top_intent=state.get("top_intent", ""))
     working = _run_steps(state, [_h_goal_planner, _h_goal_review])
     goal_review = working.get("goal_review_result")
     next_action = str(getattr(goal_review, "next_action", "") or _to_dict(goal_review).get("next_action", "") or "")
     if next_action in {"CLARIFY"}:
         after = {**working, "planning_route": _OUTER_ROUTE_CLARIFY, "response_mode": _OUTER_ROUTE_CLARIFY}
+        log_kv(_LOGGER, logging.WARNING, "[ROUTE_DECISION]", tone="warn", subgraph="planning_subgraph", route=_OUTER_ROUTE_CLARIFY, response_mode=_OUTER_ROUTE_CLARIFY, next_action=next_action)
         return _state_delta(before, after, always_include={"planning_route", "response_mode"}, exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS)
     if next_action in {"UNSUPPORTED_ANSWER"}:
         after = {**working, "planning_route": _OUTER_ROUTE_FALLBACK, "response_mode": _OUTER_ROUTE_REJECT}
+        log_kv(_LOGGER, logging.WARNING, "[ROUTE_DECISION]", tone="warn", subgraph="planning_subgraph", route=_OUTER_ROUTE_FALLBACK, response_mode=_OUTER_ROUTE_REJECT, next_action=next_action)
         return _state_delta(before, after, always_include={"planning_route", "response_mode"}, exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS)
     if next_action in {"FALLBACK"}:
         after = {**working, "planning_route": _OUTER_ROUTE_FALLBACK, "response_mode": _OUTER_ROUTE_FALLBACK}
+        log_kv(_LOGGER, logging.WARNING, "[ROUTE_DECISION]", tone="warn", subgraph="planning_subgraph", route=_OUTER_ROUTE_FALLBACK, response_mode=_OUTER_ROUTE_FALLBACK, next_action=next_action)
         return _state_delta(before, after, always_include={"planning_route", "response_mode"}, exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS)
 
     working = _run_steps(working, [_h_target_resolve])
@@ -94,10 +102,12 @@ def h_planning_subgraph(state: GraphState) -> dict:
     if working.get("error_code"):
         fallback_route = _planning_failure_route(working)
         after = {**working, "planning_route": fallback_route, "response_mode": fallback_route}
+        log_kv(_LOGGER, logging.WARNING, "[ROUTE_DECISION]", tone="warn", subgraph="planning_subgraph", route=fallback_route, response_mode=fallback_route, error_code=working.get("error_code", ""), failed_stage=working.get("failed_stage", ""))
         return _state_delta(before, after, always_include={"planning_route", "response_mode"}, exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS)
 
     if resolve_dict.get("status") == "RESOLVED":
         after = {**working, "planning_route": _OUTER_ROUTE_EXECUTE, "response_mode": "answer"}
+        log_kv(_LOGGER, logging.INFO, "[ROUTE_DECISION]", tone="route", subgraph="planning_subgraph", route=_OUTER_ROUTE_EXECUTE, response_mode="answer", resolve_status="RESOLVED")
         return _state_delta(before, after, always_include={"planning_route", "response_mode"}, exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS)
 
     # Not RESOLVED — clear pending_clarification so response_subgraph
@@ -110,6 +120,7 @@ def h_planning_subgraph(state: GraphState) -> dict:
         "pending_clarification": None,
         "final_response": "",
     }
+    log_kv(_LOGGER, logging.INFO, "[ROUTE_DECISION]", tone="route", subgraph="planning_subgraph", route=_OUTER_ROUTE_EXECUTE, response_mode="answer", resolve_status=resolve_dict.get("status", ""))
     return _state_delta(before, after, always_include={
         "planning_route", "response_mode", "pending_clarification", "final_response",
     }, exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS)

@@ -2,6 +2,9 @@
 
 Runs AFTER GoalPlanner and BEFORE CandidateResolver.
 Checks whether the goal is clear, executable, and within tool capability.
+This stage is intentionally deterministic: the planner/semantic layers may
+use LLMs, but GoalReview is the stable validator that decides routing and
+capability gating before execution starts.
 
 Typical scenarios:
   - ``帮我订座`` → unsupported (no booking tool)
@@ -15,6 +18,10 @@ from typing import Any
 
 from ...domain.goal import GoalPlan, GoalReviewResult
 from ...domain.state import SessionState
+from .unsupported_intent import (
+    build_booking_unsupported_reason,
+    detect_booking_unsupported,
+)
 
 
 _ALLOWED_GOAL_TYPES = {"recommendation", "comparison", "single_shop_query", "refinement", "unsupported"}
@@ -31,12 +38,6 @@ def _to_dict(value: Any) -> dict[str, Any]:
         dumped = model_dump()
         return dumped if isinstance(dumped, dict) else {}
     return dict(getattr(value, "__dict__", {}) or {})
-
-
-# Set of known unsupported intent patterns (no tool available)
-_UNSUPPORTED_INTENT_MARKERS: list[str] = [
-    "booking", "reservation", "订座", "订位", "预约", "预订",
-]
 
 
 def _check_unsupported(goal: GoalPlan) -> tuple[bool, str]:
@@ -90,11 +91,13 @@ def _check_tool_capability(goal: GoalPlan) -> tuple[bool, str]:
 
     Returns (is_supported, reason).
     """
-    summary_lower = (goal.goal_summary or "").lower()
-
-    for marker in _UNSUPPORTED_INTENT_MARKERS:
-        if marker in summary_lower or marker in goal.goal_type.lower():
-            return False, f"unsupported_intent: '{marker}' not in current tool capability"
+    is_booking_intent, marker = detect_booking_unsupported(
+        goal.goal_summary,
+        goal.goal_type,
+        goal.unsupported_reason,
+    )
+    if is_booking_intent:
+        return False, build_booking_unsupported_reason(marker)
 
     return True, ""
 

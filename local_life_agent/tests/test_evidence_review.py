@@ -210,3 +210,14 @@ class TestReviewEvidenceTrace:
         dumped = result.model_dump()
         assert dumped["next_action"] == "FINISH"
         assert dumped["stage"] == "evidence_review"
+
+    def test_review_evidence_does_not_print_debug_output(self, capsys: pytest.CaptureFixture[str]):
+        goal = LocalLifeGoalDraft(goal_type=GoalType.SINGLE_SHOP_QUERY, required_facets=["coupon"])
+        pack = {
+            "facet_results": [
+                {"facet": "coupon", "result_status": "ok", "required": True},
+            ],
+        }
+        review_evidence(goal, pack)
+        captured = capsys.readouterr()
+        assert captured.out == ""

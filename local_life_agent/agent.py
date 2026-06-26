@@ -9,16 +9,68 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import logging
 from time import perf_counter
 from typing import Any
 from . import config
-from .observability.file_logger import get_python_service_logger
+from .observability.file_logger import get_python_service_logger, log_kv, reset_log_context, set_log_context
 from .observability.metrics import record_turn_metric
 from .observability.trace import build_turn_trace
 
 
 _GRAPH_CACHE: Any = None
 _FILE_LOGGER = get_python_service_logger()
+
+
+def _observed_nodes(final_state: dict[str, Any]) -> list[str]:
+    observed: list[str] = []
+    for item in final_state.get("event_log", []) or []:
+        if not isinstance(item, dict):
+            continue
+        node = str(item.get("node", "") or "").strip()
+        if node and node not in observed:
+            observed.append(node)
+    return observed
+
+
+def _expected_core_nodes(final_state: dict[str, Any]) -> list[str]:
+    response_mode = str(final_state.get("response_mode", "") or "")
+    top_intent = str(final_state.get("top_intent", "") or "")
+    nodes = ["intake_guard_router"]
+    if top_intent == "local_life":
+        nodes.extend(
+            [
+                "understanding_subgraph",
+                "planning_subgraph",
+                "execution_review_subgraph",
+                "response_subgraph",
+                "state_update_plan",
+            ]
+        )
+    elif response_mode:
+        nodes.extend(["response_subgraph", "state_update_plan"])
+    return nodes
+
+
+def _audit_turn_completeness(final_state: dict[str, Any]) -> dict[str, Any]:
+    observed = _observed_nodes(final_state)
+    expected = _expected_core_nodes(final_state)
+    tool_results = final_state.get("tool_result_set") or final_state.get("tool_results") or {}
+    failed_tools = [
+        call_id
+        for call_id, result in (tool_results.items() if isinstance(tool_results, dict) else [])
+        if str(_debug_dump(getattr(result, "result_status", None) or (result.get("result_status") if isinstance(result, dict) else ""))).lower()
+        in {"failed", "unknown", "circuit_open", "unsupported"}
+    ]
+    return {
+        "observed_nodes": observed,
+        "missing_nodes": [node for node in expected if node not in observed],
+        "llm_called": bool(final_state.get("llm_called") or final_state.get("planning_llm_called") or final_state.get("llm_verbalizer_called")),
+        "tool_call_count": len(tool_results) if isinstance(tool_results, dict) else 0,
+        "failed_tool_calls": failed_tools,
+        "has_final_response": bool(str(final_state.get("final_response", "") or "").strip()),
+        "answer_source": final_state.get("answer_source", ""),
+    }
 
 
 def _debug_dump(value: Any, _seen: set[int] | None = None) -> Any:
@@ -139,12 +191,17 @@ def run_agent_graph(input_text: str, session_id: str = "") -> AgentResponse:
     final_state: dict[str, Any] = {}
     from .engine.graph_builder import build_graph
 
-    _FILE_LOGGER.info(
-        "turn_start trace_id=%s session_id=%s input=%s",
-        f"trace_{id(input_text)}_{session_id or 'anon'}",
-        session_id or "",
-        input_text,
+    trace_id = f"trace_{id(input_text)}_{session_id or 'anon'}"
+    log_kv(
+        _FILE_LOGGER,
+        logging.INFO,
+        "[TURN_START]",
+        tone="route",
+        trace_id=trace_id,
+        session_id=session_id or "",
+        input_text=input_text,
     )
+    turn_context_token = set_log_context(trace_id=trace_id, session_id=session_id or "")
 
     global _GRAPH_CACHE
     if _GRAPH_CACHE is None:
@@ -154,7 +211,7 @@ def run_agent_graph(input_text: str, session_id: str = "") -> AgentResponse:
     initial = {
         "raw_text": input_text,
         "session_id": session_id or "",
-        "trace_id": f"trace_{id(input_text)}_{session_id or 'anon'}",
+        "trace_id": trace_id,
         "turn_id": "",
         "user_id": "",
         "normalized_text": "",
@@ -250,17 +307,33 @@ def run_agent_graph(input_text: str, session_id: str = "") -> AgentResponse:
                 final_safety_status=final_state.get("final_safety_status", "safe"),
             ) if config.DEBUG_ENABLED else None,
         )
-        _FILE_LOGGER.info(
-            "turn_end trace_id=%s session_id=%s task_type=%s answer_source=%s tool_count=%s final_status=%s",
-            trace_id,
-            sid,
-            final_state.get("task_type", ""),
-            final_state.get("answer_source", ""),
-            len((final_state.get("tool_result_set") or final_state.get("tool_results") or {})),
-            final_state.get("final_safety_status", "safe"),
+        log_kv(
+            _FILE_LOGGER,
+            logging.INFO,
+            "[TURN_AUDIT]",
+            tone="route",
+            trace_id=trace_id,
+            session_id=sid,
+            audit=_audit_turn_completeness(final_state),
+        )
+        log_kv(
+            _FILE_LOGGER,
+            logging.INFO,
+            "[TURN_END]",
+            tone="route",
+            trace_id=trace_id,
+            session_id=sid,
+            task_type=final_state.get("task_type", ""),
+            top_intent=final_state.get("top_intent", ""),
+            answer_source=final_state.get("answer_source", ""),
+            tool_count=len((final_state.get("tool_result_set") or final_state.get("tool_results") or {})),
+            final_status=final_state.get("final_safety_status", "safe"),
+            final_response=answer,
+            event_count=len(event_log),
         )
         return response
     finally:
         elapsed_ms = (perf_counter() - started_at) * 1000.0
         record_turn_metric(final_state.get("trace_id", initial.get("trace_id", "")), elapsed_ms)
+        reset_log_context(turn_context_token)
 

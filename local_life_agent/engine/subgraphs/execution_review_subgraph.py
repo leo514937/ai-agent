@@ -7,6 +7,7 @@ determine whether to proceed, retry, or fall back.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from .._compat import (
@@ -39,19 +40,25 @@ from ...planning.evidence.evidence_review import (
 )
 from ...planning.policies.replan_policy import increment_expand_search, increment_replan_evidence
 from ... import config
+from ...observability.file_logger import get_python_service_logger, log_kv
+
+_LOGGER = get_python_service_logger()
 
 
 def h_execution_review_subgraph(state: GraphState) -> dict:
     """Outer wrapper: tool execute → evidence build → review → decision → route."""
     before = dict(state)
+    log_kv(_LOGGER, logging.INFO, "[SUBGRAPH_ENTER]", tone="route", subgraph="execution_review_subgraph", trace_id=state.get("trace_id", ""), execution_plan=state.get("validated_plan") or state.get("execution_plan"))
     working = _run_steps(state, [_h_tool_execute, _h_evidence_build])
     working = _run_step(working, _h_evidence_review)
     if working.get("error_code") and str(working.get("failed_stage", "") or "") == "evidence_review":
         after = {**working, "execution_review_route": _OUTER_ROUTE_FALLBACK, "response_mode": _OUTER_ROUTE_FALLBACK}
+        log_kv(_LOGGER, logging.WARNING, "[ROUTE_DECISION]", tone="warn", subgraph="execution_review_subgraph", route=_OUTER_ROUTE_FALLBACK, response_mode=_OUTER_ROUTE_FALLBACK, failed_stage="evidence_review", error_code=working.get("error_code", ""))
         return _state_delta(before, after, always_include={"execution_review_route", "response_mode"}, exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS)
     working = _run_step(working, _h_decision_planner)
     if working.get("error_code") and str(working.get("failed_stage", "") or "") == "decision_planner":
         after = {**working, "execution_review_route": _OUTER_ROUTE_FALLBACK, "response_mode": _OUTER_ROUTE_FALLBACK}
+        log_kv(_LOGGER, logging.WARNING, "[ROUTE_DECISION]", tone="warn", subgraph="execution_review_subgraph", route=_OUTER_ROUTE_FALLBACK, response_mode=_OUTER_ROUTE_FALLBACK, failed_stage="decision_planner", error_code=working.get("error_code", ""))
         return _state_delta(before, after, always_include={"execution_review_route", "response_mode"}, exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS)
     working = _run_step(working, _h_decision_review)
     decision_review = working.get("decision_review_result")
@@ -61,23 +68,29 @@ def h_execution_review_subgraph(state: GraphState) -> dict:
         if isinstance(session, SessionState):
             increment_replan_evidence(session)
         after = {**working, "execution_review_route": _OUTER_ROUTE_RETRY, "response_mode": "answer"}
+        log_kv(_LOGGER, logging.WARNING, "[ROUTE_DECISION]", tone="warn", subgraph="execution_review_subgraph", route=_OUTER_ROUTE_RETRY, response_mode="answer", next_action=next_action)
         return _state_delta(before, after, always_include={"execution_review_route", "response_mode"}, exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS)
     if next_action in {"EXPAND_SEARCH"}:
         session = working.get("session_state")
         if isinstance(session, SessionState):
             increment_expand_search(session)
         after = {**working, "execution_review_route": _OUTER_ROUTE_RETRY, "response_mode": "answer"}
+        log_kv(_LOGGER, logging.WARNING, "[ROUTE_DECISION]", tone="warn", subgraph="execution_review_subgraph", route=_OUTER_ROUTE_RETRY, response_mode="answer", next_action=next_action)
         return _state_delta(before, after, always_include={"execution_review_route", "response_mode"}, exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS)
     if next_action in {"CLARIFY"}:
         after = {**working, "execution_review_route": _OUTER_ROUTE_CLARIFY, "response_mode": _OUTER_ROUTE_CLARIFY}
+        log_kv(_LOGGER, logging.WARNING, "[ROUTE_DECISION]", tone="warn", subgraph="execution_review_subgraph", route=_OUTER_ROUTE_CLARIFY, response_mode=_OUTER_ROUTE_CLARIFY, next_action=next_action)
         return _state_delta(before, after, always_include={"execution_review_route", "response_mode"})
     if next_action in {"FALLBACK", "UNSUPPORTED_ANSWER"}:
         after = {**working, "execution_review_route": _OUTER_ROUTE_FALLBACK, "response_mode": _OUTER_ROUTE_FALLBACK}
+        log_kv(_LOGGER, logging.WARNING, "[ROUTE_DECISION]", tone="warn", subgraph="execution_review_subgraph", route=_OUTER_ROUTE_FALLBACK, response_mode=_OUTER_ROUTE_FALLBACK, next_action=next_action)
         return _state_delta(before, after, always_include={"execution_review_route", "response_mode"}, exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS)
     if next_action == "DEGRADE_ANSWER":
         after = {**working, "execution_review_route": _OUTER_ROUTE_DEGRADE, "response_mode": "answer"}
+        log_kv(_LOGGER, logging.WARNING, "[ROUTE_DECISION]", tone="warn", subgraph="execution_review_subgraph", route=_OUTER_ROUTE_DEGRADE, response_mode="answer", next_action=next_action)
         return _state_delta(before, after, always_include={"execution_review_route", "response_mode"}, exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS)
     after = {**working, "execution_review_route": _OUTER_ROUTE_ENOUGH, "response_mode": "answer"}
+    log_kv(_LOGGER, logging.INFO, "[ROUTE_DECISION]", tone="route", subgraph="execution_review_subgraph", route=_OUTER_ROUTE_ENOUGH, response_mode="answer", next_action=next_action)
     return _state_delta(before, after, always_include={"execution_review_route", "response_mode"}, exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS)
 
 

@@ -18,6 +18,10 @@ DecisionReview does NOT:
   - Modify the DecisionPlan.
   - Generate natural language.
   - Call LLM.
+
+LLMs are used upstream for semantic understanding and planning. This stage
+remains deterministic so routing decisions stay explainable, testable, and
+stable across repeated runs.
 """
 
 from __future__ import annotations

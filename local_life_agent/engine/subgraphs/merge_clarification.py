@@ -7,6 +7,7 @@ or reject the reply.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from .._compat import _log, _run_step, _state_delta
@@ -16,12 +17,16 @@ from .._routes import (
     _OUTER_ROUTE_PROCEED,
 )
 from ...domain.graph_state import GraphState
+from ...observability.file_logger import get_python_service_logger, log_kv
 from ...target.clarification import handle_clarification_reply
+
+_LOGGER = get_python_service_logger()
 
 
 def h_merge_clarification(state: GraphState) -> dict:
     """Outer wrapper: check pending → route."""
     before = dict(state)
+    log_kv(_LOGGER, logging.INFO, "[SUBGRAPH_ENTER]", tone="route", subgraph="merge_clarification", trace_id=state.get("trace_id", ""), has_pending=bool(state.get("pending_clarification")))
     working = _run_step(state, _h_check_pending)
     pending_result = str(working.get("pending_check_result", "") or "")
     if pending_result in {"restore", "topic_switch", "pass"}:
@@ -35,6 +40,7 @@ def h_merge_clarification(state: GraphState) -> dict:
         "merge_clarification_route": route,
         "response_mode": response_mode,
     }
+    log_kv(_LOGGER, logging.INFO, "[ROUTE_DECISION]", tone="route", subgraph="merge_clarification", route=route, response_mode=response_mode, pending_result=pending_result)
     return _state_delta(before, after, always_include={"merge_clarification_route", "response_mode"})
 
 

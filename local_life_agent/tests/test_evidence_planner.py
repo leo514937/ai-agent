@@ -67,6 +67,24 @@ class TestPlanEvidence:
         assert call.tool_name == "get_shop_review_summary"
         assert call.args == {"shop_ids": ["s1"]}
 
+    def test_scene_fit_uses_review_summary_tool(self):
+        goal = LocalLifeGoalDraft(
+            goal_type=GoalType.SINGLE_SHOP_QUERY,
+            required_facets=["scene_fit"],
+        )
+        cs = CandidateSet(
+            status=CandidateStatus.RESOLVED,
+            source=CandidateSource.DISCOVERY,
+            candidates=[
+                ResolvedCandidate(shop_id="s1", shop_name="Shop A", rank=1),
+            ],
+        )
+        plan = plan_evidence(goal, cs)
+        assert len(plan.tool_calls) == 1
+        call = plan.tool_calls[0]
+        assert call.tool_name == "get_shop_review_summary"
+        assert call.args == {"shop_ids": ["s1"]}
+
     def test_required_marked_correctly(self):
         goal = LocalLifeGoalDraft(
             goal_type=GoalType.COMPARISON,
@@ -154,7 +172,7 @@ class TestPlanEvidence:
         for tc in plan.tool_calls:
             assert tc.max_parallelism >= 1
 
-    def test_no_facets_raises(self):
+    def test_no_facets_defaults_to_detail_for_single_shop_query(self):
         goal = LocalLifeGoalDraft(
             goal_type=GoalType.SINGLE_SHOP_QUERY,
         )
@@ -165,5 +183,7 @@ class TestPlanEvidence:
                 ResolvedCandidate(shop_id="s1", shop_name="Shop A", rank=1),
             ],
         )
-        with pytest.raises(ValueError):
-            plan_evidence(goal, cs)
+        plan = plan_evidence(goal, cs)
+        assert len(plan.tool_calls) == 1
+        assert plan.tool_calls[0].facet == "detail"
+        assert plan.tool_calls[0].tool_name == "get_shop_detail"

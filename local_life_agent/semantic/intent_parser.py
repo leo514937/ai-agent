@@ -14,9 +14,11 @@ from ..domain.session_context_summary import build_session_context_summary
 from ..input.normalizer import normalize_text
 from ..llm.client import call_llm, load_prompt
 from ..llm.json_parser import LLMJSONParseError, parse_json_response
+from ..observability.file_logger import get_python_service_logger, log_kv
 from .slot_extractor import extract_slots
 
 _logger = logging.getLogger(__name__)
+_SERVICE_LOG = get_python_service_logger()
 
 # Module-level capture of dropped facets from the last _validate_semantic_payload call.
 # Reset before each LLM call; consumed by parse_semantic_frame after validation.
@@ -393,7 +395,23 @@ def _safe_extract_slots(text: str, top_intent: str) -> dict[str, Any]:
 
 def parse_top_intent(text: str, llm_call: Callable[..., dict[str, Any]] | None = None) -> dict[str, Any]:
     normalised_text = normalize_text(text)
+    log_kv(
+        _SERVICE_LOG,
+        logging.INFO,
+        "[TOP_INTENT_START]",
+        tone="route",
+        text_preview=normalised_text,
+    )
     if not normalised_text.strip():
+        log_kv(
+            _SERVICE_LOG,
+            logging.WARNING,
+            "[TOP_INTENT_RESULT]",
+            tone="warn",
+            top_intent=TopIntent.invalid.value,
+            error_code="EMPTY_INPUT",
+            source="empty_input",
+        )
         return {
             "top_intent": TopIntent.invalid,
             "confidence": 0.0,
@@ -442,7 +460,7 @@ def parse_top_intent(text: str, llm_call: Callable[..., dict[str, Any]] | None =
                 }
         confidence = float(payload.get('confidence', result.get('confidence', 0.0)))
         confidence = max(0.0, min(1.0, confidence))
-        return {
+        response = {
             "top_intent": top_intent,
             "confidence": confidence,
             "reason": payload.get("reason", ""),
@@ -450,9 +468,23 @@ def parse_top_intent(text: str, llm_call: Callable[..., dict[str, Any]] | None =
             "error_code": "",
             "error_message": "",
         }
+        log_kv(
+            _SERVICE_LOG,
+            logging.INFO,
+            "[TOP_INTENT_RESULT]",
+            tone="route",
+            top_intent=getattr(top_intent, "value", top_intent),
+            confidence=confidence,
+            reason=payload.get("reason", ""),
+            llm_backend=result.get("llm_backend", ""),
+            llm_payload=payload,
+            raw_preview=result.get("raw", ""),
+            source="llm",
+        )
+        return response
 
     fallback = _fallback_intent(normalised_text, str(result.get("error_code", "") or ""))
-    return {
+    response = {
         "top_intent": fallback,
         "confidence": 0.0,
         "reason": "llm_failed",
@@ -460,6 +492,19 @@ def parse_top_intent(text: str, llm_call: Callable[..., dict[str, Any]] | None =
         "error_code": result.get("error_code", ""),
         "error_message": result.get("error_message", ""),
     }
+    log_kv(
+        _SERVICE_LOG,
+        logging.WARNING,
+        "[TOP_INTENT_RESULT]",
+        tone="warn",
+        top_intent=getattr(fallback, "value", fallback),
+        confidence=0.0,
+        error_code=result.get("error_code", ""),
+        error_message=result.get("error_message", ""),
+        raw_preview=result.get("raw", ""),
+        source="fallback",
+    )
+    return response
 
 
 def parse_semantic_frame(
@@ -477,6 +522,14 @@ def parse_semantic_frame(
     follow-ups, references, and task continuity.
     """
     normalised_text = normalize_text(text)
+    log_kv(
+        _SERVICE_LOG,
+        logging.INFO,
+        "[SEMANTIC_PARSE_START]",
+        tone="route",
+        text_preview=normalised_text,
+        top_intent=top_intent,
+    )
     if not normalised_text.strip():
         frame = _annotate_frame(
             SemanticFrame(),
@@ -485,7 +538,7 @@ def parse_semantic_frame(
             fallback_reason="empty_input",
             llm_called=False,
         )
-        return {
+        response = {
             "semantic_frame": frame,
             "error_code": "EMPTY_INPUT",
             "error_message": "input is empty after normalisation",
@@ -495,10 +548,20 @@ def parse_semantic_frame(
             "fallback_reason": frame.fallback_reason,
             "llm_called": frame.llm_called,
         }
+        log_kv(
+            _SERVICE_LOG,
+            logging.WARNING,
+            "[SEMANTIC_PARSE_RESULT]",
+            tone="warn",
+            source="empty_input",
+            error_code="EMPTY_INPUT",
+            semantic_source=frame.semantic_source,
+        )
+        return response
 
     if llm_call is None:
         if not allow_fallback:
-            return {
+            response = {
                 "semantic_frame": None,
                 "error_code": "SEMANTIC_LLM_UNAVAILABLE",
                 "error_message": "semantic llm backend is unavailable",
@@ -509,13 +572,23 @@ def parse_semantic_frame(
                 "llm_called": False,
                 "semantic_repair_hints": _safe_extract_slots(normalised_text, top_intent),
             }
+            log_kv(
+                _SERVICE_LOG,
+                logging.ERROR,
+                "[SEMANTIC_PARSE_RESULT]",
+                tone="error",
+                source="llm_unavailable",
+                error_code="SEMANTIC_LLM_UNAVAILABLE",
+                repair_hints=response.get("semantic_repair_hints"),
+            )
+            return response
         frame = _fallback_semantic_frame(
             normalised_text,
             top_intent,
             fallback_reason="llm_call_unavailable",
             llm_called=False,
         )
-        return {
+        response = {
             "semantic_frame": frame,
             "error_code": "",
             "error_message": "",
@@ -526,6 +599,17 @@ def parse_semantic_frame(
             "llm_called": frame.llm_called,
             "semantic_repair_hints": _safe_extract_slots(normalised_text, top_intent),
         }
+        log_kv(
+            _SERVICE_LOG,
+            logging.WARNING,
+            "[SEMANTIC_PARSE_RESULT]",
+            tone="warn",
+            source="diagnostic_rules",
+            semantic_source=frame.semantic_source,
+            fallback_reason=frame.fallback_reason,
+            semantic_frame=frame,
+        )
+        return response
 
     prompt_template = load_prompt("local_life_parser")
 
@@ -593,7 +677,7 @@ def parse_semantic_frame(
         if frame.top_intent is None and top_intent in {item.value for item in TopIntent}:
             frame.top_intent = TopIntent(top_intent)
         dropped_facets = get_last_dropped_facets()
-        return {
+        response = {
             "semantic_frame": frame,
             "error_code": "",
             "error_message": "",
@@ -604,11 +688,28 @@ def parse_semantic_frame(
             "llm_called": frame.llm_called,
             "dropped_facets": dropped_facets,
         }
+        log_kv(
+            _SERVICE_LOG,
+            logging.INFO,
+            "[SEMANTIC_PARSE_RESULT]",
+            tone="route",
+            source="llm",
+            semantic_source=frame.semantic_source,
+            llm_backend=frame.llm_backend,
+            task_type=frame.task_type,
+            primary_task=frame.primary_task,
+            focused_facets=frame.focused_facets,
+            merchant_mentions=frame.merchant_mentions,
+            dropped_facets=dropped_facets,
+            llm_payload=payload,
+            raw_preview=result.get("raw", ""),
+        )
+        return response
 
     error_code = result.get("error_code", "") or "SEMANTIC_PARSE_FAILED"
     error_message = result.get("error_message", "") or "semantic parse failed"
     if not allow_fallback:
-        return {
+        response = {
             "semantic_frame": None,
             "error_code": error_code,
             "error_message": error_message,
@@ -619,6 +720,19 @@ def parse_semantic_frame(
             "llm_called": True,
             "semantic_repair_hints": _safe_extract_slots(normalised_text, top_intent),
         }
+        log_kv(
+            _SERVICE_LOG,
+            logging.ERROR,
+            "[SEMANTIC_PARSE_RESULT]",
+            tone="error",
+            source="llm_failed",
+            error_code=error_code,
+            error_message=error_message,
+            llm_backend=result.get("llm_backend", ""),
+            raw_preview=result.get("raw", ""),
+            repair_hints=response.get("semantic_repair_hints"),
+        )
+        return response
 
     frame = _fallback_semantic_frame(
         normalised_text,
@@ -627,7 +741,7 @@ def parse_semantic_frame(
         llm_called=True,
         llm_backend=str(result.get("llm_backend", "") or ""),
     )
-    return {
+    response = {
         "semantic_frame": frame,
         "error_code": "",
         "error_message": "",
@@ -638,5 +752,18 @@ def parse_semantic_frame(
         "llm_called": True,
         "semantic_repair_hints": _safe_extract_slots(normalised_text, top_intent),
     }
+    log_kv(
+        _SERVICE_LOG,
+        logging.WARNING,
+        "[SEMANTIC_PARSE_RESULT]",
+        tone="warn",
+        source="fallback",
+        semantic_source=frame.semantic_source,
+        llm_backend=frame.llm_backend,
+        fallback_reason=frame.fallback_reason,
+        raw_preview=result.get("raw", ""),
+        semantic_frame=frame,
+    )
+    return response
 
 

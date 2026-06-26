@@ -7,6 +7,7 @@ terminal step of the graph.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from .._compat import (
@@ -20,14 +21,19 @@ from .._compat import (
 )
 from ...domain.graph_state import GraphState
 from ...domain.state import SessionState, SessionWriteDirective
+from ...observability.file_logger import get_python_service_logger, log_kv
 from ...planning.plans.state_update_planner import plan_state_update
 from ...session.store import get_session_store
+
+_LOGGER = get_python_service_logger()
 
 
 def h_state_update_plan_outer(state: GraphState) -> dict:
     """Outer wrapper: plan state update → persist → emit."""
     before = dict(state)
+    log_kv(_LOGGER, logging.INFO, "[SUBGRAPH_ENTER]", tone="route", subgraph="state_update_plan", trace_id=state.get("trace_id", ""), answer_source=state.get("answer_source", ""))
     working = _run_steps(state, [_h_state_update_plan, _h_persist_session, _h_emit_response])
+    log_kv(_LOGGER, logging.INFO, "[SUBGRAPH_EXIT]", tone="route", subgraph="state_update_plan", final_response=working.get("final_response", ""), session_id=working.get("session_id", ""))
     return _state_delta(before, working)
 
 

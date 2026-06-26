@@ -89,6 +89,15 @@ class TestGoalPlanner:
         assert gp.unsupported
         assert "booking" in gp.unsupported_reason.lower() or "订座" in gp.unsupported_reason
 
+    def test_unsupported_reservation_phrase_in_primary_task(self):
+        """Reservation phrasing in primary_task should share the same unsupported detection."""
+        gp = plan_goal(_frame(
+            task_type="recommendation",
+            primary_task="make a reservation for tonight",
+        ))
+        assert gp.unsupported
+        assert "reservation" in gp.unsupported_reason.lower()
+
     def test_clarification_reply_maps_to_refinement(self):
         """clarification_reply task_type → refinement goal_type."""
         gp = plan_goal(_frame(task_type="clarification_reply"))
@@ -180,6 +189,20 @@ class TestGoalReview:
     def test_unsupported_on_booking(self):
         """Booking intent (English keyword) → UNSUPPORTED_ANSWER."""
         gp = plan_goal(_frame(task_type="recommendation"), raw_text="book a table for tonight")
+        result = review_goal(gp)
+        assert result.next_action == "UNSUPPORTED_ANSWER"
+
+    def test_review_catches_booking_marker_from_goal_summary(self):
+        """GoalReview should use the shared unsupported detection as a deterministic fallback."""
+        gp = GoalPlan(
+            goal_type="recommendation",
+            goal_summary="need a reservation for 2 people",
+            candidate_source="discovery",
+            requested_count=1,
+            min_required=1,
+            max_allowed=5,
+            unsupported=False,
+        )
         result = review_goal(gp)
         assert result.next_action == "UNSUPPORTED_ANSWER"
 

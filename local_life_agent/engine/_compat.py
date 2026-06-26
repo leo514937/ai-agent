@@ -7,6 +7,8 @@ duplication.
 
 from __future__ import annotations
 
+import json
+import logging
 from copy import deepcopy
 from datetime import datetime, timezone
 from enum import Enum
@@ -32,7 +34,7 @@ from ..domain.schemas import (
     ToolResult,
 )
 from ..domain.state import SessionState
-from ..observability.file_logger import get_python_service_logger
+from ..observability.file_logger import current_log_context, get_python_service_logger, log_kv, reset_log_context, set_log_context, summarize_for_log
 from ..observability.trace import record_span, sanitize_payload
 from ..planning.policies.replan_policy import increment_expand_search, increment_replan_evidence
 
@@ -96,8 +98,29 @@ def _log(state: GraphState, node: str, **extra: Any) -> dict:
     log = list(state.get("event_log", []))
     entry = {"node": node, **sanitize_payload(extra)}
     log.append(entry)
+
+    sanitized = sanitize_payload(extra)
+    if state.get("trace_id"):
+        sanitized["trace_id"] = str(state.get("trace_id", "") or "")
+    if state.get("session_id"):
+        sanitized["session_id"] = str(state.get("session_id", "") or "")
+    if state.get("turn_id"):
+        sanitized["turn_id"] = str(state.get("turn_id", "") or "")
+    if state.get("raw_text"):
+        sanitized["raw_text_preview"] = str(state.get("raw_text", "") or "")[:120]
+    if state.get("top_intent") is not None:
+        sanitized["top_intent"] = _coerce_str(state.get("top_intent"))
+    if state.get("task_type") is not None:
+        sanitized["task_type"] = _coerce_str(state.get("task_type"))
+    detail_parts = []
+    for k, v in sanitized.items():
+        if isinstance(v, bool):
+            detail_parts.append(f"{k}={str(v).lower()}")
+        elif v is not None and v != "":
+            detail_parts.append(f"{k}={summarize_for_log(v, max_len=180)}")
+    detail_str = " ".join(detail_parts) if detail_parts else ""
     try:
-        _FILE_LOGGER.info("%s", sanitize_payload(entry))
+        log_kv(_FILE_LOGGER, logging.INFO, "[NODE_EVENT]", tone="node", node=node, **sanitized)
     except Exception:
         pass
     return {"event_log": log}
@@ -267,21 +290,45 @@ def _instrument_handler(node_name: str, handler: GraphNodeFunc) -> GraphNodeFunc
         started_at = perf_counter()
         timestamp_ms = int(time() * 1000)
         input_summary = _trace_input_summary(state, node_name)
+        trace_id = state.get("trace_id", "")
+        session_id = state.get("session_id", "")
+        turn_id = state.get("turn_id", "")
+        context_token = set_log_context(
+            trace_id=trace_id,
+            session_id=session_id,
+            turn_id=turn_id,
+            node=node_name,
+            stage=stage,
+        )
 
         # — Node entry log —
-        _FILE_LOGGER.info(
-            "[NODE_ENTER] %s stage=%s raw_text=%s",
-            node_name, stage,
-            str(state.get("raw_text", "") or "")[:80],
+        log_kv(
+            _FILE_LOGGER,
+            logging.INFO,
+            "[NODE_ENTER]",
+            tone="node",
+            node=node_name,
+            stage=stage,
+            trace_id=trace_id,
+            session_id=session_id,
+            turn_id=turn_id,
+            input_summary=input_summary,
         )
 
         try:
             update = handler(state)
         except Exception as exc:
             duration_ms = int((perf_counter() - started_at) * 1000)
-            _FILE_LOGGER.error(
-                "[NODE_EXIT] %s status=failed duration=%dms error=%s",
-                node_name, duration_ms, str(exc)[:200],
+            log_kv(
+                _FILE_LOGGER,
+                logging.ERROR,
+                "[NODE_EXIT]",
+                tone="error",
+                node=node_name,
+                stage=stage,
+                status="failed",
+                duration_ms=duration_ms,
+                error_message=str(exc),
             )
             try:
                 trace_id = str(state.get("trace_id", "") or "")
@@ -305,6 +352,7 @@ def _instrument_handler(node_name: str, handler: GraphNodeFunc) -> GraphNodeFunc
                     )
             except Exception:
                 pass
+            reset_log_context(context_token)
             raise
 
         try:
@@ -316,10 +364,26 @@ def _instrument_handler(node_name: str, handler: GraphNodeFunc) -> GraphNodeFunc
             output_summary = _trace_output_summary(update)
 
             # — Node exit log —
-            _FILE_LOGGER.info(
-                "[NODE_EXIT] %s status=%s duration=%dms error=%s",
-                node_name, status, duration_ms,
-                error_code if error_code else "none",
+            log_kv(
+                _FILE_LOGGER,
+                logging.INFO if status == "success" else logging.WARNING,
+                "[NODE_EXIT]",
+                tone="node" if status == "success" else "warn",
+                node=node_name,
+                stage=stage,
+                status=status,
+                duration_ms=duration_ms,
+                error_code=error_code or "none",
+                output_summary=output_summary,
+            )
+            log_kv(
+                _FILE_LOGGER,
+                logging.DEBUG,
+                "[NODE_DELTA]",
+                tone="node",
+                changed_keys=sorted(str(key) for key in update.keys()),
+                delta=sanitize_payload(update),
+                context=current_log_context(),
             )
 
             metadata = {
@@ -359,7 +423,9 @@ def _instrument_handler(node_name: str, handler: GraphNodeFunc) -> GraphNodeFunc
                     },
                 )
         except Exception:
+            reset_log_context(context_token)
             return update
+        reset_log_context(context_token)
         return update
 
     return wrapped

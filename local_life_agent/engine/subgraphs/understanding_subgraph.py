@@ -6,6 +6,7 @@ and resolves contextual references (pronouns / ordinals / comparison targets).
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from pydantic import ValidationError
@@ -26,11 +27,15 @@ from ...domain.schemas import SemanticFrame
 from ...semantic.frame_validator import validate_frame
 from ...semantic.intent_parser import parse_semantic_frame
 from ... import config
+from ...observability.file_logger import get_python_service_logger, log_kv
+
+_LOGGER = get_python_service_logger()
 
 
 def h_understanding_subgraph(state: GraphState) -> dict:
     """Outer wrapper: parse → validate → context recovery → route."""
     before = dict(state)
+    log_kv(_LOGGER, logging.INFO, "[SUBGRAPH_ENTER]", tone="route", subgraph="understanding_subgraph", trace_id=state.get("trace_id", ""), top_intent=state.get("top_intent", ""))
     working = _run_steps(state, [_h_semantic_parse])
     if working.get("error_code"):
         after = {
@@ -38,6 +43,7 @@ def h_understanding_subgraph(state: GraphState) -> dict:
             "understanding_route": _OUTER_ROUTE_CLARIFY,
             "response_mode": _OUTER_ROUTE_CLARIFY,
         }
+        log_kv(_LOGGER, logging.WARNING, "[ROUTE_DECISION]", tone="warn", subgraph="understanding_subgraph", route=_OUTER_ROUTE_CLARIFY, response_mode=_OUTER_ROUTE_CLARIFY, error_code=working.get("error_code", ""))
         return _state_delta(
             before,
             after,
@@ -51,6 +57,7 @@ def h_understanding_subgraph(state: GraphState) -> dict:
             "understanding_route": _OUTER_ROUTE_CLARIFY,
             "response_mode": _OUTER_ROUTE_CLARIFY,
         }
+        log_kv(_LOGGER, logging.WARNING, "[ROUTE_DECISION]", tone="warn", subgraph="understanding_subgraph", route=_OUTER_ROUTE_CLARIFY, response_mode=_OUTER_ROUTE_CLARIFY, error_code=working.get("error_code", ""))
         return _state_delta(
             before,
             after,
@@ -62,6 +69,7 @@ def h_understanding_subgraph(state: GraphState) -> dict:
         "understanding_route": _OUTER_ROUTE_PROCEED,
         "response_mode": "answer",
     }
+    log_kv(_LOGGER, logging.INFO, "[ROUTE_DECISION]", tone="route", subgraph="understanding_subgraph", route=_OUTER_ROUTE_PROCEED, response_mode="answer", semantic_source=working.get("semantic_source", ""))
     return _state_delta(
         before,
         after,

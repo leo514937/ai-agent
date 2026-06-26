@@ -14,6 +14,7 @@ Responsibilities:
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable
 
 from ...domain.candidate import CandidateSet
@@ -21,7 +22,10 @@ from ...domain.decision import DecisionPlan, DecisionType
 from ...domain.evidence import EvidenceReviewResult
 from ...domain.goal import GoalPlan
 from ...domain.schemas import EvidencePack
+from ...observability.file_logger import get_python_service_logger, log_kv
 from ..llm_utils import invoke_structured_llm, model_validate_or_error
+
+_LOGGER = get_python_service_logger()
 
 
 def _to_dict(value: Any) -> dict[str, Any]:
@@ -283,6 +287,17 @@ def plan_decision_with_llm(
     llm_call: Callable[..., dict[str, Any]] | None = None,
     strict: bool = False,
 ) -> tuple[DecisionPlan | None, dict[str, Any]]:
+    log_kv(
+        _LOGGER,
+        logging.INFO,
+        "[DECISION_PLANNER_START]",
+        tone="llm",
+        goal_plan=goal_plan,
+        candidate_set=candidate_set,
+        evidence_pack=evidence_pack,
+        evidence_review=evidence_review,
+        strict=strict,
+    )
     evidence_dict = _get_evidence_dict(evidence_pack)
     replacements = {
         "{{GOAL_PLAN}}": _to_dict(goal_plan) if goal_plan is not None else {},
@@ -299,9 +314,12 @@ def plan_decision_with_llm(
         )
     except Exception as exc:
         error = {"error_code": "DECISION_PLANNER_PROMPT_ERROR", "error_message": str(exc), "llm_backend": "", "raw": ""}
+        log_kv(_LOGGER, logging.ERROR, "[DECISION_PLANNER_ERROR]", tone="error", error=error)
         if strict:
             return None, error
-        return plan_decision(goal_plan, candidate_set, evidence_pack, evidence_review), error
+        plan = plan_decision(goal_plan, candidate_set, evidence_pack, evidence_review)
+        log_kv(_LOGGER, logging.WARNING, "[DECISION_PLANNER_FALLBACK]", tone="warn", decision_plan=plan, error=error)
+        return plan, error
 
     if not llm_result.get("ok"):
         error = {
@@ -310,9 +328,12 @@ def plan_decision_with_llm(
             "llm_backend": llm_result.get("llm_backend", ""),
             "raw": llm_result.get("raw", ""),
         }
+        log_kv(_LOGGER, logging.WARNING, "[DECISION_PLANNER_LLM_FAILED]", tone="warn", error=error)
         if strict:
             return None, error
-        return plan_decision(goal_plan, candidate_set, evidence_pack, evidence_review), error
+        plan = plan_decision(goal_plan, candidate_set, evidence_pack, evidence_review)
+        log_kv(_LOGGER, logging.WARNING, "[DECISION_PLANNER_FALLBACK]", tone="warn", decision_plan=plan, error=error)
+        return plan, error
 
     model, validation_error = model_validate_or_error(DecisionPlan, llm_result.get("payload") or {})
     if model is None:
@@ -322,12 +343,23 @@ def plan_decision_with_llm(
             "llm_backend": llm_result.get("llm_backend", ""),
             "raw": llm_result.get("raw", ""),
         }
+        log_kv(_LOGGER, logging.WARNING, "[DECISION_PLANNER_SCHEMA_INVALID]", tone="warn", error=error)
         if strict:
             return None, error
-        return plan_decision(goal_plan, candidate_set, evidence_pack, evidence_review), error
+        plan = plan_decision(goal_plan, candidate_set, evidence_pack, evidence_review)
+        log_kv(_LOGGER, logging.WARNING, "[DECISION_PLANNER_FALLBACK]", tone="warn", decision_plan=plan, error=error)
+        return plan, error
 
     plan = model
     plan.decision_source = plan.decision_source or "llm_decision_planner"
+    log_kv(
+        _LOGGER,
+        logging.INFO,
+        "[DECISION_PLANNER_RESULT]",
+        tone="llm",
+        llm_backend=llm_result.get("llm_backend", ""),
+        decision_plan=plan,
+    )
     return plan, {
         "error_code": "",
         "error_message": "",

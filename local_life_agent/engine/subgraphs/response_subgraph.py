@@ -6,6 +6,7 @@ rewrites if needed, and handles clarification / fallback responses.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from .._compat import (
@@ -33,14 +34,19 @@ from ...domain.schemas import AnswerPlan
 from ...domain.decision import decision_to_answer_plan
 from ...answer.verifier import verify_answer
 from ...domain.state import SessionState
+from ...observability.file_logger import get_python_service_logger, log_kv
+
+_LOGGER = get_python_service_logger()
 
 
 def h_response_subgraph(state: GraphState) -> dict:
     """Outer wrapper: handle response mode → generate / clarify / fallback."""
     before = dict(state)
     response_mode = str(state.get("response_mode", "") or "")
+    log_kv(_LOGGER, logging.INFO, "[SUBGRAPH_ENTER]", tone="route", subgraph="response_subgraph", trace_id=state.get("trace_id", ""), response_mode=response_mode)
     if response_mode in {_OUTER_ROUTE_DIRECT, _OUTER_ROUTE_REJECT}:
         after = {**state, "response_route": _OUTER_ROUTE_PASS}
+        log_kv(_LOGGER, logging.INFO, "[ROUTE_DECISION]", tone="route", subgraph="response_subgraph", route=_OUTER_ROUTE_PASS, response_mode=response_mode)
         return _state_delta(before, after, always_include={"response_route"})
     if response_mode in {_OUTER_ROUTE_CLARIFY} or state.get("pending_clarification") is not None:
         if not str(state.get("final_response", "") or "").strip():
@@ -48,6 +54,7 @@ def h_response_subgraph(state: GraphState) -> dict:
         else:
             working = dict(state)
         after = {**working, "response_route": _OUTER_ROUTE_CLARIFY_READY}
+        log_kv(_LOGGER, logging.INFO, "[ROUTE_DECISION]", tone="route", subgraph="response_subgraph", route=_OUTER_ROUTE_CLARIFY_READY, response_mode=response_mode or _OUTER_ROUTE_CLARIFY)
         return _state_delta(before, after, always_include={"response_route"})
     if response_mode in {_OUTER_ROUTE_FALLBACK}:
         if not str(state.get("final_response", "") or "").strip():
@@ -55,6 +62,7 @@ def h_response_subgraph(state: GraphState) -> dict:
         else:
             working = dict(state)
         after = {**working, "response_route": _OUTER_ROUTE_FALLBACK_READY}
+        log_kv(_LOGGER, logging.WARNING, "[ROUTE_DECISION]", tone="warn", subgraph="response_subgraph", route=_OUTER_ROUTE_FALLBACK_READY, response_mode=response_mode)
         return _state_delta(before, after, always_include={"response_route"})
 
     working = _run_step(state, _h_answer_plan_build)
@@ -66,11 +74,13 @@ def h_response_subgraph(state: GraphState) -> dict:
         if verify_result == "pass":
             working = _run_step(working, _h_final_response)
             after = {**working, "response_route": _OUTER_ROUTE_PASS}
+            log_kv(_LOGGER, logging.INFO, "[ROUTE_DECISION]", tone="route", subgraph="response_subgraph", route=_OUTER_ROUTE_PASS, verify_result=verify_result)
             return _state_delta(before, after, always_include={"response_route"})
         rewrite_count = int(working.get("rewrite_count", 0) or 0)
         if rewrite_count >= rewrite_limit:
             working = _run_step(working, _h_fallback_answer)
             after = {**working, "response_route": _OUTER_ROUTE_FALLBACK_READY}
+            log_kv(_LOGGER, logging.WARNING, "[ROUTE_DECISION]", tone="warn", subgraph="response_subgraph", route=_OUTER_ROUTE_FALLBACK_READY, verify_result=verify_result, rewrite_count=rewrite_count)
             return _state_delta(before, after, always_include={"response_route"})
         working = _run_step(working, _h_rewrite)
 
@@ -166,24 +176,22 @@ def _h_answer_verify(state: GraphState) -> dict:
     passed = report.get("passed", False)
     violations = report.get("issues", [])
 
-    if not passed:
-        print(f"[DEBUG answer_verify FAIL] task_type={task_type} violations={violations}")
-        print(f"[DEBUG answer_verify FAIL] draft_prefix={state.get('draft_response', '')[:200]}")
-        print(f"[DEBUG answer_verify FAIL] evidence_items={len(evidence_dict.get('evidence_items') or [])}")
-        snapshot = evidence_dict.get("ranking_snapshot") or {}
-        ranked = snapshot.get("ranked") or snapshot.get("ranked_shops") or snapshot.get("shops") or []
-        print(f"[DEBUG answer_verify FAIL] ranked_count={len(ranked)}")
-        for i, r in enumerate(ranked[:5]):
-            if isinstance(r, dict):
-                print(f"  ranked[{i}] shop_name={r.get('shop_name')} shop_id={r.get('shop_id')}")
-            else:
-                print(f"  ranked[{i}]={r}")
-        fr = evidence_dict.get("facet_results") or snapshot.get("facet_results") or []
-        print(f"[DEBUG answer_verify FAIL] facet_results_count={len(fr)}")
-        for f in fr[:10]:
-            print(f"  facet={f.get('facet')} status={f.get('result_status')} shop_id={f.get('shop_id')}")
-    else:
-        print(f"[DEBUG answer_verify PASS] task_type={task_type}")
+    snapshot = evidence_dict.get("ranking_snapshot") or {}
+    ranked = snapshot.get("ranked") or snapshot.get("ranked_shops") or snapshot.get("shops") or []
+    fr = evidence_dict.get("facet_results") or snapshot.get("facet_results") or []
+    log_kv(
+        _LOGGER,
+        logging.INFO if passed else logging.WARNING,
+        "[ANSWER_VERIFY]",
+        tone="route" if passed else "warn",
+        passed=passed,
+        task_type=task_type,
+        violations=violations,
+        draft_preview=state.get("draft_response", "")[:200],
+        evidence_items=len(evidence_dict.get("evidence_items") or []),
+        ranked_preview=ranked[:5],
+        facet_results_preview=fr[:10],
+    )
 
     return {
         "verify_result": "pass" if passed else "rewrite_needed",

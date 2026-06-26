@@ -68,13 +68,55 @@ class CandidateEvidenceCollector:
             if not sid_str:
                 continue
             evidences[sid_str] = CandidateEvidence(shop_id=sid_str)
-            
+
+        # Pre-pass: extract distance data from multi-shop tool results
+        # (get_shop_cards, search_shops) which contain per-item distance_km
+        # but have no top-level shop_id.  For recommendation queries the
+        # execution plan calls search_shops (and optionally get_shop_cards)
+        # instead of per-shop get_distance_eta, so distance_km lives inside
+        # each item rather than in a dedicated tool result.
+        distance_by_shop: dict[str, dict[str, Any]] = {}
+        for call_id, tr in (tool_results or {}).items():
+            tr_dict = _to_dict(tr)
+            tool_name = tr_dict.get("tool_name")
+            if tool_name not in ("get_shop_cards", "search_shops"):
+                continue
+            data = tr_dict.get("data")
+            if isinstance(data, dict):
+                items = data.get("items", [])
+            elif isinstance(data, list):
+                items = data
+            else:
+                continue
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                item_sid = str(item.get("shop_id", "")).strip()
+                if not item_sid or item_sid not in evidences:
+                    continue
+                if item_sid in distance_by_shop:
+                    continue  # first match wins
+                d_km = item.get("distance_km")
+                if d_km is None and item.get("distance_m") is not None:
+                    try:
+                        d_km = float(item["distance_m"]) / 1000.0
+                    except Exception:
+                        d_km = None
+                if d_km is not None:
+                    distance_by_shop[item_sid] = {
+                        "result_status": "ok",
+                        "data": {
+                            "distance_km": d_km,
+                            "eta_minutes": item.get("eta_minutes"),
+                        },
+                    }
+
         for call_id, tr in (tool_results or {}).items():
             tr_dict = _to_dict(tr)
             sid = str(tr_dict.get("shop_id", "")).strip()
             if not sid or sid not in evidences:
                 continue
-            
+
             tool_name = tr_dict.get("tool_name")
             if tool_name == "get_shop_detail":
                 evidences[sid].detail = tr_dict
@@ -84,7 +126,13 @@ class CandidateEvidenceCollector:
                 evidences[sid].open_status = tr_dict
             elif tool_name == "get_distance_eta":
                 evidences[sid].distance = tr_dict
-                
+
+        # Apply distance data from multi-shop results, but don't overwrite
+        # explicit get_distance_eta results (set in the loop above).
+        for sid, dist_data in distance_by_shop.items():
+            if sid in evidences and evidences[sid].distance is None:
+                evidences[sid].distance = dist_data
+
         return list(evidences.values())
 
 class CandidateEvaluator:

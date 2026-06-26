@@ -20,27 +20,11 @@ from ...config import TOOL_DEFAULT_TIMEOUT_MS
 from ...domain.candidate import CandidateSet, GoalType, LocalLifeGoalDraft
 from ...domain.enums import Facet
 from ...domain.schemas import ExecutionPlan, ToolCallSpec
+from ...observability.file_logger import log_kv
 from ...tools.registry import get_registry
 from ..llm_utils import invoke_structured_llm, model_validate_or_error
 
 _logger = logging.getLogger(__name__)
-
-# Map facet names to tool names
-_FACET_TO_TOOL: dict[str, str] = {
-    "coupon": "get_coupon_list",
-    "open_status": "check_open_status",
-    "distance": "get_distance_eta",
-    "detail": "get_shop_detail",
-    "deal": "get_deal_list",
-    "review_summary": "get_shop_review_summary",
-    "environment": "get_shop_cards",
-    "shop_cards": "get_shop_cards",
-    "price": "get_shop_detail",
-    "rating": "get_shop_detail",
-    "taste": "get_shop_review_summary",
-    "service": "get_shop_review_summary",
-    "scene_fit": "get_shop_review_summary",
-}
 
 # Facets that map to detail tool (single call covers multiple facets)
 _DETAIL_FACETS = frozenset({"detail", "price", "rating"})
@@ -176,6 +160,17 @@ def plan_evidence_with_llm(
     strict: bool = False,
 ) -> tuple[ExecutionPlan | None, dict[str, Any]]:
     """Plan evidence/tool execution through an LLM."""
+    log_kv(
+        _logger,
+        logging.INFO,
+        "[EVIDENCE_PLANNER_START]",
+        tone="llm",
+        goal=goal,
+        candidate_count=len(candidate_set.candidates or []),
+        raw_text=raw_text,
+        semantic_frame=semantic_frame,
+        strict=strict,
+    )
     registry = get_registry()
     allowed_tools = sorted(
         tool_name
@@ -199,9 +194,12 @@ def plan_evidence_with_llm(
         )
     except Exception as exc:
         error = {"error_code": "EVIDENCE_PLANNER_PROMPT_ERROR", "error_message": str(exc), "llm_backend": "", "raw": ""}
+        log_kv(_logger, logging.ERROR, "[EVIDENCE_PLANNER_ERROR]", tone="error", error=error)
         if strict:
             return None, error
-        return plan_evidence(goal, candidate_set, location), error
+        plan = plan_evidence(goal, candidate_set, location)
+        log_kv(_logger, logging.WARNING, "[EVIDENCE_PLANNER_FALLBACK]", tone="warn", plan=plan, error=error)
+        return plan, error
 
     if not llm_result.get("ok"):
         error = {
@@ -210,9 +208,12 @@ def plan_evidence_with_llm(
             "llm_backend": llm_result.get("llm_backend", ""),
             "raw": llm_result.get("raw", ""),
         }
+        log_kv(_logger, logging.WARNING, "[EVIDENCE_PLANNER_LLM_FAILED]", tone="warn", error=error)
         if strict:
             return None, error
-        return plan_evidence(goal, candidate_set, location), error
+        plan = plan_evidence(goal, candidate_set, location)
+        log_kv(_logger, logging.WARNING, "[EVIDENCE_PLANNER_FALLBACK]", tone="warn", plan=plan, error=error)
+        return plan, error
 
     model, validation_error = model_validate_or_error(ExecutionPlan, llm_result.get("payload") or {})
     if model is None:
@@ -222,9 +223,12 @@ def plan_evidence_with_llm(
             "llm_backend": llm_result.get("llm_backend", ""),
             "raw": llm_result.get("raw", ""),
         }
+        log_kv(_logger, logging.WARNING, "[EVIDENCE_PLANNER_SCHEMA_INVALID]", tone="warn", error=error)
         if strict:
             return None, error
-        return plan_evidence(goal, candidate_set, location), error
+        plan = plan_evidence(goal, candidate_set, location)
+        log_kv(_logger, logging.WARNING, "[EVIDENCE_PLANNER_FALLBACK]", tone="warn", plan=plan, error=error)
+        return plan, error
 
     plan = model
     if not plan.tool_calls and not plan.stages:
@@ -234,10 +238,22 @@ def plan_evidence_with_llm(
             "llm_backend": llm_result.get("llm_backend", ""),
             "raw": llm_result.get("raw", ""),
         }
+        log_kv(_logger, logging.WARNING, "[EVIDENCE_PLANNER_EMPTY]", tone="warn", error=error)
         if strict:
             return None, error
-        return plan_evidence(goal, candidate_set, location), error
+        plan = plan_evidence(goal, candidate_set, location)
+        log_kv(_logger, logging.WARNING, "[EVIDENCE_PLANNER_FALLBACK]", tone="warn", plan=plan, error=error)
+        return plan, error
     plan.plan_source = plan.plan_source or "llm_evidence_planner"
+    log_kv(
+        _logger,
+        logging.INFO,
+        "[EVIDENCE_PLANNER_RESULT]",
+        tone="llm",
+        llm_backend=llm_result.get("llm_backend", ""),
+        execution_plan=plan,
+        tool_calls=len(plan.tool_calls),
+    )
     return plan, {
         "error_code": "",
         "error_message": "",
@@ -257,7 +273,7 @@ def _goal_type_to_task_type(goal_type: GoalType) -> str:
     return mapping.get(goal_type, "unknown")
 
 
-# Map facet names to tool names (expanded)
+# Single source of truth for facet -> tool resolution.
 _FACET_TOOL: dict[str, str] = {
     "coupon": "get_coupon_list",
     "open_status": "check_open_status",

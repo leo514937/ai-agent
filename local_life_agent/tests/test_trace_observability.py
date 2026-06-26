@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from local_life_agent.agent import DebugInfo, run_agent_graph
+from local_life_agent.agent import _audit_turn_completeness, DebugInfo, run_agent_graph
 from local_life_agent.engine import graph_builder
 from local_life_agent.observability.trace import build_turn_trace, get_trace_spans, record_span, reset_trace_store
 
@@ -116,3 +116,29 @@ def test_trace_failure_does_not_break_handler(monkeypatch):
     result = wrapped({"trace_id": "trace_x", "session_id": "sid", "turn_id": "tid", "raw_text": "hi", "event_log": []})
     assert result["value"] == 1
     assert result["event_log"]
+
+
+def test_turn_audit_reports_missing_nodes_and_failed_tools():
+    audit = _audit_turn_completeness(
+        {
+            "top_intent": "local_life",
+            "event_log": [
+                {"node": "intake_guard_router"},
+                {"node": "planning_subgraph"},
+                {"node": "response_subgraph"},
+            ],
+            "tool_result_set": {
+                "call_1": {"result_status": "ok"},
+                "call_2": {"result_status": "failed"},
+            },
+            "final_response": "ok",
+            "answer_source": "llm_verbalizer",
+            "planning_llm_called": True,
+        }
+    )
+
+    assert audit["llm_called"] is True
+    assert audit["tool_call_count"] == 2
+    assert audit["failed_tool_calls"] == ["call_2"]
+    assert "understanding_subgraph" in audit["missing_nodes"]
+    assert "execution_review_subgraph" in audit["missing_nodes"]

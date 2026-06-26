@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Callable
 
 from pydantic import BaseModel, ValidationError
@@ -10,6 +11,9 @@ from pydantic import BaseModel, ValidationError
 from ..config import LLM_TIMEOUT_MS
 from ..llm.client import call_llm, load_prompt
 from ..llm.json_parser import LLMJSONParseError, parse_json_response
+from ..observability.file_logger import get_python_service_logger, log_kv
+
+_PLAN_LOG = get_python_service_logger()
 
 
 def load_two_part_prompt(name: str) -> tuple[str, str]:
@@ -70,6 +74,21 @@ def invoke_structured_llm(
     system_prompt, user_template = load_two_part_prompt(prompt_name)
     user_prompt = render_prompt(user_template, replacements)
     call = llm_call or call_llm
+
+    validator_name = getattr(response_validator, "__name__", type(response_validator).__name__)
+    log_kv(
+        _PLAN_LOG,
+        logging.INFO,
+        "[PLAN_LLM_INVOKE]",
+        tone="llm",
+        prompt_name=prompt_name,
+        validator=validator_name,
+        timeout_ms=timeout_ms,
+        replacement_keys=list(replacements.keys()),
+        user_prompt_preview=user_prompt,
+        system_prompt_preview=system_prompt,
+    )
+
     result = call(
         user_prompt,
         system_prompt=system_prompt,
@@ -78,9 +97,25 @@ def invoke_structured_llm(
         max_retries=1,
         response_validator=response_validator,
     )
+
     payload = normalize_structured_content(result.get("content"))
+    ok = bool(result.get("ok", False))
+    log_kv(
+        _PLAN_LOG,
+        logging.INFO,
+        "[PLAN_LLM_RESULT]",
+        tone="llm" if ok else "warn",
+        prompt_name=prompt_name,
+        ok=ok,
+        error_code=result.get("error_code", ""),
+        llm_backend=result.get("llm_backend", ""),
+        payload_preview=payload,
+        raw_preview=result.get("raw", ""),
+        raw_len=len(str(result.get("raw", ""))),
+    )
+
     return {
-        "ok": bool(result.get("ok", False)),
+        "ok": ok,
         "payload": payload,
         "error_code": str(result.get("error_code", "") or ""),
         "error_message": str(result.get("error_message", "") or ""),

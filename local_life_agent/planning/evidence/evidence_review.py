@@ -23,6 +23,7 @@ from ...domain.evidence import (
     FacetEvidence,
     ToolStatus,
 )
+from ...observability.file_logger import log_kv
 from ..policies.review_policy import NextAction
 from ..llm_utils import invoke_structured_llm, model_validate_or_error
 
@@ -197,15 +198,21 @@ def review_evidence(
         evidence_pack, req, opt,
     )
 
-    print(f"[DEBUG review_evidence] req={req} opt={opt}")
-    print(f"[DEBUG review_evidence] required_evidence count={len(required_evidence)}")
-    for fe in required_evidence:
-        print(f"  [DEBUG] required: facet={fe.facet} status={fe.status} tool={fe.tool_name}")
-    print(f"[DEBUG review_evidence] optional_evidence count={len(optional_evidence)}")
-    for fe in optional_evidence:
-        print(f"  [DEBUG] optional: facet={fe.facet} status={fe.status} tool={fe.tool_name}")
     fr = evidence_pack.get("facet_results") if isinstance(evidence_pack, dict) else []
-    print(f"[DEBUG review_evidence] facet_results count={len(list(fr or []))}")
+    _logger.debug(
+        "review_evidence req=%s opt=%s required=%s optional=%s facet_results=%d",
+        req,
+        opt,
+        [
+            {"facet": fe.facet, "status": str(fe.status), "tool_name": fe.tool_name}
+            for fe in required_evidence
+        ],
+        [
+            {"facet": fe.facet, "status": str(fe.status), "tool_name": fe.tool_name}
+            for fe in optional_evidence
+        ],
+        len(list(fr or [])),
+    )
 
     result = EvidenceReviewResult()
 
@@ -348,6 +355,17 @@ def review_evidence_with_llm(
     strict: bool = False,
 ) -> tuple[EvidenceReviewResult | None, dict[str, Any]]:
     """Run evidence sufficiency review through an LLM."""
+    log_kv(
+        _logger,
+        logging.INFO,
+        "[EVIDENCE_REVIEW_START]",
+        tone="llm",
+        goal=goal,
+        evidence_pack=evidence_pack,
+        tool_results=tool_results or {},
+        candidate_review=candidate_review,
+        strict=strict,
+    )
     replacements = {
         "{{GOAL_PLAN}}": goal.model_dump() if hasattr(goal, "model_dump") else dict(goal),
         "{{EVIDENCE_PACK}}": evidence_pack,
@@ -363,9 +381,12 @@ def review_evidence_with_llm(
         )
     except Exception as exc:
         error = {"error_code": "EVIDENCE_REVIEW_PROMPT_ERROR", "error_message": str(exc), "llm_backend": "", "raw": ""}
+        log_kv(_logger, logging.ERROR, "[EVIDENCE_REVIEW_ERROR]", tone="error", error=error)
         if strict:
             return None, error
-        return review_evidence(goal, evidence_pack, tool_results), error
+        review = review_evidence(goal, evidence_pack, tool_results)
+        log_kv(_logger, logging.WARNING, "[EVIDENCE_REVIEW_FALLBACK]", tone="warn", review=review, error=error)
+        return review, error
 
     if not llm_result.get("ok"):
         error = {
@@ -374,9 +395,12 @@ def review_evidence_with_llm(
             "llm_backend": llm_result.get("llm_backend", ""),
             "raw": llm_result.get("raw", ""),
         }
+        log_kv(_logger, logging.WARNING, "[EVIDENCE_REVIEW_LLM_FAILED]", tone="warn", error=error)
         if strict:
             return None, error
-        return review_evidence(goal, evidence_pack, tool_results), error
+        review = review_evidence(goal, evidence_pack, tool_results)
+        log_kv(_logger, logging.WARNING, "[EVIDENCE_REVIEW_FALLBACK]", tone="warn", review=review, error=error)
+        return review, error
 
     model, validation_error = model_validate_or_error(EvidenceReviewResult, llm_result.get("payload") or {})
     if model is None:
@@ -386,13 +410,24 @@ def review_evidence_with_llm(
             "llm_backend": llm_result.get("llm_backend", ""),
             "raw": llm_result.get("raw", ""),
         }
+        log_kv(_logger, logging.WARNING, "[EVIDENCE_REVIEW_SCHEMA_INVALID]", tone="warn", error=error)
         if strict:
             return None, error
-        return review_evidence(goal, evidence_pack, tool_results), error
+        review = review_evidence(goal, evidence_pack, tool_results)
+        log_kv(_logger, logging.WARNING, "[EVIDENCE_REVIEW_FALLBACK]", tone="warn", review=review, error=error)
+        return review, error
 
     review = model
     review.review_source = review.review_source or "llm_evidence_review"
     review.recommended_next_action = review.recommended_next_action or str(getattr(review.next_action, "value", review.next_action))
+    log_kv(
+        _logger,
+        logging.INFO,
+        "[EVIDENCE_REVIEW_RESULT]",
+        tone="llm",
+        llm_backend=llm_result.get("llm_backend", ""),
+        review=review,
+    )
     return review, {
         "error_code": "",
         "error_message": "",
