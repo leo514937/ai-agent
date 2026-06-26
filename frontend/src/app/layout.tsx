@@ -41,6 +41,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   const [sessionId, setSessionId] = useState<string>('');
   const [history, setHistory] = useState<SessionHistoryItem[]>([]);
   const [chatInitialQuery, setChatInitialQuery] = useState('');
+  const [isMounted, setIsMounted] = useState(false);
   
   // 计算最终呈现的 AI 激活状态
   const activeChatOpen = isChatOpen !== null ? isChatOpen : (pathname === '/');
@@ -81,6 +82,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     reloadHistory();
     // 始终开启一个全新的会话，符合“一旦发送消息就新建会话”的设计
     setSessionId(`session-${Date.now()}`);
+    setIsMounted(true);
   }, []);
 
   // 监听全局打开 Chat 事件
@@ -150,7 +152,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   };
 
   return (
-    <html lang="zh-CN" className={theme === 'dark' ? 'dark' : ''}>
+    <html lang="zh-CN" className={!isMounted || theme === 'dark' ? 'dark' : ''}>
       <body className="bg-themeBg-main text-themeText-main font-sans min-h-screen transition-colors duration-300">
         <QueryClientProvider client={queryClient}>
           <ThemeContext.Provider value={{ theme, toggleTheme }}>
@@ -184,7 +186,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 {/* 2. 历史会话列表 */}
                 <div className="flex-1 overflow-y-auto px-2 py-2 flex flex-col gap-1 scrollbar-thin">
                   <p className="text-[8px] font-extrabold text-gray-500 uppercase tracking-widest px-3 mb-1.5">会话历史</p>
-                  {history.length === 0 ? (
+                  {!isMounted ? (
+                    <p className="text-[10px] text-gray-500 text-center py-8">加载中...</p>
+                  ) : history.length === 0 ? (
                     <p className="text-[10px] text-gray-500 text-center py-8">暂无历史对话</p>
                   ) : (
                     history.map((item) => {
@@ -225,7 +229,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                       }
                     }}
                     className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold transition-all border border-transparent
-                      ${activeChatOpen
+                      ${isMounted && activeChatOpen
                         ? 'bg-primary/20 text-primary border-primary/20 shadow-theme-sm' 
                         : 'text-gray-400 hover:bg-[#212121] hover:text-white'}`}
                   >
@@ -237,7 +241,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                     href="/"
                     onClick={() => setIsChatOpen(false)}
                     className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold transition-all border border-transparent ${
-                      pathname === '/' && !activeChatOpen
+                      isMounted && pathname === '/' && !activeChatOpen
                         ? 'text-primary bg-primary-light/10 border-primary/10 shadow-theme-sm' 
                         : 'text-gray-400 hover:bg-[#212121] hover:text-white'
                     }`}
@@ -249,7 +253,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                     href="/explore"
                     onClick={() => setIsChatOpen(false)}
                     className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold transition-all border border-transparent ${
-                      pathname === '/explore' && !activeChatOpen
+                      isMounted && pathname === '/explore' && !activeChatOpen
                         ? 'text-primary bg-primary-light/10 border-primary/10 shadow-theme-sm' 
                         : 'text-gray-400 hover:bg-[#212121] hover:text-white'
                     }`}
@@ -261,7 +265,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                     href="/order"
                     onClick={() => setIsChatOpen(false)}
                     className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold transition-all border border-transparent ${
-                      pathname === '/order' && !activeChatOpen
+                      isMounted && pathname === '/order' && !activeChatOpen
                         ? 'text-primary bg-primary-light/10 border-primary/10 shadow-theme-sm' 
                         : 'text-gray-400 hover:bg-[#212121] hover:text-white'
                     }`}
@@ -273,7 +277,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                     href="/profile"
                     onClick={() => setIsChatOpen(false)}
                     className={`flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs font-bold transition-all border border-transparent ${
-                      pathname === '/profile' && !activeChatOpen
+                      isMounted && pathname === '/profile' && !activeChatOpen
                         ? 'text-primary bg-primary-light/10 border-primary/10 shadow-theme-sm' 
                         : 'text-gray-400 hover:bg-[#212121] hover:text-white'
                     }`}
@@ -312,17 +316,19 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <div className="flex-1 flex flex-col h-screen min-w-0 overflow-hidden bg-themeBg-main relative">
                 
                 {/* AI 助手大 UI：始终挂载，使用 CSS 控制显隐 */}
-                <div className={`flex-grow h-full overflow-hidden ${activeChatOpen ? 'block' : 'hidden'}`}>
-                  <ChatView
-                    key={sessionId} // 强制绑定 Key 以在会话 ID 切换时重置全部内部状态并自动加载历史
-                    sessionId={sessionId}
-                    initialQuery={chatInitialQuery}
-                    onUpdateHistory={reloadHistory}
-                  />
+                <div className={`flex-grow h-full overflow-hidden ${isMounted && activeChatOpen ? 'block' : 'hidden'}`}>
+                  {isMounted && sessionId && (
+                    <ChatView
+                      key={sessionId} // 强制绑定 Key 以在会话 ID 切换时重置全部内部状态并自动加载历史
+                      sessionId={sessionId}
+                      initialQuery={chatInitialQuery}
+                      onUpdateHistory={reloadHistory}
+                    />
+                  )}
                 </div>
 
                 {/* 业务功能页面：始终挂载，使用 CSS 控制显隐 */}
-                <div className={`flex-1 flex flex-col h-full overflow-y-auto ${!activeChatOpen ? 'block' : 'hidden'}`}>
+                <div className={`flex-1 flex flex-col h-full overflow-y-auto ${!isMounted || !activeChatOpen ? 'block' : 'hidden'}`}>
                   {/* 顶部 Sticky View Header */}
                   <header className="sticky top-0 z-20 flex items-center justify-between px-8 py-4 bg-themeBg-sidebar/80 backdrop-blur-md border-b border-themeBorder transition-colors duration-300 shrink-0">
                     <div>

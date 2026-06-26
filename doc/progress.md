@@ -251,3 +251,7 @@
   - **组件与生命周期注入**：将 `layout.tsx` 中的 `ThemeContext` 默认值和 `RootLayout` 组件的 `theme` State 初始状态均统一变更为 `'dark'`，使 SSR 与 CSR 首屏渲染保持一致的深色主基调。
   - **主题兜底与初始化**：在 `useEffect` 初始化加载时，若检测到 `localStorage` 中未存储任何主题偏好，则主动将其置为 `'dark'` 并向 `document.documentElement` 动态添加 `.dark` 类。这样在初次访问时便能直接以完美对齐 ChatGPT 风格的沉浸式暗色主题加载，彻底消除了主题配置未设置时的“白色闪烁”与页面配色分裂感。
   - **编译验证**：执行 `npm run build` 验证，修改后的 Next.js 前端应用 100% 成功编译通过。
+- **修复页面首次加载时对话发送异常及 Hydration 冲突**：
+  - **问题分析**：由于 `sessionId` 初始状态为 `""` 并通过客户端 `useEffect` 动态设置为带有时间戳的 ID，导致 `ChatView` 发生 client-side mount 后的二次卸载与重挂载（Reconciliation key 变更）。当用户在首屏刚刚加载（未完全 mount 或 hydration 阶段）立即交互时，会导致输入内容被清空、焦点丢失、或者发送请求因 session ID 重置而中断。
+  - **解决机制**：在 `layout.tsx` 中引入 `isMounted` 状态控制，延迟 client-side 动态组件（如 `ChatView`）的初次渲染，保证首屏渲染/水合 HTML 与服务器端完全一致，消除 Hydration 冲突；同时确保 `ChatView` 在 `sessionId` 实例化完成之后才一次性正确挂载，避免了无用的卸载/重挂载周期，彻底消除了首屏不可发送消息、点击后重置、以及丢失焦点的问题。
+  - **验证测试**：前端 Next.js 项目 `npm run build` 打包编译 100% 通过；在 Playwright 环境中对首屏即时输入及流式回复发送进行了完整性测试，功能与状态保存均表现完美。

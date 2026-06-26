@@ -168,6 +168,8 @@ mkdir -p var
 # --------------------------------------------------------
 echo -e "${CYAN}[4/5] Launching Python AI Agent Service (Port 8000)...${NC}"
 python_log="var/python_service.log"
+python_log_abs="$(cd "$(dirname "$python_log")" && pwd)/$(basename "$python_log")"
+python_log_url="file://$python_log_abs"
 # Start Python web app using Uvicorn in background
 python -m uvicorn local_life_agent.app:app --host 127.0.0.1 --port 8000 > "$python_log" 2>&1 &
 # Wait up to 5 seconds for the port to bind
@@ -180,9 +182,13 @@ done
 
 if check_port 8000; then
     echo -e "  ${GREEN}Python AI Agent Service is now running in the background.${NC}"
-    echo -e "  ${YELLOW}Logs: $python_log${NC}"
+    echo -e "  ${YELLOW}Service: http://127.0.0.1:8000${NC}"
+    echo -e "  ${YELLOW}Logs: $python_log_abs${NC}"
+    echo -e "  ${YELLOW}Log link: $python_log_url${NC}"
 else
-    echo -e "  ${RED}Failed to start Python AI Agent Service. Check logs at: $python_log${NC}"
+    echo -e "  ${RED}Failed to start Python AI Agent Service.${NC}"
+    echo -e "  ${RED}Check logs at: $python_log_abs${NC}"
+    echo -e "  ${RED}Log link: $python_log_url${NC}"
 fi
 
 # --------------------------------------------------------
