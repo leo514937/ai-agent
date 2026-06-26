@@ -8,6 +8,8 @@ from enum import Enum
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..domain.state import SessionWriteDirective
+
 
 class ExecutionNode(str, Enum):
     """All possible nodes in the execution graph."""

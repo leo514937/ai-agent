@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 from pydantic import BaseModel, Field, ConfigDict
-from ..domain.schemas import DecisionPlan
+from ...domain.schemas import DecisionPlan
 
 def _to_dict(value: Any) -> dict[str, Any]:
     if value is None:
@@ -180,7 +180,7 @@ class CandidateEvaluator:
         evaluations: list[CandidateEvaluation] = []
         
         if decision_type == "recommendation":
-            from ..planning.ranking_policy import score_candidate
+            from ..policies.ranking_policy import score_candidate
             scored_candidates = []
             for item in candidates_data:
                 scored = score_candidate(item, preferences)

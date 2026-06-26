@@ -5,9 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from .. import config
-from ..domain.enums import ToolResultStatus
-from ..planning.ranking_policy import rank_candidates
+from ... import config
+from ...domain.enums import ToolResultStatus
+from ..policies.ranking_policy import rank_candidates
 
 
 def _to_dict(value: Any) -> dict[str, Any]:
@@ -555,7 +555,7 @@ def _build_comparison_evidence(
         if row.get("distance_km") is None:
             uncertainty_notes.append(f"{row.get('shop_name') or row.get('shop_id')}距离暂无法确认")
 
-    from ..domain.schemas import ComparisonMatrix
+    from ...domain.schemas import ComparisonMatrix
     matrix_dict = {
         "matrix_id": f"cmp_{plan_dict.get('plan_id', '') or 'matrix'}",
         "status": "ok" if rows else "unknown",

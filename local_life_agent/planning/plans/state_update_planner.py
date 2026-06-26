@@ -1,10 +1,19 @@
-"""State update planner for session state writes."""
+"""State update planner for session state writes.
+
+Separates two orthogonal status systems:
+- ToolResultStatus (result_status): execution outcome of a tool call
+- ResolveShopResult.status (resolve_shop_status): outcome of shop resolution
+
+These must NEVER be conflated. A tool can succeed (result_status=ok) but the
+shop resolution can fail (resolve_shop_status=NOT_FOUND).
+"""
 
 from __future__ import annotations
 
 from typing import Any
 
-from ..domain.enums import TaskType
+from ...domain.enums import TaskType
+from ...tools.result_semantics import TOOL_FAILURE_STATUSES, get_tool_result_status
 
 
 def _to_dict(value: Any) -> dict[str, Any]:
@@ -33,10 +42,21 @@ def _plan_required_by_call_id(plan: Any | None) -> dict[str, bool]:
 def plan_state_update(
     turn_context: dict,
     task_type: str,
-    resolve_status: str,
+    resolve_shop_status: str,
     pending_check_result: str | None = None,
 ) -> dict:
     """Compute the session state delta for this turn.
+
+    Args:
+        turn_context: Full turn context dict.
+        task_type: Normalised task type string.
+        resolve_shop_status: Outcome of shop resolution — one of
+            RESOLVED, AMBIGUOUS, LOW_CONFIDENCE, NOT_FOUND, or "".
+            This is ResolveShopResult.status, NOT ToolResultStatus.
+        pending_check_result: Optional pending-clarification check outcome.
+
+    Returns:
+        State update directive dict with set_fields, clear_fields, etc.
     """
     turn_context = turn_context or {}
     resolved_target = turn_context.get("resolved_target") or turn_context.get("resolved_shop")
@@ -61,21 +81,15 @@ def plan_state_update(
         turn_context.get("validated_plan") or turn_context.get("execution_plan")
     )
 
-    failure_statuses = {"failed", "circuit_open", "unknown"}
+    # Tool execution failure detection — reads ONLY ToolResultStatus.
     tool_failed = False
     if isinstance(tool_results, dict):
         for call_id, result in tool_results.items():
-            result_dict = _to_dict(result)
-            status_value = result_dict.get("result_status", "")
-            if hasattr(status_value, "value"):
-                status = str(status_value.value)
-            else:
-                status = str(status_value or "")
             required = required_by_call_id.get(str(call_id), True)
-            if required and status in failure_statuses:
+            if required and get_tool_result_status(_to_dict(result)) in TOOL_FAILURE_STATUSES:
                 tool_failed = True
                 break
-    elif str(resolve_status or "") == "RESOLVED" and not required_by_call_id:
+    elif str(resolve_shop_status or "") == "RESOLVED" and not required_by_call_id:
         tool_failed = False
 
     set_fields: dict[str, Any] = {}
@@ -86,7 +100,7 @@ def plan_state_update(
             "set_fields": {},
             "clear_fields": ["pending_clarification"],
             "task_type": task_type,
-            "resolve_status": resolve_status,
+            "resolve_shop_status": resolve_shop_status,
             "pending_check_result": pending_check_result,
         }
 
@@ -95,7 +109,7 @@ def plan_state_update(
             "set_fields": {},
             "clear_fields": [],
             "task_type": task_type,
-            "resolve_status": resolve_status,
+            "resolve_shop_status": resolve_shop_status,
             "pending_check_result": pending_check_result,
         }
 
@@ -104,21 +118,22 @@ def plan_state_update(
             "set_fields": {},
             "clear_fields": ["pending_clarification"],
             "task_type": task_type,
-            "resolve_status": resolve_status,
+            "resolve_shop_status": resolve_shop_status,
             "pending_check_result": pending_check_result,
         }
 
-    if resolve_status == "AMBIGUOUS":
+    # Shop resolution branching — reads ONLY ResolveShopResult.status.
+    if resolve_shop_status == "AMBIGUOUS":
         set_fields["pending_clarification"] = pending_dict
         return {
             "set_fields": set_fields,
             "clear_fields": [],
             "task_type": task_type,
-            "resolve_status": resolve_status,
+            "resolve_shop_status": resolve_shop_status,
             "pending_check_result": pending_check_result,
         }
 
-    if resolve_status == "RESOLVED":
+    if resolve_shop_status == "RESOLVED":
         if task_type in (TaskType.single_shop_query.value, TaskType.coupon_query.value):
             if resolved_shop:
                 set_fields["current_shop"] = resolved_shop
@@ -139,7 +154,7 @@ def plan_state_update(
             "set_fields": set_fields,
             "clear_fields": clear_fields,
             "task_type": task_type,
-            "resolve_status": resolve_status,
+            "resolve_shop_status": resolve_shop_status,
             "pending_check_result": pending_check_result,
         }
 
@@ -148,16 +163,16 @@ def plan_state_update(
             "set_fields": {},
             "clear_fields": ["pending_clarification"],
             "task_type": task_type,
-            "resolve_status": resolve_status,
+            "resolve_shop_status": resolve_shop_status,
             "pending_check_result": pending_check_result,
         }
 
-    if resolve_status in {"NOT_FOUND", ""}:
+    if resolve_shop_status in {"NOT_FOUND", ""}:
         return {
             "set_fields": {},
             "clear_fields": [],
             "task_type": task_type,
-            "resolve_status": resolve_status,
+            "resolve_shop_status": resolve_shop_status,
             "pending_check_result": pending_check_result,
         }
 
@@ -165,6 +180,6 @@ def plan_state_update(
         "set_fields": set_fields,
         "clear_fields": clear_fields,
         "task_type": task_type,
-        "resolve_status": resolve_status,
+        "resolve_shop_status": resolve_shop_status,
         "pending_check_result": pending_check_result,
     }
