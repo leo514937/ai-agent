@@ -48,6 +48,8 @@ def test_run_agent_graph_exposes_turn_trace(monkeypatch):
     assert response.debug.turn_trace["trace_id"] == response.trace_id
     assert response.debug.turn_trace["task_type"] == "recommendation"
     assert response.debug.turn_trace["tool_call_count"] == 1
+    assert response.debug.turn_trace["legacy_used"] is False
+    assert response.debug.turn_trace["fallback_used"] is False
 
 
 def test_trace_store_sanitizes_sensitive_fields():
@@ -72,6 +74,11 @@ def test_build_turn_trace_captures_fallback_and_verifier():
             "trace_id": "trace_1",
             "session_id": "session_1",
             "raw_text": "测试",
+            "top_intent_source": "llm",
+            "top_intent_router_llm_available": True,
+            "top_intent_router_backend": "real_llm",
+            "top_intent_router_error_type": "",
+            "top_intent_router_error_message": "",
             "semantic_frame": {"top_intent": "local_life", "task_type": "comparison", "primary_task": "comparison"},
             "execution_plan": {"tool_calls": [{"call_id": "a"}, {"call_id": "b"}]},
             "evidence_pack": {"comparison_matrix": {"rows": [{"shop_id": "1"}, {"shop_id": "2"}]}},
@@ -91,6 +98,9 @@ def test_build_turn_trace_captures_fallback_and_verifier():
     assert trace.decision_type == "comparison"
     assert trace.answer_verify_violations == ["ranking_changed"]
     assert trace.fallback_reason == "b2_mini_verifier:ranking_changed"
+    assert trace.top_intent_source == "llm"
+    assert trace.top_intent_router_llm_available is True
+    assert trace.top_intent_router_backend == "real_llm"
 
 
 def test_trace_failure_does_not_break_handler(monkeypatch):

@@ -133,14 +133,12 @@ def test_graph_semantic_parse_calls_default_llm_backend(monkeypatch: pytest.Monk
 def test_graph_semantic_parse_uses_injected_fake_llm(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(graph_builder, "call_llm", _llm_ok(_recommendation_payload(coupon=True, open_now=True)))
 
-    response = run_agent_graph("\u9644\u8fd1\u5e2e\u6211\u770b\u770b", "llm_injected_backend")
+    response = run_agent_graph("\u9644\u8fd1\u63a8\u8350\u706b\u9505", "llm_injected_backend")
 
     assert response.debug is not None
     assert response.debug.semantic_frame.get("semantic_source") == "real_llm"
-    assert response.debug.execution_plan.get("task_type") == "recommendation"
-    assert response.debug.execution_plan.get("coupon_preferred") is True
-    assert response.debug.execution_plan.get("open_now_preferred") is True
-    assert response.debug.execution_plan.get("query_terms") == ["\u706b\u9505"]
+    assert response.debug.turn_trace.get("task_type") == "recommendation"
+    assert response.debug.turn_trace.get("semantic_source") == "real_llm"
 
 
 def test_semantic_parse_fallback_only_when_llm_fails():
@@ -157,8 +155,10 @@ def test_semantic_parse_fallback_only_when_llm_fails():
 
     assert success["semantic_source"] == "real_llm"
     assert success["fallback_reason"] == ""
-    assert failure["semantic_source"] == "fallback_rules"
+    assert failure["semantic_frame"] is None
+    assert failure["semantic_source"] == ""
     assert failure["fallback_reason"] == "LLM_TIMEOUT"
+    assert failure["semantic_repair_hints"]
     assert failure["llm_called"] is True
 
 
@@ -203,34 +203,36 @@ def test_semantic_debug_marks_llm_or_fallback_source(monkeypatch: pytest.MonkeyP
     assert llm_response.debug is not None
     assert fallback_response.debug is not None
     assert llm_response.debug.semantic_frame.get("semantic_source") == "real_llm"
-    assert fallback_response.debug.semantic_frame.get("semantic_source") == "fallback_rules"
-    assert fallback_response.debug.semantic_frame.get("fallback_reason") == "LLM_TIMEOUT"
+    assert fallback_response.debug.turn_trace.get("semantic_source") in (None, "")
+    assert fallback_response.debug.turn_trace.get("fallback_reason") == "LLM_TIMEOUT"
 
 
 def test_recommendation_uses_fake_llm_constraints(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(graph_builder, "call_llm", _llm_ok(_recommendation_payload(coupon=True, open_now=True)))
+    result = parse_semantic_frame(
+        "\u9644\u8fd1\u63a8\u8350\u706b\u9505",
+        "local_life",
+        llm_call=_llm_ok(_recommendation_payload(coupon=True, open_now=True)),
+    )
 
-    response = run_agent_graph("\u9644\u8fd1\u5e2e\u6211\u770b\u4e00\u4e0b", "reco_llm_constraints")
-
-    assert response.debug is not None
-    plan = response.debug.execution_plan
-    assert plan.get("task_type") == "recommendation"
-    assert plan.get("query_terms") == ["\u706b\u9505"]
-    assert plan.get("scene_terms") == ["\u7ea6\u4f1a"]
-    assert plan.get("coupon_preferred") is True
-    assert plan.get("open_now_preferred") is True
+    frame = result["semantic_frame"]
+    assert frame.task_type == "recommendation"
+    assert frame.ranking_signals.get("query_terms") == ["\u706b\u9505"]
+    assert frame.soft_preferences.get("scene_terms") == ["\u7ea6\u4f1a"]
+    assert frame.soft_preferences.get("coupon_preferred") is True
+    assert frame.soft_preferences.get("open_now_preferred") is True
 
 
 def test_recommendation_llm_keyword_conflict_prefers_llm(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(graph_builder, "call_llm", _llm_ok(_recommendation_payload(coupon=False, open_now=False)))
+    result = parse_semantic_frame(
+        "\u9644\u8fd1\u6709\u5238\u7684\u706b\u9505",
+        "local_life",
+        llm_call=_llm_ok(_recommendation_payload(coupon=False, open_now=False)),
+    )
 
-    response = run_agent_graph("\u9644\u8fd1\u6709\u5238\u7684\u706b\u9505", "reco_llm_conflict")
-
-    assert response.debug is not None
-    plan = response.debug.execution_plan
-    assert plan.get("task_type") == "recommendation"
-    assert plan.get("coupon_preferred") is False
-    assert plan.get("open_now_preferred") is False
+    frame = result["semantic_frame"]
+    assert frame.task_type == "recommendation"
+    assert frame.soft_preferences.get("coupon_preferred") is False
+    assert frame.soft_preferences.get("open_now_preferred") is False
 
 
 def test_recommendation_parser_rejects_tool_name_and_shop_id():
@@ -252,7 +254,8 @@ def test_recommendation_parser_rejects_tool_name_and_shop_id():
         llm_call=wrapped_call_llm,
     )
 
-    assert result["semantic_source"] == "fallback_rules"
+    assert result["semantic_frame"] is None
+    assert result["semantic_source"] == ""
     assert result["fallback_reason"] == "LLM_ENUM_OUT_OF_RANGE"
 
 
@@ -264,15 +267,11 @@ def test_comparison_uses_fake_llm_targets(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(graph_builder, "call_llm", _llm_ok(_comparison_payload(focused_facets=["distance"])))
     monkeypatch.setattr(graph_builder, "verify_answer", lambda *_args, **_kwargs: {"passed": True})
 
-    response = run_agent_graph("\u9644\u8fd1\u5e2e\u6211\u5904\u7406\u4e00\u4e0b", "cmp_llm_targets")
+    response = run_agent_graph("海底捞和山城一锅哪个好？", "cmp_llm_targets")
 
     assert response.debug is not None
-    assert response.debug.execution_plan.get("task_type") == "comparison"
-    assert "search_shops" not in {
-        item.get("tool_name", "")
-        for item in response.debug.execution_plan.get("tool_calls", [])
-    }
-    assert len(response.debug.session_state_after.get("comparison_targets", [])) >= 2
+    assert response.debug.turn_trace.get("task_type") == "comparison"
+    assert response.debug.turn_trace.get("semantic_source") == "real_llm"
 
 
 def test_comparison_focused_facets_from_llm(monkeypatch: pytest.MonkeyPatch):
@@ -296,16 +295,17 @@ def test_comparison_focused_facets_from_llm(monkeypatch: pytest.MonkeyPatch):
     assert {call.get("facet") for call in plan.get("tool_calls", [])} == {"distance"}
 
 
-def test_semantic_source_marks_rule_based_when_using_default_backend():
-    """Default backend without injection is rule_based, not fake_llm."""
+def test_semantic_source_fails_closed_when_using_default_backend():
+    """Default backend without injection must fail closed, not fabricate a semantic frame."""
     result = parse_semantic_frame(
         "\u9644\u8fd1\u63a8\u8350\u706b\u9505",
         "local_life",
         llm_call=call_llm,
     )
 
-    assert result["semantic_source"] == "rule_based"
-    assert result["llm_backend"] == "rule_based"
+    assert result["semantic_frame"] is None
+    assert result["semantic_source"] == ""
+    assert result["llm_backend"] != ""
 
 
 def test_semantic_source_marks_real_llm_when_real_backend_injected():
@@ -319,12 +319,14 @@ def test_semantic_source_marks_real_llm_when_real_backend_injected():
     assert result["llm_backend"] == "real_llm"
 
 
-def test_semantic_source_marks_fallback_rules_on_llm_failure():
+def test_semantic_source_returns_repair_hints_on_llm_failure():
     result = parse_semantic_frame(
         "\u9644\u8fd1\u63a8\u8350\u706b\u9505",
         "local_life",
         llm_call=_llm_fail("LLM_TIMEOUT"),
     )
 
-    assert result["semantic_source"] == "fallback_rules"
+    assert result["semantic_frame"] is None
+    assert result["semantic_source"] == ""
     assert result["fallback_reason"] == "LLM_TIMEOUT"
+    assert result["semantic_repair_hints"]

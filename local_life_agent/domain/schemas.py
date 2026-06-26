@@ -222,39 +222,6 @@ class ToolTrace(BaseModel):
     error_message: str | None = None
 
 
-class ToolIntent(BaseModel):
-    """LLM 提议的受限工具意图，只描述候选，不包含执行参数。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    tool_name: str = ""
-    purpose: str = ""
-    required: bool = False
-    facet: str | None = None
-    priority: int = 0
-    depends_on: list[str] = Field(default_factory=list)
-    notes: list[str] = Field(default_factory=list)
-
-
-class ToolPlan(BaseModel):
-    """LLM ToolPlanner 的候选计划，仅作为建议输入。"""
-
-    model_config = ConfigDict(extra="forbid")
-
-    task_type: str = ""
-    primary_task: str = ""
-    purpose: str = ""
-    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
-    tool_intents: list[ToolIntent] = Field(default_factory=list)
-    notes: list[str] = Field(default_factory=list)
-    raw_text: str = ""
-    semantic_source: str = ""
-    llm_backend: str = ""
-
-
-ToolPlanItem = ToolIntent
-
-
 class ShopCardInput(BaseModel):
     """Input contract for get_shop_cards."""
 

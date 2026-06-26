@@ -296,7 +296,7 @@ class TestConditionalRouting:
         _update_coverage(resp, edge="answer_verify->rewrite")
         assert resp.answer_text
 
-    def test_task_plan_comparison_routes(self):
+    def test_planning_comparison_routes(self):
         """使用 SpyBackend 确保 comparison task_type。"""
         get_session_store().save("route_compare", SessionState(last_recommendation_list=[SHOP_A, SHOP_C]))
         spy = SpyRealLLMBackend(scenario_payloads={

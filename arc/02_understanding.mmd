@@ -1,0 +1,20 @@
+flowchart TD
+    START([understanding_start]) --> SP[semantic_parse]
+
+    SP --> SE[slot_extractor]
+    SE --> FV[frame_validator]
+    FV --> CR[context_recovery]
+    CR --> GP[goal_planner]
+    GP --> GR[goal_review]
+    GR --> TR[target_resolve]
+    TR --> CD[clarify_decide]
+
+    SP -->|error_code set| CL[clarify_response]
+    FV -->|error_code set| CL
+    GR -->|CLARIFY| CL
+    GR -->|UNSUPPORTED_ANSWER| FB[fallback_answer]
+    GR -->|FALLBACK| FB
+
+    CD -->|clarify| CL
+    CD -->|evidence_planner| EP[evidence_planner]
+    CD -->|emit_response| EM[emit_response]

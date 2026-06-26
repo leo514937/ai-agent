@@ -13,137 +13,75 @@ from .candidate_decision import (
 )
 
 def _get_tool_results_from_evidence(evidence: dict) -> dict[str, Any]:
-    # First, check if tool_results is directly in evidence
-    tr = evidence.get("tool_results")
-    if tr:
-        return tr
-    
-    reconstructed = {}
-    
-    # Check comparison_matrix
-    matrix = evidence.get("comparison_matrix") or {}
-    rows = matrix.get("rows") or []
-    for row in rows:
-        sid = row.get("shop_id")
-        if not sid:
-            continue
-        
-        # detail
-        detail_status = row.get("detail_status")
-        if not detail_status:
-            detail_status = "ok" if row.get("rating") is not None else "unknown"
-        reconstructed[f"call_detail_{sid}"] = {
-            "tool_name": "get_shop_detail",
-            "result_status": detail_status,
-            "shop_id": sid,
-            "data": {
-                "shop_id": sid,
-                "shop_name": row.get("shop_name", ""),
-                "category": row.get("category", ""),
-                "avg_price": row.get("avg_price"),
-                "rating": row.get("rating"),
-                "tags": row.get("tags", []),
-            }
-        }
-        
-        # open_status
-        open_val = row.get("open_status", "unknown")
-        reconstructed[f"call_open_{sid}"] = {
-            "tool_name": "check_open_status",
-            "result_status": "ok" if open_val in ("open", "closed") else "unknown",
-            "shop_id": sid,
-            "data": {
-                "shop_id": sid,
-                "shop_name": row.get("shop_name", ""),
-                "open_status": open_val,
-            }
-        }
-        
-        # coupon
-        c_status = row.get("coupon_status", "unknown")
-        c_res = "ok" if c_status == "has_coupon" else ("empty" if c_status == "empty" else "unknown")
-        reconstructed[f"call_coupon_{sid}"] = {
-            "tool_name": "get_coupon_list",
-            "result_status": c_res,
-            "shop_id": sid,
-            "data": [{"title": t} for t in row.get("coupon_titles", [])] if c_status == "has_coupon" else []
-        }
-        
-        # distance
-        dist_km = row.get("distance_km")
-        reconstructed[f"call_distance_{sid}"] = {
-            "tool_name": "get_distance_eta",
-            "result_status": "ok" if dist_km is not None else "unknown",
-            "shop_id": sid,
-            "data": {
-                "shop_id": sid,
-                "shop_name": row.get("shop_name", ""),
-                "distance_km": dist_km,
-                "eta_minutes": row.get("eta_minutes"),
-            }
-        }
-        
-    # Check ranking_snapshot
-    snapshot = evidence.get("ranking_snapshot") or {}
-    ranked = snapshot.get("ranked") or snapshot.get("ranked_shops") or []
-    for item in ranked:
-        sid = item.get("shop_id")
-        if not sid:
-            continue
-        
-        if f"call_detail_{sid}" in reconstructed:
-            # Already reconstructed from comparison matrix
-            continue
-            
-        reconstructed[f"call_detail_{sid}"] = {
-            "tool_name": "get_shop_detail",
-            "result_status": "ok" if item.get("rating") is not None else "unknown",
-            "shop_id": sid,
-            "data": {
-                "shop_id": sid,
-                "shop_name": item.get("shop_name", ""),
-                "category": item.get("category", ""),
-                "avg_price": item.get("avg_price"),
-                "rating": item.get("rating"),
-                "tags": item.get("tags", []),
-            }
-        }
-        
-        open_val = item.get("open_status", "unknown")
-        reconstructed[f"call_open_{sid}"] = {
-            "tool_name": "check_open_status",
-            "result_status": "ok" if open_val in ("open", "closed") else "unknown",
-            "shop_id": sid,
-            "data": {
-                "shop_id": sid,
-                "shop_name": item.get("shop_name", ""),
-                "open_status": open_val,
-            }
-        }
-        
-        coupon_count = item.get("coupon_count")
-        c_status = "has_coupon" if coupon_count is not None and coupon_count > 0 else ("empty" if coupon_count == 0 else "unknown")
-        reconstructed[f"call_coupon_{sid}"] = {
-            "tool_name": "get_coupon_list",
-            "result_status": "ok" if c_status == "has_coupon" else ("empty" if c_status == "empty" else "unknown"),
-            "shop_id": sid,
-            "data": [{"title": "优惠券"}] if c_status == "has_coupon" else []
-        }
-        
-        dist_km = item.get("distance_km")
-        reconstructed[f"call_distance_{sid}"] = {
-            "tool_name": "get_distance_eta",
-            "result_status": "ok" if dist_km is not None else "unknown",
-            "shop_id": sid,
-            "data": {
-                "shop_id": sid,
-                "shop_name": item.get("shop_name", ""),
-                "distance_km": dist_km,
-                "eta_minutes": item.get("eta_minutes"),
-            }
-        }
-        
-    return reconstructed
+    tool_results = evidence.get("tool_results")
+    if isinstance(tool_results, dict):
+        return tool_results
+    return {}
+
+
+def _build_shop_name_map(evidence: dict[str, Any]) -> dict[str, str]:
+    name_map: dict[str, str] = {}
+
+    def register(item: Any) -> None:
+        item_dict = _to_dict(item)
+        if not item_dict:
+            return
+        shop_id = str(item_dict.get("shop_id") or "").strip()
+        shop_name = str(item_dict.get("shop_name") or "").strip()
+        if shop_id and shop_name and shop_name != shop_id:
+            name_map[shop_id] = shop_name
+        alias = str(item_dict.get("alias") or "").strip()
+        if alias and shop_id and alias != shop_id:
+            name_map.setdefault(shop_id, alias)
+
+    ranking_snapshot = evidence.get("ranking_snapshot") or {}
+    for item in ranking_snapshot.get("ranked") or ranking_snapshot.get("ranked_shops") or []:
+        register(item)
+
+    comparison_matrix = evidence.get("comparison_matrix") or {}
+    for item in comparison_matrix.get("rows") or []:
+        register(item)
+    for item in comparison_matrix.get("overall_ranked") or []:
+        register(item)
+    for item in (comparison_matrix.get("dimension_winners") or {}).values():
+        if isinstance(item, list):
+            for sub_item in item:
+                register(sub_item)
+
+    for item in evidence.get("last_recommendation_list") or []:
+        register(item)
+    for item in evidence.get("evidence_items") or []:
+        register(item)
+    for item in evidence.get("unknown_items") or []:
+        register(item)
+
+    return name_map
+
+
+def _apply_shop_name_map(plan: DecisionPlan, name_map: dict[str, str]) -> None:
+    if not name_map:
+        return
+
+    def patch_item(item: Any) -> None:
+        if not isinstance(item, dict):
+            return
+        shop_id = str(item.get("shop_id") or "").strip()
+        shop_name = str(item.get("shop_name") or "").strip()
+        mapped_name = name_map.get(shop_id)
+        if mapped_name and (not shop_name or shop_name == shop_id):
+            item["shop_name"] = mapped_name
+
+    for item in plan.selected_targets:
+        patch_item(item)
+    for item in plan.omitted_targets:
+        patch_item(item)
+    for item in plan.overall_ranking:
+        patch_item(item)
+    patch_item(plan.main_recommendation)
+    for item in plan.candidate_summaries:
+        patch_item(item)
+    for item in plan.best_for.values():
+        patch_item(item)
 
 
 def _to_dict(value: Any) -> dict[str, Any]:
@@ -427,6 +365,12 @@ def _build_decision_plan(
 
         # 6. Map to legacy DecisionPlan
         plan = map_candidate_decision_plan_to_decision_plan(candidate_plan)
+        _apply_shop_name_map(plan, _build_shop_name_map(ev))
+        plan.decision_context = {
+            **(plan.decision_context or {}),
+            "raw_comparison_rows": (ev.get("comparison_matrix") or {}).get("rows", []) if isinstance(ev.get("comparison_matrix") or {}, dict) else [],
+            "raw_ranking_rows": (ev.get("ranking_snapshot") or {}).get("ranked", []) if isinstance(ev.get("ranking_snapshot") or {}, dict) else [],
+        }
         if decision_type == "recommendation" and shop_ids:
             shop_id_to_index = {str(sid): i for i, sid in enumerate(shop_ids)}
             plan.overall_ranking.sort(key=lambda x: shop_id_to_index.get(str(x.get("shop_id", "")), 999))
@@ -734,6 +678,10 @@ def _build_decision_plan(
         factual_points=factual_points,
         uncertainty_notes=uncertainty_notes,
         forbidden_claims=forbidden_claims,
+        decision_context={
+            "raw_comparison_rows": (ev.get("comparison_matrix") or {}).get("rows", []) if isinstance(ev.get("comparison_matrix") or {}, dict) else [],
+            "raw_ranking_rows": (ev.get("ranking_snapshot") or {}).get("ranked", []) if isinstance(ev.get("ranking_snapshot") or {}, dict) else [],
+        },
         conversation_continuity=conversation_continuity or {},
     )
 
@@ -803,12 +751,15 @@ def generate_answer(
     # here with defaults, otherwise metadata_out.update(metadata) below
     # would overwrite the real diagnostic values.
     metadata = {
-        "answer_source": "template",
+        "answer_source": "template_fallback",
         "llm_verbalizer_enabled": False,
         "llm_verbalizer_called": False,
         "llm_used": False,
         "llm_backend": "",
         "answer_verifier_result": "not_run",
+        "template_degraded": True,
+        "fallback_used": True,
+        "template_fallback_used": True,
     }
     
     # Track decision metadata
@@ -842,7 +793,6 @@ def generate_answer(
     from .llm_verbalizer import verbalize_decision_plan
 
     if config.ENABLE_LLM_VERBALIZER:
-
         metadata["llm_verbalizer_enabled"] = True
         metadata["llm_verbalizer_called"] = True
         from ..llm.client import call_llm
@@ -860,12 +810,18 @@ def generate_answer(
             in_graph=in_graph,
         )
         metadata["llm_used"] = True
-        if rewrite_count > 0:
-            metadata["answer_source"] = "llm_verbalizer_rewrite"
+        if not metadata.get("answer_verify_passed", True) and not metadata.get("rewrite_needed", False):
+            metadata["answer_source"] = "trusted_failure_message"
+            metadata["template_degraded"] = True
+            metadata["fallback_used"] = True
+            metadata["template_fallback_used"] = False
         else:
-            metadata["answer_source"] = "llm_verbalizer"
-        metadata["answer_fallback_reason"] = ""
-        metadata["answer_verifier_result"] = "pass"
+            metadata["answer_source"] = "llm_verbalizer_rewrite" if rewrite_count > 0 else "llm_verbalizer"
+            metadata["answer_fallback_reason"] = ""
+            metadata["answer_verifier_result"] = "pass"
+            metadata["template_degraded"] = False
+            metadata["fallback_used"] = False
+            metadata["template_fallback_used"] = False
 
         verbalized = _normalize_coupon_phrase(verbalized)
 

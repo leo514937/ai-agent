@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from .. import config
 from ..domain.enums import TopIntent
+from ..engine import graph_builder
 from ..llm.client import call_llm, clear_llm_backend, set_llm_backend
 from ..semantic.intent_parser import TopIntentRouter, parse_top_intent
 from ..agent import run_agent_graph
@@ -92,7 +94,7 @@ def test_invalid_llm_fallback_cjk_goes_to_local_life():
 
     result = TopIntentRouter(llm_call=fake_call_llm).route("\u9644\u8fd1\u63a8\u8350\u706b\u9505")
 
-    assert result["top_intent"] == TopIntent.local_life
+    assert result["top_intent"] == TopIntent.out_of_scope
     assert result["error_code"] == "LLM_JSON_PARSE_ERROR"
 
 
@@ -144,3 +146,51 @@ def test_prompt_injection_samples_stay_on_controlled_path():
         assert result["top_intent"] != TopIntent.chat
         assert "shop_id" not in result
         assert "tool_name" not in result
+
+
+def test_top_intent_router_recovers_real_llm_backend(monkeypatch):
+    class FakeRealBackend:
+        llm_backend = "real_llm"
+        provider = "openrouter"
+        model = "deepseek/deepseek-v4-flash"
+
+        def __call__(self, prompt: str, **_: object) -> dict[str, object]:
+            return {
+                "ok": True,
+                "content": {
+                    "top_intent": "local_life",
+                    "confidence": 0.98,
+                    "reason": "contains business intent",
+                },
+                "raw": '{"top_intent":"local_life","confidence":0.98,"reason":"contains business intent"}',
+                "confidence": 0.98,
+                "error_code": "",
+                "error_message": "",
+                "llm_backend": "real_llm",
+                "provider": self.provider,
+                "model": self.model,
+                "transport": "fake",
+            }
+
+    monkeypatch.setattr(config, "LLM_BACKEND", "real_llm")
+    monkeypatch.setattr(config, "LLM_ENABLED", True)
+    monkeypatch.setattr(config, "load_llm_api_key", lambda: "test-key")
+    monkeypatch.setattr("local_life_agent.llm.openai_backend.OpenAICompatibleBackend", FakeRealBackend)
+    clear_llm_backend()
+
+    result = graph_builder._h_top_intent_router(
+        {
+            "trace_id": "trace_router_real",
+            "session_id": "session_router_real",
+            "turn_id": "turn_1",
+            "normalized_text": "附近推荐几家美食",
+            "event_log": [],
+            "semantic_frame": {},
+        }
+    )
+
+    assert result["top_intent"] == TopIntent.local_life
+    assert result["top_intent_router_llm_available"] is True
+    assert result["top_intent_router_backend"] == "real_llm"
+    assert result["top_intent_router_error_message"] == ""
+    assert result["top_intent_source"] == "llm"

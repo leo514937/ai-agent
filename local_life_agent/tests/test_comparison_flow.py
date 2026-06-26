@@ -11,9 +11,9 @@ from ..answer.evidence_builder import build_evidence
 from ..answer.generator import generate_answer
 from ..answer.verifier import verify_answer
 from ..engine import graph_builder
-from ..planning.comparison_planner import plan_comparison
 from ..session.store import get_session_store, reset_session_store
 from ..domain.state import SessionState
+from .fakes.comparison_planner import plan_comparison
 from .fakes.mock_tools import (
     check_open_status,
     get_coupon_list,
@@ -22,6 +22,7 @@ from .fakes.mock_tools import (
     resolve_shop,
     search_shops,
 )
+from .fakes.verifier import fake_verifier_verify
 
 
 SHOP_A = {"shop_id": "shop_sc_05", "shop_name": "川味轩(知春路店)"}
@@ -37,6 +38,11 @@ def _reset_store():
     reset_session_store()
     yield
     reset_session_store()
+
+
+@pytest.fixture(autouse=True)
+def _fake_verifier(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("local_life_agent.answer.b2_mini_verifier.B2MiniVerifier.verify", fake_verifier_verify)
 
 
 def _target(shop: dict[str, str]) -> dict[str, Any]:

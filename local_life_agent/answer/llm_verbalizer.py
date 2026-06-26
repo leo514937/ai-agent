@@ -229,7 +229,22 @@ def verbalize_decision_plan(
 ) -> str:
     # Check client
     if not llm_client:
-        raise RuntimeError("llm_client_unavailable")
+        if metadata_out is not None:
+            metadata_out["answer_fallback_reason"] = "llm_client_unavailable"
+            metadata_out["llm_verbalizer_error"] = "llm_client_unavailable"
+            metadata_out["answer_verify_passed"] = False
+            metadata_out["answer_verify_violations"] = ["llm_client_unavailable"]
+            metadata_out["rewrite_needed"] = False
+            metadata_out["rewrite_count"] = rewrite_count
+            metadata_out["rewrite_reason"] = "llm_client_unavailable"
+            metadata_out["fallback_reason"] = "llm_client_unavailable"
+            metadata_out["final_safety_status"] = "fallback"
+            metadata_out["verifier_result"] = "fail"
+            metadata_out["verifier_failure_code"] = "llm_client_unavailable"
+            metadata_out["verifier_unknown_fields"] = []
+            metadata_out["verifier_unsupported_claims"] = []
+            metadata_out["template_fallback_used"] = False
+        return fallback_text or ""
 
     try:
         system_prompt, _ = _load_verbalizer_prompts()
@@ -243,7 +258,12 @@ def verbalize_decision_plan(
             metadata_out["rewrite_count"] = rewrite_count
             metadata_out["fallback_reason"] = "prompt_load_failed"
             metadata_out["final_safety_status"] = "fallback"
-        raise RuntimeError(f"prompt_load_failed:{exc}") from exc
+            metadata_out["verifier_result"] = "fail"
+            metadata_out["verifier_failure_code"] = "prompt_load_failed"
+            metadata_out["verifier_unknown_fields"] = []
+            metadata_out["verifier_unsupported_claims"] = []
+            metadata_out["template_fallback_used"] = True
+        return fallback_text or ""
 
     user_prompt = _render_user_prompt(plan, rewrite_count=rewrite_count, previous_violations=previous_violations)
 
@@ -276,8 +296,15 @@ def verbalize_decision_plan(
             metadata_out["generated_llm_answer_before_fallback"] = natural_text
 
         from .b2_mini_verifier import B2MiniVerifier
-        verifier = B2MiniVerifier()
-        verification_result = verifier.verify(plan, natural_text)
+        verifier = B2MiniVerifier(llm_client=llm_client)
+        verification_result = verifier.verify(plan, natural_text, timeout_ms=timeout_ms)
+        if metadata_out is not None:
+            metadata_out["verifier_result"] = "pass" if verification_result["passed"] else "fail"
+            metadata_out["verifier_failure_code"] = verification_result.get("failure_code") or verification_result.get("violation") or ""
+            metadata_out["verifier_unknown_fields"] = verification_result.get("unknown_fields") or []
+            metadata_out["verifier_unsupported_claims"] = verification_result.get("unsupported_claims") or []
+            metadata_out["verifier_false_fields"] = verification_result.get("false_fields") or []
+            metadata_out["verifier_recoverable"] = bool(verification_result.get("recoverable", False))
         if not verification_result["passed"]:
             if metadata_out is not None:
                 metadata_out["violation"] = verification_result["violation"]
@@ -286,16 +313,17 @@ def verbalize_decision_plan(
                 metadata_out["llm_verbalizer_error"] = verification_result["violations"]
                 metadata_out["answer_verify_passed"] = False
                 metadata_out["answer_verify_violations"] = verification_result["violations"]
-                metadata_out["rewrite_needed"] = in_graph and rewrite_count < _GRAPH_REWRITE_LIMIT
+                metadata_out["rewrite_needed"] = in_graph and rewrite_count < _GRAPH_REWRITE_LIMIT and bool(verification_result.get("recoverable", False))
                 metadata_out["rewrite_count"] = rewrite_count
                 metadata_out["rewrite_reason"] = verification_result["violation"]
                 metadata_out["fallback_reason"] = f"b2_mini_verifier:{verification_result['violation'] or 'unknown'}"
                 metadata_out["final_safety_status"] = "violated"
+                metadata_out["template_fallback_used"] = False
             
             # If in graph and rewrite is still under limit, return natural_text to let verifier fail & trigger rewrite
-            if in_graph and rewrite_count < _GRAPH_REWRITE_LIMIT:
+            if in_graph and rewrite_count < _GRAPH_REWRITE_LIMIT and bool(verification_result.get("recoverable", False)):
                 return natural_text
-            raise RuntimeError(f"b2_mini_verifier:{verification_result['violation'] or 'unknown'}")
+            return fallback_text or natural_text
 
         if metadata_out is not None:
             metadata_out["answer_verify_passed"] = True
@@ -305,9 +333,25 @@ def verbalize_decision_plan(
             metadata_out["rewrite_reason"] = ""
             metadata_out["fallback_reason"] = ""
             metadata_out["final_safety_status"] = "safe"
+            metadata_out["template_fallback_used"] = False
 
         return natural_text
     except Exception as exc:
-        raise RuntimeError(str(exc)) from exc
+        if metadata_out is not None:
+            metadata_out["answer_fallback_reason"] = str(exc)
+            metadata_out["llm_verbalizer_error"] = str(exc)
+            metadata_out["answer_verify_passed"] = False
+            metadata_out["answer_verify_violations"] = [str(exc)]
+            metadata_out["rewrite_needed"] = False
+            metadata_out["rewrite_count"] = rewrite_count
+            metadata_out["rewrite_reason"] = str(exc)
+            metadata_out["fallback_reason"] = str(exc)
+            metadata_out["final_safety_status"] = "fallback"
+            metadata_out["verifier_result"] = "fail"
+            metadata_out["verifier_failure_code"] = str(exc)
+            metadata_out["verifier_unknown_fields"] = []
+            metadata_out["verifier_unsupported_claims"] = []
+            metadata_out["template_fallback_used"] = False
+        return fallback_text or ""
 
 

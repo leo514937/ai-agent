@@ -62,6 +62,7 @@ class EvidenceReviewResult(BaseModel):
     optional_failed: list[str] = Field(default_factory=list)
     unknown_as_false_detected: bool = False
     failed_as_empty_detected: bool = False
+    evidence_incomplete: bool = False
     trace_payload: dict[str, Any] = Field(default_factory=dict)
 
     @property

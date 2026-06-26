@@ -16,9 +16,11 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from local_life_agent.agent import run_agent_graph
+from local_life_agent.observability.file_logger import get_python_service_logger
 from local_life_agent.session.store import get_session_store
 
 app = FastAPI(title="Local Life Agent Service", version="1.0.0")
+_FILE_LOGGER = get_python_service_logger()
 
 
 class ChatRequest(BaseModel):
@@ -52,6 +54,14 @@ async def live():
 
 @app.post("/internal/v1/chat/stream")
 async def chat_stream(request: ChatRequest):
+    _FILE_LOGGER.info(
+        "chat_stream_request session_id=%s trace_id=%s turn_id=%s page=%s message=%s",
+        request.session_id or "",
+        request.trace_id or "",
+        request.turn_id or "",
+        request.page or "",
+        request.message or "",
+    )
     response = run_agent_graph(request.message, session_id=request.session_id)
     
     trace_id = response.trace_id or request.trace_id or "trace-anon"
@@ -102,6 +112,13 @@ async def chat_stream(request: ChatRequest):
             "next_steps": [],
             "task_chain": []
         }
+        _FILE_LOGGER.info(
+            "chat_stream_final trace_id=%s session_id=%s answer=%s shops=%s",
+            trace_id,
+            session_id,
+            response.answer_text,
+            len(response.cards or []),
+        )
         yield f"event: final\ndata: {json.dumps({'event_type': 'final', 'trace_id': trace_id, 'session_id': session_id, 'turn_id': turn_id, 'payload': final_payload}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")

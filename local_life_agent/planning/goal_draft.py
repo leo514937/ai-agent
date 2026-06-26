@@ -36,6 +36,18 @@ def _to_dict(value: Any) -> dict[str, Any]:
     return dict(getattr(value, "__dict__", {}) or {})
 
 
+def _stringify_category(value: Any) -> str:
+    """Normalize category values into a search-friendly string."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (list, tuple, set)):
+        parts = [str(item).strip() for item in value if str(item).strip()]
+        return " ".join(parts)
+    return str(value).strip()
+
+
 def _goal_type_from_task_type(task_type: TaskType | str | None) -> GoalType:
     """Map the legacy TaskType enum to the new GoalType enum."""
     if task_type is None:
@@ -114,9 +126,24 @@ def build_local_life_goal_draft(
 
     goal_type = _goal_type_from_task_type(frame.task_type)
     candidate_source = _candidate_source_from_frame(frame)
-    candidate_category = str(frame.hard_constraints.get("category", "")) if isinstance(frame.hard_constraints, dict) else ""
+    candidate_category = ""
+    if isinstance(frame.hard_constraints, dict):
+        candidate_category = _stringify_category(frame.hard_constraints.get("category", ""))
     if not candidate_category:
-        candidate_category = str(frame.candidate_category or "")
+        candidate_category = _stringify_category(frame.candidate_category)
+
+    # If the user did not name a specific shop and only provided a
+    # category / scene-like request, prefer recommendation over a
+    # hard single-shop interpretation.  This lets "火锅 有券吗" flow
+    # into a similar-shop recommendation instead of a clarification
+    # dead-end when no exact shop match exists.
+    if goal_type == GoalType.SINGLE_SHOP_QUERY and not list(frame.merchant_mentions or []):
+        query_terms = []
+        ranking = frame.ranking_signals or {}
+        if isinstance(ranking, dict):
+            query_terms = list(ranking.get("query_terms", []) or [])
+        if candidate_category or query_terms or list(frame.focused_facets or []):
+            goal_type = GoalType.RECOMMENDATION
 
     # Parse candidate_limit from frame or hard_constraints
     candidate_limit: int | None = None

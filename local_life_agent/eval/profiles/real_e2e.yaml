@@ -1,0 +1,22 @@
+name: real_e2e
+mode: acceptance
+backend: real_llm
+tool_backend: db_or_java_api
+cases: ../cases/real_e2e.jsonl
+description: real_llm + real_tool 端到端验收，禁止 fake/mock/template happy path
+acceptance:
+  require_real_llm: true
+  require_real_tool_backend: true
+  allowed_tool_backends:
+    - db
+    - java_api
+  forbid_semantic_sources:
+    - fallback_rules
+    - rule_based
+  forbid_tool_backends:
+    - mock
+    - fake
+    - stub
+  forbid_answer_sources:
+    - template
+    - template_fallback

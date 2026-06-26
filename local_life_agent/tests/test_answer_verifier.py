@@ -9,7 +9,15 @@ todo/08:
 
 from __future__ import annotations
 
+import pytest
+
 from ..answer.verifier import verify_answer
+from .fakes.verifier import fake_verifier_verify
+
+
+@pytest.fixture(autouse=True)
+def _fake_verifier(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("local_life_agent.answer.b2_mini_verifier.B2MiniVerifier.verify", fake_verifier_verify)
 
 
 def test_verify_answer_passes_for_aligned_ranking():

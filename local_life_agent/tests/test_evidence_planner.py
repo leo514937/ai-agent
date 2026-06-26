@@ -49,6 +49,24 @@ class TestPlanEvidence:
         call_names = {c.tool_name for c in plan.tool_calls}
         assert call_names == {"get_coupon_list", "check_open_status", "get_distance_eta"}
 
+    def test_review_summary_uses_shop_ids(self):
+        goal = LocalLifeGoalDraft(
+            goal_type=GoalType.SINGLE_SHOP_QUERY,
+            required_facets=["review_summary"],
+        )
+        cs = CandidateSet(
+            status=CandidateStatus.RESOLVED,
+            source=CandidateSource.DISCOVERY,
+            candidates=[
+                ResolvedCandidate(shop_id="s1", shop_name="Shop A", rank=1),
+            ],
+        )
+        plan = plan_evidence(goal, cs)
+        assert len(plan.tool_calls) == 1
+        call = plan.tool_calls[0]
+        assert call.tool_name == "get_shop_review_summary"
+        assert call.args == {"shop_ids": ["s1"]}
+
     def test_required_marked_correctly(self):
         goal = LocalLifeGoalDraft(
             goal_type=GoalType.COMPARISON,

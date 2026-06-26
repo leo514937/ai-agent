@@ -37,9 +37,6 @@ class ExecutionNode(str, Enum):
     GOAL_REVIEW = "goal_review"
 
     # --- Planning ---
-    TASK_PLAN = "task_plan"
-    FACET_PLAN = "facet_plan"
-    COMPARISON_PLANNER = "comparison_planner"
     EVIDENCE_PLANNER = "evidence_planner"
     PLAN_VALIDATOR = "plan_validator"
 

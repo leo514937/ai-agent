@@ -1,4 +1,4 @@
-"""Unified EvidencePlanner — generates ToolPlan from CandidateSet + required/optional facets.
+"""Unified EvidencePlanner — generates ExecutionPlan from CandidateSet + required/optional facets.
 
 P1 responsibility:
   - For each candidate shop, emit tool calls for required + optional facets
@@ -62,7 +62,11 @@ def _build_tool_call(
 ) -> ToolCallSpec:
     """Build a single ToolCallSpec for a shop facet."""
     tool_name = _facet_to_tool(facet)
-    args: dict[str, Any] = {"shop_id": shop_id}
+    args: dict[str, Any]
+    if tool_name == "get_shop_review_summary":
+        args = {"shop_ids": [shop_id]}
+    else:
+        args = {"shop_id": shop_id}
     if tool_name == "get_distance_eta":
         args["from_location"] = location or config.MOCK_LOCATION
     if tool_name == "get_shop_cards":

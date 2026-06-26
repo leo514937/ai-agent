@@ -5,21 +5,22 @@ import json
 import os
 import re
 from contextlib import contextmanager
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Iterator
 
 from pydantic import ValidationError
 
+from .. import config
 from ..agent import AgentResponse, run_agent_graph
 from ..llm.client import clear_llm_backend, set_llm_backend
 from ..observability.metrics import aggregate_turn_trace_metrics, merge_eval_metrics
-from ..observability.trace import TurnTrace, build_turn_trace
+from ..observability.trace import TraceSpanRecord, TurnTrace, build_turn_trace
 from ..session.store import reset_session_store
 from .eval_case_schema import EvalCase
 
 
 _REPORT_DIR = Path(__file__).resolve().parent / "reports"
+_PROFILE_DIR = Path(__file__).resolve().parent / "profiles"
 
 
 class EvalSpyBackend:
@@ -76,7 +77,7 @@ def _backend_scope(backend: str) -> Iterator[dict[str, Any]]:
             clear_llm_backend()
         return
     if backend == "real_llm":
-        api_key = os.environ.get("LLM_API_KEY", "")
+        api_key = config.load_llm_api_key()
         if not api_key:
             meta["skipped"] = True
             meta["skip_reason"] = "missing_api_key"
@@ -144,36 +145,37 @@ def _response_debug_dict(response: AgentResponse) -> dict[str, Any]:
     to_dict = getattr(response, "to_dict", None)
     if callable(to_dict):
         payload = to_dict()
-        return payload.get("debug", {}) if isinstance(payload, dict) else {}
+        debug_payload = payload.get("debug", {}) if isinstance(payload, dict) else {}
+        if isinstance(debug_payload, dict):
+            debug_payload.setdefault("answer_text", getattr(response, "answer_text", ""))
+            debug_payload.setdefault("clarification", getattr(response, "clarification", None))
+        return debug_payload
     debug = getattr(response, "debug", None)
     if debug is None:
         return {}
     if isinstance(debug, dict):
+        debug.setdefault("answer_text", getattr(response, "answer_text", ""))
+        debug.setdefault("clarification", getattr(response, "clarification", None))
         return debug
-    return {
+    payload = {
         key: value
         for key, value in vars(debug).items()
         if not str(key).startswith("_")
     }
+    payload.setdefault("answer_text", getattr(response, "answer_text", ""))
+    payload.setdefault("clarification", getattr(response, "clarification", None))
+    return payload
 
 
 def _turn_trace_from_response(response: AgentResponse, user_text: str) -> TurnTrace:
     debug = _response_debug_dict(response)
-    turn_trace_dict = debug.get("turn_trace")
-    if isinstance(turn_trace_dict, dict) and turn_trace_dict.get("trace_id"):
-        events = turn_trace_dict.get("events", [])
-        return TurnTrace(
-            **{
-                **{k: v for k, v in turn_trace_dict.items() if k != "events"},
-                "events": [],
-            }
-        )
+    turn_trace_seed = debug.get("turn_trace") if isinstance(debug.get("turn_trace"), dict) else {}
     final_state = {
         "trace_id": response.trace_id,
         "session_id": response.session_id,
         "raw_text": user_text,
         "event_log": debug.get("execution_trace", []),
-        "semantic_frame": debug.get("semantic_frame", {}),
+        "semantic_frame": {**turn_trace_seed, **(debug.get("semantic_frame", {}) or {})},
         "execution_plan": debug.get("execution_plan", {}),
         "evidence_pack": debug.get("evidence_pack", {}),
         "answer_source": debug.get("answer_source", ""),
@@ -182,14 +184,62 @@ def _turn_trace_from_response(response: AgentResponse, user_text: str) -> TurnTr
         "answer_verify_violations": debug.get("answer_verify_violations", []),
         "rewrite_count": debug.get("rewrite_count", 0),
         "final_safety_status": debug.get("final_safety_status", ""),
+        "resolved_target": debug.get("resolved_target", {}),
+        "resolve_shop_result": debug.get("resolve_shop_result", {}),
+        "comparison_result": debug.get("comparison_result", {}),
+        "tool_results": debug.get("tool_results", {}),
+        "tool_result_set": debug.get("tool_result_set", {}),
+        "session_state_before": debug.get("session_state_before", {}),
+        "session_state_after": debug.get("session_state_after", {}),
+        "target_status": debug.get("target_status", turn_trace_seed.get("target_status", "")),
+        "llm_backend": debug.get("llm_backend", turn_trace_seed.get("llm_backend", "")),
+        "semantic_source": debug.get("semantic_source", turn_trace_seed.get("semantic_source", "")),
+        "llm_called": debug.get("llm_called", turn_trace_seed.get("llm_called", False)),
+        "task_type": debug.get("task_type", turn_trace_seed.get("task_type", "")),
+        "decision_type": debug.get("decision_type", turn_trace_seed.get("decision_type", "")),
+        "top_intent": debug.get("top_intent", turn_trace_seed.get("top_intent", "")),
+        "primary_task": debug.get("primary_task", turn_trace_seed.get("primary_task", "")),
+        "selected_flow": debug.get("selected_flow", turn_trace_seed.get("selected_flow", "")),
     }
-    return build_turn_trace(final_state, user_text=user_text)
+    built_trace = build_turn_trace(final_state, user_text=user_text)
+    turn_trace_dict = debug.get("turn_trace")
+    if isinstance(turn_trace_dict, dict) and turn_trace_dict.get("trace_id"):
+        merged = built_trace.to_dict()
+        for key, value in turn_trace_dict.items():
+            if key == "events":
+                continue
+            if value is None:
+                continue
+            if isinstance(value, str) and not value.strip():
+                continue
+            if isinstance(value, (list, dict)) and not value:
+                continue
+            merged[key] = value
+        events = merged.get("events") or []
+        if isinstance(events, list):
+            merged["events"] = [TraceSpanRecord(**event) if isinstance(event, dict) else event for event in events]
+        return TurnTrace(**merged)
+    return built_trace
 
 
 def _field_map(turn_trace: TurnTrace, debug: dict[str, Any]) -> dict[str, Any]:
     payload = turn_trace.to_dict()
     payload["reference_resolution_source"] = payload.get("reference_resolution_source")
     payload["final_debug_info"] = debug
+    payload["tool_result_count"] = _tool_result_count(debug)
+    payload["tool_results_present"] = payload["tool_result_count"] > 0
+    payload["candidate_status"] = payload.get("candidate_status") or payload.get("target_status") or payload.get("target_resolve_status")
+    payload["pending_clarification"] = _pending_clarification(debug)
+    payload["clarify_reason"] = _clarify_reason(debug, turn_trace)
+    payload["terminal"] = _infer_terminal(debug, turn_trace)
+    payload["fake_success_risk"] = _has_fake_success_risk(debug, turn_trace)
+    payload["evidence_complete"] = bool(payload.get("evidence_complete", not bool(payload.get("evidence_incomplete", False))))
+    payload["verifier_result"] = payload.get("verifier_result") or ("pass" if payload.get("answer_verify_passed") else "fail" if payload.get("answer_verify_passed") is not None else "")
+    payload["verifier_failure_code"] = payload.get("verifier_failure_code") or (payload.get("answer_verify_violations", [""]) or [""])[0]
+    payload["verifier_unknown_fields"] = payload.get("verifier_unknown_fields") or []
+    payload["verifier_unsupported_claims"] = payload.get("verifier_unsupported_claims") or []
+    payload["template_fallback_used"] = bool(payload.get("template_fallback_used") or str(payload.get("answer_source") or "") == "template_fallback")
+    payload["raw_text_fallback_source"] = payload.get("raw_text_fallback_source") or payload.get("fallback_reason") or ""
     return payload
 
 
@@ -197,7 +247,32 @@ def _assert_expected(expected: dict[str, Any], turn_trace: TurnTrace, debug: dic
     failures: list[str] = []
     fields = _field_map(turn_trace, debug)
     for key, value in expected.items():
-        if key in {"forbid_answer_source", "min_candidate_count", "max_rewrite_count", "must_include_violation", "must_not_include_violation", "allow_skipped_if_no_api_key", "turn_assertions"}:
+        if key in {
+            "forbid_answer_source",
+            "min_candidate_count",
+            "max_rewrite_count",
+            "must_include_violation",
+            "must_not_include_violation",
+            "allow_skipped_if_no_api_key",
+            "turn_assertions",
+            "expect_llm_backend",
+            "expect_llm_backend_kind",
+            "expect_llm_backend_family",
+            "forbid_llm_backend_kinds",
+            "forbid_llm_backend_families",
+            "forbid_semantic_sources",
+            "forbid_tool_backends",
+            "expect_answer_source",
+            "forbid_answer_sources",
+            "expect_legacy_used",
+            "expect_fallback_used",
+            "expect_evidence_incomplete",
+            "expect_terminal",
+            "forbid_fake_success",
+            "require_tool_results",
+            "require_clarify_on_ambiguous_candidates",
+            "require_trusted_failure_on_empty_tools",
+        }:
             continue
         if key == "expected_route":
             expected_flow = {
@@ -231,7 +306,125 @@ def _assert_expected(expected: dict[str, Any], turn_trace: TurnTrace, debug: dic
         if any(str(item) in violation for violation in violations):
             failures.append(f"must_not_include_violation:{item}")
 
+    expect_llm_backend = expected.get("expect_llm_backend")
+    if expect_llm_backend is not None and str(fields.get("llm_backend") or "") != str(expect_llm_backend):
+        failures.append(f"expect_llm_backend: expected={expect_llm_backend!r} observed={fields.get('llm_backend')!r}")
+
+    expect_llm_backend_kind = expected.get("expect_llm_backend_kind")
+    if expect_llm_backend_kind is not None and str(fields.get("llm_backend_kind") or "") != str(expect_llm_backend_kind):
+        failures.append(f"expect_llm_backend_kind: expected={expect_llm_backend_kind!r} observed={fields.get('llm_backend_kind')!r}")
+
+    expect_llm_backend_family = expected.get("expect_llm_backend_family")
+    if expect_llm_backend_family is not None and str(fields.get("llm_backend_family") or "") != str(expect_llm_backend_family):
+        failures.append(f"expect_llm_backend_family: expected={expect_llm_backend_family!r} observed={fields.get('llm_backend_family')!r}")
+
+    forbidden_llm_backend_kinds = [str(item) for item in expected.get("forbid_llm_backend_kinds", []) or []]
+    if forbidden_llm_backend_kinds and str(fields.get("llm_backend_kind") or "") in forbidden_llm_backend_kinds:
+        failures.append(f"forbid_llm_backend_kinds:{fields.get('llm_backend_kind')}")
+
+    forbidden_llm_backend_families = [str(item) for item in expected.get("forbid_llm_backend_families", []) or []]
+    if forbidden_llm_backend_families and str(fields.get("llm_backend_family") or "") in forbidden_llm_backend_families:
+        failures.append(f"forbid_llm_backend_families:{fields.get('llm_backend_family')}")
+
+    forbidden_semantic_sources = [str(item) for item in expected.get("forbid_semantic_sources", []) or []]
+    if forbidden_semantic_sources and str(fields.get("semantic_source") or "") in forbidden_semantic_sources:
+        failures.append(f"forbid_semantic_sources:{fields.get('semantic_source')}")
+
+    forbidden_tool_backends = [str(item) for item in expected.get("forbid_tool_backends", []) or []]
+    if forbidden_tool_backends and str(fields.get("tool_backend") or "") in forbidden_tool_backends:
+        failures.append(f"forbid_tool_backends:{fields.get('tool_backend')}")
+
+    expect_answer_source = expected.get("expect_answer_source")
+    if expect_answer_source is not None and str(fields.get("answer_source") or "") != str(expect_answer_source):
+        failures.append(f"expect_answer_source: expected={expect_answer_source!r} observed={fields.get('answer_source')!r}")
+
+    forbidden_answer_sources = [str(item) for item in expected.get("forbid_answer_sources", []) or []]
+    if forbidden_answer_sources and str(fields.get("answer_source") or "") in forbidden_answer_sources:
+        failures.append(f"forbid_answer_sources:{fields.get('answer_source')}")
+
+    for key in ("expect_legacy_used", "expect_fallback_used", "expect_evidence_incomplete"):
+        if key in expected and expected.get(key) is not None:
+            field_name = key.removeprefix("expect_")
+            observed = fields.get(field_name)
+            if bool(observed) != bool(expected.get(key)):
+                failures.append(f"{key}: expected={bool(expected.get(key))!r} observed={bool(observed)!r}")
+
+    expect_terminal = expected.get("expect_terminal")
+    if expect_terminal is not None and str(fields.get("terminal") or "") != str(expect_terminal):
+        failures.append(f"expect_terminal: expected={expect_terminal!r} observed={fields.get('terminal')!r}")
+
+    if expected.get("forbid_fake_success") and fields.get("fake_success_risk"):
+        failures.append("forbid_fake_success: fake_success_risk_detected")
+
+    require_tool_results = expected.get("require_tool_results")
+    if require_tool_results is True and not fields.get("tool_results_present"):
+        failures.append("require_tool_results: no_real_tool_results")
+    if require_tool_results is False and fields.get("tool_result_count", 0) not in (0, None):
+        failures.append(f"require_tool_results: expected_no_tool_results observed={fields.get('tool_result_count')}")
+
+    if expected.get("require_clarify_on_ambiguous_candidates"):
+        if fields.get("terminal") != "clarify":
+            failures.append(f"require_clarify_on_ambiguous_candidates: terminal={fields.get('terminal')}")
+        clarify_reason = str(fields.get("clarify_reason") or "")
+        if "ambiguous" not in clarify_reason:
+            failures.append(f"require_clarify_on_ambiguous_candidates: clarify_reason={clarify_reason!r}")
+
+    if expected.get("require_trusted_failure_on_empty_tools"):
+        if fields.get("terminal") not in {"clarify", "trusted_failure"}:
+            failures.append(f"require_trusted_failure_on_empty_tools: terminal={fields.get('terminal')}")
+        if fields.get("tool_results_present"):
+            failures.append("require_trusted_failure_on_empty_tools: unexpected_tool_results_present")
+        if str(fields.get("answer_source") or "") in {"template", "template_fallback"}:
+            failures.append(f"require_trusted_failure_on_empty_tools: answer_source={fields.get('answer_source')}")
+
     return failures
+
+
+def _tool_result_count(debug: dict[str, Any]) -> int:
+    tool_results = debug.get("tool_results") or debug.get("final_debug_info", {}).get("tool_results") or {}
+    if isinstance(tool_results, dict):
+        return len(tool_results)
+    return 0
+
+
+def _pending_clarification(debug: dict[str, Any]) -> dict[str, Any]:
+    for key in ("session_state_after", "session_state_before"):
+        state = debug.get(key) or {}
+        if isinstance(state, dict):
+            pending = state.get("pending_clarification")
+            if isinstance(pending, dict):
+                return pending
+    return {}
+
+
+def _clarify_reason(debug: dict[str, Any], turn_trace: TurnTrace) -> str:
+    pending = _pending_clarification(debug)
+    reason = pending.get("reason") if isinstance(pending, dict) else None
+    if reason:
+        return str(reason)
+    if turn_trace.target_status in {"AMBIGUOUS", "LOW_CONFIDENCE"}:
+        return "ambiguous_candidates"
+    if turn_trace.target_status == "NOT_FOUND":
+        return "tool_empty_or_not_found"
+    return ""
+
+
+def _infer_terminal(debug: dict[str, Any], turn_trace: TurnTrace) -> str:
+    if debug.get("clarification") or _pending_clarification(debug):
+        return "clarify"
+    if turn_trace.target_status == "NOT_FOUND" and _tool_result_count(debug) == 0:
+        return "trusted_failure"
+    return "final_answer"
+
+
+def _has_fake_success_risk(debug: dict[str, Any], turn_trace: TurnTrace) -> bool:
+    if (turn_trace.answer_source or "") in {"template", "template_fallback"} and (turn_trace.final_safety_status or "") == "safe":
+        return True
+    if not _tool_result_count(debug) and turn_trace.target_status == "RESOLVED" and (turn_trace.answer_source or "").startswith("llm_verbalizer"):
+        text = str(debug.get("answer_text", "") or "")
+        if text:
+            return True
+    return False
 
 
 def _run_case(case: dict[str, Any], *, backend: str, backend_meta: dict[str, Any]) -> dict[str, Any]:
@@ -253,7 +446,65 @@ def _run_case(case: dict[str, Any], *, backend: str, backend_meta: dict[str, Any
     turn_traces: list[TurnTrace] = []
     for turn in turns:
         text = str((turn or {}).get("user", "") if isinstance(turn, dict) else turn).strip()
-        response = run_agent_graph(text, session_id=session_id)
+        try:
+            response = run_agent_graph(text, session_id=session_id)
+        except Exception as exc:
+            error_name = type(exc).__name__
+            error_message = str(exc)
+            failure_trace = {
+                "trace_id": f"trace_{case.get('case_id', 'eval_case')}_runtime_error",
+                "session_id": session_id,
+                "turn_id": "",
+                "user_text": text,
+                "top_intent": None,
+                "top_intent_source": None,
+                "top_intent_router_llm_available": None,
+                "top_intent_router_backend": None,
+                "top_intent_router_error_type": error_name,
+                "top_intent_router_error_message": error_message,
+                "semantic_source": None,
+                "llm_backend": None,
+                "tool_backend": None,
+                "answer_source": None,
+                "fallback_reason": error_message,
+                "answer_verify_passed": False,
+                "answer_verify_violations": [f"runtime_exception:{error_name}"],
+                "rewrite_count": 0,
+                "final_safety_status": "fallback",
+                "target_status": "NOT_FOUND",
+                "candidate_status": "NOT_FOUND",
+                "reference_resolution_source": "runtime_exception",
+                "candidate_count": 0,
+                "candidate_source": None,
+                "resolver_tool_called": False,
+                "resolver_tool_name": None,
+                "resolver_tool_backend": None,
+                "resolver_tool_result_count": 0,
+                "resolver_error_type": error_name,
+                "resolver_error_message": error_message,
+                "fallback_used": False,
+                "template_fallback_used": False,
+                "legacy_used": False,
+                "evidence_incomplete": False,
+                "verifier_result": "fail",
+                "verifier_failure_code": f"runtime_exception:{error_name}",
+                "verifier_unknown_fields": [],
+                "verifier_unsupported_claims": [],
+                "raw_text_fallback_source": "runtime_exception",
+                "events": [],
+            }
+            return {
+                "case_id": case.get("case_id", ""),
+                "category": category,
+                "status": "failed",
+                "backend": backend,
+                "profile": str(case.get("profile", "") or ""),
+                "query": text,
+                "failures": [f"runtime_exception:{error_name}:{error_message}"],
+                "trace_summary": failure_trace,
+                "final_debug_info": {"runtime_exception": error_message},
+                "turn_traces": [failure_trace],
+            }
         responses.append(response)
         turn_traces.append(_turn_trace_from_response(response, text))
 
@@ -275,9 +526,10 @@ def _run_case(case: dict[str, Any], *, backend: str, backend_meta: dict[str, Any
         "category": category,
         "status": status,
         "backend": backend,
+        "profile": str(case.get("profile", "") or ""),
         "query": str(turns[-1].get("user", "") if turns and isinstance(turns[-1], dict) else (turns[-1] if turns else "")),
         "failures": failures,
-        "trace_summary": turn_traces[-1].to_dict(),
+        "trace_summary": _field_map(turn_traces[-1], debug),
         "final_debug_info": debug,
         "turn_traces": [trace.to_dict() for trace in turn_traces],
     }
@@ -308,20 +560,38 @@ def _report_markdown(report: dict[str, Any]) -> str:
         f"- rewrite_rate: {metrics.get('rewrite_rate', 0.0)}",
         f"- template_fallback_rate: {metrics.get('template_fallback_rate', 0.0)}",
         f"- raw_text_fallback_rate: {metrics.get('raw_text_fallback_rate', 0.0)}",
+        f"- real_e2e_veto_count: {metrics.get('real_e2e_veto_count', 0)}",
         "",
         "## Cases",
     ]
     for item in report.get("cases", []):
-        lines.append(f"- {item.get('case_id')}: {item.get('status')}")
+        trace_summary = item.get("trace_summary", {}) or {}
+        lines.append(f"- {item.get('case_id')}: {item.get('status')} terminal={trace_summary.get('terminal', '')} llm={trace_summary.get('llm_backend', '')} tool={trace_summary.get('tool_backend', '')}")
         if item.get("failures"):
             lines.append(f"  failures: {', '.join(item.get('failures', []))}")
     return "\n".join(lines) + "\n"
 
 
+def _load_profile(profile_path: str | Path) -> dict[str, Any]:
+    path = Path(profile_path)
+    if not path.exists() and not path.is_absolute():
+        path = (_PROFILE_DIR / path).resolve()
+    raw = path.read_text(encoding="utf-8")
+    try:
+        import yaml  # type: ignore
+    except ImportError as exc:  # pragma: no cover
+        raise RuntimeError("PyYAML is required to load eval profiles") from exc
+    data = yaml.safe_load(raw) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"Profile must be a mapping: {path}")
+    data["_profile_path"] = str(path)
+    return data
+
+
 def run_eval(
     cases: list[dict[str, Any]],
     *,
-    backend: str = "rule_based",
+    backend: str = "spy",
     output_dir: str | Path | None = None,
     write_reports: bool = True,
 ) -> dict[str, Any]:
@@ -340,13 +610,18 @@ def run_eval(
     skipped = sum(1 for item in results if item.get("status") == "skipped")
     category_stats: dict[str, dict[str, int]] = {}
     turn_traces: list[TurnTrace] = []
+    real_e2e_veto_count = 0
     for item in results:
         category = str(item.get("category", "uncategorized"))
         stats = category_stats.setdefault(category, {"total": 0, "passed": 0, "failed": 0, "skipped": 0})
         stats["total"] += 1
         stats[str(item.get("status"))] += 1
+        if item.get("status") == "failed" and category == "real_e2e_acceptance":
+            real_e2e_veto_count += len(item.get("failures", []))
         if item.get("status") != "skipped":
-            turn_traces.append(TurnTrace(**{k: v for k, v in item.get("trace_summary", {}).items() if k != "events"}, events=[]))
+            trace_payload = item.get("trace_summary", {}) or {}
+            allowed = set(TurnTrace.__dataclass_fields__.keys())
+            turn_traces.append(TurnTrace(**{k: v for k, v in trace_payload.items() if k in allowed and k != "events"}, events=[]))
 
     metrics = merge_eval_metrics(
         aggregate_turn_trace_metrics(turn_traces),
@@ -364,7 +639,7 @@ def run_eval(
             "failed": failed,
             "skipped": skipped,
         },
-        "metrics": metrics,
+        "metrics": {**metrics, "real_e2e_veto_count": real_e2e_veto_count},
         "cases": results,
     }
     if write_reports:
@@ -375,27 +650,80 @@ def run_eval(
 def run_eval_file(
     cases_path: str | Path,
     *,
-    backend: str = "rule_based",
+    backend: str = "spy",
     output_dir: str | Path | None = None,
     write_reports: bool = True,
 ) -> dict[str, Any]:
     return run_eval(load_cases(cases_path), backend=backend, output_dir=output_dir, write_reports=write_reports)
 
 
+def run_eval_profile(
+    profile_path: str | Path,
+    *,
+    cases_path: str | Path | None = None,
+    output_dir: str | Path | None = None,
+    write_reports: bool = True,
+) -> dict[str, Any]:
+    profile = _load_profile(profile_path)
+    resolved_cases_path = cases_path or profile.get("cases")
+    if not resolved_cases_path:
+        raise ValueError(f"profile missing cases: {profile_path}")
+    profile_file = Path(str(profile.get("_profile_path", profile_path)))
+    resolved_cases_path = Path(str(resolved_cases_path))
+    if not resolved_cases_path.is_absolute():
+        resolved_cases_path = (profile_file.parent / resolved_cases_path).resolve()
+    backend = str(profile.get("backend", "spy"))
+    if str(profile.get("name", "")) == "real_e2e":
+        from .. import config
+
+        if backend != "real_llm":
+            raise ValueError("real_e2e profile must use backend=real_llm")
+        if str(config.TOOL_BACKEND) not in {"db", "java_api"}:
+            raise ValueError(f"real_e2e requires TOOL_BACKEND in {{'db','java_api'}}, got {config.TOOL_BACKEND!r}")
+        if not config.load_llm_api_key():
+            raise RuntimeError("real_e2e requires a real LLM API key")
+    cases = load_cases(resolved_cases_path)
+    for case in cases:
+        if isinstance(case, dict):
+            case["profile"] = str(profile.get("name", ""))
+    report = run_eval(cases, backend=backend, output_dir=output_dir, write_reports=write_reports)
+    report["profile"] = {
+        "name": profile.get("name", ""),
+        "mode": profile.get("mode", ""),
+        "backend": backend,
+        "tool_backend": profile.get("tool_backend"),
+        "cases": str(resolved_cases_path),
+        "description": profile.get("description", ""),
+        "acceptance": profile.get("acceptance", {}),
+    }
+    return report
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run local life eval cases.")
-    parser.add_argument("--cases", required=True, help="JSONL cases path")
-    parser.add_argument("--backend", default="rule_based", choices=["rule_based", "spy", "real_llm"])
+    parser.add_argument("--cases", help="JSONL cases path")
+    parser.add_argument("--profile", help="YAML profile path")
+    parser.add_argument("--backend", default="spy", choices=["spy", "real_llm", "rule_based"])
     parser.add_argument("--output-dir", default=str(_REPORT_DIR))
     return parser
 
 
 def main() -> int:
     args = _build_parser().parse_args()
-    report = run_eval_file(args.cases, backend=args.backend, output_dir=args.output_dir, write_reports=True)
+    if args.profile:
+        report = run_eval_profile(
+            args.profile,
+            cases_path=args.cases,
+            output_dir=args.output_dir,
+            write_reports=True,
+        )
+    else:
+        if not args.cases:
+            raise SystemExit("--cases or --profile is required")
+        report = run_eval_file(args.cases, backend=args.backend, output_dir=args.output_dir, write_reports=True)
     print(json.dumps(report["summary"], ensure_ascii=False, indent=2))
-    print(json.dumps({k: report["metrics"][k] for k in ("pass_rate", "fallback_rate", "rewrite_rate", "template_fallback_rate", "raw_text_fallback_rate")}, ensure_ascii=False, indent=2))
-    return 0
+    print(json.dumps({k: report["metrics"][k] for k in ("pass_rate", "fallback_rate", "rewrite_rate", "template_fallback_rate", "raw_text_fallback_rate", "real_e2e_veto_count")}, ensure_ascii=False, indent=2))
+    return 0 if report["summary"].get("failed", 0) == 0 else 1
 
 
 if __name__ == "__main__":

@@ -1,0 +1,70 @@
+flowchart TD
+    START([START]) --> IGR[intake_guard_router]
+
+    IGR -->|terminal / direct / reject| RESP[response_subgraph]
+    IGR -->|clarification_reply| MC[merge_clarification]
+    IGR -->|local_life| US[understanding_subgraph]
+
+    MC --> CPC[check_pending_clarification]
+    CPC -->|proceed| US
+    CPC -->|clarify / fallback| RESP
+
+    US --> SP[semantic_parse]
+    SP --> SE[slot_extractor]
+    SE --> FV[frame_validator]
+    FV --> CR[context_recovery]
+    CR --> GP[goal_planner]
+    GP --> GR[goal_review]
+    GR --> TR[target_resolve]
+    TR --> CD[clarify_decide]
+    CD -->|evidence_planner| EP[evidence_planner]
+    CD -->|clarify| CL[clarify_response]
+    CD -->|emit_response| EM[emit_response]
+
+    GR -->|CLARIFY| CL
+    GR -->|UNSUPPORTED_ANSWER| FB[fallback_answer]
+    GR -->|FALLBACK| FB
+    FV -->|error_code| CL
+    SP -->|error_code| CL
+
+    EP --> PV[plan_validator]
+    PV -->|tool_execute| TE[tool_execute]
+    PV -->|fallback_answer| FB
+
+    TE --> EB[evidence_build]
+    EB --> EV[evidence_review]
+    EV --> DP[decision_planner]
+    DP --> DR[decision_review]
+
+    DR -->|answer_plan_build| APB[answer_plan_build]
+    DR -->|evidence_planner| EP
+    DR -->|expand_search| XS[expand_search]
+    DR -->|target_resolve| TR
+    DR -->|fallback_answer| FB
+    DR -->|clarify_response| CL
+    DR -->|emit_response| EM
+
+    EV -->|fallback_answer| FB
+    EV -->|clarify_response| CL
+    EV -->|evidence_planner| EP
+
+    RESP -->|direct / reject| FRD[final_response_build]
+    RESP -->|clarify| CL
+    RESP -->|fallback| FB
+    RESP -->|normal answer| APB
+
+    APB --> AG[answer_generate]
+    AG --> AV[answer_verify]
+    AV -->|pass| FR[final_response_build]
+    AV -->|rewrite| RW[rewrite]
+    AV -->|fallback_answer| FB
+    RW --> AG
+
+    CL --> SUP[state_update_plan]
+    FB --> SUP
+    FRD --> SUP
+    FR --> SUP
+
+    SUP --> PS[persist_session_state]
+    PS --> EM[emit_response]
+    EM --> END([END])

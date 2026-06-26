@@ -1,0 +1,23 @@
+flowchart TD
+    START([planning_start]) --> EP[evidence_planner]
+    EP --> PV[plan_validator]
+
+    PV -->|tool_execute| TE[tool_execute]
+    PV -->|fallback_answer| FB[fallback_answer]
+
+    TE --> EB[evidence_build]
+    EB --> EV[evidence_review]
+    EV --> DP[decision_planner]
+    DP --> DR[decision_review]
+
+    DR -->|answer_plan_build| APB[answer_plan_build]
+    DR -->|evidence_planner| EP
+    DR -->|expand_search| XS[expand_search]
+    DR -->|target_resolve| TR[target_resolve]
+    DR -->|fallback_answer| FB
+    DR -->|clarify_response| CL[clarify_response]
+    DR -->|emit_response| EM[emit_response]
+
+    EV -->|fallback_answer| FB
+    EV -->|clarify_response| CL
+    EV -->|evidence_planner| EP

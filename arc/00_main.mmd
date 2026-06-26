@@ -1,0 +1,22 @@
+flowchart TD
+    START([START]) --> IGR[intake_guard_router]
+
+    IGR -->|terminal / direct / reject| RESP[response_subgraph]
+    IGR -->|clarification_reply| MC[merge_clarification]
+    IGR -->|local_life| US[understanding_subgraph]
+
+    MC -->|proceed| US
+    MC -->|clarify / fallback| RESP
+
+    US -->|proceed| PS[planning_subgraph]
+    US -->|clarify / fallback| RESP
+
+    PS -->|execute| ERS[execution_review_subgraph]
+    PS -->|clarify / fallback| RESP
+    PS -->|retry| PS
+
+    ERS -->|enough / degrade / clarify / fallback| RESP
+    ERS -->|retry| PS
+
+    RESP -->|pass / fallback_ready / clarify_ready| SUP[state_update_plan]
+    SUP --> END([END])

@@ -119,7 +119,7 @@ class TestTargetResolveStrict:
 
 
 # =====================================================================
-# §3 — EvidencePlanner must NOT fallback to task_plan
+# §3 — EvidencePlanner must NOT fallback to legacy planning
 # =====================================================================
 
 
@@ -129,7 +129,7 @@ class TestEvidencePlannerStrict:
     def test_evidence_planner_fails_when_missing_goal(self):
         """§8: EvidencePlanner 缺 goal/candidate_set 时必须失败，而不是 fallback.
         
-        Poison _h_task_plan so it raises, then verify the graph node handler
+        Poison the legacy planning path so it raises, then verify the graph node handler
         raises too (or returns an error) when goal is None.
         """
         from ..domain.graph_state import GraphState
@@ -140,7 +140,7 @@ class TestEvidencePlannerStrict:
             "semantic_frame": None,
         }
 
-        # This should NOT call _h_task_plan — it should fail fast
+        # This should NOT call the legacy planning path — it should fail fast
         result = _h_evidence_planner(state)
 
         # Should either raise or return error state, not legacy
@@ -368,7 +368,7 @@ class TestPoisonedLegacyPaths:
         assert result.get("event_log")
         assert result["event_log"][-1].get("target_resolve_mode") == "candidate_set"
 
-    def test_evidence_planner_never_returns_legacy_task_plan(self):
+    def test_evidence_planner_never_returns_legacy_planning(self):
         """EvidencePlanner missing inputs must fail fast, not call legacy task plan."""
         from ..domain.candidate import (
             GoalType,

@@ -8,7 +8,8 @@ the fields it owns.
 
 from __future__ import annotations
 
-from typing import Optional, TypedDict
+from operator import add
+from typing import Annotated, Optional, TypedDict
 
 from .candidate import CandidateSet, CandidateSpec, LocalLifeGoalDraft
 from .enums import TaskType, TopIntent
@@ -23,7 +24,6 @@ from .schemas import (
     ResolveShopResult,
     SemanticFrame,
     ToolResult,
-    ToolPlan,
 )
 from .state import SessionState, SessionWriteDirective
 
@@ -48,7 +48,7 @@ class GraphState(TypedDict, total=False):
     # === 顶层意图 (Top Intent) — write: top_intent_router, read: semantic_parse/response_builder ===
     top_intent: Optional[TopIntent]
 
-    # str — written as TaskType.value string by task_plan / target_resolve / semantic_parse
+    # str — written as TaskType.value string by evidence_planner / target_resolve / semantic_parse
     task_type: Optional[str]
 
     # === 语义帧 (Semantic Frame) — write: semantic_parse/slot_extractor, read: context_recovery/task_router ===
@@ -70,20 +70,19 @@ class GraphState(TypedDict, total=False):
     goal_plan: Optional[GoalPlan]
     goal_review_result: Optional[GoalReviewResult]
 
-    # === 候选集 (CandidateSet) — write: goal_draft/candidate_resolve/candidate_review, read: task_plan/evidence_build/answer_plan ===
+    # === 候选集 (CandidateSet) — write: goal_draft/candidate_resolve/candidate_review, read: evidence_planner/evidence_build/answer_plan ===
     local_life_goal_draft: Optional[LocalLifeGoalDraft]
     candidate_spec: Optional[CandidateSpec]
     candidate_set: Optional[CandidateSet]
     review_results: Optional[dict]
 
-    # === 解析结果 (Resolve Result) — write: target_resolve/clarify_decide, read: task_plan/clarify_decide ===
+    # === 解析结果 (Resolve Result) — write: target_resolve/clarify_decide, read: evidence_planner/clarify_decide ===
     resolved_target: Optional[ResolveShopResult]
     resolve_shop_result: Optional[ResolveShopResult]  # §1 文档字段：target_resolve 直接输出
 
-    # === 执行计划 (Execution Plan) — write: task_plan/facet_planner/comparison_planner, read: plan_validator/tool_execute ===
+    # === 执行计划 (Execution Plan) — write: evidence_planner/decision_planner, read: plan_validator/tool_execute ===
     execution_plan: Optional[ExecutionPlan]
     validated_plan: Optional[ExecutionPlan]  # §1 文档字段：plan_validator 校验通过后的输出
-    tool_plan: Optional[ToolPlan]
 
     # === 工具结果 (Tool Results) — write: tool_execute, read: evidence_build/answer_verify ===
     tool_results: dict[str, ToolResult]
@@ -104,9 +103,9 @@ class GraphState(TypedDict, total=False):
     state_update_plan: Optional[SessionWriteDirective]
 
     # === 观测字段 (Observability) — append: all nodes, read: emit_response/observability ===
-    event_log: list
+    event_log: Annotated[list, add]
     metrics_tags: dict
-    trace_spans: list
+    trace_spans: Annotated[list, add]
     task_type_source: str  # origin of task_type: llm_semantic | context_recovery | target_resolve_override | pending_clarification_restore
     dropped_facets: list  # facet names filtered out by validation
 
@@ -120,6 +119,13 @@ class GraphState(TypedDict, total=False):
 
     # === 运行时辅助 (Runtime aux — not in doc §1 but required for graph operation) ===
     rewrite_count: int
+    intake_route: str
+    merge_clarification_route: str
+    understanding_route: str
+    planning_route: str
+    execution_review_route: str
+    response_route: str
+    response_mode: str
     session_state: Optional[SessionState]
     pending_check_result: str
     error_code: str
@@ -131,10 +137,6 @@ class GraphState(TypedDict, total=False):
     draft_response: str
     semantic_source: str
     fallback_reason: str
-    tool_plan_source: str
-    tool_plan_validated: bool
-    tool_plan_fallback_reason: str
-    tool_plan_reason: str
     answer_fallback_reason: str
     llm_called: bool
     llm_backend: str

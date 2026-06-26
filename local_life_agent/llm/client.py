@@ -59,6 +59,47 @@ def clear_llm_backend() -> None:
     set_llm_backend(None)
 
 
+def ensure_real_llm_backend() -> bool:
+    """Ensure the runtime backend is wired for real LLM calls.
+
+    Returns True when a backend is available after the call.
+    This is a narrow runtime repair hook for cases where import/order
+    or eval wiring left the backend unset even though real LLM config
+    and credentials are present.
+    """
+    global _LLM_BACKEND
+    if _LLM_BACKEND is not None:
+        return True
+    if config.LLM_ENABLED and config.LLM_BACKEND == "real_llm" and config.load_llm_api_key():
+        from .openai_backend import OpenAICompatibleBackend
+
+        _LLM_BACKEND = OpenAICompatibleBackend()
+        return True
+    return False
+
+
+def get_llm_backend_snapshot() -> dict[str, Any]:
+    """Return a lightweight snapshot of the currently active backend."""
+    backend = _LLM_BACKEND
+    if backend is None:
+        return {
+            "available": False,
+            "backend": "",
+            "provider": "",
+            "model": "",
+        }
+    return {
+        "available": True,
+        "backend": str(
+            getattr(backend, "llm_backend", None)
+            or getattr(backend, "backend_kind", None)
+            or "real_llm"
+        ),
+        "provider": str(getattr(backend, "provider", "") or ""),
+        "model": str(getattr(backend, "model", "") or ""),
+    }
+
+
 def has_llm_backend() -> bool:
     """Return whether a custom backend is currently injected."""
     return _LLM_BACKEND is not None
@@ -209,21 +250,14 @@ def _default_llm_backend(
     temperature: float = 0.0,
     timeout_ms: int = LLM_TIMEOUT_MS,
 ) -> str:
-    """Deterministic offline backend used when nothing is injected."""
-    user_text = _extract_user_text(prompt, system_prompt)
-    top_intent, confidence, reason = _classify_top_intent(user_text)
-    if "Local Life Semantic Parser" in prompt or "本地生活语义解析器" in prompt:
-        from ..semantic.slot_extractor import extract_slots
+    """Default fallback when no backend has been configured.
 
-        payload = extract_slots(user_text, top_intent)
-        payload["confidence"] = max(float(payload.get("confidence", 0.0) or 0.0), confidence)
-    else:
-        payload = {
-            "top_intent": top_intent,
-            "confidence": confidence,
-            "reason": reason,
-        }
-    return json.dumps(payload, ensure_ascii=False)
+    The runtime must not silently degrade to rule-based semantic
+    interpretation.  Returning a backend error here forces the caller
+    to surface the missing configuration instead of fabricating a
+    successful semantic result.
+    """
+    raise LLMBackendError("LLM_BACKEND_UNAVAILABLE")
 
 
 def _invoke_backend(
@@ -321,7 +355,8 @@ def call_llm(
     """
     effective_backend = backend or _LLM_BACKEND or _default_llm_backend
     if effective_backend is _default_llm_backend:
-        # Default pure-rule backend → semantic_source = "rule_based"
+        # No backend injected: fail closed instead of fabricating a
+        # successful rule-based semantic result.
         backend_kind = "rule_based"
     else:
         # Injected test backend or explicit backend parameter.

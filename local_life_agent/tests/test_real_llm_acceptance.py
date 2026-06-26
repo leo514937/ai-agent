@@ -135,6 +135,10 @@ def test_spy_e2e_query_1_recommendation():
     assert response.debug.semantic_frame.get("llm_called") is True
     assert not response.debug.semantic_frame.get("fallback_reason")
     assert response.debug is not None
+    assert response.debug.turn_trace.get("llm_backend") in ("real_llm", "spy_real_llm")
+    assert response.debug.turn_trace.get("semantic_source") in ("real_llm", "spy_real_llm")
+    assert response.debug.turn_trace.get("tool_backend") != "mock"
+    assert response.debug.turn_trace.get("fallback_used") is False
 
 
 def test_spy_e2e_query_2_comparison():
@@ -149,7 +153,9 @@ def test_spy_e2e_query_2_comparison():
     assert response.debug.semantic_frame.get("semantic_source") in ("real_llm", "spy_real_llm")
     assert response.debug.semantic_frame.get("llm_called") is True
     assert not response.debug.semantic_frame.get("fallback_reason")
-    assert response.debug.answer_source in ("llm_verbalizer", "", "fallback")
+    assert response.debug.answer_source in ("llm_verbalizer", "template_fallback", "")
+    assert response.debug.turn_trace.get("semantic_source") != "fallback_rules"
+    assert response.debug.turn_trace.get("answer_source") in (None, "llm_verbalizer", "template_fallback")
 
 
 def test_spy_e2e_query_3_multi_turn_recommendation():
@@ -168,7 +174,8 @@ def test_spy_e2e_query_3_multi_turn_recommendation():
     assert response.debug.semantic_frame.get("llm_called") is True
     assert not response.debug.semantic_frame.get("fallback_reason")
     # Answer may be verbalized or go through clarification/disambiguation
-    assert response.debug.answer_source in ("llm_verbalizer", "", "fallback")
+    assert response.debug.answer_source in ("llm_verbalizer", "template_fallback", "")
+    assert response.debug.turn_trace.get("legacy_used") is False
 
 
 def test_spy_e2e_query_4_multi_turn_single_shop_reference():

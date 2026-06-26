@@ -103,8 +103,8 @@ def review_candidate_set(
     if candidate_set.status == CandidateStatus.NOT_FOUND:
         return SufficiencyCheckResult(
             stage=ReviewStage.CANDIDATE_REVIEW,
-            status=ReviewStatus.NEED_MORE_CANDIDATES,
-            next_action=NextAction.CLARIFY,
+            status=ReviewStatus.FALLBACK,
+            next_action=NextAction.FALLBACK,
             reason="CandidateResolver returned NOT_FOUND: no candidates found",
             confidence="high",
         )
@@ -132,6 +132,21 @@ def review_candidate_set(
     deduped = dedupe_candidates(candidate_set.candidates)
     deduped_count = len(deduped)
 
+    if (
+        goal.goal_type == GoalType.SINGLE_SHOP_QUERY
+        and "explicit_not_found_fallback_to_discovery" in {str(item) for item in (candidate_set.warnings or [])}
+        and deduped_count > 0
+    ):
+        return SufficiencyCheckResult(
+            stage=ReviewStage.CANDIDATE_REVIEW,
+            status=ReviewStatus.ENOUGH,
+            next_action=NextAction.FINISH,
+            reason="explicit_not_found_fallback_to_discovery",
+            affected_candidates=[c.shop_id for c in deduped],
+            trace_payload={"deduped_count": deduped_count, "fallback": "discovery"},
+            confidence="high",
+        )
+
     if deduped_count == 0:
         return SufficiencyCheckResult(
             stage=ReviewStage.CANDIDATE_REVIEW,
@@ -142,7 +157,12 @@ def review_candidate_set(
         )
 
     # ── 3. Check min_required ──────────────────────────────────────
-    effective_min = max(1, goal.min_required or candidate_set.min_required or min_required_for_goal(goal))
+    effective_min = max(
+        1,
+        int(goal.min_required or 0),
+        int(candidate_set.min_required or 0),
+        int(min_required_for_goal(goal) or 0),
+    )
 
     if deduped_count < effective_min:
         reason_parts: list[str] = []

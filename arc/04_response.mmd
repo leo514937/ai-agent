@@ -1,0 +1,23 @@
+flowchart TD
+    START([response_start]) --> RT[response_subgraph]
+
+    RT -->|direct / reject| FRD[final_response_build]
+    RT -->|clarify| CL[clarify_response]
+    RT -->|fallback| FB[fallback_answer]
+    RT -->|normal answer| APB[answer_plan_build]
+
+    APB --> AG[answer_generate]
+    AG --> AV[answer_verify]
+
+    AV -->|pass| FR[final_response_build]
+    AV -->|rewrite| RW[rewrite]
+    AV -->|fallback_answer| FB
+
+    RW --> AG
+
+    CL --> SUP[state_update_plan]
+    FB --> SUP
+    FRD --> SUP
+
+    SUP --> PS[persist_session_state]
+    PS --> EM[emit_response]

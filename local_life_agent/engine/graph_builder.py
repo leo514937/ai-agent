@@ -42,6 +42,7 @@ from ..planning.state_update_planner import plan_state_update
 from ..tools.result_semantics import TOOL_FAILURE_STATUSES, get_tool_result_status
 from ..answer.verifier import verify_answer
 from ..observability.trace import record_span, sanitize_payload
+from ..observability.file_logger import get_python_service_logger
 from ..input.hard_guard import check_hard_guard
 from ..input.normalizer import normalize_text as input_normalize_text
 from ..input.receiver import receive_input as assemble_turn_input
@@ -49,7 +50,7 @@ from ..input.validator import validate_basic_input
 from ..planning.plan_validator import ExecutionPlanValidator
 from ..semantic.frame_validator import validate_frame
 from ..semantic.intent_parser import parse_semantic_frame, parse_top_intent
-from ..llm.client import call_llm
+from ..llm.client import call_llm, ensure_real_llm_backend, get_llm_backend_snapshot, has_llm_backend
 from ..tools.gateway import dispatch_tool_call
 from ..tools.gateway import BatchToolExecutor
 from ..target.shop_resolver import resolve_shop
@@ -79,6 +80,26 @@ from ..session.store import get_session_store
 from .nodes import ExecutionNode
 from .session_write import get_directive, resolve_scenario
 
+
+_OUTER_ROUTE_TERMINAL = "terminal"
+_OUTER_ROUTE_DIRECT = "direct"
+_OUTER_ROUTE_REJECT = "reject"
+_OUTER_ROUTE_LOCAL_LIFE = "local_life"
+_OUTER_ROUTE_CLARIFICATION_REPLY = "clarification_reply"
+_OUTER_ROUTE_PROCEED = "proceed"
+_OUTER_ROUTE_EXECUTE = "execute"
+_OUTER_ROUTE_ENOUGH = "enough"
+_OUTER_ROUTE_DEGRADE = "degrade"
+_OUTER_ROUTE_CLARIFY = "clarify"
+_OUTER_ROUTE_FALLBACK = "fallback"
+_OUTER_ROUTE_RETRY = "retry"
+_OUTER_ROUTE_PASS = "pass"
+_OUTER_ROUTE_FALLBACK_READY = "fallback_ready"
+_OUTER_ROUTE_CLARIFY_READY = "clarify_ready"
+
+_OUTER_WRAPPER_EXCLUDE_FIELDS = {"final_response", "event_log", "trace_spans"}
+_FILE_LOGGER = get_python_service_logger()
+
 # ===================================================================
 # Helpers
 # ===================================================================
@@ -95,6 +116,12 @@ _TRACE_STAGE_MAP: dict[str, str] = {
     "normalize_text": "input_received",
     "hard_guard": "hard_guard",
     "top_intent_router": "top_intent_router",
+    "intake_guard_router": "input_received",
+    "merge_clarification": "pending_clarification_checked",
+    "understanding_subgraph": "semantic_parse",
+    "planning_subgraph": "execution_plan",
+    "execution_review_subgraph": "evidence_review",
+    "response_subgraph": "answer_generate",
     "semantic_parse": "semantic_parse",
     "slot_extractor": "semantic_parse",
     "frame_validator": "semantic_parse",
@@ -124,6 +151,11 @@ def _log(state: GraphState, node: str, **extra: Any) -> dict:
     log = list(state.get("event_log", []))
     entry = {"node": node, **sanitize_payload(extra)}
     log.append(entry)
+    try:
+        _FILE_LOGGER.info("%s", sanitize_payload(entry))
+    except Exception:
+        # File logging must never break the main chain.
+        pass
     return {"event_log": log}
 
 
@@ -220,6 +252,44 @@ def _trace_output_summary(update: dict[str, Any]) -> dict[str, Any]:
     if event_log and isinstance(event_log, list) and isinstance(event_log[-1], dict):
         output["event"] = dict(event_log[-1])
     return sanitize_payload(output)
+
+
+def _merge_update(state: dict[str, Any], update: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(state)
+    merged.update(update)
+    return merged
+
+
+def _run_step(state: dict[str, Any], handler: GraphNodeFunc) -> dict[str, Any]:
+    update = handler(state)
+    if not isinstance(update, dict):
+        update = _to_dict(update)
+    return _merge_update(state, update)
+
+
+def _run_steps(state: dict[str, Any], handlers: list[GraphNodeFunc]) -> dict[str, Any]:
+    working = dict(state)
+    for handler in handlers:
+        working = _run_step(working, handler)
+    return working
+
+
+def _state_delta(
+    before: dict[str, Any],
+    after: dict[str, Any],
+    *,
+    always_include: set[str] | None = None,
+    exclude: set[str] | None = None,
+) -> dict[str, Any]:
+    delta: dict[str, Any] = {}
+    always = always_include or set()
+    excluded = exclude or set()
+    for key, value in after.items():
+        if key in excluded:
+            continue
+        if key in always or before.get(key) != value:
+            delta[key] = value
+    return delta
 
 
 def _event_status(node_name: str, update: dict[str, Any], event_entry: dict[str, Any]) -> str:
@@ -734,6 +804,10 @@ def _h_hard_guard(state: GraphState) -> dict:
 # §1 output: top_intent
 def _h_top_intent_router(state: GraphState) -> dict:
     txt = state.get("normalized_text", "")
+    backend_snapshot_before = get_llm_backend_snapshot()
+    llm_available_before = bool(backend_snapshot_before.get("available")) or has_llm_backend()
+    ensure_real_llm_backend()
+    backend_snapshot_after = get_llm_backend_snapshot()
     result = parse_top_intent(txt, llm_call=call_llm)
     intent = result.get("top_intent", TopIntent.out_of_scope)
     if not isinstance(intent, TopIntent):
@@ -756,6 +830,11 @@ def _h_top_intent_router(state: GraphState) -> dict:
         "top_intent": intent,
         "error_code": result.get("error_code", ""),
         "error_message": result.get("error_message", ""),
+        "top_intent_router_llm_available": llm_available_before or bool(backend_snapshot_after.get("available")),
+        "top_intent_router_backend": backend_snapshot_after.get("backend", ""),
+        "top_intent_router_error_type": "LLM_BACKEND_ERROR" if result.get("error_code") else "",
+        "top_intent_router_error_message": result.get("error_message", ""),
+        "top_intent_source": "llm" if not result.get("error_code") else "fallback",
         "final_response": final_response,
         **_log(state, "top_intent_router", intent=intent.value),
     }
@@ -769,6 +848,7 @@ def _h_semantic_parse(state: GraphState) -> dict:
     top_intent = state.get("top_intent")
     top_intent_value = top_intent.value if isinstance(top_intent, TopIntent) else str(top_intent or "")
     session_state = state.get("session_state_before") or state.get("session_state")
+    ensure_real_llm_backend()
     try:
         parsed = parse_semantic_frame(
             txt,
@@ -791,6 +871,18 @@ def _h_semantic_parse(state: GraphState) -> dict:
     llm_backend = str(parsed.get("llm_backend", "") or "")
     fallback_reason = str(parsed.get("fallback_reason", "") or "")
     llm_called = bool(parsed.get("llm_called", False))
+    if frame is None:
+        return {
+            "semantic_frame": None,
+            "error_code": error_code,
+            "error_message": error_message,
+            "semantic_source": semantic_source,
+            "llm_backend": llm_backend,
+            "fallback_reason": fallback_reason,
+            "llm_called": llm_called,
+            "dropped_facets": parsed.get("dropped_facets", []),
+            **_log(state, "semantic_parse", status="failed" if error_code else "skipped", reason=fallback_reason or error_code or "semantic_frame_missing", semantic_source=semantic_source, llm_backend=llm_backend, fallback_reason=fallback_reason, llm_called=llm_called),
+        }
     if not isinstance(frame, SemanticFrame):
         try:
             frame = SemanticFrame.model_validate(frame or {})
@@ -1478,6 +1570,7 @@ def _h_evidence_review(state: GraphState) -> dict:
               required_failed=len(review.required_failed),
               unknown_as_false=review.unknown_as_false_detected,
               failed_as_empty=review.failed_as_empty_detected,
+              evidence_incomplete=review.evidence_incomplete,
               reason=review.reason),
     }
     # P2: persist evidence_review result to SessionState for replay
@@ -1679,6 +1772,9 @@ def _h_answer_generate(state: GraphState) -> dict:
         "answer_plan": answer_plan,
         "draft_response": txt,
         "answer_source": metadata.get("answer_source", "llm_verbalizer"),
+        "template_degraded": metadata.get("template_degraded", False),
+        "fallback_used": metadata.get("fallback_used", False),
+        "template_fallback_used": metadata.get("template_fallback_used", False),
         "answer_fallback_reason": metadata.get("answer_fallback_reason", ""),
         "llm_verbalizer_error": metadata.get("llm_verbalizer_error"),
         "generated_llm_answer_before_fallback": metadata.get("generated_llm_answer_before_fallback", ""),
@@ -1686,14 +1782,21 @@ def _h_answer_generate(state: GraphState) -> dict:
         "llm_verbalizer_called": metadata.get("llm_verbalizer_called", True),
         "llm_backend": metadata.get("llm_backend", ""),
         "answer_verifier_result": metadata.get("answer_verifier_result", "unknown"),
+        "verifier_result": metadata.get("verifier_result", metadata.get("answer_verifier_result", "unknown")),
+        "verifier_failure_code": metadata.get("verifier_failure_code", metadata.get("violation", "")),
+        "verifier_unknown_fields": metadata.get("verifier_unknown_fields", []),
+        "verifier_unsupported_claims": metadata.get("verifier_unsupported_claims", []),
+        "verifier_false_fields": metadata.get("verifier_false_fields", []),
+        "verifier_recoverable": metadata.get("verifier_recoverable", False),
         # Save verification/rewrite states to GraphState
         "answer_verify_passed": metadata.get("answer_verify_passed", True),
         "answer_verify_violations": metadata.get("answer_verify_violations") or [],
         "rewrite_needed": metadata.get("rewrite_needed", False),
         "rewrite_reason": metadata.get("rewrite_reason", ""),
         "fallback_reason": metadata.get("fallback_reason", ""),
+        "raw_text_fallback_source": metadata.get("raw_text_fallback_source", metadata.get("answer_fallback_reason", "")),
         "final_safety_status": metadata.get("final_safety_status", "safe"),
-        **_log(state, "answer_generate", answer_source=metadata.get("answer_source", "template"), rewrite_count=rc, fallback_reason=metadata.get("fallback_reason", "")),
+        **_log(state, "answer_generate", answer_source=metadata.get("answer_source", "template_fallback"), rewrite_count=rc, fallback_reason=metadata.get("fallback_reason", ""), template_degraded=metadata.get("template_degraded", False), fallback_used=metadata.get("fallback_used", False)),
     }
 
 
@@ -1715,6 +1818,12 @@ def _h_answer_verify(state: GraphState) -> dict:
             "answer_verify_passed": True,
             "answer_verify_violations": [],
             "rewrite_needed": False,
+            "verifier_result": "pass",
+            "verifier_failure_code": "",
+            "verifier_unknown_fields": [],
+            "verifier_unsupported_claims": [],
+            "verifier_false_fields": [],
+            "verifier_recoverable": True,
             **_log(state, "answer_verify"),
         }
     report = verify_answer(state.get("draft_response", ""), evidence, task_type)
@@ -1748,6 +1857,12 @@ def _h_answer_verify(state: GraphState) -> dict:
         "answer_verify_violations": violations,
         "rewrite_needed": not passed,
         "rewrite_reason": violations[0] if violations else "",
+        "verifier_result": "pass" if passed else "fail",
+        "verifier_failure_code": report.get("failure_code") or (violations[0] if violations else ""),
+        "verifier_unknown_fields": report.get("verifier_unknown_fields", report.get("unknown_fields", [])),
+        "verifier_unsupported_claims": report.get("verifier_unsupported_claims", report.get("unsupported_claims", [])),
+        "verifier_false_fields": report.get("verifier_false_fields", report.get("false_fields", [])),
+        "verifier_recoverable": bool(report.get("recoverable", not passed)),
         **_log(state, "answer_verify", passed=passed, violations=violations, final_safety_status="safe" if passed else "violated"),
     }
 
@@ -1784,7 +1899,10 @@ def _h_clarify_response(state: GraphState) -> dict:
     if pending_result in {"expired", "invalid", "out_of_range"} and str(state.get("final_response", "") or "").strip():
         return {
             "final_response": state.get("final_response", ""),
-            "answer_source": "template",
+            "answer_source": "clarify_message",
+            "template_degraded": True,
+            "fallback_used": True,
+            "template_fallback_used": False,
             **_log(state, "clarify_response"),
         }
     pending = state.get("pending_clarification")
@@ -1796,26 +1914,38 @@ def _h_clarify_response(state: GraphState) -> dict:
         if prompt.strip():
             return {
                 "final_response": prompt,
-                "answer_source": "template",
+                "answer_source": "clarify_message",
+                "template_degraded": True,
+                "fallback_used": True,
+                "template_fallback_used": False,
                 **_log(state, "clarify_response"),
             }
     rs = state.get("resolve_shop_result")
     if rs is not None and getattr(rs, "status", "") in ("AMBIGUOUS", "LOW_CONFIDENCE"):
         return {
             "final_response": "店名有点模糊，请提供完整店名。",
-            "answer_source": "template",
+            "answer_source": "clarify_message",
+            "template_degraded": True,
+            "fallback_used": True,
+            "template_fallback_used": False,
             **_log(state, "clarify_response"),
         }
     clarification = (state.get("error_message", "") or "").strip()
     if clarification:
         return {
             "final_response": clarification,
-            "answer_source": "template",
+            "answer_source": "clarify_message",
+            "template_degraded": True,
+            "fallback_used": True,
+            "template_fallback_used": False,
             **_log(state, "clarify_response"),
         }
     return {
         "final_response": "请提供完整店名。",
-        "answer_source": "template",
+        "answer_source": "clarify_message",
+        "template_degraded": True,
+        "fallback_used": True,
+        "template_fallback_used": False,
         **_log(state, "clarify_response"),
     }
 
@@ -1845,10 +1975,384 @@ def _h_fallback_answer(state: GraphState) -> dict:
 
     return {
         "final_response": response,
-        "answer_source": "fallback",
+        "answer_source": "trusted_failure_message",
+        "template_degraded": True,
+        "fallback_used": True,
+        "template_fallback_used": False,
         "final_safety_status": "fallback",
         **_log(state, "fallback_answer"),
     }
+
+
+def _response_mode_for_top_intent(intent: Any) -> str:
+    intent_value = intent.value if hasattr(intent, "value") else str(intent or "")
+    if intent_value in {"chat", "capability"}:
+        return "direct"
+    if intent_value in {"unsafe", "out_of_scope", "invalid"}:
+        return "reject"
+    return "reject"
+
+
+def _planning_failure_route(state: dict[str, Any]) -> str:
+    error_code = str(state.get("error_code", "") or "")
+    error_message = str(state.get("error_message", "") or "")
+    failed_stage = str(state.get("failed_stage", "") or "")
+    if "missing_goal" in error_message or "missing_candidate_set" in error_message or "missing_goal_draft" in error_message:
+        return _OUTER_ROUTE_CLARIFY
+    if error_code in {"SCHEMA_VALIDATION_FAILED"}:
+        if any(token in error_message for token in ("goal", "candidate", "target")):
+            return _OUTER_ROUTE_CLARIFY
+    if error_code in {"TOOL_NOT_REGISTERED", "INVALID_ARGUMENT"} or failed_stage == "plan_validator":
+        return _OUTER_ROUTE_FALLBACK
+    if error_code:
+        return _OUTER_ROUTE_FALLBACK
+    return _OUTER_ROUTE_EXECUTE
+
+
+def _h_intake_guard_router(state: GraphState) -> dict:
+    before = dict(state)
+    working = _run_step(state, _h_receive_input)
+    working = _run_step(working, _h_load_session)
+    working = _run_step(working, _h_basic_validate)
+    working = _run_step(working, _h_normalize_text)
+    working = _run_step(working, _h_hard_guard)
+    if str(working.get("guard_result", "") or "") not in {"safe", "ok"}:
+        session_before = working.get("session_state_before") or working.get("session_state")
+        has_pending = bool(getattr(session_before, "pending_clarification", None) if session_before is not None else False)
+        response_mode = _response_mode_for_top_intent(working.get("top_intent"))
+        if working.get("error_code"):
+            response_mode = _OUTER_ROUTE_REJECT
+            route = _OUTER_ROUTE_TERMINAL
+        elif has_pending:
+            route = _OUTER_ROUTE_CLARIFICATION_REPLY
+        else:
+            route = _OUTER_ROUTE_TERMINAL
+        after = {
+            **working,
+            "intake_route": route,
+            "response_mode": response_mode,
+        }
+        return _state_delta(before, after, always_include={"intake_route", "response_mode"})
+    working = _run_step(working, _h_top_intent_router)
+    session_before = working.get("session_state_before") or working.get("session_state")
+    has_pending = bool(getattr(session_before, "pending_clarification", None) if session_before is not None else False)
+    top_intent = working.get("top_intent")
+    response_mode = "answer"
+    if working.get("error_code"):
+        response_mode = _OUTER_ROUTE_REJECT
+        route = _OUTER_ROUTE_TERMINAL
+    elif str(working.get("guard_result", "") or "") not in {"ok", "safe"}:
+        response_mode = _OUTER_ROUTE_REJECT
+        route = _OUTER_ROUTE_TERMINAL
+    elif has_pending:
+        route = _OUTER_ROUTE_CLARIFICATION_REPLY
+    elif top_intent in (TopIntent.local_life, "local_life"):
+            route = _OUTER_ROUTE_LOCAL_LIFE
+    else:
+        response_mode = _response_mode_for_top_intent(top_intent)
+        route = _OUTER_ROUTE_TERMINAL
+    after = {
+        **working,
+        "intake_route": route,
+        "response_mode": response_mode,
+    }
+    return _state_delta(before, after, always_include={"intake_route", "response_mode"})
+
+
+def _h_merge_clarification(state: GraphState) -> dict:
+    before = dict(state)
+    working = _run_step(state, _h_check_pending)
+    pending_result = str(working.get("pending_check_result", "") or "")
+    if pending_result in {"restore", "topic_switch", "pass"}:
+        route = _OUTER_ROUTE_PROCEED
+        response_mode = "answer"
+    else:
+        route = _OUTER_ROUTE_CLARIFY
+        response_mode = _OUTER_ROUTE_CLARIFY
+    after = {
+        **working,
+        "merge_clarification_route": route,
+        "response_mode": response_mode,
+    }
+    return _state_delta(before, after, always_include={"merge_clarification_route", "response_mode"})
+
+
+def _h_understanding_subgraph(state: GraphState) -> dict:
+    before = dict(state)
+    working = _run_steps(state, [_h_semantic_parse])
+    if working.get("error_code"):
+        after = {
+            **working,
+            "understanding_route": _OUTER_ROUTE_CLARIFY,
+            "response_mode": _OUTER_ROUTE_CLARIFY,
+        }
+        return _state_delta(
+            before,
+            after,
+            always_include={"understanding_route", "response_mode"},
+            exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS,
+        )
+    working = _run_steps(working, [_h_slot_extractor, _h_frame_validator, _h_context_recovery])
+    if working.get("error_code"):
+        after = {
+            **working,
+            "understanding_route": _OUTER_ROUTE_CLARIFY,
+            "response_mode": _OUTER_ROUTE_CLARIFY,
+        }
+        return _state_delta(
+            before,
+            after,
+            always_include={"understanding_route", "response_mode"},
+            exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS,
+        )
+    after = {
+        **working,
+        "understanding_route": _OUTER_ROUTE_PROCEED,
+        "response_mode": "answer",
+    }
+    return _state_delta(
+        before,
+        after,
+        always_include={"understanding_route", "response_mode"},
+        exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS,
+    )
+
+
+def _h_planning_subgraph(state: GraphState) -> dict:
+    before = dict(state)
+    working = _run_steps(state, [_h_goal_planner, _h_goal_review])
+    goal_review = working.get("goal_review_result")
+    next_action = str(getattr(goal_review, "next_action", "") or _to_dict(goal_review).get("next_action", "") or "")
+    if next_action in {"CLARIFY"}:
+        after = {
+            **working,
+            "planning_route": _OUTER_ROUTE_CLARIFY,
+            "response_mode": _OUTER_ROUTE_CLARIFY,
+        }
+        return _state_delta(
+            before,
+            after,
+            always_include={"planning_route", "response_mode"},
+            exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS,
+        )
+    if next_action in {"UNSUPPORTED_ANSWER"}:
+        after = {
+            **working,
+            "planning_route": _OUTER_ROUTE_FALLBACK,
+            "response_mode": _OUTER_ROUTE_REJECT,
+        }
+        return _state_delta(
+            before,
+            after,
+            always_include={"planning_route", "response_mode"},
+            exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS,
+        )
+    if next_action in {"FALLBACK"}:
+        after = {
+            **working,
+            "planning_route": _OUTER_ROUTE_FALLBACK,
+            "response_mode": _OUTER_ROUTE_FALLBACK,
+        }
+        return _state_delta(
+            before,
+            after,
+            always_include={"planning_route", "response_mode"},
+            exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS,
+        )
+
+    working = _run_steps(working, [_h_target_resolve])
+    resolve_result = working.get("resolve_shop_result") or working.get("resolved_target")
+    resolve_dict = _to_dict(resolve_result)
+    if resolve_dict.get("status") != "RESOLVED":
+        if working.get("pending_clarification") is not None or resolve_dict.get("status") in {"AMBIGUOUS", "LOW_CONFIDENCE"}:
+            after = {
+                **working,
+                "planning_route": _OUTER_ROUTE_CLARIFY,
+                "response_mode": _OUTER_ROUTE_CLARIFY,
+            }
+            return _state_delta(
+                before,
+                after,
+                always_include={"planning_route", "response_mode"},
+                exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS,
+            )
+        fallback_route = _planning_failure_route(working)
+        after = {
+            **working,
+            "planning_route": fallback_route,
+            "response_mode": fallback_route if fallback_route != _OUTER_ROUTE_EXECUTE else _OUTER_ROUTE_CLARIFY,
+        }
+        return _state_delta(
+            before,
+            after,
+            always_include={"planning_route", "response_mode"},
+            exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS,
+        )
+
+    working = _run_steps(working, [_h_evidence_planner, _h_plan_validator])
+    if working.get("error_code"):
+        fallback_route = _planning_failure_route(working)
+        after = {
+            **working,
+            "planning_route": fallback_route,
+            "response_mode": fallback_route,
+        }
+        return _state_delta(
+            before,
+            after,
+            always_include={"planning_route", "response_mode"},
+            exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS,
+        )
+    after = {
+        **working,
+        "planning_route": _OUTER_ROUTE_EXECUTE,
+        "response_mode": "answer",
+    }
+    return _state_delta(
+        before,
+        after,
+        always_include={"planning_route", "response_mode"},
+        exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS,
+    )
+
+
+def _h_execution_review_subgraph(state: GraphState) -> dict:
+    before = dict(state)
+    working = _run_steps(state, [_h_tool_execute, _h_evidence_build, _h_evidence_review, _h_decision_planner, _h_decision_review])
+    decision_review = working.get("decision_review_result")
+    next_action = str(getattr(decision_review, "next_action", "") or _to_dict(decision_review).get("next_action", "") or "")
+    if next_action in {"REPLAN_EVIDENCE"}:
+        session = working.get("session_state")
+        if isinstance(session, SessionState):
+            increment_replan_evidence(session)
+        after = {
+            **working,
+            "execution_review_route": _OUTER_ROUTE_RETRY,
+            "response_mode": "answer",
+        }
+        return _state_delta(
+            before,
+            after,
+            always_include={"execution_review_route", "response_mode"},
+            exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS,
+        )
+    if next_action in {"EXPAND_SEARCH"}:
+        session = working.get("session_state")
+        if isinstance(session, SessionState):
+            increment_expand_search(session)
+        after = {
+            **working,
+            "execution_review_route": _OUTER_ROUTE_RETRY,
+            "response_mode": "answer",
+        }
+        return _state_delta(
+            before,
+            after,
+            always_include={"execution_review_route", "response_mode"},
+            exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS,
+        )
+    if next_action in {"CLARIFY"}:
+        after = {
+            **working,
+            "execution_review_route": _OUTER_ROUTE_CLARIFY,
+            "response_mode": _OUTER_ROUTE_CLARIFY,
+        }
+        return _state_delta(before, after, always_include={"execution_review_route", "response_mode"})
+    if next_action in {"FALLBACK", "UNSUPPORTED_ANSWER"}:
+        after = {
+            **working,
+            "execution_review_route": _OUTER_ROUTE_FALLBACK,
+            "response_mode": _OUTER_ROUTE_FALLBACK,
+        }
+        return _state_delta(
+            before,
+            after,
+            always_include={"execution_review_route", "response_mode"},
+            exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS,
+        )
+    if next_action == "DEGRADE_ANSWER":
+        after = {
+            **working,
+            "execution_review_route": _OUTER_ROUTE_DEGRADE,
+            "response_mode": "answer",
+        }
+        return _state_delta(
+            before,
+            after,
+            always_include={"execution_review_route", "response_mode"},
+            exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS,
+        )
+    after = {
+        **working,
+        "execution_review_route": _OUTER_ROUTE_ENOUGH,
+        "response_mode": "answer",
+    }
+    return _state_delta(
+        before,
+        after,
+        always_include={"execution_review_route", "response_mode"},
+        exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS,
+    )
+
+
+def _h_response_subgraph(state: GraphState) -> dict:
+    before = dict(state)
+    response_mode = str(state.get("response_mode", "") or "")
+    if response_mode in {_OUTER_ROUTE_DIRECT, _OUTER_ROUTE_REJECT}:
+        after = {
+            **state,
+            "response_route": _OUTER_ROUTE_PASS,
+        }
+        return _state_delta(before, after, always_include={"response_route"})
+    if response_mode in {_OUTER_ROUTE_CLARIFY} or state.get("pending_clarification") is not None:
+        if not str(state.get("final_response", "") or "").strip():
+            working = _run_step(state, _h_clarify_response)
+        else:
+            working = dict(state)
+        after = {
+            **working,
+            "response_route": _OUTER_ROUTE_CLARIFY_READY,
+        }
+        return _state_delta(before, after, always_include={"response_route"})
+    if response_mode in {_OUTER_ROUTE_FALLBACK}:
+        if not str(state.get("final_response", "") or "").strip():
+            working = _run_step(state, _h_fallback_answer)
+        else:
+            working = dict(state)
+        after = {
+            **working,
+            "response_route": _OUTER_ROUTE_FALLBACK_READY,
+        }
+        return _state_delta(before, after, always_include={"response_route"})
+
+    working = _run_step(state, _h_answer_plan_build)
+    rewrite_limit = max(0, int(_GRAPH_REWRITE_LIMIT or 0))
+    while True:
+        working = _run_step(working, _h_answer_generate)
+        working = _run_step(working, _h_answer_verify)
+        verify_result = str(working.get("verify_result", "") or "")
+        if verify_result == "pass":
+            working = _run_step(working, _h_final_response)
+            after = {
+                **working,
+                "response_route": _OUTER_ROUTE_PASS,
+            }
+            return _state_delta(before, after, always_include={"response_route"})
+        rewrite_count = int(working.get("rewrite_count", 0) or 0)
+        if rewrite_count >= rewrite_limit:
+            working = _run_step(working, _h_fallback_answer)
+            after = {
+                **working,
+                "response_route": _OUTER_ROUTE_FALLBACK_READY,
+            }
+            return _state_delta(before, after, always_include={"response_route"})
+        working = _run_step(working, _h_rewrite)
+
+
+def _h_state_update_plan_outer(state: GraphState) -> dict:
+    before = dict(state)
+    working = _run_steps(state, [_h_state_update_plan, _h_persist_session, _h_emit_response])
+    return _state_delta(before, working)
 
 
 # --- 26. state_update_plan ---
@@ -1981,9 +2485,21 @@ _HANDLERS: dict[str, GraphNodeFunc] = {
     "emit_response": _h_emit_response,
 }
 
-# Nodes that the §2 Node Table says should exist in the graph.
-# All 27 rows including clarify_decide as independent node.
+#瘦主图 node table — only the outer orchestration nodes are compiled into LangGraph.
+_GRAPH_HANDLERS: dict[str, GraphNodeFunc] = {
+    "intake_guard_router": _h_intake_guard_router,
+    "merge_clarification": _h_merge_clarification,
+    "understanding_subgraph": _h_understanding_subgraph,
+    "planning_subgraph": _h_planning_subgraph,
+    "execution_review_subgraph": _h_execution_review_subgraph,
+    "response_subgraph": _h_response_subgraph,
+    "state_update_plan": _h_state_update_plan_outer,
+}
+
+# Nodes that the legacy §2 Node Table says should exist in the graph.
+# Kept for internal step handlers and regression coverage.
 ALL_NODE_NAMES: set[str] = set(_HANDLERS.keys())
+_GRAPH_NODE_NAMES: set[str] = set(_GRAPH_HANDLERS.keys())
 
 # Normal-flow unconditional edges  (§2 "涓嬩竴璺? default path)
 _NORMAL_EDGES: dict[str, str] = {
@@ -2006,6 +2522,14 @@ _NORMAL_EDGES: dict[str, str] = {
     "fallback_answer": "state_update_plan",
     "state_update_plan": "persist_session_state",
     "persist_session_state": "emit_response",
+}
+
+_GRAPH_NORMAL_EDGES: dict[str, str] = {
+    "merge_clarification": "understanding_subgraph",
+    "understanding_subgraph": "planning_subgraph",
+    "planning_subgraph": "execution_review_subgraph",
+    "execution_review_subgraph": "response_subgraph",
+    "response_subgraph": "state_update_plan",
 }
 
 
@@ -2236,6 +2760,30 @@ def _route_answer_verify(state: GraphState) -> str:
     return "final_response_build"
 
 
+def _route_intake_guard(state: GraphState) -> str:
+    return str(state.get("intake_route", "") or _OUTER_ROUTE_TERMINAL)
+
+
+def _route_merge_clarification(state: GraphState) -> str:
+    return str(state.get("merge_clarification_route", "") or _OUTER_ROUTE_CLARIFY)
+
+
+def _route_understanding_subgraph(state: GraphState) -> str:
+    return str(state.get("understanding_route", "") or _OUTER_ROUTE_CLARIFY)
+
+
+def _route_planning_subgraph(state: GraphState) -> str:
+    return str(state.get("planning_route", "") or _OUTER_ROUTE_FALLBACK)
+
+
+def _route_execution_review_subgraph(state: GraphState) -> str:
+    return str(state.get("execution_review_route", "") or _OUTER_ROUTE_FALLBACK)
+
+
+def _route_response_subgraph(state: GraphState) -> str:
+    return str(state.get("response_route", "") or _OUTER_ROUTE_PASS)
+
+
 # === Conditional edge route maps ===
 
 _CHECK_PENDING_ROUTES: dict[Any, str] = {
@@ -2317,6 +2865,46 @@ _ANSWER_VERIFY_ROUTES: dict[Any, str] = {
 }
 
 
+_GRAPH_INTAKE_ROUTES: dict[Any, str] = {
+    _OUTER_ROUTE_TERMINAL: "response_subgraph",
+    _OUTER_ROUTE_CLARIFICATION_REPLY: "merge_clarification",
+    _OUTER_ROUTE_LOCAL_LIFE: "understanding_subgraph",
+}
+
+_GRAPH_MERGE_ROUTES: dict[Any, str] = {
+    _OUTER_ROUTE_PROCEED: "understanding_subgraph",
+    _OUTER_ROUTE_CLARIFY: "response_subgraph",
+    _OUTER_ROUTE_FALLBACK: "response_subgraph",
+}
+
+_GRAPH_UNDERSTANDING_ROUTES: dict[Any, str] = {
+    _OUTER_ROUTE_PROCEED: "planning_subgraph",
+    _OUTER_ROUTE_CLARIFY: "response_subgraph",
+    _OUTER_ROUTE_FALLBACK: "response_subgraph",
+}
+
+_GRAPH_PLANNING_ROUTES: dict[Any, str] = {
+    _OUTER_ROUTE_EXECUTE: "execution_review_subgraph",
+    _OUTER_ROUTE_CLARIFY: "response_subgraph",
+    _OUTER_ROUTE_FALLBACK: "response_subgraph",
+    _OUTER_ROUTE_RETRY: "planning_subgraph",
+}
+
+_GRAPH_EXECUTION_ROUTES: dict[Any, str] = {
+    _OUTER_ROUTE_ENOUGH: "response_subgraph",
+    _OUTER_ROUTE_DEGRADE: "response_subgraph",
+    _OUTER_ROUTE_CLARIFY: "response_subgraph",
+    _OUTER_ROUTE_FALLBACK: "response_subgraph",
+    _OUTER_ROUTE_RETRY: "planning_subgraph",
+}
+
+_GRAPH_RESPONSE_ROUTES: dict[Any, str] = {
+    _OUTER_ROUTE_PASS: "state_update_plan",
+    _OUTER_ROUTE_FALLBACK_READY: "state_update_plan",
+    _OUTER_ROUTE_CLARIFY_READY: "state_update_plan",
+}
+
+
 # ===================================================================
 # Graph builder
 # ===================================================================
@@ -2336,88 +2924,52 @@ def build_graph() -> CompiledStateGraph:
     """
     builder: StateGraph = StateGraph(GraphState)
 
-    # 1. Add all nodes
-    for name, handler in _HANDLERS.items():
+    # 1. Add outer orchestration nodes only
+    for name, handler in _GRAPH_HANDLERS.items():
         builder.add_node(name, _instrument_handler(name, handler))
 
-    # 2. START 鈫?receive_input
-    builder.add_edge(START, "receive_input")
+    # 2. START -> intake_guard_router
+    builder.add_edge(START, "intake_guard_router")
 
     # 3. Normal-flow unconditional edges
-    for src, dst in _NORMAL_EDGES.items():
+    for src, dst in _GRAPH_NORMAL_EDGES.items():
         builder.add_edge(src, dst)
 
-    # 4. Conditional edges  (§3)
     builder.add_conditional_edges(
-        "check_pending_clarification",
-        _route_check_pending,
-        _CHECK_PENDING_ROUTES,
+        "intake_guard_router",
+        _route_intake_guard,
+        _GRAPH_INTAKE_ROUTES,
     )
     builder.add_conditional_edges(
-        "basic_input_validate",
-        _route_basic_validate,
-        _BASIC_VALIDATE_ROUTES,
+        "merge_clarification",
+        _route_merge_clarification,
+        _GRAPH_MERGE_ROUTES,
     )
     builder.add_conditional_edges(
-        "hard_guard",
-        _route_hard_guard,
-        _HARD_GUARD_ROUTES,
+        "understanding_subgraph",
+        _route_understanding_subgraph,
+        _GRAPH_UNDERSTANDING_ROUTES,
     )
     builder.add_conditional_edges(
-        "top_intent_router",
-        _route_top_intent,
-        _TOP_INTENT_ROUTES,
+        "planning_subgraph",
+        _route_planning_subgraph,
+        _GRAPH_PLANNING_ROUTES,
     )
     builder.add_conditional_edges(
-        "semantic_parse",
-        _route_semantic_parse,
-        _SEMANTIC_PARSE_ROUTES,
+        "execution_review_subgraph",
+        _route_execution_review_subgraph,
+        _GRAPH_EXECUTION_ROUTES,
     )
     builder.add_conditional_edges(
-        "frame_validator",
-        _route_frame_validator,
-        _FRAME_VALIDATOR_ROUTES,
-    )
-    builder.add_conditional_edges(
-        "goal_review",
-        _route_goal_review,
-        _GOAL_REVIEW_ROUTES,
-    )
-    builder.add_conditional_edges(
-        "clarify_decide",
-        _route_clarify_decide,
-        _CLARIFY_DECIDE_ROUTES,
-    )
-    builder.add_conditional_edges(
-        "decision_review",
-        _route_decision_review,
-        _DECISION_REVIEW_ROUTES,
-    )
-    builder.add_conditional_edges(
-        "plan_validator",
-        _route_plan_validator,
-        _PLAN_VALIDATOR_ROUTES,
-    )
-    builder.add_conditional_edges(
-        "tool_execute",
-        _route_tool_execute,
-        _TOOL_EXECUTE_ROUTES,
-    )
-    builder.add_conditional_edges(
-        "evidence_review",
-        _route_evidence_review,
-        _EVIDENCE_REVIEW_ROUTES,
-    )
-    builder.add_conditional_edges(
-        "answer_verify",
-        _route_answer_verify,
-        _ANSWER_VERIFY_ROUTES,
+        "response_subgraph",
+        _route_response_subgraph,
+        _GRAPH_RESPONSE_ROUTES,
     )
 
-    # 5. Terminal: emit_response 鈫?END
-    builder.add_edge("emit_response", END)
+    # 4. Terminal: state_update_plan -> END
+    builder.add_edge("state_update_plan", END)
 
-    # 6. Validate
+    # 5. Validate
     report = verify_graph_completeness(builder)
     if report["errors"]:
         raise ValueError(
@@ -2498,6 +3050,32 @@ _EDGE_TABLE_ROWS: list[tuple[str, str, str]] = [
     ("answer_verify", "rewrite attempts >= 1", "fallback_answer"),
 ]
 
+_GRAPH_NODE_TABLE_NEXT_HOPS: dict[str, list[str]] = {
+    "intake_guard_router": ["response_subgraph", "merge_clarification", "understanding_subgraph"],
+    "merge_clarification": ["understanding_subgraph", "response_subgraph"],
+    "understanding_subgraph": ["planning_subgraph", "response_subgraph"],
+    "planning_subgraph": ["execution_review_subgraph", "response_subgraph"],
+    "execution_review_subgraph": ["response_subgraph", "planning_subgraph"],
+    "response_subgraph": ["state_update_plan"],
+    "state_update_plan": [],
+}
+
+_GRAPH_EDGE_TABLE_ROWS: list[tuple[str, str, str]] = [
+    ("intake_guard_router", "terminal/direct/reject", "response_subgraph"),
+    ("intake_guard_router", "clarification_reply", "merge_clarification"),
+    ("intake_guard_router", "local_life", "understanding_subgraph"),
+    ("merge_clarification", "restore/topic_switch/pass", "understanding_subgraph"),
+    ("merge_clarification", "clarify/fallback", "response_subgraph"),
+    ("understanding_subgraph", "proceed", "planning_subgraph"),
+    ("understanding_subgraph", "clarify/fallback", "response_subgraph"),
+    ("planning_subgraph", "execute", "execution_review_subgraph"),
+    ("planning_subgraph", "clarify/fallback", "response_subgraph"),
+    ("execution_review_subgraph", "enough/degrade", "response_subgraph"),
+    ("execution_review_subgraph", "clarify/fallback", "response_subgraph"),
+    ("execution_review_subgraph", "retry", "planning_subgraph"),
+    ("response_subgraph", "pass/fallback_ready/clarify_ready", "state_update_plan"),
+]
+
 _GRAPH_STATE_FIELDS: list[str] = [
     # 璺敱鏍囪瘑
     "trace_id",
@@ -2528,11 +3106,6 @@ _GRAPH_STATE_FIELDS: list[str] = [
     # 鎵ц璁″垝
     "execution_plan",
     "validated_plan",  # §1 鏂囨。瀛楁
-    "tool_plan",
-    "tool_plan_source",
-    "tool_plan_validated",
-    "tool_plan_fallback_reason",
-    "tool_plan_reason",
     # 宸ュ叿缁撴灉
     "tool_results",
     "tool_result_set",  # §1 鏂囨。瀛楁
@@ -2547,6 +3120,13 @@ _GRAPH_STATE_FIELDS: list[str] = [
     "final_response",
     # 鐘舵€佹洿鏂?
     "state_update_plan",
+    "intake_route",
+    "merge_clarification_route",
+    "understanding_route",
+    "planning_route",
+    "execution_review_route",
+    "response_route",
+    "response_mode",
     # 浼氳瘽蹇収
     "session_state_before",  # §1 鏂囨。瀛楁
     "session_state_after",
@@ -2583,10 +3163,10 @@ def verify_graph_completeness(
     warnings: list[str] = []
 
     # --- Check 1: all nodes present ---
-    configured = set(_HANDLERS.keys())
+    configured = set(_GRAPH_HANDLERS.keys())
 
     # Check that the node-table next hops all exist
-    for src, targets in _NODE_TABLE_NEXT_HOPS.items():
+    for src, targets in _GRAPH_NODE_TABLE_NEXT_HOPS.items():
         if src not in configured:
             errors.append(f"§2 node '{src}' has no handler —missing from graph")
         for t in targets:
@@ -2598,7 +3178,7 @@ def verify_graph_completeness(
 
     # --- Check 2: conditional edge from-nodes ---
     seen_from: set[str] = set()
-    for src, _cond, dst in _EDGE_TABLE_ROWS:
+    for src, _cond, dst in _GRAPH_EDGE_TABLE_ROWS:
         seen_from.add(src)
         if src not in configured:
             errors.append(

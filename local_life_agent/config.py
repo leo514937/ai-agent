@@ -132,10 +132,10 @@ def _llm_cfg_int(primary_key: str, fallback_key: str, default: int) -> int:
 
 # --- LLM Backend Selection ---
 # Accepted values: "rule_based", "fake_llm", "real_llm"
-# "rule_based" = pure rule-based backend (default, no real LLM call)
+# "rule_based" = offline fallback only, never the normal happy path
 # "fake_llm"   = injected fake backend for tests
 # "real_llm"   = connected to a real LLM provider (OpenAI-compatible)
-LOCAL_LIFE_LLM_BACKEND: str = _llm_cfg_str("LOCAL_LIFE_LLM_BACKEND", "LLM_BACKEND", "rule_based")
+LOCAL_LIFE_LLM_BACKEND: str = _llm_cfg_str("LOCAL_LIFE_LLM_BACKEND", "LLM_BACKEND", "real_llm")
 LLM_BACKEND: str = LOCAL_LIFE_LLM_BACKEND
 if LLM_BACKEND not in ("rule_based", "fake_llm", "real_llm"):
     raise ValueError(
@@ -143,7 +143,7 @@ if LLM_BACKEND not in ("rule_based", "fake_llm", "real_llm"):
         "Accepted values: 'rule_based', 'fake_llm', 'real_llm'."
     )
 
-ENABLE_REAL_LLM: bool = _llm_cfg_bool("ENABLE_REAL_LLM", "LLM_ENABLED", False)
+ENABLE_REAL_LLM: bool = _llm_cfg_bool("ENABLE_REAL_LLM", "LLM_ENABLED", True)
 LLM_ENABLED: bool = ENABLE_REAL_LLM
 
 REAL_LLM_PROVIDER: str = _llm_cfg_str("REAL_LLM_PROVIDER", "LLM_PROVIDER", "")
@@ -162,7 +162,6 @@ LLM_TIMEOUT_MS: int = _llm_cfg_int("REAL_LLM_TIMEOUT_MS", "LLM_TIMEOUT_MS", REAL
 REAL_LLM_API_KEY_ENV: str = _llm_cfg_str("REAL_LLM_API_KEY_ENV", "REAL_LLM_API_KEY_ENV", "LLM_API_KEY")
 
 ENABLE_LLM_VERBALIZER = _llm_cfg_bool("ENABLE_LLM_VERBALIZER", "ENABLE_LLM_VERBALIZER", True)
-ENABLE_LLM_TOOL_PLANNER = _llm_cfg_bool("ENABLE_LLM_TOOL_PLANNER", "ENABLE_LLM_TOOL_PLANNER", False)
 
 # --- Tools ---
 TOOL_DEFAULT_TIMEOUT_MS = 2000

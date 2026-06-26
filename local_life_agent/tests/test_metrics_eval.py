@@ -9,7 +9,7 @@ def test_aggregate_turn_trace_metrics_counts_core_rates():
         TurnTrace(
             trace_id="t1",
             task_type="recommendation",
-            semantic_source="fallback_rules",
+            semantic_source="diagnostic_rules",
             reference_resolution_source="raw_text_fallback",
             candidate_count=3,
             decision_type="recommendation",
@@ -27,7 +27,7 @@ def test_aggregate_turn_trace_metrics_counts_core_rates():
             reference_resolution_source="semantic_frame",
             candidate_count=2,
             decision_type="comparison",
-            answer_source="fallback",
+            answer_source="template_fallback",
             answer_verify_passed=False,
             answer_verify_violations=["ranking_changed"],
             rewrite_count=1,

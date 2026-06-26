@@ -123,26 +123,40 @@ fi
 # 3. Check & Start Redis (Port 6379)
 # --------------------------------------------------------
 echo -e "${CYAN}[3/5] Checking Redis (Port 6379)...${NC}"
+REDIS_HOME="${REDIS_HOME:-/d/software/redis/Redis-x64-5.0.14.1}"
+REDIS_SERVER="$REDIS_HOME/redis-server.exe"
+REDIS_CONF="$REDIS_HOME/redis.windows.conf"
+REDIS_LOG="var/redis_service.log"
+
 if check_port 6379; then
     echo -e "  ${GREEN}Redis is already running.${NC}"
     if [ -f "scripts/init_redis_stream.py" ]; then
         python scripts/init_redis_stream.py
     fi
 else
-    echo -e "  ${YELLOW}Redis is not running. Launching Fake Redis fallback...${NC}"
-    if [ -f "scripts/start_fake_redis.py" ]; then
-        python scripts/start_fake_redis.py >/dev/null 2>&1 &
-        sleep 2
+    if [ ! -f "$REDIS_SERVER" ]; then
+        echo -e "  ${RED}Redis is not running and redis-server.exe was not found at: $REDIS_SERVER${NC}"
+        exit 1
+    fi
+
+    echo -e "  ${YELLOW}Redis is not running. Starting real Redis from: $REDIS_HOME${NC}"
+    mkdir -p var
+    "$REDIS_SERVER" "$REDIS_CONF" > "$REDIS_LOG" 2>&1 &
+
+    for i in {1..10}; do
+        sleep 1
         if check_port 6379; then
-            echo -e "  ${GREEN}Fake Redis started successfully in background.${NC}"
+            echo -e "  ${GREEN}Redis started successfully.${NC}"
             if [ -f "scripts/init_redis_stream.py" ]; then
                 python scripts/init_redis_stream.py
             fi
-        else
-            echo -e "  ${RED}Failed to start Fake Redis. Please start Redis manually.${NC}"
+            break
         fi
-    else
-        echo -e "  ${RED}Redis is not running and scripts/start_fake_redis.py was not found.${NC}"
+    done
+
+    if ! check_port 6379; then
+        echo -e "  ${RED}Failed to start Redis. Check $REDIS_LOG for details.${NC}"
+        exit 1
     fi
 fi
 

@@ -28,9 +28,143 @@ def _match_any_regex(text: str, patterns: list[str]) -> bool:
     return any(re.search(pattern, text) for pattern in patterns)
 
 
+_SHOP_MENTION_PATTERN = re.compile(
+    r"[\u4e00-\u9fffA-Za-z0-9·]{2,40}(?:\([^)]+\))?(?:店|馆|楼|城|中心店|广场店|餐厅|咖啡店|火锅店|茶餐厅|烧烤店|烤肉店)?"
+)
+
+_SHOP_PREFIXES = (
+    "为您推荐",
+    "给您推荐",
+    "推荐顺序是",
+    "推荐顺序为",
+    "推荐是",
+    "对比",
+    "比较",
+    "优先看",
+    "先看",
+    "先去",
+    "建议去",
+    "可以去",
+    "也可以去",
+    "你也可以去",
+    "顺便去",
+    "去",
+    "到",
+    "看",
+    "看看",
+    "这家是",
+    "这家",
+    "第一家是",
+    "第一家",
+    "上述几家",
+    "上述几店",
+    "上述",
+)
+
+_SHOP_SUFFIXES = (
+    "看看",
+    "试试",
+    "吧",
+    "呢",
+    "哦",
+)
+
+
+def _append_shop_name(names: set[str], value: Any) -> None:
+    name = str(value or "").strip()
+    if not name:
+        return
+    names.add(name)
+    if "(" in name:
+        names.add(name.split("(", 1)[0].strip())
+
+
+def _strip_shop_context(candidate: str) -> str:
+    text = candidate.strip().strip("，。；;：:、, ")
+    if not text:
+        return text
+    changed = True
+    while changed and text:
+        changed = False
+        for prefix in sorted(_SHOP_PREFIXES, key=len, reverse=True):
+            if text.startswith(prefix) and len(text) > len(prefix):
+                text = text[len(prefix):].lstrip("，。；;：:、, \t")
+                changed = True
+        for suffix in sorted(_SHOP_SUFFIXES, key=len, reverse=True):
+            if text.endswith(suffix) and len(text) > len(suffix):
+                text = text[: -len(suffix)].rstrip("，。；;：:、, \t")
+                changed = True
+    return text
+
+
+def _collect_allowed_shop_names(evidence: dict[str, Any]) -> set[str]:
+    allowed: set[str] = set()
+
+    def walk(value: Any) -> None:
+        if isinstance(value, dict):
+            for key in ("shop_name", "name", "alias"):
+                if value.get(key):
+                    _append_shop_name(allowed, value.get(key))
+            for key in ("ranking_snapshot", "comparison_matrix", "candidate_summaries", "evidence_items", "unknown_items", "last_recommendation_list", "comparison_targets"):
+                child = value.get(key)
+                if child is not None:
+                    walk(child)
+            for key in ("ranked", "ranked_shops", "shops", "rows", "overall_ranked", "dimension_winners", "items"):
+                child = value.get(key)
+                if child is not None:
+                    walk(child)
+            for item in value.values():
+                if isinstance(item, (dict, list, tuple)):
+                    walk(item)
+            return
+        if isinstance(value, (list, tuple, set)):
+            for item in value:
+                walk(item)
+            return
+        if isinstance(value, str):
+            return
+
+    walk(evidence)
+    return allowed
+
+
 def _known_shop_names_in_answer(answer: str) -> list[str]:
-    # Static shop data removed in P1; returns empty (no name-based verification)
-    return []
+    """Extract explicit shop-like mentions from the answer text."""
+    mentions: list[str] = []
+    for match in _SHOP_MENTION_PATTERN.finditer(answer):
+        raw_candidate = _strip_shop_context(match.group(0))
+        if not raw_candidate:
+            continue
+        pieces = [raw_candidate]
+        if any(sep in raw_candidate for sep in ("和", "与", "及", "、", "，", ",", "；", ";", "/")):
+            split_pieces = [part.strip() for part in re.split(r"[和与及、，,；;/]", raw_candidate) if part.strip()]
+            if len(split_pieces) >= 2:
+                pieces = split_pieces
+        for candidate in pieces:
+            candidate = _strip_shop_context(candidate)
+            if not candidate:
+                continue
+            if "(" not in candidate and not candidate.endswith(("店", "馆", "楼", "城", "餐厅", "咖啡店", "火锅店", "茶餐厅", "烧烤店", "烤肉店", "中心店", "广场店")):
+                continue
+            if candidate not in mentions:
+                mentions.append(candidate)
+    return mentions
+
+
+def _closest_expected_name(answer: str, expected_names: list[str], phrase_index: int) -> str:
+    best_name = ""
+    best_distance: int | None = None
+    for name in expected_names:
+        if not name:
+            continue
+        index = answer.find(name)
+        if index < 0:
+            continue
+        distance = abs(index - phrase_index)
+        if best_distance is None or distance < best_distance:
+            best_distance = distance
+            best_name = name
+    return best_name
 
 
 def _extract_facet_results(evidence: dict[str, Any], task_type: str) -> list[dict[str, Any]]:
@@ -206,7 +340,7 @@ def _comparison_issues(answer: str, evidence: dict[str, Any]) -> list[str]:
     if _match_any_phrase(answer, ["\u8bc4\u5206", "\u53e3\u7891", "\u8bc4\u4ef7"]) and "rating" not in dimension_winners:
         issues.append("unprovided_dimension_winner")
 
-    expected_names = _comparison_overall_ranked_names(evidence) or _extract_ranked_shop_names(evidence)
+    expected_names = _comparison_overall_ranked_names(evidence) or _comparison_shop_names(evidence) or _extract_ranked_shop_names(evidence)
     if len(expected_names) >= 2 and _match_any_phrase(answer, ["\u66f4\u597d", "\u66f4\u4f18", "\u9886\u5148", "\u80dc\u51fa", "\u66f4\u5360\u4f18"]) and not _match_any_phrase(
         answer,
         ["\u4e0d\u80fd\u5224\u65ad\u8c01\u66f4\u597d", "\u65e0\u6cd5\u5224\u65ad\u8c01\u66f4\u597d", "\u6682\u65f6\u4e0d\u80fd\u5224\u65ad\u8c01\u66f4\u597d"],
@@ -219,6 +353,24 @@ def _comparison_issues(answer: str, evidence: dict[str, Any]) -> list[str]:
             mentioned_order = _extract_mentioned_order(answer, expected_names)
             if mentioned_order and mentioned_order[0] != expected_names[0]:
                 issues.append("ranking_changed_by_llm")
+
+    winner_claim_phrases = ["\u6700\u63a8\u8350", "\u66f4\u597d", "\u66f4\u4f18", "\u80dc\u51fa", "\u9886\u5148", "\u7efc\u5408\u6700\u597d", "\u7efc\u5408\u66f4\u597d", "\u66f4\u9002\u5408", "\u66f4\u8fd1", "\u79bb\u5f97\u66f4\u8fd1", "\u6700\u8fd1"]
+    if len(expected_names) >= 2 and _match_any_phrase(answer, winner_claim_phrases):
+        winner_claimed = False
+        for phrase in winner_claim_phrases:
+            start = 0
+            while True:
+                phrase_index = answer.find(phrase, start)
+                if phrase_index < 0:
+                    break
+                closest_name = _closest_expected_name(answer, expected_names, phrase_index)
+                if closest_name and closest_name != expected_names[0]:
+                    issues.append("unsupported_comparison_winner")
+                    winner_claimed = True
+                    break
+                start = phrase_index + len(phrase)
+            if winner_claimed:
+                break
 
     return issues
 
@@ -245,12 +397,9 @@ def _build_suggested_fix(issues: list[str]) -> str:
 def verify_answer(answer: str, evidence: dict, task_type: str) -> dict:
     """Verify an answer against its evidence base."""
     evidence_dict = _to_dict(evidence)
-    issues: list[str] = []
-
-    # A. Run B2MiniVerifier checks
     from .b2_mini_verifier import B2MiniVerifier
     from .generator import _build_decision_plan
-    
+
     mock_answer_plan = {
         "answer_type": task_type,
         "forbidden_claims": evidence_dict.get("forbidden_claims") or [],
@@ -258,81 +407,19 @@ def verify_answer(answer: str, evidence: dict, task_type: str) -> dict:
             item.get("shop_name", "") if isinstance(item, dict) else str(item)
             for item in (evidence_dict.get("unknown_items") or [])
             if (item.get("shop_name", "") if isinstance(item, dict) else str(item))
-        ]
+        ],
     }
     plan = _build_decision_plan(mock_answer_plan, evidence_dict)
-    
-    verifier = B2MiniVerifier()
-    res = verifier.verify(plan, answer)
-    if not res["passed"]:
-        for v in res["violations"]:
-            if v not in issues:
-                issues.append(v)
-
-    # B. Legacy check rules (to preserve existing test behaviors)
-    forbidden_claims = evidence_dict.get("forbidden_claims") or []
-    for claim in forbidden_claims:
-        if isinstance(claim, str) and claim and claim in answer:
-            if f"forbidden_claim:{claim}" not in issues:
-                issues.append(f"forbidden_claim:{claim}")
-
-    if task_type == "comparison" or (evidence_dict.get("comparison_matrix") or {}).get("rows"):
-        issues.extend(_comparison_issues(answer, evidence_dict))
-        # Deduplicate
-        unique_issues = []
-        for issue in issues:
-            if issue not in unique_issues:
-                unique_issues.append(issue)
-        passed = len(unique_issues) == 0
-        return {
-            "passed": passed,
-            "issues": unique_issues,
-            "suggested_fix": "" if passed else _build_suggested_fix(unique_issues),
-            "task_type": task_type,
-        }
-
-    allowed_shop_names = {
-        name
-        for name in (
-            item.get("shop_name", "") if isinstance(item, dict) else ""
-            for item in (evidence_dict.get("evidence_items") or []) + (evidence_dict.get("unknown_items") or [])
-        )
-        if isinstance(name, str) and name.strip()
-    }
-    for name in _known_shop_names_in_answer(answer):
-        if allowed_shop_names and name not in allowed_shop_names:
-            if f"shop_mismatch:{name}" not in issues:
-                issues.append(f"shop_mismatch:{name}")
-
-    facet_results = _extract_facet_results(evidence_dict, task_type)
-    for item in facet_results:
-        facet = str(item.get("facet", ""))
-        if facet and _facet_required(item):
-            _facet_rules(answer, facet, item, issues)
-
-    expected_names = _extract_ranked_shop_names(evidence_dict)
-    if len(expected_names) >= 2:
-        mentioned_order = _extract_mentioned_order(answer, expected_names)
-        if len(mentioned_order) >= 2 and mentioned_order != expected_names[: len(mentioned_order)]:
-            if "ranking_changed_by_llm" not in issues:
-                issues.append("ranking_changed_by_llm")
-    if task_type == "recommendation" and len(expected_names) >= 3:
-        mentioned_order = _extract_mentioned_order(answer, expected_names)
-        if len(mentioned_order) != 3:
-            if "recommendation_top_k_mismatch" not in issues:
-                issues.append("recommendation_top_k_mismatch")
-
-    # Deduplicate issues
-    unique_issues = []
-    for issue in issues:
-        if issue not in unique_issues:
-            unique_issues.append(issue)
-
-    passed = len(unique_issues) == 0
+    res = B2MiniVerifier().verify(plan, answer)
+    issues = list(res.get("violations") or [])
+    passed = bool(res.get("passed", False))
+    if not passed and not issues:
+        fallback_code = str(res.get("failure_code") or res.get("violation") or "verifier_failed")
+        issues = [fallback_code]
     return {
         "passed": passed,
-        "issues": unique_issues,
-        "suggested_fix": "" if passed else _build_suggested_fix(unique_issues),
+        "issues": issues,
+        "suggested_fix": "" if passed else _build_suggested_fix(issues),
         "task_type": task_type,
     }
 

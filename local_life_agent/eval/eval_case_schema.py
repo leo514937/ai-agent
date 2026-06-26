@@ -44,6 +44,23 @@ class EvalExpected(BaseModel):
     must_not_include_violation: list[str] | None = None
     allow_skipped_if_no_api_key: bool | None = None
     turn_assertions: list[dict[str, Any]] | None = None
+    expect_llm_backend: str | None = None
+    expect_llm_backend_kind: str | None = None
+    expect_llm_backend_family: str | None = None
+    forbid_llm_backend_kinds: list[str] | None = None
+    forbid_llm_backend_families: list[str] | None = None
+    forbid_semantic_sources: list[str] | None = None
+    forbid_tool_backends: list[str] | None = None
+    expect_answer_source: str | None = None
+    forbid_answer_sources: list[str] | None = None
+    expect_legacy_used: bool | None = None
+    expect_fallback_used: bool | None = None
+    expect_evidence_incomplete: bool | None = None
+    expect_terminal: str | None = None
+    forbid_fake_success: bool | None = None
+    require_tool_results: bool | None = None
+    require_clarify_on_ambiguous_candidates: bool | None = None
+    require_trusted_failure_on_empty_tools: bool | None = None
 
     # Catch-all for any other expected keys the runtime checks
     extra: dict[str, Any] = Field(default_factory=dict, alias="_extra")

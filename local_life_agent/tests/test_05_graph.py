@@ -30,6 +30,7 @@ from ..engine.graph_builder import (
     _EDGE_TABLE_ROWS,
     _GRAPH_STATE_FIELDS,
     _HANDLERS,
+    _GRAPH_HANDLERS,
     _NODE_TABLE_NEXT_HOPS,
     _route_answer_verify,
     _route_check_pending,
@@ -144,8 +145,6 @@ class TestNodeTableCompleteness:
     def test_every_execution_node_has_handler(self):
         """Every ExecutionNode enum member has a handler (including CLARIFY_DECIDE)."""
         for node in ExecutionNode:
-            if node.value in {"task_plan", "facet_plan", "comparison_planner"}:
-                continue
             assert node.value in _HANDLERS, (
                 f"ExecutionNode.{node.name} ('{node.value}') has no handler"
             )
@@ -238,7 +237,7 @@ class TestGraphCompilation:
         assert len(report["errors"]) == 0, (
             f"Graph completeness errors: {report['errors']}"
         )
-        assert report["node_count"] == len(_HANDLERS)
+        assert report["node_count"] == len(_GRAPH_HANDLERS)
 
 
 # ===================================================================
@@ -304,12 +303,27 @@ class TestNormalFlow:
 
     def test_top_intent_classified(self):
         """top_intent_router should classify local_life intent."""
-        def backend(**_kwargs):
+        def backend(**kwargs):
+            prompt = str(kwargs.get("prompt", "") or "")
+            system_prompt = str(kwargs.get("system_prompt", "") or "")
+            prompt_blob = f"{system_prompt}\n{prompt}"
+            if "顶层意图路由" in prompt_blob or "Top Intent" in prompt_blob:
+                return {
+                    "content": {
+                        "top_intent": "local_life",
+                        "confidence": 0.97,
+                        "reason": "contains local-life intent",
+                    }
+                }
+            if "答案生成 Verbalizer" in prompt_blob or "DecisionPlan 事实数据" in prompt_blob:
+                return {
+                    "content": {
+                        "natural_response": "这是一个测试回复。",
+                    }
+                }
             return {
                 "content": {
-                    "top_intent": "local_life",
-                    "confidence": 0.97,
-                    "reason": "contains local-life intent",
+                    "natural_response": "这是一个测试回复。",
                 }
             }
 

@@ -58,6 +58,7 @@ def _spec(
 def _fake_resolve_shop(query: str, **kw: Any) -> dict[str, Any]:
     """Simulate resolve_shop for controlled testing."""
     data: dict[str, Any] = query.lower().strip()
+    session_shop_ids = list(kw.get("session_shop_ids") or [])
 
     if data in ("海底捞(牡丹园店)",):
         return {
@@ -89,6 +90,13 @@ def _fake_resolve_shop(query: str, **kw: Any) -> dict[str, Any]:
             "shop": None,
             "candidates": [],
             "confidence": 0.0,
+        }
+    if data in ("这家", "它", "第一家") and session_shop_ids:
+        return {
+            "status": "RESOLVED",
+            "shop": {"shop_id": session_shop_ids[0], "shop_name": "上下文店铺"},
+            "candidates": [],
+            "confidence": 0.9,
         }
     # Default: ambiguous
     return {
@@ -178,8 +186,8 @@ class TestResolveExplicit:
         result = resolver.resolve_explicit(goal, spec)
         assert result.status == CandidateStatus.NOT_FOUND
 
-    def test_ambiguous_mention_takes_first_candidate(self, resolver: CandidateResolver):
-        """When resolve_shop returns AMBIGUOUS, resolver takes first candidate."""
+    def test_ambiguous_mention_returns_ambiguous_candidate_set(self, resolver: CandidateResolver):
+        """When resolve_shop returns AMBIGUOUS, resolver must keep ambiguity for clarification."""
         goal = _goal(goal_type=GoalType.COMPARISON, candidate_source=CandidateSource.EXPLICIT, candidate_limit=2)
         spec = _spec(
             source=CandidateSource.EXPLICIT,
@@ -187,10 +195,10 @@ class TestResolveExplicit:
             limit=2,
         )
         result = resolver.resolve_explicit(goal, spec)
-        assert result.status == CandidateStatus.RESOLVED
-        # "海底捞" is ambiguous → resolver takes first candidate: shop_007
-        assert len(result.candidates) == 1
-        assert result.candidates[0].shop_id == "shop_007"
+        assert result.status == CandidateStatus.AMBIGUOUS
+        assert len(result.candidates) >= 2
+        assert {c.shop_id for c in result.candidates} >= {"shop_007", "shop_sc_01"}
+        assert result.min_required == 2
 
     def test_not_found_mention_skipped(self, resolver: CandidateResolver):
         goal = _goal(goal_type=GoalType.COMPARISON, candidate_source=CandidateSource.EXPLICIT, candidate_limit=2)
@@ -281,6 +289,44 @@ class TestResolveDiscovery:
         result = resolver.resolve_discovery(goal, spec)
         assert result.status == CandidateStatus.NOT_FOUND
 
+    def test_search_normalizes_common_modifiers(self, resolver: CandidateResolver):
+        goal = _goal(goal_type=GoalType.COMPARISON, candidate_source=CandidateSource.DISCOVERY)
+        spec = _spec(source=CandidateSource.DISCOVERY, query="附近 火锅", limit=2)
+        result = resolver.resolve_discovery(goal, spec)
+        assert result.status == CandidateStatus.RESOLVED
+        assert len(result.candidates) == 2
+
+    def test_search_combined_categories_falls_back_to_each_term(self):
+        def _multi_term_search(query: str, **kw: Any) -> dict[str, Any]:
+            q = str(query or "").strip()
+            if q in {"火锅 烧烤", "火锅,烧烤"}:
+                return {"success": True, "result_status": "ok", "data": []}
+            if q == "火锅":
+                return {
+                    "success": True,
+                    "result_status": "ok",
+                    "data": [
+                        {"shop_id": "shop_007", "shop_name": "海底捞(牡丹园店)", "rating": 4.5, "distance_km": 1.2},
+                    ],
+                }
+            if q == "烧烤":
+                return {
+                    "success": True,
+                    "result_status": "ok",
+                    "data": [
+                        {"shop_id": "shop_bb_01", "shop_name": "木屋烧烤(北邮店)", "rating": 4.2, "distance_km": 0.8},
+                    ],
+                }
+            return {"success": True, "result_status": "ok", "data": []}
+
+        resolver = CandidateResolver(search_shops_fn=_multi_term_search)
+        goal = _goal(goal_type=GoalType.COMPARISON, candidate_source=CandidateSource.DISCOVERY, candidate_limit=3)
+        spec = _spec(source=CandidateSource.DISCOVERY, query="火锅 烧烤", limit=3)
+        result = resolver.resolve_discovery(goal, spec)
+        assert result.status == CandidateStatus.RESOLVED
+        assert {c.shop_id for c in result.candidates} == {"shop_007", "shop_bb_01"}
+        assert result.candidates[0].shop_id == "shop_007"
+
     def test_limit_applied(self, resolver: CandidateResolver):
         """Ensure limit parameter caps the number of candidates."""
         goal = _goal(goal_type=GoalType.COMPARISON, candidate_source=CandidateSource.DISCOVERY, candidate_limit=1)
@@ -333,6 +379,17 @@ class TestResolveMixed:
         )
         result = resolver.resolve_mixed(goal, spec)
         assert result.status == CandidateStatus.NOT_FOUND
+
+    def test_mixed_uses_context_when_explicit_is_empty(self, resolver: CandidateResolver):
+        goal = _goal(goal_type=GoalType.COMPARISON, candidate_source=CandidateSource.MIXED, candidate_limit=2)
+        spec = _spec(source=CandidateSource.MIXED, query="", explicit_mentions=[])
+        state: dict[str, Any] = {
+            "current_shop": {"shop_id": "shop_007", "shop_name": "海底捞(牡丹园店)"},
+        }
+        result = resolver.resolve_mixed(goal, spec, state)
+        assert result.status == CandidateStatus.RESOLVED
+        assert len(result.candidates) == 1
+        assert result.candidates[0].shop_id == "shop_007"
 
 
 # ===================================================================

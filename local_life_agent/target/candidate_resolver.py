@@ -55,6 +55,121 @@ def _to_dict(value: Any) -> dict[str, Any]:
     return dict(getattr(value, "__dict__", {}) or {})
 
 
+def _session_shop_ids(state: dict[str, Any] | None) -> list[str]:
+    """Collect shop IDs from session context for follow-up resolution."""
+    if not state:
+        return []
+
+    ids: list[str] = []
+    current_shop = _to_dict(state.get("current_shop"))
+    if current_shop.get("shop_id"):
+        ids.append(str(current_shop.get("shop_id")).strip())
+
+    for item in state.get("last_recommendation_list", []) or []:
+        shop = _to_dict(item)
+        sid = str(shop.get("shop_id", "")).strip()
+        if sid:
+            ids.append(sid)
+
+    for item in state.get("comparison_targets", []) or []:
+        data = _to_dict(item)
+        shop = data.get("resolved_shop") or data.get("shop") or data
+        shop_dict = _to_dict(shop)
+        sid = str(shop_dict.get("shop_id", "")).strip()
+        if sid:
+            ids.append(sid)
+
+    deduped: list[str] = []
+    for sid in ids:
+        if sid and sid not in deduped:
+            deduped.append(sid)
+    return deduped
+
+
+def _normalize_discovery_query(query: str) -> str:
+    """Strip common human modifiers from discovery-style queries."""
+    q = str(query or "").strip()
+    if not q:
+        return ""
+
+    q = q.replace("，", " ").replace(",", " ").replace("。", " ").replace("、", " ")
+    tokens = [token for token in q.split() if token.strip()]
+    if len(tokens) > 1:
+        stop_prefixes = {
+            "附近",
+            "周边",
+            "周围",
+            "推荐",
+            "推荐几家",
+            "附近有没有",
+            "附近推荐",
+            "附近推荐几家",
+            "约会",
+            "便宜一点的",
+            "便宜一点",
+            "便宜点",
+            "更便宜",
+            "最好有券",
+            "最好有券的",
+            "现在营业",
+            "现在开门",
+            "营业",
+            "这家",
+            "这三家",
+            "第一家",
+            "第二家",
+            "第三家",
+        }
+        while len(tokens) > 1 and tokens[0] in stop_prefixes:
+            tokens.pop(0)
+        if len(tokens) > 1 and tokens[0].endswith("的呢"):
+            tokens.pop(0)
+        q = " ".join(tokens).strip()
+    return q
+
+
+def _discovery_query_variants(query: str) -> list[str]:
+    """Build fallback discovery queries from a combined human query."""
+    normalized = _normalize_discovery_query(query)
+    if not normalized:
+        return []
+
+    stop_terms = {
+        "附近",
+        "周边",
+        "周围",
+        "推荐",
+        "推荐几家",
+        "附近有没有",
+        "附近推荐",
+        "附近推荐几家",
+        "约会",
+        "便宜一点的",
+        "便宜一点",
+        "便宜点",
+        "更便宜",
+        "最好有券",
+        "最好有券的",
+        "现在营业",
+        "现在开门",
+        "营业",
+        "这家",
+        "这三家",
+        "第一家",
+        "第二家",
+        "第三家",
+    }
+
+    variants: list[str] = [normalized]
+    tokens = [token for token in normalized.split() if token.strip()]
+    for token in tokens:
+        if token in stop_terms:
+            continue
+        if token not in variants:
+            variants.append(token)
+    return variants
+
+
 class CandidateResolver:
     """Resolve candidates for a given goal and spec.
 
@@ -88,7 +203,7 @@ class CandidateResolver:
         state = state or {}
         source = spec.source
         if source == CandidateSource.EXPLICIT:
-            return self.resolve_explicit(goal, spec)
+            return self.resolve_explicit(goal, spec, state)
         if source == CandidateSource.CONTEXT:
             return self.resolve_context(goal, spec, state)
         if source == CandidateSource.MIXED:
@@ -103,10 +218,11 @@ class CandidateResolver:
         self,
         goal: Any,
         spec: CandidateSpec,
+        state: dict[str, Any] | None = None,
     ) -> CandidateSet:
         """Resolve explicit shop mentions via resolve_shop.
 
-        AMBIGUOUS mentions take the first candidate.
+        AMBIGUOUS mentions remain ambiguous and must be clarified.
         NOT_FOUND mentions are skipped.
         """
         mentions = spec.explicit_mentions or []
@@ -122,8 +238,12 @@ class CandidateResolver:
 
         candidates: list[ResolvedCandidate] = []
         ambiguous_candidates: list[ResolvedCandidate] = []
+        session_shop_id_list = _session_shop_ids(state)
         for idx, mention in enumerate(mentions):
-            result = self._resolve_shop(mention)
+            kwargs: dict[str, Any] = {}
+            if session_shop_id_list:
+                kwargs["session_shop_ids"] = session_shop_id_list
+            result = self._resolve_shop(mention, **kwargs)
             status = str(result.get("status", "NOT_FOUND") or "NOT_FOUND")
 
             if status == "RESOLVED":
@@ -151,20 +271,49 @@ class CandidateResolver:
                             rank=idx,
                             confidence=float(result.get("confidence", 0.5)),
                             raw=cand_dict,
-                        ))
+                    ))
 
-        if ambiguous_candidates and not candidates:
-            first_candidate = ambiguous_candidates[:1]
+        if ambiguous_candidates:
+            merged: list[ResolvedCandidate] = []
+            for item in [*candidates, *ambiguous_candidates]:
+                if not any(existing.shop_id == item.shop_id for existing in merged):
+                    merged.append(item)
             return CandidateSet(
-                status=CandidateStatus.RESOLVED,
+                status=CandidateStatus.AMBIGUOUS,
                 source=CandidateSource.EXPLICIT,
-                candidates=first_candidate,
-                requested_count=spec.limit or len(first_candidate) or 1,
-                min_required=1,
+                candidates=merged,
+                requested_count=spec.limit or len(merged) or 1,
+                min_required=2,
                 max_allowed=spec.limit or 5,
             )
 
         if not candidates:
+            fallback_query = spec.query or spec.category or " ".join(mentions)
+            if fallback_query.strip():
+                fallback_spec = CandidateSpec(
+                    source=CandidateSource.DISCOVERY,
+                    category=spec.category,
+                    query=fallback_query,
+                    location_scope=spec.location_scope,
+                    sort_by=list(spec.sort_by or []),
+                    limit=spec.limit,
+                    explicit_mentions=[],
+                    context_ref=spec.context_ref,
+                    filters=dict(spec.filters or {}),
+                    ranking_signals=dict(spec.ranking_signals or {}),
+                )
+                discovery_set = self.resolve_discovery(goal, fallback_spec)
+                if discovery_set.status == CandidateStatus.RESOLVED and discovery_set.candidates:
+                    return CandidateSet(
+                        status=CandidateStatus.RESOLVED,
+                        source=CandidateSource.MIXED,
+                        candidates=discovery_set.candidates,
+                        warnings=["explicit_not_found_fallback_to_discovery"],
+                        original_spec=spec,
+                        requested_count=spec.limit or len(discovery_set.candidates),
+                        min_required=1,
+                        max_allowed=spec.limit or 5,
+                    )
             return CandidateSet(
                 status=CandidateStatus.NOT_FOUND,
                 source=CandidateSource.EXPLICIT,
@@ -280,8 +429,8 @@ class CandidateResolver:
         The spec.query or spec.category is used as the search query.
         Empty query returns NOT_FOUND.
         """
-        query = spec.query or spec.category or ""
-        if not query:
+        query_variants = _discovery_query_variants(spec.query or spec.category or "")
+        if not query_variants:
             return CandidateSet(
                 status=CandidateStatus.NOT_FOUND,
                 source=CandidateSource.DISCOVERY,
@@ -292,27 +441,35 @@ class CandidateResolver:
             )
 
         limit = spec.limit or SEARCH_LIMIT
-        result = self._search_shops(query)
-        data = result.get("data") or []
-        if not isinstance(data, list):
-            data = []
-
         candidates: list[ResolvedCandidate] = []
-        for idx, item in enumerate(data):
-            shop = _to_dict(item)
-            sid = str(shop.get("shop_id", "")).strip()
-            if not sid:
-                continue
-            candidates.append(ResolvedCandidate(
-                shop_id=sid,
-                shop_name=str(shop.get("shop_name", "")),
-                source=CandidateSource.DISCOVERY,
-                rank=idx,
-                confidence=float(shop.get("confidence", 0.7)),
-                rating=shop.get("rating"),
-                distance_km=shop.get("distance_km"),
-                raw=shop,
-            ))
+        seen_shop_ids: set[str] = set()
+        for query in query_variants:
+            if limit and len(candidates) >= limit:
+                break
+
+            result = self._search_shops(query)
+            data = result.get("data") or []
+            if not isinstance(data, list):
+                data = []
+
+            for item in data:
+                shop = _to_dict(item)
+                sid = str(shop.get("shop_id", "")).strip()
+                if not sid or sid in seen_shop_ids:
+                    continue
+                candidates.append(ResolvedCandidate(
+                    shop_id=sid,
+                    shop_name=str(shop.get("shop_name", "")),
+                    source=CandidateSource.DISCOVERY,
+                    rank=len(candidates),
+                    confidence=float(shop.get("confidence", 0.7)),
+                    rating=shop.get("rating"),
+                    distance_km=shop.get("distance_km"),
+                    raw=shop,
+                ))
+                seen_shop_ids.add(sid)
+                if limit and len(candidates) >= limit:
+                    break
 
         if not candidates:
             return CandidateSet(
@@ -352,15 +509,21 @@ class CandidateResolver:
 
         Deduplicates by shop_id (explicit takes priority).
         """
-        explicit_set = self.resolve_explicit(goal, spec)
+        explicit_set = self.resolve_explicit(goal, spec, state)
+        context_set = self.resolve_context(goal, spec, state)
         discovery_set = self.resolve_discovery(goal, spec)
 
         merged: list[ResolvedCandidate] = []
         seen_ids: set[str] = set()
 
+        for c in (context_set.candidates or []):
+            if c.shop_id and c.shop_id not in seen_ids:
+                merged.append(c)
+                seen_ids.add(c.shop_id)
+
         for c in (explicit_set.candidates or []):
-            merged.append(c)
-            if c.shop_id:
+            if c.shop_id and c.shop_id not in seen_ids:
+                merged.append(c)
                 seen_ids.add(c.shop_id)
 
         for c in (discovery_set.candidates or []):

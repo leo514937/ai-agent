@@ -37,7 +37,7 @@ def _goal(goal_type: GoalType, **kw: object) -> LocalLifeGoalDraft:
 
 
 def _set(candidates: list[ResolvedCandidate], status: CandidateStatus = CandidateStatus.RESOLVED,
-         source: CandidateSource = CandidateSource.DISCOVERY, min_required: int = 2,
+         source: CandidateSource = CandidateSource.DISCOVERY, min_required: int = 1,
          max_allowed: int = 5) -> CandidateSet:
     return CandidateSet(
         status=status,
@@ -110,8 +110,8 @@ class TestReviewStatusFailures:
             _goal(GoalType.COMPARISON),
             _set([], status=CandidateStatus.NOT_FOUND),
         )
-        assert result.status == ReviewStatus.NEED_MORE_CANDIDATES
-        assert result.next_action in (NextAction.CLARIFY, NextAction.FALLBACK)
+        assert result.status == ReviewStatus.FALLBACK
+        assert result.next_action == NextAction.FALLBACK
 
     def test_ambiguous_returns_need_clarification(self):
         result = review_candidate_set(

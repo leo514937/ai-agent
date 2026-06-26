@@ -370,18 +370,17 @@ class TestLLMFailureFallback:
     """When LLM truly fails, the fallback path should produce correct metadata."""
 
     def test_llm_failure_triggers_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """LLM failure → semantic_source = fallback_rules, fallback_reason set."""
+        """LLM failure must not fabricate a semantic frame."""
         monkeypatch.setattr(graph_builder, "call_llm", _fail_semantic_only("LLM_TIMEOUT"))
 
         response = run_agent_graph("附近推荐火锅", "verify_llm_fail")
 
         assert response.debug is not None
         sf = response.debug.semantic_frame
-        assert sf.get("semantic_source") == "fallback_rules", (
-            f"Expected fallback_rules, got {sf.get('semantic_source')!r}"
-        )
-        assert sf.get("fallback_reason") == "LLM_TIMEOUT"
-        assert sf.get("llm_called") is True
+        assert sf.get("semantic_frame") is None
+        assert sf.get("semantic_source") in (None, "")
+        assert response.debug.turn_trace.get("fallback_reason") == "LLM_TIMEOUT"
+        assert response.debug.turn_trace.get("llm_called") is True
 
 
 # ===================================================================

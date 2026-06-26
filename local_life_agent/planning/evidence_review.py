@@ -299,6 +299,13 @@ def review_evidence(
             result.status = "insufficient"
             result.reason = f"required_facets_indeterminate_no_ok: {unknown_or_failed}"
 
+    tool_results_missing = not isinstance(tool_results, dict) or not bool(tool_results)
+    result.evidence_incomplete = tool_results_missing or result.next_action in (
+        NextAction.REPLAN_EVIDENCE,
+        NextAction.CLARIFY,
+        NextAction.FALLBACK,
+    )
+
     # Build trace payload
     result.trace_payload = {
         "required": {
@@ -315,6 +322,7 @@ def review_evidence(
         },
         "unknown_as_false_detected": result.unknown_as_false_detected,
         "failed_as_empty_detected": result.failed_as_empty_detected,
+        "evidence_incomplete": result.evidence_incomplete,
         "next_action": result.next_action,
         "status": result.status,
         "reason": result.reason,

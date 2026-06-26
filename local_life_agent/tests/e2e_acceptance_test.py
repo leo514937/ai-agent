@@ -433,15 +433,7 @@ def run_turn(query: str, session_id: str = "") -> dict:
         trace["ordinal_references"] = str(sf.get("ordinal_references", []))
         trace["deictic_references"] = str(sf.get("deictic_references", []))
         
-        # Check execution trace for plan info
-        exec_trace = debug.execution_trace or []
-        for entry in exec_trace:
-            if isinstance(entry, dict):
-                node = entry.get("node", "")
-                if node == "task_plan":
-                    pass  # task_type was set here
-        
-        trace["execution_trace_nodes"] = [e.get("node", "") for e in exec_trace if isinstance(e, dict)]
+        trace["execution_trace_nodes"] = [e.get("node", "") for e in (debug.execution_trace or []) if isinstance(e, dict)]
     
     return trace
 

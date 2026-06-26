@@ -11,10 +11,18 @@ currently available mock data and session helpers:
 
 from __future__ import annotations
 
+import pytest
+
 from ..answer.verifier import verify_answer
 from ..domain.state import SessionState
 from ..engine.session_write import SessionScenario, get_directive, resolve_scenario
 from .fakes.mock_tools import get_coupon_list, get_shop_detail, resolve_shop, search_shops
+from .fakes.verifier import fake_verifier_verify
+
+
+@pytest.fixture(autouse=True)
+def _fake_verifier(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("local_life_agent.answer.b2_mini_verifier.B2MiniVerifier.verify", fake_verifier_verify)
 
 
 def _apply_directive(state: SessionState, directive, ctx: dict[str, object]) -> None:

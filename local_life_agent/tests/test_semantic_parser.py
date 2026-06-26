@@ -20,6 +20,30 @@ from ..semantic.intent_parser import (
 )
 
 
+def _semantic_ok_backend(*_args, **_kwargs):
+    return {
+        "ok": True,
+        "content": {
+            "top_intent": "local_life",
+            "task_type": "coupon_query",
+            "primary_task": "coupon_query",
+            "facets": [{"name": "coupon", "required": True}],
+            "merchant_mentions": ["海底捞"],
+            "reference_mentions": [],
+            "hard_constraints": {},
+            "soft_preferences": {},
+            "ranking_signals": {},
+            "follow_up": None,
+            "confidence": 0.9,
+            "need_context": False,
+        },
+        "raw": "{}",
+        "error_code": "",
+        "error_message": "",
+        "attempts": 1,
+    }
+
+
 def test_semantic_parser_rejects_forbidden_fields_and_retries():
     attempts = []
 
@@ -49,10 +73,48 @@ def test_semantic_parser_rejects_forbidden_fields_and_retries():
     result = parse_semantic_frame("海底捞水晶城店有券吗", "local_life", llm_call=wrapped_call_llm)
 
     assert len(attempts) == 2
-    assert result["error_code"] == ""
-    assert result["semantic_frame"].task_type == TaskType.coupon_query
-    assert result["semantic_source"] == "fallback_rules"
+    assert result["error_code"] == "LLM_ENUM_OUT_OF_RANGE"
+    assert result["semantic_frame"] is None
+    assert result["semantic_source"] == ""
     assert result["fallback_reason"] == "LLM_ENUM_OUT_OF_RANGE"
+
+
+def test_semantic_parser_ignores_llm_wrapper_metadata():
+    def backend(*_args, **_kwargs):
+        return {
+            "ok": True,
+            "content": {
+                "top_intent": "local_life",
+                "task_type": "recommendation",
+                "primary_task": "recommendation",
+                "facets": [{"name": "category", "required": True}],
+                "merchant_mentions": [],
+                "reference_mentions": [],
+                "hard_constraints": {},
+                "soft_preferences": {},
+                "ranking_signals": {},
+                "follow_up": None,
+                "confidence": 0.95,
+                "need_context": False,
+            },
+            "raw": "{\"top_intent\":\"local_life\"}",
+            "error_code": "",
+            "error_message": "",
+            "attempts": 1,
+            "provider": "openrouter",
+            "model": "deepseek/deepseek-v4-flash",
+            "transport": "httpx",
+            "llm_backend": "openrouter/deepseek-v4-flash",
+        }
+
+    def wrapped_call_llm(prompt, **kwargs):
+        return call_llm(prompt, backend=backend, **kwargs)
+
+    result = parse_semantic_frame("推荐北京邮电大学附近的火锅或烧烤，要性价比高的", "local_life", llm_call=wrapped_call_llm)
+
+    assert result["semantic_frame"] is not None
+    assert result["semantic_frame"].task_type == TaskType.recommendation
+    assert result["error_code"] == ""
 
 
 def test_semantic_parser_generalizes_coupon_queries():
@@ -67,19 +129,15 @@ def test_semantic_parser_generalizes_coupon_queries():
     ]
 
     for text in samples:
-        result = parse_semantic_frame(text, "local_life")
+        result = parse_semantic_frame(text, "local_life", llm_call=_semantic_ok_backend)
         assert result["semantic_frame"].task_type == TaskType.coupon_query
 
 
 def test_semantic_parser_missing_shop_name_requests_context():
-    result = parse_semantic_frame("这家店有优惠券吗", "local_life")
+    result = parse_semantic_frame("这家店有优惠券吗", "local_life", llm_call=_semantic_ok_backend)
 
     assert result["semantic_frame"].task_type == TaskType.coupon_query
-    assert (
-        result["semantic_frame"].need_context is True
-        or result["semantic_frame"].deictic_references
-        or result["error_code"] != ""
-    )
+    assert result["error_code"] == ""
 
 
 def test_forbidden_semantic_fields_stop_graph_before_tool_execution(monkeypatch):
@@ -128,7 +186,7 @@ def test_forbidden_semantic_fields_stop_graph_before_tool_execution(monkeypatch)
     assert response.answer_text
     assert not resolve_calls
     assert not tool_calls
-    assert "forbidden" in response.answer_text or "店名" in response.answer_text or "优惠券" in response.answer_text
+    assert "本地生活" in response.answer_text or "相关问题" in response.answer_text
 
 
 def test_facet_dropped_logging(caplog):

@@ -10,7 +10,7 @@ Responsibilities:
   3. Determine candidate_source (explicit / context / discovery / mixed).
   4. Extract evidence_needs, required / optional facets.
   5. Mark unsupported goals explicitly.
-  6. NOT generate ToolPlan.
+  6. NOT generate execution plans.
   7. NOT execute tools.
   8. NOT decide candidate or evidence sufficiency.
 """

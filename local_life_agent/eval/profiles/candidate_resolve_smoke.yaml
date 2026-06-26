@@ -1,0 +1,22 @@
+name: candidate_resolve_smoke
+mode: smoke
+backend: real_llm
+tool_backend: db
+cases: ../cases/candidate_resolve_smoke.jsonl
+description: real_llm + real resolver/search smoke, only checks candidate-resolution trace fields
+acceptance:
+  require_real_llm: true
+  require_real_tool_backend: true
+  allowed_tool_backends:
+    - db
+    - java_api
+  forbid_semantic_sources:
+    - fallback_rules
+    - rule_based
+  forbid_tool_backends:
+    - mock
+    - fake
+    - stub
+  forbid_answer_sources:
+    - template
+    - template_fallback

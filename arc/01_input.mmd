@@ -1,0 +1,17 @@
+flowchart TD
+    START([input_start]) --> RI[receive_input]
+    RI --> LS[load_session_state]
+    LS --> CPC[check_pending_clarification]
+    CPC -->|new topic / normal input| BI[basic_input_validate]
+    CPC -->|pending reply digits| TR[target_resolve]
+    CPC -->|expired / invalid pending reply| CL[clarify_response]
+
+    BI -->|valid text| NT[normalize_text]
+    BI -->|invalid / empty / overlong| EM[emit_response]
+
+    NT --> HG[hard_guard]
+    HG -->|safe| TI[top_intent_router]
+    HG -->|pure invalid / greeting / capability| EM
+
+    TI -->|local_life| OUT1[[route: local_life]]
+    TI -->|out_of_scope / unsafe / chat / capability / invalid| EM
