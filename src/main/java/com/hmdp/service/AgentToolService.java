@@ -1,11 +1,9 @@
 package com.hmdp.service;
 
 import cn.hutool.core.util.StrUtil;
-import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.hmdp.ai.query.AiBusinessQueryFacade;
 import com.hmdp.ai.query.AiQueryContext;
 import com.hmdp.ai.query.dto.AiReputationDigest;
-import com.hmdp.ai.query.dto.AiShopDetailDigest;
 import com.hmdp.dto.agent.*;
 import com.hmdp.entity.Blog;
 import com.hmdp.entity.BlogComments;

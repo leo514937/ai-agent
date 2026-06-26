@@ -18,11 +18,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import javax.annotation.Resource;
-import java.text.DecimalFormat;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -37,7 +35,6 @@ import java.util.Map;
 @Service
 public class AiAssistantService {
 
-    private static final DecimalFormat SCORE_FORMAT = new DecimalFormat("0.0");
 
     @Resource
     private AiBusinessQueryFacade aiBusinessQueryFacade;
@@ -372,12 +369,6 @@ public class AiAssistantService {
         return null;
     }
 
-    private String normalizeMode(String value) {
-        if (StrUtil.isBlank(value)) {
-            return "";
-        }
-        return value.trim().toLowerCase(Locale.ROOT);
-    }
 
     private String normalize(String message) {
         return message == null ? "" : message.trim();
