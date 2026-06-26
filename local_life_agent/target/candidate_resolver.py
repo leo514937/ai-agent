@@ -20,20 +20,18 @@ from ..domain.candidate import (
     CandidateStatus,
     ResolvedCandidate,
 )
-from ..tools.gateway import dispatch_tool_call
 
 
 def _default_resolve_shop(query: str, **kw: Any) -> dict[str, Any]:
-    result = dispatch_tool_call("resolve_shop", {"query": query, **(kw or {})})
-    # dispatch_tool_call normalizes the result; extract the raw tool output
-    data = result.get("data")
-    if isinstance(data, dict) and "status" in data:
-        return data
-    return result
+    from ..engine import graph_builder as gb
+
+    return gb.resolve_shop(query, **(kw or {}))
 
 
 def _default_search_shops(query: str, **kw: Any) -> dict[str, Any]:
-    result = dispatch_tool_call("search_shops", {"query": query, **(kw or {})})
+    from ..engine import graph_builder as gb
+
+    result = gb.dispatch_tool_call("search_shops", {"query": query, **(kw or {})})
     # dispatch_tool_call normalizes; 'data' may be a list or dict
     data = result.get("data")
     if isinstance(data, list):

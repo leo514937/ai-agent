@@ -14,6 +14,8 @@ JSON 对象之外的任何说明文字。
     {"name": "coupon | open_status | distance | price | rating | category | environment | taste | service | review_summary | scene_fit", "required": true}
   ],
   "merchant_mentions": ["店铺名称文本"],
+  "brand_mentions": ["品牌名文本"],
+  "branch_mentions": ["门店/分店文本"],
   "reference_mentions": [],
   "comparison_targets": [
     {"shop_name": "店铺名称文本", "reference": "ordinal|deictic|explicit|context", "source_text": "原始短语"}
@@ -56,6 +58,7 @@ JSON 对象之外的任何说明文字。
   - 设置 comparison_targets 条目的 reference 为 "explicit"，source_text 与原始文本一致。
 - `facets` 必须包含带有 `name` 和 `required` 的对象。
 - `merchant_mentions` 必须只包含用户消息中出现的精确店铺名称文本 —— 不要修改或"纠正"字符（例如用户写"川味轩"，mention 必须是"川味轩"，而不是"川味宣"）。永远不要输出 `shop_id`。
+- `brand_mentions` 必须只包含用户消息中出现的品牌名文本；`branch_mentions` 必须只包含用户消息中出现的门店/分店文本。
 - `comparison_targets` 必须只包含结构化的店铺名称引用；永远不要输出 `shop_id`、`winner` 或 `ranking`。
 - `ordinal_references` 和 `deictic_references` 应列出用户消息中找到的精确文本引用。
 - `focused_facets` 应只包含用户明确请求或明显暗示的对比维度。

@@ -54,6 +54,10 @@ class _SemanticFrameRouterResponse(BaseModel):
     primary_task: str = ""
     facets: list[FacetSpecResponse] = Field(default_factory=list)
     merchant_mentions: list[str] = Field(default_factory=list)
+    brand_mentions: list[str] = Field(default_factory=list)
+    branch_mentions: list[str] = Field(default_factory=list)
+    surface_hints: list[str] = Field(default_factory=list)
+    alias_hints: list[str] = Field(default_factory=list)
     reference_mentions: list[str] = Field(default_factory=list)
     comparison_targets: list[dict[str, Any]] = Field(default_factory=list)
     ordinal_references: list[str] = Field(default_factory=list)
@@ -287,6 +291,22 @@ def _annotate_frame(
     return frame
 
 
+def _merge_semantic_mentions(payload: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(payload)
+    merchant_mentions = [str(item).strip() for item in (merged.get("merchant_mentions") or []) if str(item).strip()]
+    brand_mentions = [str(item).strip() for item in (merged.get("brand_mentions") or []) if str(item).strip()]
+    branch_mentions = [str(item).strip() for item in (merged.get("branch_mentions") or []) if str(item).strip()]
+
+    combined: list[str] = []
+    for item in [*merchant_mentions, *brand_mentions, *branch_mentions]:
+        if item and item not in combined:
+            combined.append(item)
+    merged["merchant_mentions"] = combined
+    merged["brand_mentions"] = brand_mentions
+    merged["branch_mentions"] = branch_mentions
+    return merged
+
+
 def _fallback_semantic_frame(
     text: str,
     top_intent: str,
@@ -423,15 +443,21 @@ def parse_semantic_frame(
                 "llm_called": False,
                 "semantic_repair_hints": extract_slots(normalised_text, top_intent),
             }
+        frame = _fallback_semantic_frame(
+            normalised_text,
+            top_intent,
+            fallback_reason="llm_call_unavailable",
+            llm_called=False,
+        )
         return {
-            "semantic_frame": None,
-            "error_code": "SEMANTIC_LLM_UNAVAILABLE",
-            "error_message": "semantic llm backend is unavailable",
+            "semantic_frame": frame,
+            "error_code": "",
+            "error_message": "",
             "raw": "",
-            "semantic_source": "",
-            "llm_backend": "",
-            "fallback_reason": "llm_call_unavailable",
-            "llm_called": False,
+            "semantic_source": frame.semantic_source,
+            "llm_backend": frame.llm_backend,
+            "fallback_reason": frame.fallback_reason,
+            "llm_called": frame.llm_called,
             "semantic_repair_hints": extract_slots(normalised_text, top_intent),
         }
 
@@ -471,6 +497,7 @@ def parse_semantic_frame(
                     payload = {}
             else:
                 payload = {}
+        payload = _merge_semantic_mentions(payload)
         if "top_intent" not in payload or payload.get("top_intent") is None:
             payload["top_intent"] = TopIntent(top_intent) if top_intent in {item.value for item in TopIntent} else TopIntent.out_of_scope
         llm_backend = str(result.get("llm_backend", "real_llm") or "real_llm")
@@ -527,14 +554,21 @@ def parse_semantic_frame(
             "semantic_repair_hints": extract_slots(normalised_text, top_intent),
         }
 
+    frame = _fallback_semantic_frame(
+        normalised_text,
+        top_intent,
+        fallback_reason=error_code,
+        llm_called=True,
+        llm_backend=str(result.get("llm_backend", "") or ""),
+    )
     return {
-        "semantic_frame": None,
-        "error_code": error_code,
-        "error_message": error_message,
+        "semantic_frame": frame,
+        "error_code": "",
+        "error_message": "",
         "raw": result.get("raw", ""),
-        "semantic_source": "",
-        "llm_backend": str(result.get("llm_backend", "") or ""),
-        "fallback_reason": error_code,
+        "semantic_source": frame.semantic_source,
+        "llm_backend": frame.llm_backend,
+        "fallback_reason": frame.fallback_reason,
         "llm_called": True,
         "semantic_repair_hints": extract_slots(normalised_text, top_intent),
     }

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from ..domain.enums import Facet, TaskType
 
 
@@ -27,7 +25,9 @@ def validate_frame(frame: dict) -> dict:
     clarification = ""
 
     task_type = frame.get("task_type")
-    mentions = frame.get("merchant_mentions") or []
+    mentions = list(frame.get("merchant_mentions") or [])
+    mentions.extend([item for item in (frame.get("brand_mentions") or []) if item not in mentions])
+    mentions.extend([item for item in (frame.get("branch_mentions") or []) if item not in mentions])
     forbidden_fields = [k for k in ("shop_id", "tool_name", "coupon_fact", "fake_fact") if frame.get(k)]
 
     if forbidden_fields:

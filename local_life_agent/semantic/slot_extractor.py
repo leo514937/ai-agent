@@ -1,14 +1,12 @@
-"""Fallback semantic slot extraction for the local-life domain."""
+"""Fallback hint extraction for the local-life domain."""
 
 from __future__ import annotations
 
-import json
 import re
-from functools import lru_cache
-from pathlib import Path
 
 from ..domain.enums import Facet, TaskType
 from ..input.normalizer import normalize_text
+from .alias_index import iter_alias_tokens
 
 _COUPON_HINTS = (
     "\u6709\u5238",
@@ -123,12 +121,6 @@ _DEICTIC_HINTS = (
 _NOISE_RE = re.compile(r"[\s,\.\?!;:()\[\]{}<>/\\|\"'\u3001\uff0c\u3002\uff01\uff1f\uff1b\uff1a]+")
 
 
-@lru_cache(maxsize=1)
-def _load_mock_catalog() -> list[dict]:
-    # Static mock data removed in P1; returns empty
-    return []
-
-
 def _dedupe(items: list[str]) -> list[str]:
     seen: set[str] = set()
     ordered: list[str] = []
@@ -141,29 +133,8 @@ def _dedupe(items: list[str]) -> list[str]:
     return ordered
 
 
-def _brand_prefix(name: str) -> str:
-    cleaned = normalize_text(name).strip()
-    if "(" in cleaned:
-        return cleaned.split("(", 1)[0].strip()
-    return cleaned
-
-
 def _shop_tokens() -> list[tuple[str, str]]:
-    tokens: list[tuple[str, str]] = []
-    for shop in _load_mock_catalog():
-        canonical = normalize_text(shop.get("shop_name", "")).strip()
-        if canonical:
-            tokens.append((canonical, canonical))
-            brand = _brand_prefix(canonical)
-            if brand and brand != canonical:
-                tokens.append((brand, brand))
-        alias = normalize_text(shop.get("alias", "")).strip()
-        if alias:
-            tokens.append((alias, canonical or alias))
-        for alias_item in shop.get("aliases", []) or []:
-            cleaned = normalize_text(alias_item).strip()
-            if cleaned:
-                tokens.append((cleaned, canonical or cleaned))
+    tokens = list(iter_alias_tokens())
     tokens.sort(key=lambda item: len(item[0]), reverse=True)
     return tokens
 
@@ -227,6 +198,28 @@ def _build_facets(text: str) -> list[dict[str, object]]:
 
 def _extract_hints(text: str, hints: tuple[str, ...]) -> list[str]:
     return _dedupe([hint for hint in hints if hint in text])
+
+
+def _surface_hints(text: str) -> list[str]:
+    hints: list[str] = []
+    hints.extend(_extract_hints(text, _COUPON_HINTS))
+    hints.extend(_extract_hints(text, _OPEN_HINTS))
+    hints.extend(_extract_hints(text, _DISTANCE_HINTS))
+    hints.extend(_extract_hints(text, _OPTIONAL_HINTS))
+    hints.extend(_extract_hints(text, _RECOMMENDATION_HINTS))
+    hints.extend(_extract_hints(text, _CATEGORY_HINTS))
+    hints.extend(_extract_hints(text, _SCENE_HINTS))
+    hints.extend(_extract_hints(text, _COMPARISON_HINTS))
+    return _dedupe(hints)
+
+
+def _alias_hints(text: str) -> list[str]:
+    normalized = normalize_text(text)
+    hits: list[str] = []
+    for token, canonical in _shop_tokens():
+        if token and token in normalized:
+            hits.append(canonical)
+    return _dedupe(hits)
 
 
 def _comparison_focus(text: str) -> str:
@@ -324,10 +317,12 @@ def _build_comparison_targets(
 def extract_slots(text: str, top_intent: str) -> dict:
     normalized = normalize_text(text)
     simplified = _NOISE_RE.sub(" ", normalized)
-    mentions = _extract_merchant_mentions(normalized)
+    mentions = _alias_hints(normalized)
     ordinal_references = _extract_ordinals(normalized)
     deictic_references = _extract_deictic(normalized)
     facets = _build_facets(simplified)
+    surface_hints = _surface_hints(simplified)
+    alias_hints = mentions
     query_terms = _recommendation_query_terms(simplified)
     scene_terms = _recommendation_scene_terms(simplified)
     comparison = _looks_like_comparison(simplified, mentions, ordinal_references, deictic_references)
@@ -394,6 +389,8 @@ def extract_slots(text: str, top_intent: str) -> dict:
         "primary_task": primary_task,
         "facets": facets,
         "merchant_mentions": mentions,
+        "brand_mentions": [],
+        "branch_mentions": [],
         "reference_mentions": reference_mentions,
         "comparison_targets": comparison_targets,
         "ordinal_references": ordinal_references,
@@ -403,6 +400,8 @@ def extract_slots(text: str, top_intent: str) -> dict:
         "hard_constraints": {},
         "soft_preferences": soft_preferences,
         "ranking_signals": ranking_signals,
+        "surface_hints": surface_hints,
+        "alias_hints": alias_hints,
         "follow_up": None,
         "confidence": confidence,
         "need_context": need_context,

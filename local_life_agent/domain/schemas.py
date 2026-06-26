@@ -75,6 +75,10 @@ class SemanticFrame(BaseModel):
     primary_task: str = ""
     facets: list["FacetSpec"] = Field(default_factory=list)
     merchant_mentions: list[str] = Field(default_factory=list)
+    brand_mentions: list[str] = Field(default_factory=list)
+    branch_mentions: list[str] = Field(default_factory=list)
+    surface_hints: list[str] = Field(default_factory=list)
+    alias_hints: list[str] = Field(default_factory=list)
     reference_mentions: list[str] = Field(default_factory=list)
     comparison_targets: list[dict[str, Any]] = Field(default_factory=list)
     ordinal_references: list[str] = Field(default_factory=list)
