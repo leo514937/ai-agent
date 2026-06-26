@@ -19,7 +19,7 @@ const queryClient = new QueryClient({
 
 // 2. 简易 Theme Context，用于主题切换
 const ThemeContext = createContext<{ theme: 'light' | 'dark'; toggleTheme: () => void }>({
-  theme: 'light',
+  theme: 'dark',
   toggleTheme: () => {},
 });
 
@@ -30,7 +30,7 @@ interface SessionHistoryItem {
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  const [theme, setTheme] = useState<'light' | 'dark'>('light');
+  const [theme, setTheme] = useState<'light' | 'dark'>('dark');
   
   // ChatGPT 风格状态管理
   const pathname = usePathname();
@@ -71,6 +71,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     if (savedTheme) {
       setTheme(savedTheme);
       document.documentElement.classList.toggle('dark', savedTheme === 'dark');
+    } else {
+      // 默认使用 dark 主题
+      setTheme('dark');
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('theme', 'dark');
     }
 
     reloadHistory();
