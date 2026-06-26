@@ -140,6 +140,16 @@ class ExecutionPlanValidator:
             "single_shop_query": ["search_shops"],
             "coupon_query": ["search_shops"],
         }
+        self._read_only_tools: set[str] = {
+            "search_shops",
+            "get_shop_detail",
+            "get_coupon_list",
+            "check_open_status",
+            "get_distance_eta",
+            "get_shop_cards",
+            "get_shop_review_summary",
+            "get_deal_list",
+        }
 
     def validate(
         self,
@@ -159,11 +169,13 @@ class ExecutionPlanValidator:
         report = ValidationReport()
 
         self._check_tool_registered(plan, report)
+        self._check_call_id_integrity(plan, report)
         self._check_arg_schemas(plan, report)
         self._check_max_tool_calls(plan, report)
         self._check_comparison_target_limit(plan, report)
         self._check_forbidden_tools(plan, report)
         self._check_depends_on_cycles(plan, report)
+        self._check_recommendation_dependencies(plan, report)
         self._check_shop_ids(plan, resolved_shop_ids, report)
 
         return report
@@ -178,6 +190,21 @@ class ExecutionPlanValidator:
                     f"Tool '{tc.tool_name}' (call_id={tc.call_id}) is not registered. "
                     f"Registered: {sorted(self._registered_tools)}"
                 )
+                continue
+            if tc.tool_name not in self._read_only_tools:
+                report.errors.append(
+                    f"Tool '{tc.tool_name}' (call_id={tc.call_id}) is not allowed in execution plans because it is not read-only."
+                )
+
+    def _check_call_id_integrity(self, plan: ExecutionPlan, report: ValidationReport) -> None:
+        seen: set[str] = set()
+        for tc in plan.tool_calls:
+            if not str(tc.call_id or "").strip():
+                report.errors.append("INVALID_PLAN: tool call is missing call_id")
+                continue
+            if tc.call_id in seen:
+                report.errors.append(f"INVALID_PLAN: duplicate call_id '{tc.call_id}'")
+            seen.add(tc.call_id)
 
     # ------------------------------------------------------------------
     # Rule 2: args match schema  (placeholder — detailed schema matching
@@ -237,11 +264,15 @@ class ExecutionPlanValidator:
     ) -> None:
         if resolved_shop_ids is None:
             return
+        call_map = {tc.call_id: tc for tc in plan.tool_calls}
         for tc in plan.tool_calls:
             sid = tc.target_shop_id.strip()
             arg_shop_id = str(tc.args.get("shop_id", "")).strip() if isinstance(tc.args, dict) else ""
+            arg_shop_ids = tc.args.get("shop_ids", []) if isinstance(tc.args, dict) else []
             if plan.task_type == "recommendation":
                 if sid.startswith("$search_result[") or arg_shop_id.startswith("$search_result["):
+                    continue
+                if isinstance(arg_shop_ids, list) and any(str(item).startswith("$search_result") for item in arg_shop_ids):
                     continue
             if sid and sid not in resolved_shop_ids:
                 report.errors.append(
@@ -257,6 +288,15 @@ class ExecutionPlanValidator:
                 report.errors.append(
                     f"shop_id mismatch in call_id={tc.call_id}: target_shop_id='{sid}' args.shop_id='{arg_shop_id}'"
                 )
+            if isinstance(arg_shop_ids, list):
+                for idx, item in enumerate(arg_shop_ids):
+                    item_sid = str(item or "").strip()
+                    if not item_sid or item_sid.startswith("$search_result"):
+                        continue
+                    if item_sid not in resolved_shop_ids:
+                        report.errors.append(
+                            f"shop_ids[{idx}] '{item_sid}' in call_id={tc.call_id} was not produced by legitimate resolve. Allowed: {resolved_shop_ids}"
+                        )
 
     # ------------------------------------------------------------------
     # Rule 4: depends_on cycle detection (DFS)
@@ -278,6 +318,11 @@ class ExecutionPlanValidator:
             return False
 
         for tc in plan.tool_calls:
+            for dep in tc.depends_on:
+                if dep not in call_map:
+                    report.errors.append(
+                        f"INVALID_PLAN: call_id='{tc.call_id}' depends_on unknown call_id='{dep}'"
+                    )
             if _has_cycle(tc.call_id, set()):
                 report.errors.append(
                     f"Circular dependency detected involving call_id='{tc.call_id}'"
@@ -335,3 +380,22 @@ class ExecutionPlanValidator:
                     f"Tool '{tc.tool_name}' (call_id={tc.call_id}) is forbidden "
                     f"for task_type='{plan.task_type}'"
                 )
+
+    def _check_recommendation_dependencies(self, plan: ExecutionPlan, report: ValidationReport) -> None:
+        if plan.task_type != "recommendation":
+            return
+        has_search = any(tc.tool_name == "search_shops" for tc in plan.tool_calls)
+        uses_search_placeholder = False
+        for tc in plan.tool_calls:
+            args = dict(tc.args or {}) if isinstance(tc.args, dict) else {}
+            if str(tc.target_shop_id or "").startswith("$search_result"):
+                uses_search_placeholder = True
+            if str(args.get("shop_id", "") or "").startswith("$search_result"):
+                uses_search_placeholder = True
+            shop_ids = args.get("shop_ids")
+            if isinstance(shop_ids, list) and any(str(item).startswith("$search_result") for item in shop_ids):
+                uses_search_placeholder = True
+        if uses_search_placeholder and not has_search:
+            report.errors.append(
+                "INVALID_PLAN: recommendation plan uses $search_result placeholders but has no search_shops call"
+            )

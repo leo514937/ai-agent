@@ -1,7 +1,7 @@
-"""intake_guard_router subgraph — entry routing.
+"""intake_guard_router subgraph - entry routing.
 
-Runs the input pipeline (receive → load session → validate → normalize
-→ hard_guard → top_intent_router) and decides whether to route to
+Runs the input pipeline (receive -> load session -> validate -> normalize
+-> hard_guard -> top_intent_router) and decides whether to route to
 local-life understanding, merge a pending clarification, or go straight
 to response.
 """
@@ -11,16 +11,14 @@ from __future__ import annotations
 from typing import Any
 
 from .._compat import (
-    _log,
-    _run_step,
-    _run_steps,
-    _state_delta,
-    _to_dict,
     _OUTER_WRAPPER_EXCLUDE_FIELDS,
+    _log,
+    _response_mode_for_top_intent,
+    _run_step,
+    _state_delta,
 )
 from .._routes import (
     _OUTER_ROUTE_CLARIFICATION_REPLY,
-    _OUTER_ROUTE_CLARIFY,
     _OUTER_ROUTE_LOCAL_LIFE,
     _OUTER_ROUTE_REJECT,
     _OUTER_ROUTE_TERMINAL,
@@ -36,7 +34,7 @@ from ...session.store import get_session_store
 
 
 def h_intake_guard_router(state: GraphState) -> dict:
-    """Outer wrapper: intake → guard → route."""
+    """Outer wrapper: intake -> guard -> route."""
     before = dict(state)
     working = _run_step(state, _h_receive_input)
     working = _run_step(working, _h_load_session)
@@ -64,6 +62,7 @@ def h_intake_guard_router(state: GraphState) -> dict:
             "response_mode": response_mode,
         }
         return _state_delta(before, after, always_include={"intake_route", "response_mode"})
+
     working = _run_step(working, _h_top_intent_router)
     session_before = working.get("session_state_before") or working.get("session_state")
     has_pending = bool(
@@ -92,11 +91,6 @@ def h_intake_guard_router(state: GraphState) -> dict:
         "response_mode": response_mode,
     }
     return _state_delta(before, after, always_include={"intake_route", "response_mode"})
-
-
-# ---------------------------------------------------------------------------
-# Internal step handlers
-# ---------------------------------------------------------------------------
 
 
 def _h_receive_input(state: GraphState) -> dict:
@@ -139,7 +133,7 @@ def _h_basic_validate(state: GraphState) -> dict:
             "input_type": validation["input_type"],
             "error_code": validation["error_code"],
             "error_message": validation["error_message"],
-            "final_response": "请提供一条有效的文本内容。",
+            "final_response": "璇锋彁渚涗竴鏉℃湁鏁堢殑鏂囨湰鍐呭銆?",
             **_log(state, "basic_input_validate", valid=False, error_code=validation["error_code"]),
         }
     return {
@@ -173,13 +167,13 @@ def _h_hard_guard(state: GraphState) -> dict:
 
 def _h_top_intent_router(state: GraphState) -> dict:
     txt = state.get("normalized_text", "")
-    # lazy-import via graph_builder for test monkeypatch compat
     from ..graph_builder import call_llm as _call_llm
     from ..graph_builder import (
         ensure_real_llm_backend as _ensure_real,
         get_llm_backend_snapshot as _get_snapshot,
         has_llm_backend as _has_backend,
     )
+
     backend_snapshot_before = _get_snapshot()
     llm_available_before = bool(backend_snapshot_before.get("available")) or _has_backend()
     _ensure_real()
@@ -194,18 +188,24 @@ def _h_top_intent_router(state: GraphState) -> dict:
 
     final_response = state.get("final_response", "")
     if intent == TopIntent.invalid:
-        final_response = "请先输入一条有效的问题。"
+        final_response = "璇峰厛杈撳叆涓€鏉℃湁鏁堢殑闂銆?"
     elif intent == TopIntent.chat:
-        final_response = "我可以帮你查附近门店、优惠和营业状态。"
+        final_response = "鎴戝彲浠ュ府浣犳煡闄勮繎闂ㄥ簵銆佷紭鎯犲拰钀ヤ笟鐘舵€併€?"
     elif intent == TopIntent.capability:
-        final_response = "我可以帮你查附近门店、优惠、距离和营业状态。"
+        final_response = "鎴戝彲浠ュ府浣犳煡闄勮繎闂ㄥ簵銆佷紭鎯犮€佽窛绂诲拰钀ヤ笟鐘舵€併€?"
     elif intent in (TopIntent.unsafe, TopIntent.out_of_scope):
-        final_response = "抱歉，我主要处理本地生活相关问题。"
+        final_response = "鎶辨瓑锛屾垜涓昏澶勭悊鏈湴鐢熸椿鐩稿叧闂銆?"
+
+    route_error_code = result.get("error_code", "")
+    route_error_message = result.get("error_message", "")
+    if intent == TopIntent.local_life:
+        route_error_code = ""
+        route_error_message = ""
 
     return {
         "top_intent": intent,
-        "error_code": result.get("error_code", ""),
-        "error_message": result.get("error_message", ""),
+        "error_code": route_error_code,
+        "error_message": route_error_message,
         "top_intent_router_llm_available": llm_available_before or bool(backend_snapshot_after.get("available")),
         "top_intent_router_backend": backend_snapshot_after.get("backend", ""),
         "top_intent_router_error_type": "LLM_BACKEND_ERROR" if result.get("error_code") else "",
@@ -214,15 +214,6 @@ def _h_top_intent_router(state: GraphState) -> dict:
         "final_response": final_response,
         **_log(state, "top_intent_router", intent=intent.value),
     }
-
-
-def _response_mode_for_top_intent(intent: Any) -> str:
-    intent_value = intent.value if hasattr(intent, "value") else str(intent or "")
-    if intent_value in {"chat", "capability"}:
-        return "direct"
-    if intent_value in {"unsafe", "out_of_scope", "invalid"}:
-        return "reject"
-    return "reject"
 
 
 def _planning_failure_route(state: dict[str, Any]) -> str:

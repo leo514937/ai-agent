@@ -14,13 +14,14 @@ Responsibilities:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from ...domain.candidate import CandidateSet
 from ...domain.decision import DecisionPlan, DecisionType
 from ...domain.evidence import EvidenceReviewResult
 from ...domain.goal import GoalPlan
 from ...domain.schemas import EvidencePack
+from ..llm_utils import invoke_structured_llm, model_validate_or_error
 
 
 def _to_dict(value: Any) -> dict[str, Any]:
@@ -240,6 +241,14 @@ def plan_decision(
         "has_winner": winner_shop_id is not None,
     }
 
+    winner_evidence_refs = []
+    if winner_shop_id is not None:
+        winner_claim_refs = []
+        for claim in claims:
+            if str(claim.get("shop_id", "") or "") == str(winner_shop_id):
+                winner_claim_refs.extend([str(ev).strip() for ev in (claim.get("evidence_ids") or []) if str(ev).strip()])
+        winner_evidence_refs = winner_claim_refs or (["ranking_snapshot"] if ranking else [])
+
     return DecisionPlan(
         decision_type=decision_type,
         goal_id=goal_id,
@@ -255,4 +264,73 @@ def plan_decision(
         forbidden_claims=forbidden_claims,
         must_mention_unknowns=must_mention_unknowns,
         decision_context=decision_context,
+        decision_source="deterministic_decision_planner",
+        decision_confidence=0.0,
+        claim_bindings=[
+            {"claim_id": f"claim_{idx+1}", "evidence_ids": claim.get("evidence_ids", [])}
+            for idx, claim in enumerate(claims)
+        ],
+        winner_evidence_refs=winner_evidence_refs,
     )
+
+
+def plan_decision_with_llm(
+    goal_plan: GoalPlan | dict[str, Any] | None = None,
+    candidate_set: CandidateSet | dict[str, Any] | None = None,
+    evidence_pack: EvidencePack | dict[str, Any] | None = None,
+    evidence_review: EvidenceReviewResult | dict[str, Any] | None = None,
+    *,
+    llm_call: Callable[..., dict[str, Any]] | None = None,
+    strict: bool = False,
+) -> tuple[DecisionPlan | None, dict[str, Any]]:
+    evidence_dict = _get_evidence_dict(evidence_pack)
+    replacements = {
+        "{{GOAL_PLAN}}": _to_dict(goal_plan) if goal_plan is not None else {},
+        "{{CANDIDATE_SET}}": _to_dict(candidate_set) if candidate_set is not None else {},
+        "{{EVIDENCE_PACK}}": evidence_dict,
+        "{{EVIDENCE_REVIEW}}": _to_dict(evidence_review) if evidence_review is not None else {},
+    }
+    try:
+        llm_result = invoke_structured_llm(
+            prompt_name="decision_planner",
+            replacements=replacements,
+            response_validator=DecisionPlan.model_validate,
+            llm_call=llm_call,
+        )
+    except Exception as exc:
+        error = {"error_code": "DECISION_PLANNER_PROMPT_ERROR", "error_message": str(exc), "llm_backend": "", "raw": ""}
+        if strict:
+            return None, error
+        return plan_decision(goal_plan, candidate_set, evidence_pack, evidence_review), error
+
+    if not llm_result.get("ok"):
+        error = {
+            "error_code": llm_result.get("error_code") or "DECISION_PLANNER_LLM_FAILED",
+            "error_message": llm_result.get("error_message") or "decision planner llm failed",
+            "llm_backend": llm_result.get("llm_backend", ""),
+            "raw": llm_result.get("raw", ""),
+        }
+        if strict:
+            return None, error
+        return plan_decision(goal_plan, candidate_set, evidence_pack, evidence_review), error
+
+    model, validation_error = model_validate_or_error(DecisionPlan, llm_result.get("payload") or {})
+    if model is None:
+        error = {
+            "error_code": "DECISION_PLAN_SCHEMA_INVALID",
+            "error_message": validation_error,
+            "llm_backend": llm_result.get("llm_backend", ""),
+            "raw": llm_result.get("raw", ""),
+        }
+        if strict:
+            return None, error
+        return plan_decision(goal_plan, candidate_set, evidence_pack, evidence_review), error
+
+    plan = model
+    plan.decision_source = plan.decision_source or "llm_decision_planner"
+    return plan, {
+        "error_code": "",
+        "error_message": "",
+        "llm_backend": llm_result.get("llm_backend", ""),
+        "raw": llm_result.get("raw", ""),
+    }

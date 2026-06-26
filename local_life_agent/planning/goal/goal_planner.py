@@ -18,13 +18,14 @@ Responsibilities:
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any
+from typing import Any, Callable
 
 from ...domain.candidate import GoalType as _GoalType
 from ...domain.enums import Facet
 from ...domain.goal import GoalPlan, GoalSource
 from ...domain.schemas import SemanticFrame
 from ...domain.state import SessionState
+from ..llm_utils import invoke_structured_llm, model_validate_or_error
 
 
 def _to_dict(value: Any) -> dict[str, Any]:
@@ -128,7 +129,10 @@ def _get_facets(
 
     for f in focused:
         if f and f not in required and f not in optional:
-            optional.append(f)
+            if not facet_specs:
+                required.append(f)
+            else:
+                optional.append(f)
 
     return required, optional
 
@@ -238,7 +242,7 @@ def _map_goal_type(task_type_str: str) -> str:
     return mapping.get(task_type_str, "unsupported")
 
 
-def plan_goal(
+def _plan_goal_rules(
     semantic_frame: SemanticFrame | dict[str, Any] | None,
     session_state: SessionState | dict[str, Any] | None = None,
     raw_text: str = "",
@@ -331,4 +335,103 @@ def plan_goal(
         unsupported=unsupported,
         unsupported_reason=unsupported_reason,
         source_origin=source_origin,
+        planner_source="deterministic_goal_planner",
+        planner_reason="rule_based_planner",
+        planner_confidence=0.0,
     )
+
+
+def plan_goal_with_llm(
+    semantic_frame: SemanticFrame | dict[str, Any] | None,
+    session_state: SessionState | dict[str, Any] | None = None,
+    raw_text: str = "",
+    *,
+    llm_call: Callable[..., dict[str, Any]] | None = None,
+    strict: bool = False,
+) -> tuple[GoalPlan | None, dict[str, Any]]:
+    """Plan the goal via LLM and return metadata for graph handlers."""
+    replacements = {
+        "{{TEXT}}": str(raw_text or ""),
+        "{{SEMANTIC_FRAME}}": _to_dict(semantic_frame),
+        "{{SESSION_CONTEXT}}": _to_dict(session_state),
+    }
+    try:
+        llm_result = invoke_structured_llm(
+            prompt_name="goal_planner",
+            replacements=replacements,
+            response_validator=GoalPlan.model_validate,
+            llm_call=llm_call,
+        )
+    except Exception as exc:
+        error = {"error_code": "GOAL_PLANNER_PROMPT_ERROR", "error_message": str(exc), "llm_backend": "", "raw": ""}
+        if strict:
+            return None, error
+        plan = _plan_goal_rules(semantic_frame, session_state, raw_text)
+        plan.planner_source = "deterministic_goal_planner"
+        plan.planner_reason = f"llm_prompt_error:{exc}"
+        return plan, error
+
+    if not llm_result.get("ok"):
+        error = {
+            "error_code": llm_result.get("error_code") or "GOAL_PLANNER_LLM_FAILED",
+            "error_message": llm_result.get("error_message") or "goal planner llm failed",
+            "llm_backend": llm_result.get("llm_backend", ""),
+            "raw": llm_result.get("raw", ""),
+        }
+        if strict:
+            return None, error
+        plan = _plan_goal_rules(semantic_frame, session_state, raw_text)
+        plan.planner_source = "deterministic_goal_planner"
+        plan.planner_reason = str(error["error_code"])
+        return plan, error
+
+    payload = dict(llm_result.get("payload") or {})
+    model, validation_error = model_validate_or_error(GoalPlan, payload)
+    if model is None:
+        error = {
+            "error_code": "GOAL_PLAN_SCHEMA_INVALID",
+            "error_message": validation_error,
+            "llm_backend": llm_result.get("llm_backend", ""),
+            "raw": llm_result.get("raw", ""),
+        }
+        if strict:
+            return None, error
+        plan = _plan_goal_rules(semantic_frame, session_state, raw_text)
+        plan.planner_source = "deterministic_goal_planner"
+        plan.planner_reason = "goal_plan_schema_invalid"
+        return plan, error
+
+    plan = model
+    if not plan.goal_type or not plan.candidate_source:
+        error = {
+            "error_code": "GOAL_PLAN_INCOMPLETE",
+            "error_message": "llm goal plan is missing required goal_type or candidate_source",
+            "llm_backend": llm_result.get("llm_backend", ""),
+            "raw": llm_result.get("raw", ""),
+        }
+        if strict:
+            return None, error
+        plan = _plan_goal_rules(semantic_frame, session_state, raw_text)
+        plan.planner_source = "deterministic_goal_planner"
+        plan.planner_reason = "goal_plan_incomplete"
+        return plan, error
+    if not plan.goal_source:
+        plan.goal_source = GoalSource.SEMANTIC_FRAME
+    plan.source_origin = plan.source_origin or "llm_goal_planner"
+    plan.planner_source = plan.planner_source or "llm_goal_planner"
+    plan.planner_reason = plan.planner_reason or "llm_structured_plan"
+    return plan, {
+        "error_code": "",
+        "error_message": "",
+        "llm_backend": llm_result.get("llm_backend", ""),
+        "raw": llm_result.get("raw", ""),
+    }
+
+
+def plan_goal(
+    semantic_frame: SemanticFrame | dict[str, Any] | None,
+    session_state: SessionState | dict[str, Any] | None = None,
+    raw_text: str = "",
+) -> GoalPlan:
+    """Backward-compatible deterministic planner."""
+    return _plan_goal_rules(semantic_frame, session_state, raw_text)

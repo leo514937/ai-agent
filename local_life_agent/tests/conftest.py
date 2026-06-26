@@ -80,7 +80,17 @@ class SpyRealLLMBackend:
         self.requests.append(request)
         self.prompts.append(prompt)
 
-        if "## DecisionPlan" in prompt or "DecisionPlan 事实数据" in prompt or "natural_response" in prompt:
+        if "# Goal Planner" in prompt:
+            response = self._goal_plan_response(prompt, timeout_ms, kwargs)
+        elif "# Evidence Planner" in prompt:
+            response = self._execution_plan_response(prompt, timeout_ms, kwargs)
+        elif "# Evidence Sufficiency Review" in prompt:
+            response = self._evidence_review_response(prompt, timeout_ms, kwargs)
+        elif "# Decision Planner" in prompt:
+            response = self._decision_plan_response(prompt, timeout_ms, kwargs)
+        elif "# 答案校验 Verifier" in prompt:
+            response = self._answer_verifier_response(prompt, timeout_ms, kwargs)
+        elif "## DecisionPlan" in prompt or "DecisionPlan 事实数据" in prompt or "natural_response" in prompt:
             response = self._verbalizer_response(prompt, timeout_ms, kwargs)
         elif "# Top Intent Router" in prompt or "# 顶层意图路由" in prompt:
             response = self._top_intent_response(prompt, timeout_ms, kwargs)
@@ -295,6 +305,221 @@ class SpyRealLLMBackend:
             text = f"我会优先参考{target_name or '当前结果'}来回答。"
 
         payload = {"natural_response": text}
+        return self._wrap(payload, timeout_ms, kwargs)
+
+    def _goal_plan_response(self, prompt: str, timeout_ms: int, kwargs: dict[str, Any]) -> dict[str, Any]:
+        text = self._extract_scalar(prompt, "- 原始文本:")
+        semantic = self._extract_json_object(prompt, "- SemanticFrame:")
+        task_type = str(semantic.get("task_type") or "recommendation")
+        goal_type = {
+            "recommendation": "recommendation",
+            "comparison": "comparison",
+            "single_shop_query": "single_shop_query",
+            "coupon_query": "single_shop_query",
+        }.get(task_type, "unsupported")
+        facets = semantic.get("facets") or []
+        required: list[str] = []
+        optional: list[str] = []
+        for item in facets:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name", "")).strip()
+            if not name:
+                continue
+            if item.get("required"):
+                required.append(name)
+            else:
+                optional.append(name)
+        requested_count = int(semantic.get("candidate_limit") or (2 if goal_type == "comparison" else 3 if goal_type == "recommendation" else 1))
+        payload = {
+            "goal_type": goal_type,
+            "goal_source": "semantic_frame",
+            "goal_summary": str(semantic.get("primary_task") or task_type or text),
+            "candidate_source": str(semantic.get("candidate_source") or ("explicit" if semantic.get("merchant_mentions") else "discovery")),
+            "candidate_category": str(semantic.get("candidate_category") or (semantic.get("hard_constraints") or {}).get("category") or "") or None,
+            "candidate_limit": semantic.get("candidate_limit"),
+            "requested_count": requested_count,
+            "min_required": 2 if goal_type == "comparison" else 1,
+            "max_allowed": max(requested_count, 1),
+            "evidence_needs": list(dict.fromkeys(required + optional)),
+            "required_facets": required,
+            "optional_facets": optional,
+            "constraints": semantic.get("hard_constraints") or {},
+            "unsupported": False,
+            "unsupported_reason": "",
+            "source_origin": "llm_goal_planner",
+            "planner_source": "llm_goal_planner",
+            "planner_reason": f"spy_goal_plan:{self.sentinel_id}",
+            "planner_confidence": 0.97,
+        }
+        return self._wrap(payload, timeout_ms, kwargs)
+
+    def _execution_plan_response(self, prompt: str, timeout_ms: int, kwargs: dict[str, Any]) -> dict[str, Any]:
+        goal = self._extract_json_object(prompt, "- GoalPlan:")
+        candidate_set = self._extract_json_object(prompt, "- CandidateSet:")
+        task_type = str(goal.get("goal_type") or "recommendation")
+        shop_ids = [
+            str(item.get("shop_id"))
+            for item in (candidate_set.get("candidates") or [])
+            if isinstance(item, dict) and item.get("shop_id")
+        ]
+        required_facets = list(goal.get("required_facets") or [])
+        optional_facets = [f for f in (goal.get("optional_facets") or []) if f not in required_facets]
+        all_facets = required_facets + optional_facets
+        tool_map = {
+            "coupon": "get_coupon_list",
+            "open_status": "check_open_status",
+            "distance": "get_distance_eta",
+            "review_summary": "get_shop_review_summary",
+            "scene_fit": "get_shop_review_summary",
+            "price": "get_shop_detail",
+            "rating": "get_shop_detail",
+            "deal": "get_deal_list",
+        }
+        tool_calls: list[dict[str, Any]] = []
+        idx = 0
+        if task_type == "recommendation" and not shop_ids:
+            tool_calls.append({
+                "call_id": "call_search_shops",
+                "tool_name": "search_shops",
+                "args": {"query": "火锅", "location": {"lat": 39.9609, "lng": 116.3581}, "limit": 5},
+                "target_shop_id": "",
+                "required": True,
+                "facet": "",
+                "depends_on": [],
+                "timeout_ms": 2000,
+                "retry_policy": {"max_attempts": 3, "backoff_ms": 200},
+                "fallback_policy": {"fallback_tool": "", "fallback_args": {}},
+                "group_id": "search",
+                "max_parallelism": 1,
+            })
+        for shop_id in shop_ids[:5]:
+            for facet in all_facets:
+                idx += 1
+                tool_name = tool_map.get(str(facet), "get_shop_detail")
+                args: dict[str, Any] = {"shop_id": shop_id}
+                if tool_name == "get_shop_review_summary":
+                    args = {"shop_ids": [shop_id]}
+                elif tool_name == "get_distance_eta":
+                    args = {"shop_id": shop_id, "from_location": {"lat": 39.9609, "lng": 116.3581}}
+                tool_calls.append({
+                    "call_id": f"call_{facet}_{idx}",
+                    "tool_name": tool_name,
+                    "args": args,
+                    "target_shop_id": shop_id,
+                    "required": facet in required_facets,
+                    "facet": facet,
+                    "depends_on": [],
+                    "timeout_ms": 2000,
+                    "retry_policy": {"max_attempts": 3, "backoff_ms": 200},
+                    "fallback_policy": {"fallback_tool": "", "fallback_args": {}},
+                    "group_id": shop_id,
+                    "max_parallelism": 4,
+                })
+        payload = {
+            "plan_id": f"spy_plan_{self.sentinel_id.lower()}",
+            "task_type": task_type,
+            "tool_calls": tool_calls,
+            "stages": [],
+            "target_shop_ids": shop_ids,
+            "query_terms": ["火锅"],
+            "scene_terms": [],
+            "open_now_preferred": False,
+            "coupon_preferred": "coupon" in all_facets,
+            "nearby_preferred": "distance" in all_facets,
+            "plan_source": "llm_evidence_planner",
+            "planning_notes": [f"spy_execution_plan:{self.sentinel_id}"],
+            "assumptions_used": [],
+        }
+        return self._wrap(payload, timeout_ms, kwargs)
+
+    def _evidence_review_response(self, prompt: str, timeout_ms: int, kwargs: dict[str, Any]) -> dict[str, Any]:
+        goal = self._extract_json_object(prompt, "- GoalPlan:")
+        required = list(goal.get("required_facets") or [])
+        payload = {
+            "stage": "evidence_review",
+            "next_action": "FINISH",
+            "can_degrade": False,
+            "status": "sufficient",
+            "reason": "spy_evidence_review_ok",
+            "required_ok": required,
+            "required_empty": [],
+            "required_unknown": [],
+            "required_failed": [],
+            "optional_ok": [],
+            "optional_empty": [],
+            "optional_unknown": [],
+            "optional_failed": [],
+            "unknown_as_false_detected": False,
+            "failed_as_empty_detected": False,
+            "evidence_incomplete": False,
+            "trace_payload": {"spy_marker": self.sentinel_id},
+            "review_source": "llm_evidence_review",
+            "review_confidence": 0.96,
+            "missing_evidence": [],
+            "unsafe_answer_risks": [],
+            "recommended_next_action": "FINISH",
+        }
+        return self._wrap(payload, timeout_ms, kwargs)
+
+    def _decision_plan_response(self, prompt: str, timeout_ms: int, kwargs: dict[str, Any]) -> dict[str, Any]:
+        goal = self._extract_json_object(prompt, "- GoalPlan:")
+        candidate_set = self._extract_json_object(prompt, "- CandidateSet:")
+        evidence = self._extract_json_object(prompt, "- EvidencePack:")
+        candidates = [str(item.get("shop_id")) for item in (candidate_set.get("candidates") or []) if isinstance(item, dict) and item.get("shop_id")]
+        ranking = list((evidence.get("ranking_snapshot") or {}).get("ranked") or [])
+        winner_shop_id = str(ranking[0].get("shop_id", "")) if ranking and isinstance(ranking[0], dict) else (candidates[0] if candidates else None)
+        claims = []
+        claim_bindings = []
+        for idx, item in enumerate(evidence.get("evidence_items") or [], start=1):
+            if not isinstance(item, dict):
+                continue
+            claim_id = f"claim_{idx}"
+            evidence_id = str(item.get("evidence_id", "") or claim_id)
+            claims.append({
+                "claim_id": claim_id,
+                "shop_id": item.get("shop_id", ""),
+                "facet": item.get("facet", ""),
+                "claim_type": item.get("facet", ""),
+                "value": item.get("value"),
+                "evidence_ids": [evidence_id],
+            })
+            claim_bindings.append({"claim_id": claim_id, "evidence_ids": [evidence_id]})
+        payload = {
+            "decision_type": "comparison" if goal.get("goal_type") == "comparison" else "recommendation" if goal.get("goal_type") == "recommendation" else "single_shop_query",
+            "goal_id": str(goal.get("goal_summary", "") or ""),
+            "candidates": candidates,
+            "answerable_facets": list(goal.get("required_facets") or []),
+            "unknown_facets": [],
+            "failed_facets": [],
+            "winner_shop_id": winner_shop_id,
+            "ranking": ranking,
+            "ranking_source": "evidence",
+            "claims": claims,
+            "caveats": [],
+            "next_goal": None,
+            "decision_context": {"spy_marker": self.sentinel_id},
+            "style_hints": [],
+            "forbidden_claims": list(evidence.get("forbidden_claims") or []),
+            "must_mention_unknowns": [],
+            "decision_source": "llm_decision_planner",
+            "decision_confidence": 0.96,
+            "claim_bindings": claim_bindings,
+            "winner_evidence_refs": claim_bindings[0]["evidence_ids"] if claim_bindings else [],
+        }
+        return self._wrap(payload, timeout_ms, kwargs)
+
+    def _answer_verifier_response(self, prompt: str, timeout_ms: int, kwargs: dict[str, Any]) -> dict[str, Any]:
+        payload = {
+            "passed": True,
+            "failure_code": "",
+            "violation": "",
+            "violations": [],
+            "unknown_fields": [],
+            "false_fields": [],
+            "unsupported_claims": [],
+            "recoverable": False,
+        }
         return self._wrap(payload, timeout_ms, kwargs)
 
     def _extract_scalar(self, prompt: str, label: str) -> str:

@@ -199,6 +199,10 @@ class DecisionPlan(BaseModel):
     # For AnswerGenerator: forbidden claims, unknowns to mention
     forbidden_claims: list[str] = Field(default_factory=list)
     must_mention_unknowns: list[str] = Field(default_factory=list)
+    decision_source: str = ""
+    decision_confidence: float = 0.0
+    claim_bindings: list[dict[str, Any]] = Field(default_factory=list)
+    winner_evidence_refs: list[str] = Field(default_factory=list)
 
 
 class DecisionReviewResult(BaseModel):

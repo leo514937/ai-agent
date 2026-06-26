@@ -437,6 +437,33 @@ class ExecutionPlan(BaseModel):
     open_now_preferred: bool = False
     coupon_preferred: bool = False
     nearby_preferred: bool = False
+    plan_source: str = ""
+    planning_notes: list[str] = Field(default_factory=list)
+    assumptions_used: list[str] = Field(default_factory=list)
+
+
+class ToolIntentSpec(BaseModel):
+    """LLM-only intermediate tool intent before hard validation."""
+    tool_name: str = ""
+    purpose: str = ""
+    required: bool = True
+    facet: str | None = None
+    priority: int = 1
+    depends_on: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+
+
+class ToolIntentPlan(BaseModel):
+    """LLM-only high-level plan that can be compiled into an ExecutionPlan."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    task_type: str = ""
+    primary_task: str = ""
+    purpose: str = ""
+    confidence: float = 0.0
+    tool_intents: list[ToolIntentSpec] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
 
 
 # ===================================================================

@@ -81,7 +81,32 @@ def _can_determine_winner(
     # If there are unknown/failed facets, winner is conditional
     if decision_plan.unknown_facets or decision_plan.failed_facets:
         return False
+    if not decision_plan.winner_evidence_refs:
+        return False
     return True
+
+
+def _validate_claim_bindings(decision_plan: DecisionPlan) -> tuple[bool, str]:
+    if not decision_plan.claims:
+        return True, ""
+    bindings = decision_plan.claim_bindings or []
+    binding_map: dict[str, list[str]] = {}
+    for item in bindings:
+        if not isinstance(item, dict):
+            continue
+        claim_id = str(item.get("claim_id", "") or "").strip()
+        evidence_ids = [str(ev).strip() for ev in (item.get("evidence_ids") or []) if str(ev).strip()]
+        if claim_id:
+            binding_map[claim_id] = evidence_ids
+    for idx, claim in enumerate(decision_plan.claims, start=1):
+        claim_dict = _to_dict(claim)
+        claim_id = str(claim_dict.get("claim_id", "") or f"claim_{idx}")
+        evidence_ids = [str(ev).strip() for ev in (claim_dict.get("evidence_ids") or []) if str(ev).strip()]
+        if not evidence_ids:
+            evidence_ids = binding_map.get(claim_id, [])
+        if not evidence_ids:
+            return False, f"claim_missing_evidence_refs:{claim_id}"
+    return True, ""
 
 
 def _has_core_coverage(
@@ -170,6 +195,16 @@ def review_decision(
             next_action="FALLBACK",
             reason=violation_reason,
             trace_payload={"evidence_review_violation": violation_reason},
+        )
+
+    claim_bindings_ok, binding_reason = _validate_claim_bindings(decision_plan)
+    if not claim_bindings_ok:
+        return DecisionReviewResult(
+            stage="decision_review",
+            status="insufficient",
+            next_action="FALLBACK",
+            reason=binding_reason,
+            trace_payload={"binding_reason": binding_reason},
         )
 
     # --- 4. Check candidate_review for need_more_candidates ---

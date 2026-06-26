@@ -28,9 +28,15 @@ from .._routes import (
 from ...domain.graph_state import GraphState
 from ...domain.schemas import EvidencePack, ExecutionPlan, ToolResult
 from ...domain.state import SessionState
-from ...planning.decision.decision_planner import plan_decision as p2_plan_decision
+from ...planning.decision.decision_planner import (
+    plan_decision as p2_plan_decision,
+    plan_decision_with_llm,
+)
 from ...planning.decision.decision_review import review_decision as p2_review_decision
-from ...planning.evidence.evidence_review import review_evidence as review_evidence_sufficiency
+from ...planning.evidence.evidence_review import (
+    review_evidence as review_evidence_sufficiency,
+    review_evidence_with_llm,
+)
 from ...planning.policies.replan_policy import increment_expand_search, increment_replan_evidence
 from ... import config
 
@@ -38,10 +44,16 @@ from ... import config
 def h_execution_review_subgraph(state: GraphState) -> dict:
     """Outer wrapper: tool execute → evidence build → review → decision → route."""
     before = dict(state)
-    working = _run_steps(state, [
-        _h_tool_execute, _h_evidence_build, _h_evidence_review,
-        _h_decision_planner, _h_decision_review,
-    ])
+    working = _run_steps(state, [_h_tool_execute, _h_evidence_build])
+    working = _run_step(working, _h_evidence_review)
+    if working.get("error_code") and str(working.get("failed_stage", "") or "") == "evidence_review":
+        after = {**working, "execution_review_route": _OUTER_ROUTE_FALLBACK, "response_mode": _OUTER_ROUTE_FALLBACK}
+        return _state_delta(before, after, always_include={"execution_review_route", "response_mode"}, exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS)
+    working = _run_step(working, _h_decision_planner)
+    if working.get("error_code") and str(working.get("failed_stage", "") or "") == "decision_planner":
+        after = {**working, "execution_review_route": _OUTER_ROUTE_FALLBACK, "response_mode": _OUTER_ROUTE_FALLBACK}
+        return _state_delta(before, after, always_include={"execution_review_route", "response_mode"}, exclude=_OUTER_WRAPPER_EXCLUDE_FIELDS)
+    working = _run_step(working, _h_decision_review)
     decision_review = working.get("decision_review_result")
     next_action = str(getattr(decision_review, "next_action", "") or _to_dict(decision_review).get("next_action", "") or "")
     if next_action in {"REPLAN_EVIDENCE"}:
@@ -204,17 +216,40 @@ def _h_evidence_review(state: GraphState) -> dict:
         return {**_log(state, "evidence_review", status="SKIPPED", reason="missing_goal_or_evidence_pack")}
     pack_dict = evidence_pack.model_dump() if hasattr(evidence_pack, "model_dump") else _to_dict(evidence_pack)
     tool_results = state.get("tool_result_set") or state.get("tool_results", {})
-    review = review_evidence_sufficiency(
-        goal=goal, evidence_pack=pack_dict, tool_results=tool_results,
+    from ..graph_builder import call_llm as _call_llm, get_llm_backend_snapshot as _get_llm_backend_snapshot
+    backend_snapshot = _get_llm_backend_snapshot()
+    strict_llm = str(backend_snapshot.get("backend_kind", "") or "") not in {"", "fake_llm", "fake"}
+    review, meta = review_evidence_with_llm(
+        goal=goal,
+        evidence_pack=pack_dict,
+        tool_results=tool_results,
+        candidate_review=(state.get("review_results") or {}).get("candidate_review") if isinstance(state.get("review_results"), dict) else None,
+        llm_call=_call_llm,
+        strict=strict_llm,
     )
+    if review is None:
+        return {
+            "review_results": dict(state.get("review_results") or {}),
+            "error_code": meta.get("error_code", "EVIDENCE_REVIEW_FAILED"),
+            "error_message": meta.get("error_message", "evidence review llm failed"),
+            "failed_stage": "evidence_review",
+            "planning_llm_backend": meta.get("llm_backend", ""),
+            "planning_llm_called": True,
+            "planning_failure_code": meta.get("error_code", "EVIDENCE_REVIEW_FAILED"),
+            **_log(state, "evidence_review", status="failed", reason=meta.get("error_code", "EVIDENCE_REVIEW_FAILED")),
+        }
     review_results = dict(state.get("review_results") or {})
     review_results["evidence_review"] = review
     result: dict[str, Any] = {
         "review_results": review_results,
+        "planning_llm_backend": meta.get("llm_backend", ""),
+        "planning_llm_called": True,
+        "planning_failure_code": "",
         **_log(state, "evidence_review", next_action=review.next_action, status=review.status,
               required_ok=len(review.required_ok), required_failed=len(review.required_failed),
               unknown_as_false=review.unknown_as_false_detected,
               failed_as_empty=review.failed_as_empty_detected,
+              review_source=review.review_source or "llm_evidence_review",
               evidence_incomplete=review.evidence_incomplete, reason=review.reason),
     }
     ss = _session_store_state(state)
@@ -237,17 +272,37 @@ def _h_decision_planner(state: GraphState) -> dict:
     if isinstance(rr, dict):
         ev = rr.get("evidence_review")
 
-    decision_plan = p2_plan_decision(
+    from ..graph_builder import call_llm as _call_llm, get_llm_backend_snapshot as _get_llm_backend_snapshot
+    backend_snapshot = _get_llm_backend_snapshot()
+    strict_llm = str(backend_snapshot.get("backend_kind", "") or "") not in {"", "fake_llm", "fake"}
+    decision_plan, meta = plan_decision_with_llm(
         goal_plan=gp, candidate_set=cs, evidence_pack=ep, evidence_review=ev,
+        llm_call=_call_llm,
+        strict=strict_llm,
     )
+    if decision_plan is None:
+        return {
+            "p2_decision_plan": None,
+            "error_code": meta.get("error_code", "DECISION_PLANNER_FAILED"),
+            "error_message": meta.get("error_message", "decision planner llm failed"),
+            "failed_stage": "decision_planner",
+            "planning_llm_backend": meta.get("llm_backend", ""),
+            "planning_llm_called": True,
+            "planning_failure_code": meta.get("error_code", "DECISION_PLANNER_FAILED"),
+            **_log(state, "decision_planner", status="failed", reason=meta.get("error_code", "DECISION_PLANNER_FAILED")),
+        }
     result: dict[str, Any] = {
         "p2_decision_plan": decision_plan,
+        "planning_llm_backend": meta.get("llm_backend", ""),
+        "planning_llm_called": True,
+        "planning_failure_code": "",
         **_log(state, "decision_planner",
               decision_type=decision_plan.decision_type.value if hasattr(decision_plan.decision_type, "value") else str(decision_plan.decision_type),
               answerable=len(decision_plan.answerable_facets),
               unknown=len(decision_plan.unknown_facets),
               failed=len(decision_plan.failed_facets),
-              has_winner=decision_plan.winner_shop_id is not None),
+              has_winner=decision_plan.winner_shop_id is not None,
+              decision_source=decision_plan.decision_source or "llm_decision_planner"),
     }
     ss = _session_store_state(state)
     ss.last_decision_plan = decision_plan.model_dump()

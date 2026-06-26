@@ -50,10 +50,13 @@ from ...domain.schemas import (
 )
 from ...domain.state import SessionState
 from ...planning.plans.candidate_review import review_candidate_set
-from ...planning.evidence.evidence_planner import plan_evidence as plan_evidence_from_candidates
+from ...planning.evidence.evidence_planner import (
+    plan_evidence as plan_evidence_from_candidates,
+    plan_evidence_with_llm,
+)
 from ...planning.plans.execution_plan_builder import build_recommendation_execution_plan
 from ...planning.goal.goal_draft import build_candidate_spec, build_local_life_goal_draft
-from ...planning.goal.goal_planner import plan_goal as p2_plan_goal
+from ...planning.goal.goal_planner import plan_goal as p2_plan_goal, plan_goal_with_llm
 from ...planning.goal.goal_review import review_goal as p2_review_goal
 from ...planning.plans.plan_validator import ExecutionPlanValidator
 from ...planning.policies.replan_policy import increment_expand_search, increment_replan_evidence
@@ -119,18 +122,34 @@ def h_planning_subgraph(state: GraphState) -> dict:
 
 def _h_goal_planner(state: GraphState) -> dict:
     """P2 GoalPlanner: generate a structured GoalPlan from the semantic frame."""
-    from ...domain.goal import GoalPlan
-    from ...planning.goal.goal_planner import plan_goal as p2_plan_goal
-
     sf = state.get("semantic_frame")
     session = state.get("session_state_before") or state.get("session_state")
     raw_text = str(state.get("raw_text", "") or "")
-    plan = p2_plan_goal(sf, session, raw_text)
+    from ..graph_builder import call_llm as _call_llm, get_llm_backend_snapshot as _get_llm_backend_snapshot
+    backend_snapshot = _get_llm_backend_snapshot()
+    strict_llm = str(backend_snapshot.get("backend_kind", "") or "") not in {"", "fake_llm", "fake"}
+    plan, meta = plan_goal_with_llm(sf, session, raw_text, llm_call=_call_llm, strict=strict_llm)
+    if plan is None:
+        result = {
+            "goal_plan": None,
+            "goal_plan_source": "",
+            "planning_llm_backend": meta.get("llm_backend", ""),
+            "planning_llm_called": True,
+            "planning_failure_code": meta.get("error_code", "GOAL_PLANNER_FAILED"),
+            "error_code": meta.get("error_code", "GOAL_PLANNER_FAILED"),
+            "error_message": meta.get("error_message", "goal planner llm failed"),
+            **_log(state, "goal_planner", status="failed", reason=meta.get("error_code", "GOAL_PLANNER_FAILED")),
+        }
+        return result
     result: dict[str, Any] = {
         "goal_plan": plan,
+        "goal_plan_source": plan.planner_source or plan.source_origin or "llm_goal_planner",
+        "planning_llm_backend": meta.get("llm_backend", ""),
+        "planning_llm_called": True,
+        "planning_failure_code": "",
         **_log(state, "goal_planner",
               goal_type=plan.goal_type, candidate_source=plan.candidate_source,
-              unsupported=plan.unsupported),
+              unsupported=plan.unsupported, planner_source=plan.planner_source or "llm_goal_planner"),
     }
     ss = _session_store_state(state)
     ss.active_goal = plan.model_dump()
@@ -377,30 +396,43 @@ def _h_evidence_planner(state: GraphState) -> dict:
                   missing_goal=goal is None, missing_candidate_set=candidate_set is None,
                   reason="missing_goal_or_effective_candidate_set"),
         }
-    if getattr(goal, "goal_type", None) == GoalType.RECOMMENDATION:
-        frame = state.get("semantic_frame")
-        frame_dict = _to_dict(frame)
-        plan_payload = build_recommendation_execution_plan(
-            frame_dict,
-            location=_user_location(state),
-            fallback_query=str(state.get("raw_text", "") or ""),
-        )
-        plan = ExecutionPlan.model_validate(plan_payload.get("plan", {}))
-    else:
-        plan = plan_evidence_from_candidates(
-            goal=goal,
-            candidate_set=candidate_set,
-            location=_user_location(state),
-        )
+    from ..graph_builder import call_llm as _call_llm, get_llm_backend_snapshot as _get_llm_backend_snapshot
+    backend_snapshot = _get_llm_backend_snapshot()
+    strict_llm = str(backend_snapshot.get("backend_kind", "") or "") not in {"", "fake_llm", "fake"}
+    plan, meta = plan_evidence_with_llm(
+        goal=goal,
+        candidate_set=candidate_set,
+        location=_user_location(state),
+        semantic_frame=state.get("semantic_frame"),
+        raw_text=str(state.get("raw_text", "") or ""),
+        llm_call=_call_llm,
+        strict=strict_llm,
+    )
+    if plan is None:
+        return {
+            "error_code": meta.get("error_code", "EVIDENCE_PLANNER_FAILED"),
+            "error_message": meta.get("error_message", "evidence planner llm failed"),
+            "failed_stage": "evidence_planner",
+            "planning_llm_backend": meta.get("llm_backend", ""),
+            "planning_llm_called": True,
+            "planning_failure_code": meta.get("error_code", "EVIDENCE_PLANNER_FAILED"),
+            **_log(state, "evidence_planner", status="failed", evidence_plan_source="llm",
+                  reason=meta.get("error_code", "EVIDENCE_PLANNER_FAILED")),
+        }
     task_type = str(plan.task_type or "")
     return {
         "execution_plan": plan,
+        "execution_plan_source": plan.plan_source or "llm_evidence_planner",
+        "planning_llm_backend": meta.get("llm_backend", ""),
+        "planning_llm_called": True,
+        "planning_failure_code": "",
         "task_type": task_type,
         "task_type_source": "evidence_planner",
         "reference_resolution_source": "candidate_set",
         **_log(state, "evidence_planner", evidence_plan_source="strict",
               missing_goal=False, missing_candidate_set=False,
               tool_calls=len(plan.tool_calls), task_type=task_type,
+              planner_source=plan.plan_source or "llm_evidence_planner",
               candidate_count=len(candidate_set.candidates or [])),
     }
 

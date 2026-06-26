@@ -70,6 +70,22 @@ def _mock_llm_client(content: str | dict | None = None, ok: bool = True) -> Any:
         llm_backend = "fake_llm"
         
         def __call__(self, prompt: str, system_prompt: str = "", temperature: float = 0.0, timeout_ms: int = 3000, **kwargs) -> str:
+            if "绛旀鏍￠獙 Verifier" in prompt or "绛旀鏍￠獙 Verifier" in system_prompt or "Answer Type" in prompt:
+                return {
+                    "ok": True,
+                    "content": {
+                        "passed": True,
+                        "failure_code": "",
+                        "violation": "",
+                        "violations": [],
+                        "unknown_fields": [],
+                        "false_fields": [],
+                        "unsupported_claims": [],
+                        "recoverable": False,
+                    },
+                    "raw": "{}",
+                    "llm_backend": "fake_llm",
+                }
             if "DecisionPlan" in prompt or "DecisionPlan" in system_prompt:
                 if not ok:
                     raise RuntimeError("LLM simulated failure")
@@ -155,6 +171,22 @@ def _sequence_llm_client(contents: list[str]) -> Any:
             self._call_count = 0
 
         def __call__(self, prompt: str, system_prompt: str = "", temperature: float = 0.0, timeout_ms: int = 3000, **kwargs) -> str:
+            if "绛旀鏍￠獙 Verifier" in prompt or "绛旀鏍￠獙 Verifier" in system_prompt or "Answer Type" in prompt:
+                return {
+                    "ok": True,
+                    "content": {
+                        "passed": True,
+                        "failure_code": "",
+                        "violation": "",
+                        "violations": [],
+                        "unknown_fields": [],
+                        "false_fields": [],
+                        "unsupported_claims": [],
+                        "recoverable": False,
+                    },
+                    "raw": "{}",
+                    "llm_backend": "fake_llm",
+                }
             if "DecisionPlan" in prompt or "DecisionPlan" in system_prompt:
                 import json
 

@@ -27,7 +27,12 @@ EXPECTED_PROMPT_FILES = {
     "top_intent_router.md",
     "local_life_parser.md",
     "tool_planner.md",
+    "goal_planner.md",
+    "evidence_planner.md",
+    "evidence_sufficiency_review.md",
+    "decision_planner.md",
     "answer_verbalizer.md",
+    "answer_verifier.md",
 }
 
 

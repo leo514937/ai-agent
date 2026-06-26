@@ -59,6 +59,9 @@ class GoalPlan(BaseModel):
 
     # Trace
     source_origin: str = "goal_planner"
+    planner_source: str = ""
+    planner_reason: str = ""
+    planner_confidence: float = 0.0
 
 
 class GoalReviewResult(BaseModel):

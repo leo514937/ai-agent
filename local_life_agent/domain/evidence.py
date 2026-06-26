@@ -64,6 +64,11 @@ class EvidenceReviewResult(BaseModel):
     failed_as_empty_detected: bool = False
     evidence_incomplete: bool = False
     trace_payload: dict[str, Any] = Field(default_factory=dict)
+    review_source: str = ""
+    review_confidence: float = 0.0
+    missing_evidence: list[str] = Field(default_factory=list)
+    unsafe_answer_risks: list[str] = Field(default_factory=list)
+    recommended_next_action: str = ""
 
     @property
     def is_sufficient(self) -> bool:

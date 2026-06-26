@@ -69,6 +69,7 @@ class GraphState(TypedDict, total=False):
     # === P2 目标 (Goal) — write: goal_planner/goal_review, read: candidate_resolve/evidence_planner/decision_planner ===
     goal_plan: Optional[GoalPlan]
     goal_review_result: Optional[GoalReviewResult]
+    goal_plan_source: str
 
     # === 候选集 (CandidateSet) — write: goal_draft/candidate_resolve/candidate_review, read: evidence_planner/evidence_build/answer_plan ===
     local_life_goal_draft: Optional[LocalLifeGoalDraft]
@@ -83,6 +84,7 @@ class GraphState(TypedDict, total=False):
     # === 执行计划 (Execution Plan) — write: evidence_planner/decision_planner, read: plan_validator/tool_execute ===
     execution_plan: Optional[ExecutionPlan]
     validated_plan: Optional[ExecutionPlan]  # §1 文档字段：plan_validator 校验通过后的输出
+    execution_plan_source: str
 
     # === 工具结果 (Tool Results) — write: tool_execute, read: evidence_build/answer_verify ===
     tool_results: dict[str, ToolResult]
@@ -140,6 +142,9 @@ class GraphState(TypedDict, total=False):
     answer_fallback_reason: str
     llm_called: bool
     llm_backend: str
+    planning_llm_backend: str
+    planning_llm_called: bool
+    planning_failure_code: str
     answer_source: str
     llm_verbalizer_violation: Optional[str]
     llm_verbalizer_error: Optional[str]

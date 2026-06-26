@@ -13,7 +13,7 @@ P1 responsibility:
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from ...domain.candidate import GoalType, LocalLifeGoalDraft
 from ...domain.evidence import (
@@ -24,6 +24,7 @@ from ...domain.evidence import (
     ToolStatus,
 )
 from ..policies.review_policy import NextAction
+from ..llm_utils import invoke_structured_llm, model_validate_or_error
 
 _logger = logging.getLogger(__name__)
 
@@ -335,3 +336,66 @@ def review_evidence(
     )
 
     return result
+
+
+def review_evidence_with_llm(
+    goal: LocalLifeGoalDraft,
+    evidence_pack: dict[str, Any],
+    tool_results: dict[str, Any] | None = None,
+    *,
+    candidate_review: Any = None,
+    llm_call: Callable[..., dict[str, Any]] | None = None,
+    strict: bool = False,
+) -> tuple[EvidenceReviewResult | None, dict[str, Any]]:
+    """Run evidence sufficiency review through an LLM."""
+    replacements = {
+        "{{GOAL_PLAN}}": goal.model_dump() if hasattr(goal, "model_dump") else dict(goal),
+        "{{EVIDENCE_PACK}}": evidence_pack,
+        "{{TOOL_RESULTS}}": tool_results or {},
+        "{{CANDIDATE_REVIEW}}": candidate_review.model_dump() if hasattr(candidate_review, "model_dump") else (candidate_review or {}),
+    }
+    try:
+        llm_result = invoke_structured_llm(
+            prompt_name="evidence_sufficiency_review",
+            replacements=replacements,
+            response_validator=EvidenceReviewResult.model_validate,
+            llm_call=llm_call,
+        )
+    except Exception as exc:
+        error = {"error_code": "EVIDENCE_REVIEW_PROMPT_ERROR", "error_message": str(exc), "llm_backend": "", "raw": ""}
+        if strict:
+            return None, error
+        return review_evidence(goal, evidence_pack, tool_results), error
+
+    if not llm_result.get("ok"):
+        error = {
+            "error_code": llm_result.get("error_code") or "EVIDENCE_REVIEW_LLM_FAILED",
+            "error_message": llm_result.get("error_message") or "evidence review llm failed",
+            "llm_backend": llm_result.get("llm_backend", ""),
+            "raw": llm_result.get("raw", ""),
+        }
+        if strict:
+            return None, error
+        return review_evidence(goal, evidence_pack, tool_results), error
+
+    model, validation_error = model_validate_or_error(EvidenceReviewResult, llm_result.get("payload") or {})
+    if model is None:
+        error = {
+            "error_code": "EVIDENCE_REVIEW_SCHEMA_INVALID",
+            "error_message": validation_error,
+            "llm_backend": llm_result.get("llm_backend", ""),
+            "raw": llm_result.get("raw", ""),
+        }
+        if strict:
+            return None, error
+        return review_evidence(goal, evidence_pack, tool_results), error
+
+    review = model
+    review.review_source = review.review_source or "llm_evidence_review"
+    review.recommended_next_action = review.recommended_next_action or str(getattr(review.next_action, "value", review.next_action))
+    return review, {
+        "error_code": "",
+        "error_message": "",
+        "llm_backend": llm_result.get("llm_backend", ""),
+        "raw": llm_result.get("raw", ""),
+    }

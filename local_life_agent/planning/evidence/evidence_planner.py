@@ -13,13 +13,15 @@ P1 responsibility:
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from ... import config
 from ...config import TOOL_DEFAULT_TIMEOUT_MS
 from ...domain.candidate import CandidateSet, GoalType, LocalLifeGoalDraft
 from ...domain.enums import Facet
 from ...domain.schemas import ExecutionPlan, ToolCallSpec
+from ...tools.registry import get_registry
+from ..llm_utils import invoke_structured_llm, model_validate_or_error
 
 _logger = logging.getLogger(__name__)
 
@@ -109,7 +111,14 @@ def plan_evidence(
     required_facets = list(goal.required_facets or [])
     optional_facets = list(goal.optional_facets or [])
     if not required_facets and not optional_facets:
-        raise ValueError("required_facets or optional_facets is required")
+        goal_type = getattr(goal.goal_type, "value", goal.goal_type)
+        if goal_type in {"recommendation", "comparison"}:
+            required_facets = ["distance", "open_status", "coupon"]
+            optional_facets = ["detail"]
+        elif goal_type in {"single_shop_query", "refinement"}:
+            required_facets = list(goal.evidence_needs or []) or ["detail"]
+        else:
+            raise ValueError("required_facets or optional_facets is required")
     all_facets = required_facets + [f for f in optional_facets if f not in required_facets]
 
     candidates = list(candidate_set.candidates or [])
@@ -154,6 +163,87 @@ def plan_evidence(
         optional_facets,
     )
     return plan
+
+
+def plan_evidence_with_llm(
+    goal: LocalLifeGoalDraft,
+    candidate_set: CandidateSet,
+    location: dict[str, Any] | None = None,
+    *,
+    semantic_frame: Any = None,
+    raw_text: str = "",
+    llm_call: Callable[..., dict[str, Any]] | None = None,
+    strict: bool = False,
+) -> tuple[ExecutionPlan | None, dict[str, Any]]:
+    """Plan evidence/tool execution through an LLM."""
+    registry = get_registry()
+    allowed_tools = sorted(
+        tool_name
+        for tool_name in registry.list_tools()
+        if tool_name != "resolve_shop"
+    )
+    replacements = {
+        "{{TEXT}}": str(raw_text or ""),
+        "{{GOAL_PLAN}}": goal.model_dump() if hasattr(goal, "model_dump") else dict(goal),
+        "{{SEMANTIC_FRAME}}": semantic_frame.model_dump() if hasattr(semantic_frame, "model_dump") else (semantic_frame or {}),
+        "{{CANDIDATE_SET}}": candidate_set.model_dump() if hasattr(candidate_set, "model_dump") else dict(candidate_set),
+        "{{USER_LOCATION}}": location or config.MOCK_LOCATION,
+        "{{ALLOWED_TOOLS}}": allowed_tools,
+    }
+    try:
+        llm_result = invoke_structured_llm(
+            prompt_name="evidence_planner",
+            replacements=replacements,
+            response_validator=ExecutionPlan.model_validate,
+            llm_call=llm_call,
+        )
+    except Exception as exc:
+        error = {"error_code": "EVIDENCE_PLANNER_PROMPT_ERROR", "error_message": str(exc), "llm_backend": "", "raw": ""}
+        if strict:
+            return None, error
+        return plan_evidence(goal, candidate_set, location), error
+
+    if not llm_result.get("ok"):
+        error = {
+            "error_code": llm_result.get("error_code") or "EVIDENCE_PLANNER_LLM_FAILED",
+            "error_message": llm_result.get("error_message") or "evidence planner llm failed",
+            "llm_backend": llm_result.get("llm_backend", ""),
+            "raw": llm_result.get("raw", ""),
+        }
+        if strict:
+            return None, error
+        return plan_evidence(goal, candidate_set, location), error
+
+    model, validation_error = model_validate_or_error(ExecutionPlan, llm_result.get("payload") or {})
+    if model is None:
+        error = {
+            "error_code": "EXECUTION_PLAN_SCHEMA_INVALID",
+            "error_message": validation_error,
+            "llm_backend": llm_result.get("llm_backend", ""),
+            "raw": llm_result.get("raw", ""),
+        }
+        if strict:
+            return None, error
+        return plan_evidence(goal, candidate_set, location), error
+
+    plan = model
+    if not plan.tool_calls and not plan.stages:
+        error = {
+            "error_code": "EXECUTION_PLAN_EMPTY",
+            "error_message": "llm execution plan did not contain any tool calls or stages",
+            "llm_backend": llm_result.get("llm_backend", ""),
+            "raw": llm_result.get("raw", ""),
+        }
+        if strict:
+            return None, error
+        return plan_evidence(goal, candidate_set, location), error
+    plan.plan_source = plan.plan_source or "llm_evidence_planner"
+    return plan, {
+        "error_code": "",
+        "error_message": "",
+        "llm_backend": llm_result.get("llm_backend", ""),
+        "raw": llm_result.get("raw", ""),
+    }
 
 
 def _goal_type_to_task_type(goal_type: GoalType) -> str:

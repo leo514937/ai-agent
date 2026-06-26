@@ -17,6 +17,10 @@ from ...domain.goal import GoalPlan, GoalReviewResult
 from ...domain.state import SessionState
 
 
+_ALLOWED_GOAL_TYPES = {"recommendation", "comparison", "single_shop_query", "refinement", "unsupported"}
+_ALLOWED_CANDIDATE_SOURCES = {"explicit", "context", "discovery", "mixed"}
+
+
 def _to_dict(value: Any) -> dict[str, Any]:
     if value is None:
         return {}
@@ -57,11 +61,23 @@ def _check_clarity_and_executability(goal: GoalPlan) -> tuple[bool, str, list[st
     if not goal.goal_type or goal.goal_type in ("unsupported", ""):
         missing.append("goal_type")
         return False, "goal_type is empty or unsupported", missing
+    if goal.goal_type not in _ALLOWED_GOAL_TYPES:
+        missing.append("goal_type")
+        return False, f"goal_type '{goal.goal_type}' is not allowed", missing
 
     # Candidate source is required
     if not goal.candidate_source or goal.candidate_source == "":
         missing.append("candidate_source")
         return False, "no candidate_source specified", missing
+    if goal.candidate_source not in _ALLOWED_CANDIDATE_SOURCES:
+        missing.append("candidate_source")
+        return False, f"candidate_source '{goal.candidate_source}' is not allowed", missing
+    if goal.requested_count <= 0 or goal.min_required <= 0 or goal.max_allowed <= 0:
+        missing.append("quantity_bounds")
+        return False, "requested_count/min_required/max_allowed must be positive", missing
+    if goal.min_required > goal.requested_count or goal.requested_count > goal.max_allowed:
+        missing.append("quantity_bounds")
+        return False, "goal quantity bounds are inconsistent", missing
 
     # For explicit / mixed sources, we need at least some mention context
     # (checked at CandidateReview level, not here)

@@ -315,7 +315,8 @@ def _fallback_semantic_frame(
     llm_called: bool,
     llm_backend: str = "",
 ) -> SemanticFrame:
-    frame = SemanticFrame.model_validate(extract_slots(text, top_intent))
+    payload = _safe_extract_slots(text, top_intent)
+    frame = SemanticFrame.model_validate(payload)
     return _annotate_frame(
         frame,
         semantic_source="diagnostic_rules",
@@ -323,6 +324,71 @@ def _fallback_semantic_frame(
         fallback_reason=fallback_reason,
         llm_called=llm_called,
     )
+
+
+def _safe_extract_slots(text: str, top_intent: str) -> dict[str, Any]:
+    try:
+        payload = extract_slots(text, top_intent)
+    except ModuleNotFoundError:
+        normalized = normalize_text(text)
+        focused_facets: list[str] = []
+        ordinal_references: list[str] = []
+        deictic_references: list[str] = []
+        reference_mentions: list[str] = []
+        comparison_targets: list[dict[str, Any]] = []
+        merchant_mentions: list[str] = []
+
+        if "券" in normalized or "优惠" in normalized:
+            focused_facets.append("coupon")
+        if "营业" in normalized or "开门" in normalized or "打烊" in normalized:
+            focused_facets.append("open_status")
+        if "距离" in normalized or "多远" in normalized or "公里" in normalized or "几分钟" in normalized:
+            focused_facets.append("distance")
+
+        for ref in ("第一家", "第二家", "第三家", "第一个", "第二个", "第三个"):
+            if ref in normalized:
+                ordinal_references.append(ref)
+                reference_mentions.append(ref)
+
+        for ref in ("这家", "那家", "这几家", "这三家"):
+            if ref in normalized:
+                deictic_references.append(ref)
+                reference_mentions.append(ref)
+                comparison_targets.append(
+                    {"shop_name": ref, "reference": "deictic", "source_text": ref}
+                )
+
+        task_type = "recommendation" if top_intent == "local_life" else None
+        primary_task = "recommendation"
+        if any(token in normalized for token in ("对比", "比较", "哪个好", "谁更", "哪家更")):
+            task_type = "comparison"
+            primary_task = "comparison"
+        elif focused_facets or ordinal_references or deictic_references:
+            task_type = "single_shop_query" if top_intent == "local_life" else None
+            primary_task = "single_shop_query"
+
+        payload = {
+            "top_intent": top_intent,
+            "task_type": task_type,
+            "primary_task": primary_task,
+            "facets": [],
+            "merchant_mentions": merchant_mentions,
+            "brand_mentions": [],
+            "branch_mentions": [],
+            "reference_mentions": reference_mentions,
+            "comparison_targets": comparison_targets,
+            "ordinal_references": ordinal_references,
+            "deictic_references": deictic_references,
+            "focused_facets": focused_facets,
+            "comparison_focus": "",
+            "hard_constraints": {},
+            "soft_preferences": {},
+            "ranking_signals": {},
+            "follow_up": None,
+            "confidence": 0.0,
+            "need_context": False,
+        }
+    return payload
 
 
 def parse_top_intent(text: str, llm_call: Callable[..., dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -385,7 +451,7 @@ def parse_top_intent(text: str, llm_call: Callable[..., dict[str, Any]] | None =
             "error_message": "",
         }
 
-    fallback = TopIntent.invalid if not normalised_text.strip() else TopIntent.out_of_scope
+    fallback = _fallback_intent(normalised_text, str(result.get("error_code", "") or ""))
     return {
         "top_intent": fallback,
         "confidence": 0.0,
@@ -441,7 +507,7 @@ def parse_semantic_frame(
                 "llm_backend": "",
                 "fallback_reason": "llm_call_unavailable",
                 "llm_called": False,
-                "semantic_repair_hints": extract_slots(normalised_text, top_intent),
+                "semantic_repair_hints": _safe_extract_slots(normalised_text, top_intent),
             }
         frame = _fallback_semantic_frame(
             normalised_text,
@@ -458,7 +524,7 @@ def parse_semantic_frame(
             "llm_backend": frame.llm_backend,
             "fallback_reason": frame.fallback_reason,
             "llm_called": frame.llm_called,
-            "semantic_repair_hints": extract_slots(normalised_text, top_intent),
+            "semantic_repair_hints": _safe_extract_slots(normalised_text, top_intent),
         }
 
     prompt_template = load_prompt("local_life_parser")
@@ -551,7 +617,7 @@ def parse_semantic_frame(
             "llm_backend": str(result.get("llm_backend", "") or ""),
             "fallback_reason": error_code,
             "llm_called": True,
-            "semantic_repair_hints": extract_slots(normalised_text, top_intent),
+            "semantic_repair_hints": _safe_extract_slots(normalised_text, top_intent),
         }
 
     frame = _fallback_semantic_frame(
@@ -570,7 +636,7 @@ def parse_semantic_frame(
         "llm_backend": frame.llm_backend,
         "fallback_reason": frame.fallback_reason,
         "llm_called": True,
-        "semantic_repair_hints": extract_slots(normalised_text, top_intent),
+        "semantic_repair_hints": _safe_extract_slots(normalised_text, top_intent),
     }
 
 
