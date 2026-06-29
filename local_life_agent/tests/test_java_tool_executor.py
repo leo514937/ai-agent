@@ -156,6 +156,7 @@ class TestJavaEmptyResult:
         result = await _execute("get_coupon_list", {"shop_id": "shop_999"}, transport)
         assert result.success is True
         assert result.backend_source == "java_api"
+        assert result.data == []
 
 
 # ═══════════════════════════════════════════════════════════════════

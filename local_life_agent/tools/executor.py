@@ -11,6 +11,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from .. import config
+from ..streaming.runtime import raise_if_turn_cancelled
 
 
 class RawToolResult:
@@ -91,6 +92,7 @@ class DbToolExecutor(ToolExecutor):
         return "db"
 
     async def execute(self, tool_def: dict, args: dict[str, Any]) -> RawToolResult:
+        raise_if_turn_cancelled()
         tool_name = tool_def["name"]
         fn = getattr(self._mod, tool_name, None)
         if fn is None:
@@ -167,6 +169,7 @@ class JavaToolExecutor(ToolExecutor):
             TimeoutError: Propagated from JavaToolClient when the
                          HTTP request times out.
         """
+        raise_if_turn_cancelled()
         tool_name = tool_def["name"]
         data, meta = await self._client.call(tool_name, args)
 
@@ -175,8 +178,9 @@ class JavaToolExecutor(ToolExecutor):
         error_code = data.get("error_code")
         error_message = data.get("error_message", "")
 
+        payload = data["data"] if "data" in data else data
         return RawToolResult(
-            data=data.get("data") or data,
+            data=payload,
             success=success,
             error_code=error_code,
             error_message=error_message,
