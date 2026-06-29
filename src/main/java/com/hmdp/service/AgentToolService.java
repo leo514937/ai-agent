@@ -9,7 +9,9 @@ import com.hmdp.entity.Blog;
 import com.hmdp.entity.BlogComments;
 import com.hmdp.entity.Shop;
 import com.hmdp.entity.ShopType;
+import com.hmdp.entity.SeckillVoucher;
 import com.hmdp.entity.Voucher;
+import com.hmdp.service.ISeckillVoucherService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,6 +38,9 @@ public class AgentToolService {
 
     @Resource
     private IVoucherService voucherService;
+
+    @Resource
+    private ISeckillVoucherService seckillVoucherService;
 
     @Resource
     private IShopTypeService shopTypeService;
@@ -174,7 +179,10 @@ public class AgentToolService {
                 .map(this::toAgentCouponDTO)
                 .collect(Collectors.toList());
 
-        return AgentToolResponse.ok(dtos);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("data", dtos);
+        result.put("total", dtos.size());
+        return AgentToolResponse.ok(result);
     }
 
     // ── 5. check_open_status ────────────────────────────────────────
@@ -928,32 +936,57 @@ public class AgentToolService {
 
     private AgentShopDTO toAgentShopDTO(Shop shop, AgentLocation location) {
         AgentShopDTO dto = new AgentShopDTO();
+        ShopType type = shopTypeService.getById(shop.getTypeId());
+        Double rating = shop.getScore() == null ? null : shop.getScore() / 10.0;
+        Double avgPrice = shop.getAvgPrice() == null ? null : shop.getAvgPrice().doubleValue();
         dto.setShopId(String.valueOf(shop.getId()));
         dto.setShopName(shop.getName());
         dto.setCategoryId(shop.getTypeId());
-        dto.setCategory(String.valueOf(shop.getTypeId()));  // Will map to type name later if needed
+        dto.setCategory(type == null ? String.valueOf(shop.getTypeId()) : type.getName());
         dto.setAddress(shop.getAddress());
         dto.setArea(shop.getArea());
+        dto.setAlias(Collections.emptyList());
         dto.setLat(shop.getY());           // y → lat
         dto.setLng(shop.getX());           // x → lng
-        dto.setRating(shop.getScore() == null ? 0.0 : shop.getScore() / 10.0);
+        dto.setRating(rating);
         dto.setAvgPrice(shop.getAvgPrice());
         dto.setBusinessHours(shop.getOpenHours());
         dto.setSold(shop.getSold());
         dto.setComments(shop.getComments());
+        dto.setTags(deriveTopTags(dto.getCategory(), avgPrice, rating, "unknown", 0, null));
         return dto;
     }
 
     private AgentCouponDTO toAgentCouponDTO(Voucher voucher) {
         AgentCouponDTO dto = new AgentCouponDTO();
+        SeckillVoucher seckillVoucher = null;
+        if (voucher.getType() != null && voucher.getType() == 1) {
+            seckillVoucher = seckillVoucherService.lambdaQuery()
+                    .eq(SeckillVoucher::getVoucherId, voucher.getId())
+                    .one();
+        }
         dto.setCouponId(String.valueOf(voucher.getId()));
         dto.setShopId(String.valueOf(voucher.getShopId()));
         dto.setTitle(voucher.getTitle());
         dto.setDescription(voucher.getSubTitle());
+        dto.setDiscountType("fixed");
+        if (voucher.getPayValue() != null && voucher.getActualValue() != null) {
+            dto.setDiscountValue(Math.max(0.0, (voucher.getActualValue() - voucher.getPayValue()) / 100.0));
+            dto.setMinConsume(voucher.getActualValue() / 100.0);
+        }
+        if (seckillVoucher != null) {
+            dto.setValidFrom(formatDateTime(seckillVoucher.getBeginTime()));
+            dto.setValidUntil(formatDateTime(seckillVoucher.getEndTime()));
+            dto.setStock(seckillVoucher.getStock());
+        }
         dto.setPayValue(voucher.getPayValue());
         dto.setActualValue(voucher.getActualValue());
         dto.setStatus(voucher.getStatus() != null && voucher.getStatus() == 1 ? "available" : "unknown");
         return dto;
+    }
+
+    private String formatDateTime(LocalDateTime value) {
+        return value == null ? null : value.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
     }
 
     private AgentToolResponse buildResolveResolved(Shop shop) {

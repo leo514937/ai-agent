@@ -1,5 +1,7 @@
 package com.hmdp.dto.agent;
 
+import com.fasterxml.jackson.databind.PropertyNamingStrategy;
+import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -19,11 +21,18 @@ import lombok.NoArgsConstructor;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@JsonNaming(PropertyNamingStrategy.SnakeCaseStrategy.class)
 public class AgentCouponDTO {
     private String couponId;
     private String shopId;
     private String title;
     private String description;    // from sub_title
+    private String discountType;
+    private Double discountValue;
+    private Double minConsume;
+    private String validFrom;
+    private String validUntil;
+    private Integer stock;
     private Long payValue;         // unit: fen
     private Long actualValue;      // unit: fen
     private String status;         // "available" | "expired" | "unknown"

@@ -1,8 +1,13 @@
 package com.hmdp.dto.agent;
 
+import com.fasterxml.jackson.databind.PropertyNamingStrategy;
+import com.fasterxml.jackson.databind.annotation.JsonNaming;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Shop DTO for the Agent tool API.
@@ -20,12 +25,14 @@ import lombok.NoArgsConstructor;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
+@JsonNaming(PropertyNamingStrategy.SnakeCaseStrategy.class)
 public class AgentShopDTO {
     private String shopId;
     private String shopName;
     private Long categoryId;
     private String category;       // resolved from type_id if available
     private String address;
+    private List<String> alias = new ArrayList<>();
     private Double lat;            // from tb_shop.y
     private Double lng;            // from tb_shop.x
     private Double rating;         // from tb_shop.score / 10.0
@@ -34,4 +41,5 @@ public class AgentShopDTO {
     private Integer sold;
     private Integer comments;
     private String area;
+    private List<String> tags = new ArrayList<>();
 }
