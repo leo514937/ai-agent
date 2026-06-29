@@ -80,8 +80,8 @@ public class AgentToolController {
     public ResponseEntity<AgentToolResponse> getDistanceEta(
             @PathVariable Long shopId,
             @RequestBody AgentDistanceEtaRequest request) {
-        AgentLocation location = request != null ? request.getLocation() : null;
-        return ResponseEntity.ok(agentToolService.getDistanceEta(shopId, location));
+        AgentLocation fromLocation = request != null ? request.getFromLocation() : null;
+        return ResponseEntity.ok(agentToolService.getDistanceEta(shopId, fromLocation));
     }
 
     /**
