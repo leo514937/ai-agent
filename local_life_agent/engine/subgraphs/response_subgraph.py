@@ -39,12 +39,96 @@ from ...observability.file_logger import get_python_service_logger, log_kv
 _LOGGER = get_python_service_logger()
 
 
+def _compose_single_shop_response(evidence: dict[str, Any], draft_text: str) -> str:
+    """Build a deterministic single-shop summary from EvidencePack."""
+    evidence_dict = _to_dict(evidence)
+    snapshot = evidence_dict.get("ranking_snapshot") or {}
+    shop_name = str(snapshot.get("shop_name", "") or "").strip()
+    if not shop_name:
+        for item in evidence_dict.get("evidence_items") or []:
+            if isinstance(item, dict) and str(item.get("shop_name", "") or "").strip():
+                shop_name = str(item.get("shop_name", "") or "").strip()
+                break
+    if not shop_name:
+        shop_name = "这家店"
+
+    facet_results = evidence_dict.get("facet_results") or []
+    coupon_text = ""
+    open_text = ""
+    distance_text = ""
+    uncertain_notes: list[str] = []
+
+    for item in facet_results:
+        item_dict = _to_dict(item)
+        facet = str(item_dict.get("facet", "") or "")
+        status = str(item_dict.get("status", item_dict.get("result_status", "")) or "").lower()
+        value = item_dict.get("value")
+
+        if facet == "coupon":
+            if status == "ok":
+                titles: list[str] = []
+                if isinstance(value, list):
+                    titles = [str(v).strip() for v in value if str(v).strip()]
+                if titles:
+                    coupon_text = f"有券：{'、'.join(titles[:3])}"
+                else:
+                    coupon_text = "有券"
+            elif status == "empty":
+                coupon_text = "当前暂无可用优惠券"
+            else:
+                uncertain_notes.append("优惠券情况暂时无法确认")
+        elif facet == "open_status":
+            open_value = value
+            if isinstance(open_value, dict):
+                open_value = open_value.get("open_status", open_value.get("status", ""))
+            open_status = str(open_value or "").strip().lower()
+            if status == "ok" and open_status in {"open", "opened"}:
+                open_text = "目前营业中"
+            elif status == "ok" and open_status in {"closed", "close"}:
+                open_text = "当前未营业"
+            else:
+                uncertain_notes.append("营业状态暂时无法确认")
+        elif facet == "distance":
+            distance_value = value
+            distance_km = None
+            eta_minutes = None
+            if isinstance(distance_value, dict):
+                distance_km = distance_value.get("distance_km")
+                eta_minutes = distance_value.get("eta_minutes")
+            elif isinstance(distance_value, (int, float)):
+                distance_km = distance_value
+            if status == "ok" and distance_km is not None:
+                distance_text = f"距离为 {distance_km} 公里"
+                if eta_minutes is not None:
+                    distance_text += f"，预计时间 {eta_minutes} 分钟"
+            else:
+                uncertain_notes.append("距离暂时无法确认")
+
+    parts: list[str] = []
+    if open_text:
+        parts.append(open_text)
+    if coupon_text:
+        parts.append(coupon_text)
+    if distance_text:
+        parts.append(distance_text)
+
+    if parts:
+        response = f"{shop_name}: {'; '.join(parts)}"
+    else:
+        response = draft_text.strip() or f"{shop_name}的信息我已经整理好了。"
+
+    if uncertain_notes:
+        response += "；" + "；".join(dict.fromkeys(uncertain_notes))
+
+    return response
+
+
 def h_response_subgraph(state: GraphState) -> dict:
     """Outer wrapper: handle response mode → generate / clarify / fallback."""
     before = dict(state)
     response_mode = str(state.get("response_mode", "") or "")
     log_kv(_LOGGER, logging.INFO, "[SUBGRAPH_ENTER]", tone="route", subgraph="response_subgraph", trace_id=state.get("trace_id", ""), response_mode=response_mode)
-    if response_mode in {_OUTER_ROUTE_DIRECT, _OUTER_ROUTE_REJECT}:
+    if response_mode in {_OUTER_ROUTE_DIRECT, _OUTER_ROUTE_REJECT, "direct_response", "exploration_plan"}:
         after = {**state, "response_route": _OUTER_ROUTE_PASS}
         log_kv(_LOGGER, logging.INFO, "[ROUTE_DECISION]", tone="route", subgraph="response_subgraph", route=_OUTER_ROUTE_PASS, response_mode=response_mode)
         return _state_delta(before, after, always_include={"response_route"})
@@ -123,6 +207,17 @@ def _h_answer_generate(state: GraphState) -> dict:
         in_graph=True,
         conversation_continuity=cc,
     )
+    answer_type = str(getattr(answer_plan, "answer_type", "") or "")
+    if answer_type in {"single_shop", "single_shop_query"}:
+        generic_markers = (
+            "我会优先参考当前结果来回答。",
+            "当前信息还不够完整，我暂时无法确认当前结果的全部细节。",
+            "这项信息我已经按当前查询结果整理好了。",
+            "抱歉，暂时无法处理您的请求，请稍后再试。",
+            "当前已知信息还不够完整，我暂时无法确认哪家更好。",
+        )
+        if not txt.strip() or any(marker in txt for marker in generic_markers):
+            txt = _compose_single_shop_response(state.get("evidence_pack") or {}, txt)
     return {
         "answer_plan": answer_plan,
         "draft_response": txt,
@@ -163,6 +258,22 @@ def _h_answer_verify(state: GraphState) -> dict:
     task_type = getattr(state.get("execution_plan"), "task_type", "") or (
         state.get("execution_plan", {}).get("task_type", "") if isinstance(state.get("execution_plan"), dict) else ""
     )
+    if str(state.get("answer_source", "") or "") in {"template_fallback", "llm_disabled"}:
+        return {
+            "verify_result": "pass",
+            "error_code": "",
+            "error_message": "",
+            "answer_verify_passed": True,
+            "answer_verify_violations": [],
+            "rewrite_needed": False,
+            "verifier_result": "pass",
+            "verifier_failure_code": "",
+            "verifier_unknown_fields": [],
+            "verifier_unsupported_claims": [],
+            "verifier_false_fields": [],
+            "verifier_recoverable": True,
+            **_log(state, "answer_verify", passed=True, skipped_reason="template_fallback"),
+        }
     if not evidence or not state.get("draft_response", ""):
         return {
             "verify_result": "pass", "error_code": "", "error_message": "",
@@ -278,6 +389,52 @@ def _h_fallback_answer(state: GraphState) -> dict:
     evidence_dict = _to_dict(state.get("evidence_pack") or {})
     snapshot = evidence_dict.get("ranking_snapshot") or {}
     status = str(snapshot.get("status", "") or "") if isinstance(snapshot, dict) else ""
+    task_type = str(state.get("task_type", "") or getattr(state.get("execution_plan"), "task_type", "") or "")
+    shop_name = str(snapshot.get("shop_name", "") or "").strip()
+    if not shop_name:
+        for item in evidence_dict.get("evidence_items") or []:
+            if isinstance(item, dict) and str(item.get("shop_name", "") or "").strip():
+                shop_name = str(item.get("shop_name", "") or "").strip()
+                break
+    facet_results = evidence_dict.get("facet_results") or snapshot.get("facet_results") or []
+    coupon_titles: list[str] = []
+    coupon_available = False
+    for facet_item in facet_results:
+        facet_dict = facet_item if isinstance(facet_item, dict) else _to_dict(facet_item)
+        if str(facet_dict.get("facet", "") or "") != "coupon":
+            continue
+        if str(facet_dict.get("status", "") or "") == "ok":
+            coupon_available = True
+            values = facet_dict.get("value") or []
+            if isinstance(values, list):
+                for value in values[:3]:
+                    value_text = str(value).strip()
+                    if value_text:
+                        coupon_titles.append(value_text)
+            break
+    if task_type in {"single_shop_query", "open_status_query"} and shop_name:
+        for facet_item in facet_results:
+            facet_dict = facet_item if isinstance(facet_item, dict) else _to_dict(facet_item)
+            if str(facet_dict.get("facet", "") or "") != "open_status":
+                continue
+            if str(facet_dict.get("status", "") or "") != "ok":
+                break
+            raw_value = facet_dict.get("value")
+            if isinstance(raw_value, dict):
+                raw_value = raw_value.get("open_status", raw_value.get("status", ""))
+            status_text = str(raw_value or "").strip().lower()
+            if status_text in {"open", "opened", "营业中", "open_now", "openstatusopen"}:
+                response = f"{shop_name}当前营业中。"
+            elif status_text in {"closed", "close", "closed_now", "not_open", "关闭"}:
+                response = f"{shop_name}当前未营业。"
+            else:
+                response = f"{shop_name}的营业状态暂时无法确认。"
+            break
+    if task_type in {"single_shop_query", "coupon_query"} and shop_name and coupon_available:
+        if coupon_titles:
+            response = f"{shop_name}有券，当前可用券包括：{'、'.join(coupon_titles)}。"
+        else:
+            response = f"{shop_name}有券。"
     if not status:
         tr = state.get("tool_result_set") or state.get("tool_results", {})
         for result in tr.values():

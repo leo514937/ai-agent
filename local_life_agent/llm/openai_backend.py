@@ -9,6 +9,7 @@ import httpx
 import requests
 
 from .. import config
+from ..streaming.runtime import raise_if_turn_cancelled
 
 
 class OpenAICompatibleBackend:
@@ -51,6 +52,7 @@ class OpenAICompatibleBackend:
         system_prompt: str = "",
         temperature: float = 0.0,
         timeout_ms: int = 3000,
+        stream_handler: Any | None = None,
     ) -> dict[str, Any]:
         api_key = self._get_api_key()
 
@@ -79,16 +81,50 @@ class OpenAICompatibleBackend:
             "temperature": temperature,
             "max_tokens": 1024,
         }
+        if stream_handler is not None:
+            payload["stream"] = True
 
         # Convert timeout_ms to seconds, fallback to config.REAL_LLM_TIMEOUT_SECONDS
         timeout_sec = (timeout_ms / 1000.0) if timeout_ms else float(self.timeout_seconds)
 
         try:
             with httpx.Client(timeout=timeout_sec) as client:
-                response = client.post(url, headers=headers, json=payload)
-                response.raise_for_status()
-                res_data = response.json()
-                transport = "httpx"
+                if stream_handler is None:
+                    response = client.post(url, headers=headers, json=payload)
+                    response.raise_for_status()
+                    res_data = response.json()
+                    transport = "httpx"
+                else:
+                    raw_chunks: list[str] = []
+                    with client.stream("POST", url, headers=headers, json=payload) as response:
+                        response.raise_for_status()
+                        for line in response.iter_lines():
+                            raise_if_turn_cancelled()
+                            if not line:
+                                continue
+                            if isinstance(line, bytes):
+                                line = line.decode("utf-8", errors="ignore")
+                            if not str(line).startswith("data:"):
+                                continue
+                            data = str(line)[5:].strip()
+                            if not data or data == "[DONE]":
+                                continue
+                            try:
+                                chunk = json.loads(data)
+                            except Exception:
+                                continue
+                            choices = chunk.get("choices", []) if isinstance(chunk, dict) else []
+                            if not choices:
+                                continue
+                            delta = choices[0].get("delta", {}) if isinstance(choices[0], dict) else {}
+                            content_delta = delta.get("content", "")
+                            if not content_delta:
+                                continue
+                            raw_chunks.append(str(content_delta))
+                            stream_handler(str(content_delta))
+                            raise_if_turn_cancelled()
+                    res_data = {"choices": [{"message": {"content": "".join(raw_chunks)}}]}
+                    transport = "httpx_stream"
         except (httpx.HTTPError, RuntimeError, ValueError) as exc:
             if not self._should_fallback_to_requests(exc):
                 raise

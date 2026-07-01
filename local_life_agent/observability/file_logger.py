@@ -32,10 +32,7 @@ def _log_paths() -> list[Path]:
     project_root = Path(__file__).resolve().parents[2]
     log_dir = project_root / "var"
     log_dir.mkdir(parents=True, exist_ok=True)
-    return [
-        log_dir / "python_service.log",
-        log_dir / "pythonservice.log",
-    ]
+    return [log_dir / "python_service.log"]
 
 
 def get_python_service_logger() -> logging.Logger:

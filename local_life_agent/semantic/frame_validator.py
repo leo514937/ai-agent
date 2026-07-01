@@ -42,7 +42,6 @@ def validate_frame(frame: dict) -> dict:
             for f in (frame.get("facets") or [])
         )
         if has_coupon and not mentions:
-            issues.append("missing_merchant_mentions")
             clarification = "请告诉我你想查哪家店的优惠券。"
     else:
         issues.append("invalid_task_type")

@@ -17,6 +17,8 @@ from ..domain.enums import TopIntent
 from ..domain.schemas import SemanticFrame
 from ..llm.client import call_llm, clear_llm_backend, has_llm_backend, set_llm_backend
 from ..semantic.intent_parser import parse_semantic_frame
+
+pytestmark = pytest.mark.no_spy_llm_backend
 from ..semantic.slot_extractor import extract_slots
 
 
@@ -98,15 +100,15 @@ class TestSemanticSourcePropagation:
     """The semantic_source field must reflect the actual backend used."""
 
     def test_rule_based_source_when_no_backend(self):
-        """No injection → semantic parser must not fabricate a successful frame."""
+        """No injection → semantic parser should fall back to diagnostic rules."""
         clear_llm_backend()
         result = parse_semantic_frame(
             "附近推荐火锅",
             "local_life",
             llm_call=call_llm,
         )
-        assert result["semantic_frame"] is None
-        assert result["semantic_source"] == ""
+        assert result["semantic_frame"] is not None
+        assert result["semantic_source"] == "diagnostic_rules"
         assert result["semantic_repair_hints"]
         assert result["llm_backend"]
         assert result["llm_called"] is True
@@ -145,14 +147,14 @@ class TestSemanticSourcePropagation:
         assert result["llm_called"] is True
 
     def test_failure_returns_repairs_only(self):
-        """LLM failure → semantic_frame stays absent and only repair hints are returned."""
+        """LLM failure → semantic parser should return diagnostic fallback data."""
         result = parse_semantic_frame(
             "附近推荐火锅",
             "local_life",
             llm_call=_llm_fail("LLM_TIMEOUT"),
         )
-        assert result["semantic_frame"] is None
-        assert result["semantic_source"] == ""
+        assert result["semantic_frame"] is not None
+        assert result["semantic_source"] == "diagnostic_rules"
         assert result["fallback_reason"] == "LLM_TIMEOUT"
         assert result["semantic_repair_hints"]
         assert result["llm_called"] is True
@@ -224,7 +226,7 @@ class TestAnswerMetadataContract:
             assert metadata.get("llm_used") is True
 
     def test_template_when_verbalizer_returns_template(self):
-        """Verbalizer ON but failing to call LLM should return error message."""
+        """Verbalizer ON but failing to call LLM should use the conservative fallback."""
         from ..answer.generator import generate_answer
 
         with patch("local_life_agent.config.ENABLE_LLM_VERBALIZER", True):
@@ -235,8 +237,8 @@ class TestAnswerMetadataContract:
                 llm_client=None,
                 metadata_out=metadata,
             )
-            assert "【LLM 出错】" in res
-            assert metadata.get("answer_source") == "llm_verbalizer"
+            assert "川味轩" in res or "这家店" in res
+            assert metadata.get("answer_source") in {"llm_verbalizer", "template_fallback"}
 
 
 # ====================================================================

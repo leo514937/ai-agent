@@ -72,11 +72,22 @@ def plan_state_update(
     recommendation_list = turn_context.get("last_recommendation_list")
     if recommendation_list is None:
         recommendation_list = []
+    goal_dict = _to_dict(turn_context.get("local_life_goal_draft"))
+    candidate_source = str(goal_dict.get("candidate_source", "") or "").strip()
+    active_turn_result = _to_dict(turn_context.get("active_turn_result"))
+    active_turn_route = str(active_turn_result.get("route", "") or "").strip()
+    reference_resolution_source = str(turn_context.get("reference_resolution_source", "") or "").strip()
     comparison_targets = turn_context.get("comparison_targets")
     if comparison_targets is None:
         comparison_targets = []
+    resolution_stage = str(turn_context.get("resolution_stage", "") or "").strip()
     comparison_result = turn_context.get("comparison_result")
+    evidence_pack = turn_context.get("evidence_pack")
+    if comparison_result is None and evidence_pack is not None:
+        comparison_result = _to_dict(evidence_pack).get("comparison_matrix")
     tool_results = turn_context.get("tool_result_set") or turn_context.get("tool_results") or {}
+    execution_plan_dict = _to_dict(turn_context.get("validated_plan") or turn_context.get("execution_plan"))
+    has_tool_calls = bool(execution_plan_dict.get("tool_calls"))
     required_by_call_id = _plan_required_by_call_id(
         turn_context.get("validated_plan") or turn_context.get("execution_plan")
     )
@@ -84,13 +95,19 @@ def plan_state_update(
     # Tool execution failure detection — reads ONLY ToolResultStatus.
     tool_failed = False
     if isinstance(tool_results, dict):
+        observed_call_ids = {str(call_id) for call_id in tool_results.keys()}
+        required_call_ids = {call_id for call_id, required in required_by_call_id.items() if required}
         for call_id, result in tool_results.items():
             required = required_by_call_id.get(str(call_id), True)
             if required and get_tool_result_status(_to_dict(result)) in TOOL_FAILURE_STATUSES:
                 tool_failed = True
                 break
-    elif str(resolve_shop_status or "") == "RESOLVED" and not required_by_call_id:
-        tool_failed = False
+        if has_tool_calls and required_call_ids and not tool_failed:
+            missing_required_calls = required_call_ids - observed_call_ids
+            if missing_required_calls:
+                tool_failed = True
+    elif has_tool_calls:
+        tool_failed = True
 
     set_fields: dict[str, Any] = {}
     clear_fields: list[str] = []
@@ -98,7 +115,7 @@ def plan_state_update(
     if tool_failed:
         return {
             "set_fields": {},
-            "clear_fields": ["pending_clarification"],
+            "clear_fields": ["pending_clarification", "current_shop"],
             "task_type": task_type,
             "resolve_shop_status": resolve_shop_status,
             "pending_check_result": pending_check_result,
@@ -113,7 +130,7 @@ def plan_state_update(
             "pending_check_result": pending_check_result,
         }
 
-    if pending_check_result == "expired":
+    if pending_check_result in {"expired", "cancelled", "topic_switch"}:
         return {
             "set_fields": {},
             "clear_fields": ["pending_clarification"],
@@ -122,7 +139,22 @@ def plan_state_update(
             "pending_check_result": pending_check_result,
         }
 
-    # Shop resolution branching — reads ONLY ResolveShopResult.status.
+    if pending_dict is not None and not tool_failed:
+        set_fields["pending_clarification"] = pending_dict
+        clear_fields = [field for field in clear_fields if field != "pending_clarification"]
+        return {
+            "set_fields": set_fields,
+            "clear_fields": clear_fields,
+            "task_type": task_type,
+            "resolve_shop_status": resolve_shop_status,
+            "pending_check_result": pending_check_result,
+        }
+
+    # Shop resolution branching — reads ResolveShopResult.status.
+    # CANDIDATE_SET_RESOLVED is a valid "resolved" state (multi-candidate with no single target).
+    # It follows the same RESOLVED paths for comparison/recommendation, but
+    # single_shop_query must NEVER reach CANDIDATE_SET_RESOLVED (it would be AMBIGUOUS).
+    is_resolved = resolve_shop_status in ("RESOLVED", "CANDIDATE_SET_RESOLVED")
     if resolve_shop_status == "AMBIGUOUS":
         set_fields["pending_clarification"] = pending_dict
         return {
@@ -133,35 +165,40 @@ def plan_state_update(
             "pending_check_result": pending_check_result,
         }
 
-    if resolve_shop_status == "RESOLVED":
+    if is_resolved:
         if task_type in (TaskType.single_shop_query.value, TaskType.coupon_query.value):
-            if resolved_shop:
-                set_fields["current_shop"] = resolved_shop
+            # Only write current_shop for true RESOLVED (single target), never CANDIDATE_SET_RESOLVED
+            if resolve_shop_status == "RESOLVED":
+                should_set_current_shop = not tool_failed
+                if resolved_shop and should_set_current_shop:
+                    set_fields["current_shop"] = resolved_shop
             clear_fields.extend(["pending_clarification", "last_recommendation_list"])
         elif task_type == TaskType.recommendation.value:
             set_fields["last_recommendation_list"] = recommendation_list
-            clear_fields.extend(["pending_clarification", "current_shop"])
+            # CANDIDATE_SET_RESOLVED (multi-candidate): NEVER write current_shop
+            # RESOLVED (single target): write current_shop only with reference_resolution_source
+            if resolve_shop_status == "RESOLVED" and resolution_stage != "candidate_set_resolved" and resolved_shop and reference_resolution_source:
+                set_fields["current_shop"] = resolved_shop
+                clear_fields.append("pending_clarification")
+            else:
+                clear_fields.extend(["pending_clarification", "current_shop"])
         elif task_type == TaskType.comparison.value:
             if comparison_targets:
                 set_fields["comparison_targets"] = comparison_targets
             if comparison_result is not None:
                 set_fields["comparison_result"] = comparison_result
-            clear_fields.append("pending_clarification")
+                clear_fields.append("pending_clarification")
+            elif pending_dict is not None:
+                set_fields["pending_clarification"] = pending_dict
+            else:
+                clear_fields.append("pending_clarification")
+            clear_fields.append("current_shop")
         else:
             clear_fields.append("pending_clarification")
 
         return {
             "set_fields": set_fields,
             "clear_fields": clear_fields,
-            "task_type": task_type,
-            "resolve_shop_status": resolve_shop_status,
-            "pending_check_result": pending_check_result,
-        }
-
-    if pending_check_result == "topic_switch":
-        return {
-            "set_fields": {},
-            "clear_fields": ["pending_clarification"],
             "task_type": task_type,
             "resolve_shop_status": resolve_shop_status,
             "pending_check_result": pending_check_result,

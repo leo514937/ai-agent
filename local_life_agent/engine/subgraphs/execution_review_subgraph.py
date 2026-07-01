@@ -43,6 +43,7 @@ from ... import config
 from ...observability.file_logger import get_python_service_logger, log_kv
 
 _LOGGER = get_python_service_logger()
+from ...core import ExecutionCore
 
 
 def h_execution_review_subgraph(state: GraphState) -> dict:
@@ -113,7 +114,7 @@ def _h_tool_execute(state: GraphState) -> dict:
             str(call_id): _to_dict(result)
             for call_id, result in (state.get("precomputed_tool_results") or {}).items()
         }
-        batch_executor = BatchToolExecutor(call_fn=_dispatch_tool_call)
+        execution_core = ExecutionCore(call_fn=_dispatch_tool_call)
         search_calls = []
         remaining_specs = []
         for spec in tool_calls:
@@ -124,7 +125,7 @@ def _h_tool_execute(state: GraphState) -> dict:
                 remaining_specs.append(spec)
 
         if search_calls:
-            raw_results.update(batch_executor.execute_sync(search_calls))
+            raw_results.update(execution_core.execute_batch(search_calls))
 
         resolved_batch: list[dict[str, Any]] = []
         error_results: dict[str, dict[str, Any]] = {}
@@ -156,7 +157,7 @@ def _h_tool_execute(state: GraphState) -> dict:
             resolved_batch.append(resolved_call)
 
         if resolved_batch:
-            raw_results.update(batch_executor.execute_sync(resolved_batch))
+            raw_results.update(execution_core.execute_batch(resolved_batch))
         raw_results.update(error_results)
 
         for spec in tool_calls:

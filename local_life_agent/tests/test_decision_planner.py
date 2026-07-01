@@ -106,8 +106,8 @@ class TestDecisionPlanner:
         assert "coupon" in dp.failed_facets
         assert dp.winner_shop_id is None  # no ranking data → no winner
 
-    def test_winner_from_ranking(self):
-        """Winner is determined from ranking_snapshot data."""
+    def test_winner_from_evidence(self):
+        """Winner should come from evidence coverage, not rank order alone."""
         dp = plan_decision(
             goal_plan=_goal(goal_type="comparison"),
             candidate_set={"candidates": [{"shop_id": "s1"}, {"shop_id": "s2"}]},
@@ -116,9 +116,21 @@ class TestDecisionPlanner:
                 ranking_snapshot={
                     "ranked": [{"shop_id": "s1", "rank": 1}, {"shop_id": "s2", "rank": 2}],
                 },
+                evidence_items=[
+                    {
+                        "evidence_id": "evi_s2_rating",
+                        "shop_id": "s2",
+                        "facet": "rating",
+                        "result_status": "ok",
+                        "value": 4.9,
+                    }
+                ],
             ),
         )
-        assert dp.winner_shop_id == "s1"
+        assert dp.winner_shop_id == "s2"
+        assert dp.winner_evidence_refs == ["evi_s2_rating"]
+        assert dp.insufficient_evidence is False
+        assert dp.next_action == "finish"
 
     def test_no_winner_when_no_ranking(self):
         """No ranking data → no winner."""
@@ -127,9 +139,67 @@ class TestDecisionPlanner:
             candidate_set={"candidates": [{"shop_id": "shop_1"}]},
             evidence_pack=_evidence(facet_results=[_ok_facet("rating")]),
         )
-        # winner_shop_id may still be set from single candidate
-        # but we check that it doesn't crash
         assert dp.decision_type == DecisionType.SINGLE_SHOP_QUERY
+        assert dp.winner_shop_id is None
+        assert dp.winner_evidence_refs == []
+        assert dp.insufficient_evidence is True
+
+    def test_snapshot_only_does_not_choose_winner(self):
+        """Ranking snapshot alone must not fabricate a winner."""
+        dp = plan_decision(
+            goal_plan=_goal(goal_type="recommendation"),
+            candidate_set={"candidates": [{"shop_id": "shop_1"}, {"shop_id": "shop_2"}]},
+            evidence_pack=_evidence(
+                facet_results=[],
+                ranking_snapshot={
+                    "ranked": [
+                        {"shop_id": "shop_1", "shop_name": "A"},
+                        {"shop_id": "shop_2", "shop_name": "B"},
+                    ]
+                },
+            ),
+        )
+        assert dp.winner_shop_id is None
+        assert dp.winner_evidence_refs == []
+        assert dp.next_action == "insufficient_evidence"
+        assert dp.reason == "insufficient evidence to choose a winner"
+        assert "claim_refs" in dp.missing_fields
+
+    def test_tie_does_not_use_snapshot_for_tiebreak(self):
+        """A tie in evidence should stay a tie instead of falling back to snapshot order."""
+        dp = plan_decision(
+            goal_plan=_goal(goal_type="comparison"),
+            candidate_set={"candidates": [{"shop_id": "s1"}, {"shop_id": "s2"}]},
+            evidence_pack=_evidence(
+                facet_results=[],
+                evidence_items=[
+                    {
+                        "evidence_id": "e1",
+                        "shop_id": "s1",
+                        "facet": "rating",
+                        "result_status": "ok",
+                        "value": 4.8,
+                    },
+                    {
+                        "evidence_id": "e2",
+                        "shop_id": "s2",
+                        "facet": "rating",
+                        "result_status": "ok",
+                        "value": 4.8,
+                    },
+                ],
+                ranking_snapshot={
+                    "ranked": [
+                        {"shop_id": "s2", "rank": 1},
+                        {"shop_id": "s1", "rank": 2},
+                    ],
+                },
+            ),
+        )
+        assert dp.winner_shop_id is None
+        assert dp.winner_evidence_refs == []
+        assert dp.next_action == "present_tie"
+        assert dp.reason == "tie or insufficient differentiating evidence"
 
     def test_unsupported_when_goal_unsupported(self):
         """Unsupported goal → UNSUPPORTED decision type."""

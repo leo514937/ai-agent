@@ -80,7 +80,8 @@ def recover_context(
     resolution = resolve_references(source_text, session_state, frame)
     if inherited_constraints and "inherited_constraints" not in resolution:
         resolution["inherited_constraints"] = inherited_constraints
-    if resolution.get("status") == "resolved":
+    resolution_status = str(resolution.get("status", "") or "").upper()
+    if resolution_status == "RESOLVED":
         target = resolution.get("target") or resolution.get("resolved_shop") or {}
         if hasattr(target, "model_dump"):
             target = target.model_dump()

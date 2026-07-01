@@ -41,6 +41,8 @@ def _expected_core_nodes(final_state: dict[str, Any]) -> list[str]:
         nodes.extend(
             [
                 "understanding_subgraph",
+                "orchestration_router_shadow",
+                "workflow_runner",
                 "planning_subgraph",
                 "execution_review_subgraph",
                 "response_subgraph",

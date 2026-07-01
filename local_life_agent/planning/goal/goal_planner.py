@@ -18,6 +18,7 @@ Responsibilities:
 from __future__ import annotations
 
 import logging
+import re
 from enum import Enum
 from typing import Any, Callable
 
@@ -81,11 +82,15 @@ def _get_candidate_source(frame: SemanticFrame | dict[str, Any] | None) -> str:
         mentions = list(frame.merchant_mentions or [])
         ordinals = list(frame.ordinal_references or [])
         deictics = list(frame.deictic_references or [])
+        comparison_targets = list(frame.comparison_targets or [])
+        reference_mentions = list(frame.reference_mentions or [])
     else:
         cs = frame.get("candidate_source")
         mentions = list(frame.get("merchant_mentions", []) or [])
         ordinals = list(frame.get("ordinal_references", []) or [])
         deictics = list(frame.get("deictic_references", []) or [])
+        comparison_targets = list(frame.get("comparison_targets", []) or [])
+        reference_mentions = list(frame.get("reference_mentions", []) or [])
 
     if cs is not None:
         try:
@@ -93,7 +98,7 @@ def _get_candidate_source(frame: SemanticFrame | dict[str, Any] | None) -> str:
         except Exception:
             pass
 
-    has_structured_refs = bool(ordinals or deictics)
+    has_structured_refs = bool(ordinals or deictics or comparison_targets or reference_mentions)
     has_mentions = len(mentions) >= 1
 
     if has_mentions and has_structured_refs:
@@ -103,6 +108,91 @@ def _get_candidate_source(frame: SemanticFrame | dict[str, Any] | None) -> str:
     if has_structured_refs:
         return "context"
     return "discovery"
+
+
+def _infer_explicit_mentions_from_text(raw_text: str) -> list[str]:
+    """从原文里尽量保守地提取明确店名片段。"""
+    text = str(raw_text or "").strip()
+    if not text:
+        return []
+
+    mentions: list[str] = []
+    bracket_pattern = r"[\u4e00-\u9fffA-Za-z0-9·&]+[（(][^）)]+[）)]"
+    mentions.extend(re.findall(bracket_pattern, text))
+
+    cut_markers = (
+        "有券",
+        "团购",
+        "营业",
+        "开门",
+        "多久",
+        "多远",
+        "距离",
+        "离我",
+        "多少钱",
+        "便宜",
+        "优惠",
+        "套餐",
+    )
+    cut_index = len(text)
+    for marker in cut_markers:
+        idx = text.find(marker)
+        if 0 < idx < cut_index:
+            cut_index = idx
+    if cut_index < len(text):
+        prefix = text[:cut_index].strip(" ，,。?？！!~")
+        if prefix and any(token in prefix for token in ("店", "馆", "轩", "居", "坊", "园", "楼", "火锅", "烧烤", "餐厅", "饭店", "酒楼")):
+            mentions.append(prefix)
+        elif (
+            prefix
+            and 2 <= len(prefix) <= 12
+            and any("\u4e00" <= ch <= "\u9fff" for ch in prefix)
+            and not any(token in prefix for token in ("这家", "那家", "第一家", "第二家", "第三家", "附近", "推荐"))
+        ):
+            mentions.append(prefix)
+
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for mention in mentions:
+        cleaned = str(mention).strip()
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            ordered.append(cleaned)
+    return ordered
+
+
+def _normalize_goal_plan_from_text(
+    plan: GoalPlan,
+    semantic_frame: SemanticFrame | dict[str, Any] | None,
+    raw_text: str,
+) -> GoalPlan:
+    """补齐明确店名信号，避免单店查询被误压成推荐。"""
+    text = str(raw_text or "")
+    mentions: list[str] = []
+    if isinstance(semantic_frame, SemanticFrame):
+        mentions = [str(item).strip() for item in (semantic_frame.merchant_mentions or []) if str(item).strip()]
+    elif isinstance(semantic_frame, dict):
+        mentions = [str(item).strip() for item in (semantic_frame.get("merchant_mentions", []) or []) if str(item).strip()]
+    if not mentions and text:
+        mentions = _infer_explicit_mentions_from_text(text)
+
+    if not mentions:
+        return plan
+
+    comparison_hints = ("比", "比较", "对比", "哪个好", "哪个更好", "哪家更好", "谁更好")
+    has_comparison_hint = any(hint in text for hint in comparison_hints)
+    if plan.goal_type == "recommendation" and has_comparison_hint and len(mentions) >= 2:
+        plan.goal_type = "comparison"
+    elif plan.goal_type == "recommendation" and len(mentions) == 1:
+        plan.goal_type = "single_shop_query"
+
+    if plan.goal_type == "single_shop_query" and not plan.goal_summary:
+        plan.goal_summary = text
+
+    if plan.candidate_source in {"", "discovery", "recommendation"}:
+        plan.candidate_source = "explicit" if len(mentions) == 1 else "mixed"
+
+    return plan
 
 
 def _get_facets(
@@ -321,7 +411,7 @@ def _plan_goal_rules(
     if isinstance(semantic_frame, SemanticFrame) and semantic_frame.semantic_source:
         source_origin = semantic_frame.semantic_source
 
-    return GoalPlan(
+    plan = GoalPlan(
         goal_type=goal_type_str,
         goal_source=GoalSource.SEMANTIC_FRAME,
         goal_summary=goal_summary,
@@ -342,6 +432,7 @@ def _plan_goal_rules(
         planner_reason="rule_based_planner",
         planner_confidence=0.0,
     )
+    return _normalize_goal_plan_from_text(plan, semantic_frame, raw_text)
 
 
 def plan_goal_with_llm(
@@ -438,6 +529,7 @@ def plan_goal_with_llm(
         return plan, error
     if not plan.goal_source:
         plan.goal_source = GoalSource.SEMANTIC_FRAME
+    plan = _normalize_goal_plan_from_text(plan, semantic_frame, raw_text)
     plan.source_origin = plan.source_origin or "llm_goal_planner"
     plan.planner_source = plan.planner_source or "llm_goal_planner"
     plan.planner_reason = plan.planner_reason or "llm_structured_plan"

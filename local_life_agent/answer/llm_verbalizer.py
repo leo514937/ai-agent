@@ -173,6 +173,73 @@ def _check_boundary(plan: DecisionPlan, text: str) -> bool:
     return True
 
 
+def _rule_based_verbalize(plan: DecisionPlan) -> str:
+    """Build a conservative local fallback answer from the decision plan."""
+    plan_dict = plan.model_dump() if hasattr(plan, "model_dump") else dict(getattr(plan, "__dict__", {}) or {})
+    answer_type = str(plan_dict.get("answer_type", "") or "general")
+    selected_targets = list(plan_dict.get("selected_targets") or [])
+    main_recommendation_value = plan_dict.get("main_recommendation")
+    main_recommendation = (
+        main_recommendation_value.model_dump()
+        if hasattr(main_recommendation_value, "model_dump")
+        else dict(getattr(main_recommendation_value, "__dict__", {}) or {})
+    )
+    factual_points = [str(item) for item in (plan_dict.get("factual_points") or []) if str(item).strip()]
+    uncertainty_notes = [str(item) for item in (plan_dict.get("uncertainty_notes") or []) if str(item).strip()]
+
+    def _target_name() -> str:
+        for item in (main_recommendation, *(selected_targets or [])):
+            item_dict = item.model_dump() if hasattr(item, "model_dump") else dict(getattr(item, "__dict__", {}) or {})
+            name = str(item_dict.get("shop_name", "") or item_dict.get("alias", "") or "").strip()
+            if name:
+                return name
+        return "这家店"
+
+    target_name = _target_name()
+
+    if answer_type in {"single_shop", "single_shop_query"}:
+        for point in factual_points:
+            if "有券" in point:
+                return f"{target_name}{point.split(':', 1)[1].strip() if ':' in point else '有券'}"
+        if uncertainty_notes:
+            return f"{target_name}暂时无法确认优惠券信息。"
+        return f"{target_name}这项信息我已经按当前查询结果整理好了。"
+
+    if answer_type == "comparison":
+        names = []
+        for item in selected_targets[:2]:
+            item_dict = item.model_dump() if hasattr(item, "model_dump") else dict(getattr(item, "__dict__", {}) or {})
+            name = str(item_dict.get("shop_name", "") or item_dict.get("alias", "") or "").strip()
+            if name:
+                names.append(name)
+        if len(names) >= 2 and not uncertainty_notes:
+            return f"综合当前已知信息，我会优先看{names[0]}，其次是{names[1]}。"
+        if len(names) >= 2:
+            return f"这两家目前信息还不够完整，我暂时无法确认谁更好，先参考{names[0]}和{names[1]}的已知信息。"
+        if names:
+            if uncertainty_notes:
+                return f"{names[0]}目前信息还不够完整，我暂时无法确认它是不是更好的选择。"
+            return f"综合当前已知信息，我会优先看{names[0]}。"
+        if uncertainty_notes:
+            return "当前已知信息还不够完整，我暂时无法确认哪家更好。"
+        return "综合当前已知信息，我会优先参考这些店铺。"
+
+    if answer_type == "recommendation":
+        names = []
+        for item in selected_targets[:3]:
+            item_dict = item.model_dump() if hasattr(item, "model_dump") else dict(getattr(item, "__dict__", {}) or {})
+            name = str(item_dict.get("shop_name", "") or item_dict.get("alias", "") or "").strip()
+            if name:
+                names.append(name)
+        if names:
+            return f"附近这几家更值得优先看：{'、'.join(names)}。"
+        return "我会优先参考当前结果来给你推荐。"
+
+    if factual_points:
+        return factual_points[0]
+    return "我会优先参考当前结果来回答。"
+
+
 def _invoke_verbalizer_llm(
     llm_client: Any,
     *,
@@ -232,6 +299,24 @@ def _invoke_verbalizer_llm(
     return _normalize(result)
 
 
+def _mark_template_fallback_metadata(
+    metadata_out: dict[str, Any],
+    *,
+    error_message: str,
+    rewrite_count: int,
+) -> None:
+    metadata_out["answer_source"] = "template_fallback"
+    metadata_out["llm_verbalizer_error"] = error_message
+    metadata_out["answer_fallback_reason"] = error_message
+    metadata_out["answer_verify_passed"] = False
+    metadata_out["answer_verify_violations"] = ["template_fallback"]
+    metadata_out["rewrite_needed"] = False
+    metadata_out["rewrite_count"] = rewrite_count
+    metadata_out["final_safety_status"] = "fallback"
+    metadata_out["verifier_result"] = "fallback"
+    metadata_out["verifier_failure_code"] = "template_fallback"
+
+
 def verbalize_decision_plan(
     plan: DecisionPlan,
     *,
@@ -249,124 +334,106 @@ def verbalize_decision_plan(
     # Check client
     if not llm_client:
         if metadata_out is not None:
-            metadata_out["answer_source"] = "llm_error"
-            metadata_out["llm_verbalizer_error"] = "llm_client_unavailable"
-            metadata_out["answer_verify_passed"] = False
-            metadata_out["answer_verify_violations"] = ["llm_client_unavailable"]
-            metadata_out["rewrite_needed"] = False
-            metadata_out["rewrite_count"] = rewrite_count
-            metadata_out["final_safety_status"] = "error"
-            metadata_out["verifier_result"] = "fail"
-            metadata_out["verifier_failure_code"] = "llm_client_unavailable"
-        return "【LLM 出错】LLM 服务不可用，无法生成回答。"
+            _mark_template_fallback_metadata(
+                metadata_out,
+                error_message="llm_client_unavailable",
+                rewrite_count=rewrite_count,
+            )
+        return _rule_based_verbalize(plan)
 
     try:
         system_prompt, _ = _load_verbalizer_prompts()
     except (FileNotFoundError, ValueError, OSError) as exc:
         if metadata_out is not None:
-            metadata_out["answer_source"] = "llm_error"
-            metadata_out["llm_verbalizer_error"] = str(exc)
-            metadata_out["answer_verify_passed"] = False
-            metadata_out["answer_verify_violations"] = ["prompt_load_failed"]
-            metadata_out["rewrite_needed"] = False
-            metadata_out["rewrite_count"] = rewrite_count
-            metadata_out["final_safety_status"] = "error"
-            metadata_out["verifier_result"] = "fail"
-            metadata_out["verifier_failure_code"] = "prompt_load_failed"
-        return f"【LLM 出错】Verbalizer 提示词加载失败: {exc}"
+            _mark_template_fallback_metadata(
+                metadata_out,
+                error_message=str(exc),
+                rewrite_count=rewrite_count,
+            )
+        return _rule_based_verbalize(plan)
 
     user_prompt = _render_user_prompt(plan, rewrite_count=rewrite_count, previous_violations=previous_violations)
 
     try:
-        try:
-            res = _invoke_verbalizer_llm(
-                llm_client,
-                prompt=user_prompt,
-                system_prompt=system_prompt,
-                timeout_ms=timeout_ms,
-            )
-        except AttributeError:
-            raise RuntimeError("llm_call_missing_callable")
-
-        if not res or not res.get("ok"):
-            error_msg = str((res or {}).get("error_message", "") or (res or {}).get("error_code", "") or "llm_call_failed")
-            if metadata_out is not None:
-                metadata_out["answer_source"] = "llm_error"
-                metadata_out["llm_verbalizer_error"] = error_msg
-                metadata_out["answer_verify_passed"] = False
-                metadata_out["answer_verify_violations"] = [error_msg]
-                metadata_out["rewrite_needed"] = False
-                metadata_out["rewrite_count"] = rewrite_count
-                metadata_out["final_safety_status"] = "error"
-                metadata_out["verifier_result"] = "fail"
-                metadata_out["verifier_failure_code"] = error_msg
-            return f"【LLM 出错】LLM 调用失败: {error_msg}"
-
-        content = res.get("content")
-        if isinstance(content, VerbalizerResponse):
-            natural_text = content.natural_response
-        elif isinstance(content, dict):
-            natural_text = content.get("natural_response", "")
-        else:
-            raise RuntimeError("missing_natural_response")
-
-        if not natural_text:
-            raise RuntimeError("empty_natural_response")
-
-        if metadata_out is not None:
-            metadata_out["generated_llm_answer_before_fallback"] = natural_text
-
-        from .b2_mini_verifier import B2MiniVerifier
-        verifier = B2MiniVerifier(llm_client=llm_client)
-        verification_result = verifier.verify(plan, natural_text, timeout_ms=timeout_ms)
-        if metadata_out is not None:
-            metadata_out["verifier_result"] = "pass" if verification_result["passed"] else "fail"
-            metadata_out["verifier_failure_code"] = verification_result.get("failure_code") or verification_result.get("violation") or ""
-            metadata_out["verifier_unknown_fields"] = verification_result.get("unknown_fields") or []
-            metadata_out["verifier_unsupported_claims"] = verification_result.get("unsupported_claims") or []
-            metadata_out["verifier_false_fields"] = verification_result.get("false_fields") or []
-            metadata_out["verifier_recoverable"] = bool(verification_result.get("recoverable", False))
-        if not verification_result["passed"]:
-            if metadata_out is not None:
-                violations = verification_result.get("violations") or [str(verification_result.get("violation", ""))]
-                metadata_out["violation"] = verification_result["violation"]
-                metadata_out["violations"] = violations
-                metadata_out["llm_verbalizer_error"] = violations
-                metadata_out["answer_verify_passed"] = False
-                metadata_out["answer_verify_violations"] = violations
-                metadata_out["rewrite_needed"] = in_graph and rewrite_count < _GRAPH_REWRITE_LIMIT and bool(verification_result.get("recoverable", False))
-                metadata_out["rewrite_count"] = rewrite_count
-                metadata_out["rewrite_reason"] = verification_result["violation"]
-                metadata_out["final_safety_status"] = "violated"
-            
-            # If in graph and rewrite is still under limit, return natural_text to let verifier fail & trigger rewrite
-            if in_graph and rewrite_count < _GRAPH_REWRITE_LIMIT and bool(verification_result.get("recoverable", False)):
-                return natural_text
-            # Verification failed and no rewrite available — return natural_text + note
-            error_note = f"\n\n【注意】LLM 回答未通过可信性校验，可能存在不准确信息。"
-            return natural_text + error_note
-
-        if metadata_out is not None:
-            metadata_out["answer_verify_passed"] = True
-            metadata_out["answer_verify_violations"] = []
-            metadata_out["rewrite_needed"] = False
-            metadata_out["rewrite_count"] = rewrite_count
-            metadata_out["rewrite_reason"] = ""
-            metadata_out["final_safety_status"] = "safe"
-
-        return natural_text
+        res = _invoke_verbalizer_llm(
+            llm_client,
+            prompt=user_prompt,
+            system_prompt=system_prompt,
+            timeout_ms=timeout_ms,
+        )
+    except AttributeError:
+        raise RuntimeError("llm_call_missing_callable")
     except Exception as exc:
         if metadata_out is not None:
-            metadata_out["answer_source"] = "llm_error"
-            metadata_out["llm_verbalizer_error"] = str(exc)
+            _mark_template_fallback_metadata(
+                metadata_out,
+                error_message=str(exc),
+                rewrite_count=rewrite_count,
+            )
+        return _rule_based_verbalize(plan)
+
+    if not res or not res.get("ok"):
+        error_msg = str((res or {}).get("error_message", "") or (res or {}).get("error_code", "") or "llm_call_failed")
+        if metadata_out is not None:
+            _mark_template_fallback_metadata(
+                metadata_out,
+                error_message=error_msg,
+                rewrite_count=rewrite_count,
+            )
+        return _rule_based_verbalize(plan)
+
+    content = res.get("content")
+    if isinstance(content, VerbalizerResponse):
+        natural_text = content.natural_response
+    elif isinstance(content, dict):
+        natural_text = content.get("natural_response", "")
+    else:
+        raise RuntimeError("missing_natural_response")
+
+    if not natural_text:
+        raise RuntimeError("empty_natural_response")
+
+    if metadata_out is not None:
+        metadata_out["generated_llm_answer_before_fallback"] = natural_text
+
+    from .b2_mini_verifier import B2MiniVerifier
+    verifier = B2MiniVerifier(llm_client=llm_client)
+    verification_result = verifier.verify(plan, natural_text, timeout_ms=timeout_ms)
+    if metadata_out is not None:
+        metadata_out["verifier_result"] = "pass" if verification_result["passed"] else "fail"
+        metadata_out["verifier_failure_code"] = verification_result.get("failure_code") or verification_result.get("violation") or ""
+        metadata_out["verifier_unknown_fields"] = verification_result.get("unknown_fields") or []
+        metadata_out["verifier_unsupported_claims"] = verification_result.get("unsupported_claims") or []
+        metadata_out["verifier_false_fields"] = verification_result.get("false_fields") or []
+        metadata_out["verifier_recoverable"] = bool(verification_result.get("recoverable", False))
+    if not verification_result["passed"]:
+        if metadata_out is not None:
+            violations = verification_result.get("violations") or [str(verification_result.get("violation", ""))]
+            metadata_out["violation"] = verification_result["violation"]
+            metadata_out["violations"] = violations
+            metadata_out["llm_verbalizer_error"] = violations
             metadata_out["answer_verify_passed"] = False
-            metadata_out["answer_verify_violations"] = [str(exc)]
-            metadata_out["rewrite_needed"] = False
+            metadata_out["answer_verify_violations"] = violations
+            metadata_out["rewrite_needed"] = in_graph and rewrite_count < _GRAPH_REWRITE_LIMIT and bool(verification_result.get("recoverable", False))
             metadata_out["rewrite_count"] = rewrite_count
-            metadata_out["rewrite_reason"] = str(exc)
-            metadata_out["final_safety_status"] = "error"
-            metadata_out["verifier_result"] = "fail"
-            metadata_out["verifier_failure_code"] = str(exc)
-        return f"【LLM 出错】{exc}"
+            metadata_out["rewrite_reason"] = verification_result["violation"]
+            metadata_out["final_safety_status"] = "violated"
+
+        # If in graph and rewrite is still under limit, return natural_text to let verifier fail & trigger rewrite
+        if in_graph and rewrite_count < _GRAPH_REWRITE_LIMIT and bool(verification_result.get("recoverable", False)):
+            return natural_text
+        # Verification failed and no rewrite available — return natural_text + note
+        error_note = f"\n\n【注意】LLM 回答未通过可信性校验，可能存在不准确信息。"
+        return natural_text + error_note
+
+    if metadata_out is not None:
+        metadata_out["answer_verify_passed"] = True
+        metadata_out["answer_verify_violations"] = []
+        metadata_out["rewrite_needed"] = False
+        metadata_out["rewrite_count"] = rewrite_count
+        metadata_out["rewrite_reason"] = ""
+        metadata_out["final_safety_status"] = "safe"
+
+    return natural_text
 
 

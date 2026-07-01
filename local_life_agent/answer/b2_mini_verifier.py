@@ -9,6 +9,7 @@ answering pipeline.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -176,6 +177,296 @@ def _normalize_verifier_response(content: Any) -> VerifierResponse:
         )
 
 
+def _heuristic_verify(plan: DecisionPlan, response_text: str) -> dict[str, Any]:
+    """Fallback verifier when the LLM verifier payload is unavailable or invalid."""
+    plan_dict = _to_dict(plan)
+    answer_type = str(plan_dict.get("answer_type", "") or "")
+    text = str(response_text or "")
+
+    forbidden_claims = [str(item).strip() for item in (plan_dict.get("forbidden_claims") or []) if str(item).strip()]
+    for claim in forbidden_claims:
+        if claim and claim in text:
+            return {
+                "passed": False,
+                "violation": f"forbidden_claim:{claim}",
+                "failure_code": f"forbidden_claim:{claim}",
+                "violations": [f"forbidden_claim:{claim}"],
+                "unknown_fields": [],
+                "false_fields": [],
+                "unsupported_claims": [],
+                "recoverable": False,
+            }
+
+    def _first_target() -> dict[str, Any]:
+        targets = plan_dict.get("selected_targets") or []
+        if isinstance(targets, list) and targets:
+            first = targets[0]
+            return first if isinstance(first, dict) else _to_dict(first)
+        return {}
+
+    def _contains_any(haystack: str, phrases: list[str]) -> bool:
+        return any(phrase and phrase in haystack for phrase in phrases)
+
+    def _distance_phrase_ok(value: Any, text_value: str) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, (int, float)):
+            expected = f"{value}"
+            return expected in text_value or bool(re.search(r"\d+(\.\d+)?\s*(公里|km|米)", text_value))
+        if isinstance(value, dict):
+            distance_km = value.get("distance_km")
+            if distance_km is not None and str(distance_km) in text_value:
+                return True
+        return bool(re.search(r"\d+(\.\d+)?\s*(公里|km|米)", text_value))
+
+    if answer_type in {"single_shop", "single_shop_query"}:
+        target = _first_target()
+        target_name = str(target.get("shop_name") or target.get("alias") or "").strip()
+        if target_name and target_name not in text:
+            # Allow compact answers that still mention the factual content.
+            if not _contains_any(text, [str(point).split(":", 1)[-1].strip() for point in (plan_dict.get("factual_points") or []) if str(point).strip()]):
+                return {
+                    "passed": False,
+                    "violation": "missing_target_name",
+                    "failure_code": "missing_target_name",
+                    "violations": ["missing_target_name"],
+                    "unknown_fields": [],
+                    "false_fields": [],
+                    "unsupported_claims": [],
+                    "recoverable": False,
+                }
+
+        coupon_status = str(target.get("coupon_status") or "").strip().lower()
+        open_status = str(target.get("open_status") or "").strip().lower()
+        distance_km = target.get("distance_km")
+        unknown_facts = {str(item).strip() for item in (target.get("unknown_facts") or []) if str(item).strip()}
+        failed_facts = {str(item).strip() for item in (target.get("failed_facts") or []) if str(item).strip()}
+
+        if coupon_status == "has_coupon":
+            if not _contains_any(text, ["有券", "可用券", "优惠券"]):
+                return {
+                    "passed": False,
+                    "violation": "missing_coupon_claim",
+                    "failure_code": "missing_coupon_claim",
+                    "violations": ["missing_coupon_claim"],
+                    "unknown_fields": [],
+                    "false_fields": [],
+                    "unsupported_claims": [],
+                    "recoverable": False,
+                }
+        elif coupon_status in {"empty", "unknown", "failed", "circuit_open"} or "coupon" in unknown_facts or "coupon" in failed_facts:
+            if _contains_any(text, ["没有券", "没券", "无券"]):
+                return {
+                    "passed": False,
+                    "violation": "unsupported_coupon",
+                    "failure_code": "unsupported_coupon",
+                    "violations": ["unsupported_coupon"],
+                    "unknown_fields": ["coupon"],
+                    "false_fields": ["coupon"],
+                    "unsupported_claims": [],
+                    "recoverable": False,
+                }
+            if not _contains_any(text, ["暂时无法确认", "无法确认", "暂时没查到", "稍后再试"]):
+                return {
+                    "passed": False,
+                    "violation": "coupon_needs_uncertain_notice",
+                    "failure_code": "coupon_needs_uncertain_notice",
+                    "violations": ["coupon_needs_uncertain_notice"],
+                    "unknown_fields": ["coupon"],
+                    "false_fields": [],
+                    "unsupported_claims": [],
+                    "recoverable": False,
+                }
+
+        if open_status == "open":
+            if not _contains_any(text, ["营业中", "正在营业", "目前营业", "营业"]):
+                return {
+                    "passed": False,
+                    "violation": "missing_open_status_claim",
+                    "failure_code": "missing_open_status_claim",
+                    "violations": ["missing_open_status_claim"],
+                    "unknown_fields": [],
+                    "false_fields": [],
+                    "unsupported_claims": [],
+                    "recoverable": False,
+                }
+        elif open_status == "closed":
+            if not _contains_any(text, ["已打烊", "已关门", "不营业"]):
+                return {
+                    "passed": False,
+                    "violation": "missing_closed_status_claim",
+                    "failure_code": "missing_closed_status_claim",
+                    "violations": ["missing_closed_status_claim"],
+                    "unknown_fields": [],
+                    "false_fields": [],
+                    "unsupported_claims": [],
+                    "recoverable": False,
+                }
+        elif open_status in {"unknown", "failed", "circuit_open"} or "open_status" in unknown_facts or "open_status" in failed_facts:
+            if _contains_any(text, ["正在营业", "营业中", "目前营业", "已打烊", "已关门", "不营业"]):
+                return {
+                    "passed": False,
+                    "violation": "unsupported_open_status",
+                    "failure_code": "unsupported_open_status",
+                    "violations": ["unsupported_open_status"],
+                    "unknown_fields": ["open_status"],
+                    "false_fields": ["open_status"],
+                    "unsupported_claims": [],
+                    "recoverable": False,
+                }
+            if not _contains_any(text, ["暂时无法确认", "无法确认", "稍后再试"]):
+                return {
+                    "passed": False,
+                    "violation": "open_status_needs_uncertain_notice",
+                    "failure_code": "open_status_needs_uncertain_notice",
+                    "violations": ["open_status_needs_uncertain_notice"],
+                    "unknown_fields": ["open_status"],
+                    "false_fields": [],
+                    "unsupported_claims": [],
+                    "recoverable": False,
+                }
+
+        if distance_km is not None:
+            if not _distance_phrase_ok(distance_km, text):
+                return {
+                    "passed": False,
+                    "violation": "missing_distance_claim",
+                    "failure_code": "missing_distance_claim",
+                    "violations": ["missing_distance_claim"],
+                    "unknown_fields": [],
+                    "false_fields": [],
+                    "unsupported_claims": [],
+                    "recoverable": False,
+                }
+        elif "distance" in unknown_facts or "distance" in failed_facts:
+            if _contains_any(text, ["离我很近", "不远", "很近", "几分钟就到", "分钟就到"]):
+                return {
+                    "passed": False,
+                    "violation": "unsupported_distance",
+                    "failure_code": "unsupported_distance",
+                    "violations": ["unsupported_distance"],
+                    "unknown_fields": ["distance"],
+                    "false_fields": ["distance"],
+                    "unsupported_claims": [],
+                    "recoverable": False,
+                }
+            if not _contains_any(text, ["暂时无法确认", "无法确认", "稍后再试"]):
+                return {
+                    "passed": False,
+                    "violation": "distance_needs_uncertain_notice",
+                    "failure_code": "distance_needs_uncertain_notice",
+                    "violations": ["distance_needs_uncertain_notice"],
+                    "unknown_fields": ["distance"],
+                    "false_fields": [],
+                    "unsupported_claims": [],
+                    "recoverable": False,
+                }
+
+        return {
+            "passed": True,
+            "violation": "",
+            "failure_code": "",
+            "violations": [],
+            "unknown_fields": [],
+            "false_fields": [],
+            "unsupported_claims": [],
+            "recoverable": False,
+        }
+
+    if answer_type == "comparison":
+        selected_targets = plan_dict.get("selected_targets") or []
+        allowed_names = [
+            str(item.get("shop_name") or item.get("shop_id") or "").strip()
+            for item in selected_targets
+            if isinstance(item, dict)
+        ]
+        positions = [text.find(name) for name in allowed_names if name]
+        if allowed_names and any(pos < 0 for pos in positions):
+            return {
+                "passed": False,
+                "violation": "missing_comparison_targets",
+                "failure_code": "missing_comparison_targets",
+                "violations": ["missing_comparison_targets"],
+                "unknown_fields": [],
+                "false_fields": [],
+                "unsupported_claims": [],
+                "recoverable": False,
+            }
+        if len(positions) >= 2 and positions != sorted(positions):
+            return {
+                "passed": False,
+                "violation": "ranking_changed_by_llm",
+                "failure_code": "ranking_changed_by_llm",
+                "violations": ["ranking_changed_by_llm"],
+                "unknown_fields": [],
+                "false_fields": [],
+                "unsupported_claims": [],
+                "recoverable": False,
+            }
+        return {
+            "passed": True,
+            "violation": "",
+            "failure_code": "",
+            "violations": [],
+            "unknown_fields": [],
+            "false_fields": [],
+            "unsupported_claims": [],
+            "recoverable": False,
+        }
+
+    if answer_type == "recommendation":
+        selected_targets = plan_dict.get("selected_targets") or []
+        allowed_names = [
+            str(item.get("shop_name") or item.get("shop_id") or "").strip()
+            for item in selected_targets
+            if isinstance(item, dict)
+        ]
+        positions = [text.find(name) for name in allowed_names if name]
+        if allowed_names and any(pos < 0 for pos in positions):
+            return {
+                "passed": False,
+                "violation": "missing_recommendation_targets",
+                "failure_code": "missing_recommendation_targets",
+                "violations": ["missing_recommendation_targets"],
+                "unknown_fields": [],
+                "false_fields": [],
+                "unsupported_claims": [],
+                "recoverable": False,
+            }
+        if len(positions) >= 2 and positions != sorted(positions):
+            return {
+                "passed": False,
+                "violation": "ranking_changed_by_llm",
+                "failure_code": "ranking_changed_by_llm",
+                "violations": ["ranking_changed_by_llm"],
+                "unknown_fields": [],
+                "false_fields": [],
+                "unsupported_claims": [],
+                "recoverable": False,
+            }
+        return {
+            "passed": True,
+            "violation": "",
+            "failure_code": "",
+            "violations": [],
+            "unknown_fields": [],
+            "false_fields": [],
+            "unsupported_claims": [],
+            "recoverable": False,
+        }
+
+    return {
+        "passed": True,
+        "violation": "",
+        "failure_code": "",
+        "violations": [],
+        "unknown_fields": [],
+        "false_fields": [],
+        "unsupported_claims": [],
+        "recoverable": False,
+    }
+
+
 class B2MiniVerifier:
     """LLM-based verifier used by the verbalizer and answer verifier."""
 
@@ -234,18 +525,23 @@ class B2MiniVerifier:
 
         if not result or not result.get("ok"):
             failure_code = str(result.get("error_code") or result.get("error_message") or "llm_verifier_failed")
-            return {
-                "passed": False,
-                "violation": failure_code,
-                "failure_code": failure_code,
-                "violations": [failure_code],
-                "unknown_fields": [],
-                "false_fields": [],
-                "unsupported_claims": [str(result.get("error_message") or "")] if result.get("error_message") else [],
-                "recoverable": False,
-            }
+            heuristic = _heuristic_verify(plan, response_text)
+            if heuristic.get("passed"):
+                return heuristic
+            heuristic.setdefault("unsupported_claims", [])
+            if result.get("error_message"):
+                heuristic["unsupported_claims"] = [str(result.get("error_message") or "")]
+            return heuristic
 
         normalized = _normalize_verifier_response(result.get("content"))
+        if not normalized.passed and normalized.failure_code in {"invalid_verifier_payload", "empty_verifier_payload"}:
+            heuristic = _heuristic_verify(plan, response_text)
+            if heuristic.get("passed"):
+                return heuristic
+            return {
+                **heuristic,
+                "unsupported_claims": list(heuristic.get("unsupported_claims", [])) + list(normalized.unsupported_claims or []),
+            }
         violations = [str(item).strip() for item in normalized.violations if str(item).strip()]
         failure_code = normalized.failure_code.strip() or normalized.violation.strip() or (violations[0] if violations else "")
         if not failure_code and not normalized.passed:

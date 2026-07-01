@@ -169,14 +169,8 @@ def _closest_expected_name(answer: str, expected_names: list[str], phrase_index:
 
 def _extract_facet_results(evidence: dict[str, Any], task_type: str) -> list[dict[str, Any]]:
     facet_results = evidence.get("facet_results") or []
-    if not facet_results:
-        snapshot = evidence.get("ranking_snapshot") or {}
-        facet_results = snapshot.get("facet_results") or []
     if facet_results:
         return [item if isinstance(item, dict) else {} for item in facet_results]
-    if task_type == "coupon_query":
-        snapshot = evidence.get("ranking_snapshot") or {}
-        return [{"facet": "coupon", "required": True, "status": snapshot.get("status", "unknown")}]
     return []
 
 
@@ -312,6 +306,9 @@ def _comparison_issues(answer: str, evidence: dict[str, Any]) -> list[str]:
     matrix = evidence.get("comparison_matrix") or {}
     rows = [row for row in (matrix.get("rows") or []) if isinstance(row, dict)]
     if not rows:
+        ranking_snapshot = evidence.get("ranking_snapshot") or {}
+        rows = [row for row in (ranking_snapshot.get("ranked") or ranking_snapshot.get("ranked_shops") or ranking_snapshot.get("shops") or []) if isinstance(row, dict)]
+    if not rows:
         return issues
 
     allowed_shop_names = set(_comparison_shop_names(evidence))
@@ -353,6 +350,12 @@ def _comparison_issues(answer: str, evidence: dict[str, Any]) -> list[str]:
             mentioned_order = _extract_mentioned_order(answer, expected_names)
             if mentioned_order and mentioned_order[0] != expected_names[0]:
                 issues.append("ranking_changed_by_llm")
+
+    ordering_markers = ["\u5728\u524d", "\u5728\u540e", "\u6392\u5728", "\u987a\u5e8f", "\u6392\u540d", "\u524d\u9762", "\u540e\u9762", "\u7b2c\u4e00", "\u7b2c\u4e8c", "\u7b2c\u4e09"]
+    if len(expected_names) >= 2 and _match_any_phrase(answer, ordering_markers):
+        mentioned_order = _extract_mentioned_order(answer, expected_names)
+        if len(mentioned_order) >= 2 and mentioned_order != expected_names[: len(mentioned_order)]:
+            issues.append("ranking_changed_by_llm")
 
     winner_claim_phrases = ["\u6700\u63a8\u8350", "\u66f4\u597d", "\u66f4\u4f18", "\u80dc\u51fa", "\u9886\u5148", "\u7efc\u5408\u6700\u597d", "\u7efc\u5408\u66f4\u597d", "\u66f4\u9002\u5408", "\u66f4\u8fd1", "\u79bb\u5f97\u66f4\u8fd1", "\u6700\u8fd1"]
     if len(expected_names) >= 2 and _match_any_phrase(answer, winner_claim_phrases):

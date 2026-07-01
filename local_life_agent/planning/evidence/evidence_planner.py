@@ -54,7 +54,8 @@ def _build_tool_call(
     else:
         args = {"shop_id": shop_id}
     if tool_name == "get_distance_eta":
-        args["from_location"] = location or config.MOCK_LOCATION
+        if location is not None:
+            args["from_location"] = location
     if tool_name == "get_shop_cards":
         args = {"shop_ids": [shop_id], "need_coupon_brief": True, "need_open_status": True, "need_distance_eta": True}
     return ToolCallSpec(
@@ -99,13 +100,18 @@ def plan_evidence(
         if goal_type in {"recommendation", "comparison"}:
             required_facets = ["distance", "open_status", "coupon"]
             optional_facets = ["detail"]
-        elif goal_type in {"single_shop_query", "refinement"}:
+        elif goal_type == "single_shop_query":
+            required_facets = list(goal.evidence_needs or [])
+            if not required_facets:
+                required_facets = ["detail"]
+        elif goal_type == "refinement":
             required_facets = list(goal.evidence_needs or []) or ["detail"]
         else:
             raise ValueError("required_facets or optional_facets is required")
     all_facets = required_facets + [f for f in optional_facets if f not in required_facets]
 
     candidates = list(candidate_set.candidates or [])
+    has_location = location is not None
 
     # Deduplicate by shop_id + facet
     seen: set[str] = set()
@@ -120,6 +126,8 @@ def plan_evidence(
             continue
 
         for facet in all_facets:
+            if facet == "distance" and not has_location:
+                continue
             dk = _dedup_key(shop_id, facet)
             if dk in seen:
                 continue
@@ -130,13 +138,30 @@ def plan_evidence(
                 _build_tool_call(shop_id, shop_name, facet, required, index, location)
             )
 
+    planning_notes: list[str] = []
+    assumptions_used: list[str] = []
+    if not has_location and "distance" in all_facets:
+        planning_notes.append("缺少用户位置，已跳过 distance 工具调用")
+        assumptions_used.append("distance_requires_user_location")
+
     task_type = _goal_type_to_task_type(goal.goal_type)
 
     plan = ExecutionPlan(
         plan_id=f"evidence_plan_{candidate_set.source.value}_{task_type}",
         task_type=task_type,
         tool_calls=tool_calls,
+        stages=[
+            {
+                "stage_id": "stage_1",
+                "description": "Fetch requested facets for the resolved shop in parallel",
+                "tool_names": [call.tool_name for call in tool_calls],
+                "depends_on": [],
+                "max_parallelism": max(1, min(len(tool_calls), config.MAX_CONCURRENCY)),
+            }
+        ] if tool_calls else [],
         target_shop_ids=[c.shop_id for c in candidates if c.shop_id],
+        planning_notes=planning_notes,
+        assumptions_used=assumptions_used,
     )
 
     _logger.debug(
@@ -182,7 +207,7 @@ def plan_evidence_with_llm(
         "{{GOAL_PLAN}}": goal.model_dump() if hasattr(goal, "model_dump") else dict(goal),
         "{{SEMANTIC_FRAME}}": semantic_frame.model_dump() if hasattr(semantic_frame, "model_dump") else (semantic_frame or {}),
         "{{CANDIDATE_SET}}": candidate_set.model_dump() if hasattr(candidate_set, "model_dump") else dict(candidate_set),
-        "{{USER_LOCATION}}": location or config.MOCK_LOCATION,
+        "{{USER_LOCATION}}": location or {},
         "{{ALLOWED_TOOLS}}": allowed_tools,
     }
     try:

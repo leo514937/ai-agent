@@ -88,17 +88,31 @@ def _setup(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
 # =====================================================================
 # Coverage tracker
 # =====================================================================
+#
+# P0 e2e gate:
+# - only count trace-visible outer main-graph nodes
+# - wrapper internals are tracked separately under subgraph coverage
+#
+# Subgraph coverage:
+# - understanding_subgraph internals:
+#   semantic_parse / slot_extractor / frame_validator / context_recovery
+# - execution_review_subgraph internals:
+#   tool_execute / evidence_build / decision_planner / decision_review
 
 _COVERAGE: dict[str, dict[str, Any]] = {
     "nodes": {n: False for n in [
         "receive_input", "load_session_state", "check_pending_clarification",
         "basic_input_validate", "normalize_text", "hard_guard", "top_intent_router",
-        "semantic_parse", "slot_extractor", "frame_validator", "context_recovery",
         "target_resolve", "clarify_decide", "evidence_planner", "plan_validator",
-        "tool_execute", "evidence_build", "decision_planner", "decision_review",
         "answer_plan_build", "answer_generate", "answer_verify", "rewrite",
         "final_response_build", "clarify_response", "fallback_answer",
         "state_update_plan", "persist_session_state", "emit_response",
+    ]},
+    "subgraph_nodes": {n: False for n in [
+        "semantic_parse", "slot_extractor", "frame_validator", "context_recovery",
+        "orchestration_router_shadow",
+        "workflow_runner",
+        "tool_execute", "evidence_build", "decision_planner", "decision_review",
     ]},
     "conditional_edges": {e: False for e in [
         "check_pending->basic_input_validate", "check_pending->target_resolve",
@@ -108,12 +122,15 @@ _COVERAGE: dict[str, dict[str, Any]] = {
         "top_intent->semantic_parse", "top_intent->emit_response",
         "semantic->slot_extractor", "semantic->clarify_response",
         "frame_validator->context_recovery", "frame_validator->clarify_response",
+        "understanding_subgraph->orchestration_router_shadow",
         "clarify_decide->evidence_planner", "clarify_decide->clarify_response",
         "clarify_decide->emit_response",
         "plan_validator->tool_execute", "plan_validator->fallback_answer",
         "tool_execute->evidence_build",
         "answer_verify->final_response_build", "answer_verify->rewrite",
         "answer_verify->fallback_answer",
+        "orchestration_router_shadow->workflow_runner",
+        "workflow_runner->planning_subgraph", "workflow_runner->response_subgraph",
     ]},
     "verbalizer_paths": {v: False for v in [
         "recommendation_success", "recommendation_violation_fallback",
@@ -130,6 +147,8 @@ _COVERAGE: dict[str, dict[str, Any]] = {
 def _mark_node(node: str) -> None:
     if node in _COVERAGE["nodes"]:
         _COVERAGE["nodes"][node] = True
+    if node in _COVERAGE["subgraph_nodes"]:
+        _COVERAGE["subgraph_nodes"][node] = True
 
 
 def _mark_edge(edge: str) -> None:
@@ -248,7 +267,7 @@ class TestConditionalRouting:
         assert resp.answer_text
 
     def test_clarify_decide_ambiguous_routes(self):
-        """使用 SpyBackend 确保 local_life + single_shop_query 以触发 AMBIGUOUS 路径。"""
+        """使用 SpyBackend 确保 local_life + single_shop_query 走澄清兜底路径。"""
         spy = SpyRealLLMBackend(scenario_payloads={
             "海底捞": {
                 "top_intent": "local_life", "task_type": "single_shop_query",
@@ -260,11 +279,14 @@ class TestConditionalRouting:
         set_llm_backend(spy)
         resp = run_agent_graph("海底捞", "route_clarify_amb")
         nodes = _update_coverage(resp, edge="clarify_decide->clarify_response")
-        assert "target_resolve" in nodes
-        assert "clarify_decide" in nodes
+        assert resp.debug is not None
+        assert resp.debug.answer_source == "clarification_fallback_workflow"
+        assert resp.debug.session_state_after.get("pending_clarification") is not None
+        assert "target_resolve" not in nodes
+        assert "clarify_decide" not in nodes
 
     def test_clarify_decide_not_found_emits(self):
-        """使用 SpyBackend 确保 local_life intent 以触发 target_resolve。"""
+        """使用 SpyBackend 确保未命中店名时直接进入澄清兜底。"""
         spy = SpyRealLLMBackend(scenario_payloads={
             "不存在的店铺名": {
                 "top_intent": "local_life", "task_type": "single_shop_query",
@@ -276,8 +298,11 @@ class TestConditionalRouting:
         set_llm_backend(spy)
         resp = run_agent_graph("不存在的店铺名", "route_not_found")
         nodes = _update_coverage(resp, edge="clarify_decide->emit_response")
-        assert "target_resolve" in nodes
-        assert "clarify_decide" in nodes
+        assert resp.debug is not None
+        assert resp.debug.answer_source == "clarification_fallback_workflow"
+        assert resp.debug.session_state_after.get("pending_clarification") is not None
+        assert "target_resolve" not in nodes
+        assert "clarify_decide" not in nodes
         assert "emit_response" in nodes
 
     def test_plan_validator_ok_to_tool(self):
@@ -326,6 +351,34 @@ class TestConditionalRouting:
         set_llm_backend(FB())
         resp = run_agent_graph("海底捞", "route_frame_fail")
         _update_coverage(resp, edge="frame_validator->clarify_response")
+        assert resp.answer_text
+
+    def test_final_response_build_pass_path(self, monkeypatch: pytest.MonkeyPatch):
+        """最小 deterministic 场景：只验证 final_response_build 可达。"""
+        from local_life_agent.engine.subgraphs import response_subgraph as response_subgraph_module
+
+        monkeypatch.setattr(
+            response_subgraph_module,
+            "verify_answer",
+            lambda *_args, **_kwargs: {
+                "passed": True,
+                "failure_code": "",
+                "violation": "",
+                "violations": [],
+                "unknown_fields": [],
+                "false_fields": [],
+                "unsupported_claims": [],
+                "recoverable": False,
+            },
+        )
+
+        spy = SpyRealLLMBackend()
+        set_llm_backend(spy)
+        resp = run_agent_graph("附近推荐火锅", "route_final_response_pass")
+        nodes = _update_coverage(resp, edge="answer_verify->final_response_build")
+        assert "final_response_build" in nodes
+        assert resp.debug is not None
+        assert resp.debug.answer_verify_passed is True
         assert resp.answer_text
 
 
@@ -468,7 +521,7 @@ class TestEdgeCases:
         assert spy.call_count >= 1
 
     def test_missing_shop_name(self):
-        """SpyBackend 确保 local_life intent 以触发 NOT_FOUND。"""
+        """SpyBackend 确保缺失店名时走澄清兜底。"""
         spy = SpyRealLLMBackend(scenario_payloads={
             "火星餐厅": {
                 "top_intent": "local_life", "task_type": "single_shop_query",
@@ -480,8 +533,11 @@ class TestEdgeCases:
         set_llm_backend(spy)
         resp = run_agent_graph("火星餐厅怎么样？", "edge_missing")
         nodes = _update_coverage(resp, edge="clarify_decide->emit_response")
-        assert "target_resolve" in nodes
-        assert "clarify_decide" in nodes
+        assert resp.debug is not None
+        assert resp.debug.answer_source == "clarification_fallback_workflow"
+        assert resp.debug.session_state_after.get("pending_clarification") is not None
+        assert "target_resolve" not in nodes
+        assert "clarify_decide" not in nodes
 
 
 # =====================================================================
@@ -491,6 +547,8 @@ class TestEdgeCases:
 def test_print_coverage_report() -> None:
     n_total = len(_COVERAGE["nodes"])
     n_covered = sum(1 for v in _COVERAGE["nodes"].values() if v)
+    s_total = len(_COVERAGE["subgraph_nodes"])
+    s_covered = sum(1 for v in _COVERAGE["subgraph_nodes"].values() if v)
     e_total = len(_COVERAGE["conditional_edges"])
     e_covered = sum(1 for v in _COVERAGE["conditional_edges"].values() if v)
     v_total = len(_COVERAGE["verbalizer_paths"])
@@ -504,6 +562,11 @@ def test_print_coverage_report() -> None:
     print(f"\n[节点覆盖] {n_covered}/{n_total} ({n_covered/n_total*100:.1f}%)")
     for name in sorted(_COVERAGE["nodes"]):
         s = "PASS" if _COVERAGE["nodes"][name] else "MISS"
+        print(f"  [{s:4s}] {name}")
+
+    print(f"\n[Subgraph 内部覆盖] {s_covered}/{s_total} ({s_covered/s_total*100:.1f}%)")
+    for name in sorted(_COVERAGE["subgraph_nodes"]):
+        s = "PASS" if _COVERAGE["subgraph_nodes"][name] else "MISS"
         print(f"  [{s:4s}] {name}")
 
     print(f"\n[条件边覆盖] {e_covered}/{e_total} ({e_covered/e_total*100:.1f}%)")
@@ -522,9 +585,12 @@ def test_print_coverage_report() -> None:
             print(f"  {src}: {cnt}次")
 
     unv = [n for n, v in _COVERAGE["nodes"].items() if not v]
+    subv = [n for n, v in _COVERAGE["subgraph_nodes"].items() if not v]
     unc = [e for e, v in _COVERAGE["conditional_edges"].items() if not v]
     if unv:
         print(f"\n! 未覆盖节点: {', '.join(unv)}")
+    if subv:
+        print(f"\n! 未覆盖 Subgraph 内部节点: {', '.join(subv)}")
     if unc:
         print(f"\n! 未覆盖条件边: {', '.join(unc)}")
 

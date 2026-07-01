@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 
@@ -140,6 +141,8 @@ def test_semantic_parser_missing_shop_name_requests_context():
 
 
 def test_forbidden_semantic_fields_stop_graph_before_tool_execution(monkeypatch):
+    module = importlib.reload(gb)
+    from ..engine.subgraphs import understanding_subgraph as us
     tool_calls: list[tuple[str, dict]] = []
     resolve_calls: list[tuple[str, dict]] = []
 
@@ -165,8 +168,8 @@ def test_forbidden_semantic_fields_stop_graph_before_tool_execution(monkeypatch)
             "raw": "{}",
         }
 
-    original_dispatch = gb.dispatch_tool_call
-    original_resolve = gb.resolve_shop
+    original_dispatch = module.dispatch_tool_call
+    original_resolve = module.resolve_shop
 
     def fake_dispatch(tool_name: str, kwargs: dict):
         tool_calls.append((tool_name, dict(kwargs)))
@@ -176,9 +179,9 @@ def test_forbidden_semantic_fields_stop_graph_before_tool_execution(monkeypatch)
         resolve_calls.append((query, {"location": location, "session_shop_ids": list(session_shop_ids or [])}))
         return original_resolve(query, location=location, session_shop_ids=session_shop_ids)
 
-    monkeypatch.setattr(gb, "parse_semantic_frame", fake_parse_semantic_frame)
-    monkeypatch.setattr(gb, "dispatch_tool_call", fake_dispatch)
-    monkeypatch.setattr(gb, "resolve_shop", fake_resolve)
+    monkeypatch.setattr(us, "parse_semantic_frame", fake_parse_semantic_frame)
+    monkeypatch.setattr(module, "dispatch_tool_call", fake_dispatch)
+    monkeypatch.setattr(module, "resolve_shop", fake_resolve)
 
     response = run_agent_graph("海底捞水晶城店有券吗", "semantic_forbid")
 

@@ -1,10 +1,17 @@
 from __future__ import annotations
 
-from ..tools.gateway import dispatch_tool_call
+import pytest
+
+from .. import config as _cfg
+from ..tools.executor import build_tool_executor
 
 
-def test_tool_results_mark_backend_source_mock():
-    result = dispatch_tool_call("get_shop_detail", {"shop_id": "shop_sc_05"})
-
-    assert result["backend_source"] == "mock"
-    assert result["tool_backend"] == "mock"
+def test_tool_executor_rejects_unknown_backend():
+    """Unknown TOOL_BACKEND values should fail closed instead of silently falling back."""
+    old_backend = _cfg.TOOL_BACKEND
+    try:
+        _cfg.TOOL_BACKEND = "fake"
+        with pytest.raises(ValueError, match="Unknown TOOL_BACKEND"):
+            build_tool_executor()
+    finally:
+        _cfg.TOOL_BACKEND = old_backend

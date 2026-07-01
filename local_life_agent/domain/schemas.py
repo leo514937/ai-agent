@@ -52,10 +52,14 @@ class MatchedBy(str, Enum):
 
 
 class UserContext(BaseModel):
-    """User's location and mock preferences (static mock for MVP)."""
+    """User's location and location metadata."""
     location_name: str = "北京邮电大学"
-    lat: float = 39.9609
-    lng: float = 116.3581
+    lat: float | None = 39.9609
+    lng: float | None = 116.3581
+    location_status: str = "provided"
+    location_source: str = "provided"
+    requires_location: bool = False
+    location_missing_reason: str = ""
 
 
 class TurnInput(BaseModel):
@@ -170,6 +174,18 @@ class PendingClarification(BaseModel):
     source_node: str = ""
     already_resolved_targets: list[dict[str, Any]] = Field(default_factory=list)
     ambiguous_target_slot: str = ""
+
+
+class ActiveTurnResult(BaseModel):
+    """Canonical result of pending clarification turn resolution."""
+
+    route: str = ""
+    source: str = ""
+    reason: str = ""
+    confidence: float = 0.0
+    selected_index: int | None = None
+    selected_candidate: dict[str, Any] | None = None
+    new_query: str = ""
 
 
 class ToolResult(BaseModel):
@@ -615,6 +631,19 @@ class ComparisonTargetResolution(BaseModel):
     prompt: str | None = None
 
 
+class ComparisonTurnArtifact(BaseModel):
+    """Comparison turn handoff payload for the thin core wrapper."""
+    model_config = ConfigDict(extra="forbid")
+
+    comparison_targets: list[dict[str, Any]] = Field(default_factory=list)
+    comparison_target_resolution: dict[str, Any] = Field(default_factory=dict)
+    pending_clarification: dict[str, Any] | None = None
+    comparison_result: dict[str, Any] | None = None
+    displayed_items: list[dict[str, Any]] = Field(default_factory=list)
+    source: str = ""
+    provenance: str = ""
+
+
 ComparisonTargetResolution.model_rebuild()
 
 
@@ -647,6 +676,90 @@ class ComparisonMatrix(BaseModel):
 ComparisonCell.model_rebuild()
 ComparisonMatrix.model_rebuild()
 
+_ORCHESTRATION_PATTERNS = {
+    "direct_response",
+    "deterministic_tool",
+    "discovery_decision",
+    "exploration_planning",
+    "clarification_fallback",
+}
+_ORCHESTRATION_COMPLEXITY = {"low", "medium", "high"}
+_ORCHESTRATION_RESPONSE_MODES = {
+    "direct_response",
+    "tool_answer",
+    "search_list",
+    "recommendation",
+    "comparison",
+    "refinement",
+    "clarify",
+    "fallback",
+    "exploration_plan",
+}
+_ORCHESTRATION_NEXT_ACTIONS = {"run_workflow", "clarify", "fallback"}
+
+
+class OrchestrationDecision(BaseModel):
+    """Shadow-mode secondary routing decision for Phase 4.
+
+    This object records which workflow pattern the orchestration router
+    would prefer, without changing the active execution path.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    orchestration_pattern: str = "direct_response"
+    workflow_name: str = "direct_response"
+    workflow_reason: str = ""
+    task_complexity: str = "low"
+    requires_tool: bool = False
+    requires_clarification: bool = False
+    response_mode: str = "direct_response"
+    confidence: float = 0.0
+    missing_fields: list[str] = Field(default_factory=list)
+    next_action: str = "run_workflow"
+
+    @field_validator("orchestration_pattern", "workflow_name")
+    @classmethod
+    def _validate_pattern(cls, value: str) -> str:
+        value = str(value or "").strip() or "direct_response"
+        if value not in _ORCHESTRATION_PATTERNS:
+            raise ValueError(f"unsupported orchestration pattern: {value}")
+        return value
+
+    @field_validator("task_complexity")
+    @classmethod
+    def _validate_complexity(cls, value: str) -> str:
+        value = str(value or "").strip() or "low"
+        if value not in _ORCHESTRATION_COMPLEXITY:
+            raise ValueError(f"unsupported task complexity: {value}")
+        return value
+
+    @field_validator("response_mode")
+    @classmethod
+    def _validate_response_mode(cls, value: str) -> str:
+        value = str(value or "").strip() or "direct_response"
+        if value not in _ORCHESTRATION_RESPONSE_MODES:
+            raise ValueError(f"unsupported response mode: {value}")
+        return value
+
+    @field_validator("next_action")
+    @classmethod
+    def _validate_next_action(cls, value: str) -> str:
+        value = str(value or "").strip() or "run_workflow"
+        if value not in _ORCHESTRATION_NEXT_ACTIONS:
+            raise ValueError(f"unsupported next action: {value}")
+        return value
+
+    @field_validator("confidence")
+    @classmethod
+    def _validate_confidence(cls, value: float) -> float:
+        confidence = float(value or 0.0)
+        if confidence < 0.0:
+            return 0.0
+        if confidence > 1.0:
+            return 1.0
+        return confidence
+
 
 class DecisionPlan(BaseModel):
     """Factual plan used by the LLMVerbalizer to generate a natural response."""
@@ -668,7 +781,48 @@ class DecisionPlan(BaseModel):
     conversation_continuity: dict[str, Any] = Field(default_factory=dict)
 
 
+class ExplorationSubgoal(BaseModel):
+    """A single step in an exploration itinerary."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    subgoal_id: str = ""
+    kind: str = ""
+    query: str = ""
+    sequence_order: int = 0
+    temporal_relation: str = ""
+    require_location: bool = False
+    max_candidates: int = 3
+    tool_rounds: list[dict[str, Any]] = Field(default_factory=list)
+    selected_candidate: dict[str, Any] | None = None
+    candidate_shops: list[dict[str, Any]] = Field(default_factory=list)
+    note: str = ""
+
+
+class ExplorationPlan(BaseModel):
+    """Structured plan for multi-subgoal local-life exploration."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    plan_id: str = ""
+    task_type: str = ""
+    goal_type: str = ""
+    has_temporal_sequence: bool = False
+    expected_output: str = ""
+    subgoal_limit: int = 3
+    expansion_round_limit: int = 2
+    subgoals: list[ExplorationSubgoal] = Field(default_factory=list)
+    tool_rounds_used: int = 0
+    location_required: bool = False
+    location_available: bool = False
+    tool_names_used: list[str] = Field(default_factory=list)
+    notes: list[str] = Field(default_factory=list)
+    fallback_reason: str = ""
+
+
 DecisionPlan.model_rebuild()
+ExplorationPlan.model_rebuild()
+OrchestrationDecision.model_rebuild()
 
 
 # ===================================================================

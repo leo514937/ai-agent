@@ -30,6 +30,23 @@ class CandidateStatus(str, Enum):
     NEED_CLARIFICATION = "need_clarification"
 
 
+class ResolutionStage(str, Enum):
+    """分层状态：区分候选集解析、目标解析、胜者决策。
+
+    CandidateSet 层写入: candidate_set_resolved / target_ambiguous / target_not_found
+    Decision 层写入:    winner_decided / winner_pending / winner_not_applicable
+    Answer 层只读，不写。
+    State 层根据最终 plan 写入 session（current_shop / comparison_targets 等）。
+    """
+    CANDIDATE_SET_RESOLVED = "candidate_set_resolved"
+    TARGET_RESOLVED = "target_resolved"
+    TARGET_AMBIGUOUS = "target_ambiguous"
+    TARGET_NOT_FOUND = "target_not_found"
+    WINNER_PENDING = "winner_pending"
+    WINNER_DECIDED = "winner_decided"
+    WINNER_NOT_APPLICABLE = "winner_not_applicable"
+
+
 class CandidateSource(str, Enum):
     """Origin of candidate shops."""
     EXPLICIT = "explicit"

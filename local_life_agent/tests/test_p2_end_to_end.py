@@ -104,14 +104,24 @@ class TestP2FullFlow:
             candidate_set={"candidates": [{"shop_id": "s1"}, {"shop_id": "s2"}, {"shop_id": "s3"}]},
             evidence_pack=_evidence(
                 facet_results=[{"facet": "rating", "status": "ok", "value": "4.5"}],
+                evidence_items=[
+                    {
+                        "evidence_id": "evi_s1_rating",
+                        "shop_id": "s1",
+                        "facet": "rating",
+                        "result_status": "ok",
+                        "value": 4.5,
+                    }
+                ],
                 ranking_snapshot={"ranked": [
-                    {"shop_id": "s1", "rank": 1},
+                    {"shop_id": "s3", "rank": 1},
                     {"shop_id": "s2", "rank": 2},
-                    {"shop_id": "s3", "rank": 3},
+                    {"shop_id": "s1", "rank": 3},
                 ]},
             ),
         )
         assert dp.winner_shop_id == "s1"
+        assert dp.winner_evidence_refs == ["evi_s1_rating"]
 
         dr = review_decision(decision_plan=dp, goal_plan=gp)
         assert dr.next_action == "FINISH"
@@ -176,6 +186,15 @@ class TestP2FullFlow:
             evidence_pack=_evidence(
                 target_shop_ids=["s1", "s2"],
                 facet_results=[{"facet": "rating", "status": "ok", "value": "4.0"}],
+                evidence_items=[
+                    {
+                        "evidence_id": "evi_s2_rating",
+                        "shop_id": "s2",
+                        "facet": "rating",
+                        "result_status": "ok",
+                        "value": 4.9,
+                    }
+                ],
                 ranking_snapshot={"ranked": [
                     {"shop_id": "s2", "rank": 1},
                     {"shop_id": "s1", "rank": 2},
@@ -183,6 +202,7 @@ class TestP2FullFlow:
             ),
         )
         assert dp.winner_shop_id == "s2"
+        assert dp.winner_evidence_refs == ["evi_s2_rating"]
         dr = review_decision(decision_plan=dp, goal_plan=gp)
         assert dr.next_action == "FINISH"
 

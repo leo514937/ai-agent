@@ -118,7 +118,7 @@ def build_execution_plan(task_type: str, target: dict, facets: list[str | dict[s
             args = {"shop_id": shop_id}
         elif facet_name == Facet.distance.value:
             tool_name = "get_distance_eta"
-            args = {"shop_id": shop_id, "from_location": config.MOCK_LOCATION}
+            args = {"shop_id": shop_id}
         elif facet_name in (Facet.environment.value, Facet.taste.value, Facet.service.value,
                             Facet.review_summary.value, Facet.scene_fit.value):
             tool_name = "get_shop_detail"
@@ -173,7 +173,7 @@ def build_recommendation_execution_plan(
     frame = _to_dict(semantic_frame)
     query = infer_recommendation_query(frame) or str(fallback_query or "").strip()
     preferences = _recommendation_preferences(frame)
-    location = location or config.MOCK_LOCATION
+    location = location or {}
     tool_calls: list[dict[str, Any]] = [
         {
             "call_id": "call_search_shops",

@@ -105,13 +105,13 @@ class TestMinRequired:
 # ===================================================================
 
 class TestReviewStatusFailures:
-    def test_not_found_returns_need_more(self):
+    def test_not_found_returns_need_clarification(self):
         result = review_candidate_set(
             _goal(GoalType.COMPARISON),
             _set([], status=CandidateStatus.NOT_FOUND),
         )
-        assert result.status == ReviewStatus.FALLBACK
-        assert result.next_action == NextAction.FALLBACK
+        assert result.status == ReviewStatus.NEED_CLARIFICATION
+        assert result.next_action == NextAction.CLARIFY
 
     def test_ambiguous_returns_need_clarification(self):
         result = review_candidate_set(

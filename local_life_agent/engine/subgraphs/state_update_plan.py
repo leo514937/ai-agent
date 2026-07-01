@@ -19,13 +19,16 @@ from .._compat import (
     _state_delta,
     _to_dict,
 )
+from ...domain.enums import TaskType
 from ...domain.graph_state import GraphState
 from ...domain.state import SessionState, SessionWriteDirective
 from ...observability.file_logger import get_python_service_logger, log_kv
+from ...core import StateCore
 from ...planning.plans.state_update_planner import plan_state_update
 from ...session.store import get_session_store
 
 _LOGGER = get_python_service_logger()
+_STATE_CORE = StateCore()
 
 
 def h_state_update_plan_outer(state: GraphState) -> dict:
@@ -54,23 +57,42 @@ def _h_state_update_plan(state: GraphState) -> dict:
     task_type = state.get("task_type")
     task_type_value = task_type.value if hasattr(task_type, "value") else str(task_type or "")
     turn_context = {
+        "local_life_goal_draft": state.get("local_life_goal_draft"),
         "resolved_target": resolved,
         "resolved_shop": resolved,
         "current_shop": state.get("current_shop"),
         "pending_clarification": pending,
+        "merge_clarification_result": state.get("merge_clarification_result"),
+        "restored_task": state.get("restored_task"),
+        "reference_resolution_source": state.get("reference_resolution_source"),
+        "task_type_source": state.get("task_type_source"),
+        "active_turn_result": state.get("active_turn_result"),
         "last_recommendation_list": state.get("last_recommendation_list", []),
         "comparison_targets": state.get("comparison_targets", []),
+        "resolution_stage": state.get("resolution_stage", ""),
+        "evidence_pack": state.get("evidence_pack"),
         "comparison_result": _to_dict(state.get("evidence_pack")).get("comparison_matrix") if state.get("evidence_pack") is not None else state.get("comparison_result"),
         "tool_result_set": state.get("tool_result_set") or state.get("tool_results", {}),
         "execution_plan": state.get("validated_plan") or state.get("execution_plan"),
     }
-    plan_dict = plan_state_update(
+    if task_type_value == TaskType.comparison.value and turn_context.get("comparison_result") is None and turn_context.get("pending_clarification") is None:
+        turn_context["comparison_result"] = {
+            "rows": [
+                {
+                    "shop_id": str(item.get("shop_id", "")).strip(),
+                    "shop_name": str(item.get("shop_name", "")).strip(),
+                }
+                for item in (state.get("comparison_targets") or [])
+                if str(item.get("shop_id", "")).strip() or str(item.get("shop_name", "")).strip()
+            ]
+        }
+    plan_dict = _STATE_CORE.plan_state_update(
         turn_context,
         task_type_value,
         resolved_status,
         pending_check_result=str(state.get("pending_check_result", "") or ""),
     )
-    directive = SessionWriteDirective(
+    directive = _STATE_CORE.build_state_patch(
         set_fields=plan_dict.get("set_fields", {}),
         clear_fields=plan_dict.get("clear_fields", []),
     )

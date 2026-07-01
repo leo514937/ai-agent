@@ -11,7 +11,7 @@ from __future__ import annotations
 from operator import add
 from typing import Annotated, Optional, TypedDict
 
-from .candidate import CandidateSet, CandidateSpec, LocalLifeGoalDraft
+from .candidate import CandidateSet, CandidateSpec, LocalLifeGoalDraft, ResolutionStage
 from .enums import TaskType, TopIntent
 from .goal import GoalPlan, GoalReviewResult
 from .decision import DecisionPlan, DecisionReviewResult
@@ -20,6 +20,8 @@ from .schemas import (
     ComparisonTargetResolution,
     EvidencePack,
     ExecutionPlan,
+    ExplorationPlan,
+    OrchestrationDecision,
     PendingClarification,
     ResolveShopResult,
     SemanticFrame,
@@ -56,6 +58,12 @@ class GraphState(TypedDict, total=False):
 
     # === 澄清状态 (Pending Clarification) — write: clarify_decide/resolve_shop, read: check_pending/context_recovery ===
     pending_clarification: Optional[PendingClarification]
+    clarification_request: Optional[PendingClarification]
+    active_turn_result: dict[str, object]
+    active_turn_route: str
+    restored_task: str
+    selected_candidate: dict
+    selected_index: int
 
     # === 会话记忆 (Session Memory) — write: state_update_planner, read: context_recovery/task_router ===
     current_shop: Optional[dict]
@@ -80,6 +88,10 @@ class GraphState(TypedDict, total=False):
     # === 解析结果 (Resolve Result) — write: target_resolve/clarify_decide, read: evidence_planner/clarify_decide ===
     resolved_target: Optional[ResolveShopResult]
     resolve_shop_result: Optional[ResolveShopResult]  # §1 文档字段：target_resolve 直接输出
+    target_resolution_status: str
+    # resolution_stage — 分层语义：candidate_set_resolved | target_resolved | winner_decided
+    # writing: planning_subgraph / decision_planner, reading: clarify_decide / state_update_plan
+    resolution_stage: Optional[str]
 
     # === 执行计划 (Execution Plan) — write: evidence_planner/decision_planner, read: plan_validator/tool_execute ===
     execution_plan: Optional[ExecutionPlan]
@@ -97,8 +109,30 @@ class GraphState(TypedDict, total=False):
     p2_decision_plan: Optional[DecisionPlan]
     decision_review_result: Optional[DecisionReviewResult]
 
+    # === Phase 4 二级路由 (Shadow Orchestration) — write: orchestration_router, read: trace/log only ===
+    orchestration_decision: Optional[OrchestrationDecision]
+    orchestration_pattern: str
+    workflow_name: str
+    workflow_reason: str
+    task_complexity: str
+    requires_tool: bool
+    requires_clarification: bool
+    next_action: str
+    orchestration_error_code: str
+    orchestration_error_message: str
+
+    # === Phase 5 workflow dispatch ===
+    workflow_run_status: str
+    workflow_runner_error: str
+    workflow_runner_reason: str
+    workflow_started_at: str
+    workflow_finished_at: str
+    workflow_registered: bool
+    workflow_callable: str
+
     # === 回答层 (Answer Layer) — write: answer_plan_build/answer_generate/final_response_build, read: answer_verify/emit_response ===
     answer_plan: Optional[AnswerPlan]
+    exploration_plan: Optional[ExplorationPlan]
     final_response: str
 
     # === 状态更新 (State Update) — write: state_update_planner, read: persist_session_state ===
@@ -130,6 +164,8 @@ class GraphState(TypedDict, total=False):
     response_mode: str
     session_state: Optional[SessionState]
     pending_check_result: str
+    merge_clarification_result: str
+    clarification_result: str
     error_code: str
     error_message: str
     plan_validation_result: str
@@ -157,5 +193,12 @@ class GraphState(TypedDict, total=False):
     rewrite_reason: str
     final_safety_status: str
     recommendation_query: str
+    subgoals: list
+    has_temporal_sequence: bool
+    expected_output: str
+    exploration_round_count: int
+    tool_availability: dict
+    location_status: str
+    user_location: dict
 
 

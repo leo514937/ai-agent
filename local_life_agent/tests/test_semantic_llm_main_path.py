@@ -295,8 +295,8 @@ def test_comparison_focused_facets_from_llm(monkeypatch: pytest.MonkeyPatch):
     assert {call.get("facet") for call in plan.get("tool_calls", [])} == {"distance"}
 
 
-def test_semantic_source_fails_closed_when_using_default_backend():
-    """Default backend without injection must fail closed, not fabricate a semantic frame."""
+def test_semantic_source_uses_default_spy_backend_fixture():
+    """Autouse test backend defaults to spy backend in this suite."""
     result = parse_semantic_frame(
         "\u9644\u8fd1\u63a8\u8350\u706b\u9505",
         "local_life",
@@ -304,8 +304,8 @@ def test_semantic_source_fails_closed_when_using_default_backend():
     )
 
     assert result["semantic_frame"] is not None
-    assert result["semantic_source"] == "diagnostic_rules"
-    assert result["llm_backend"] != ""
+    assert result["semantic_source"] == "spy_real_llm"
+    assert result["llm_backend"] == "spy_real_llm"
 
 
 def test_semantic_source_marks_real_llm_when_real_backend_injected():

@@ -16,7 +16,6 @@ from time import perf_counter, time
 from typing import Any
 
 from .. import config
-from ..config import MOCK_LOCATION
 from ..domain.candidate import (
     CandidateSet,
     CandidateSource,
@@ -53,6 +52,8 @@ _TRACE_STAGE_MAP: dict[str, str] = {
     "intake_guard_router": "input_received",
     "merge_clarification": "pending_clarification_checked",
     "understanding_subgraph": "semantic_parse",
+    "orchestration_router_shadow": "orchestration_router",
+    "workflow_runner": "workflow_runner",
     "planning_subgraph": "execution_plan",
     "execution_review_subgraph": "evidence_review",
     "response_subgraph": "answer_generate",
@@ -180,16 +181,22 @@ def _to_dict(value: Any) -> dict[str, Any]:
 
 
 def _user_location(state: GraphState) -> dict[str, Any]:
-    """Extract user location from graph state, falling back to MOCK_LOCATION."""
+    """Extract user location from graph state without inventing defaults."""
     loc = state.get("user_location")
-    if isinstance(loc, dict) and loc.get("lat") and loc.get("lng"):
+    if isinstance(loc, dict) and loc.get("lat") is not None and loc.get("lng") is not None:
         return dict(loc)
+    user_context = state.get("user_context")
+    if isinstance(user_context, dict) and user_context.get("lat") is not None and user_context.get("lng") is not None:
+        status = str(user_context.get("location_status", "") or "").lower()
+        source = str(user_context.get("location_source", "") or "").lower()
+        if status in {"provided", "test_mock"} or source in {"provided", "test_mock"}:
+            return dict(user_context)
     session = state.get("session_state_before") or state.get("session_state") or {}
     if isinstance(session, SessionState):
         location = getattr(session, "location", None)
-        if location is not None:
+        if isinstance(location, dict) and location.get("lat") is not None and location.get("lng") is not None:
             return dict(location)
-    return dict(config.MOCK_LOCATION)
+    return {}
 
 
 def _coerce_str(value: Any) -> str:
@@ -259,12 +266,14 @@ def _trace_input_summary(state: GraphState, node_name: str) -> dict[str, Any]:
 
 
 def _trace_output_summary(update: dict[str, Any]) -> dict[str, Any]:
+    tool_results = _to_dict(update.get("tool_results"))
+    legacy_tool_result_set = _to_dict(update.get("tool_result_set"))
     output = {
         "keys": sorted(str(key) for key in update.keys()),
         "error_code": _coerce_str(update.get("error_code"))[:64],
         "answer_source": _coerce_str(update.get("answer_source"))[:64],
         "verify_result": _coerce_str(update.get("verify_result"))[:64],
-        "tool_result_count": len((_to_dict(update.get("tool_result_set")) or _to_dict(update.get("tool_results")))),
+        "tool_result_count": len(tool_results) if tool_results else len(legacy_tool_result_set),
     }
     event_log = update.get("event_log") or []
     if event_log and isinstance(event_log, list) and isinstance(event_log[-1], dict):
@@ -495,14 +504,14 @@ def _resolved_shop_ids_from_state(state: GraphState) -> set[str]:
             sid = str(data.get("shop_id", "")).strip()
             if sid:
                 resolved_ids.add(sid)
-        candidate_set = state.get("candidate_set") or state.get("effective_candidate_set")
-        if candidate_set is not None:
-            candidate_data = _to_dict(candidate_set)
-            for item in candidate_data.get("candidates", []) or []:
-                data = _to_dict(item)
-                sid = str(data.get("shop_id", "")).strip()
-                if sid:
-                    resolved_ids.add(sid)
+    candidate_set = state.get("candidate_set") or state.get("effective_candidate_set")
+    if candidate_set is not None:
+        candidate_data = _to_dict(candidate_set)
+        for item in candidate_data.get("candidates", []) or []:
+            data = _to_dict(item)
+            sid = str(data.get("shop_id", "")).strip()
+            if sid:
+                resolved_ids.add(sid)
     for source in (state.get("resolved_target"), state.get("resolve_shop_result")):
         if source is None:
             continue

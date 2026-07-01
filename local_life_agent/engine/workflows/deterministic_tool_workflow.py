@@ -1,0 +1,829 @@
+"""Independent deterministic workflow for explicit single-shop fact queries.
+
+Phase 6 keeps this workflow intentionally small:
+- resolve one explicit shop target
+- call exactly one tool
+- build ExecutionPlan / ToolResult / EvidencePack / AnswerPlan
+- generate a deterministic answer from evidence
+- verify the answer before handing back to the graph
+
+When target resolution is ambiguous or missing, the workflow returns a
+clarification / fallback payload and does not call any tools.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+import re
+from typing import Any
+
+from ...answer.answer_plan_builder import build_answer_plan
+from ...answer.verifier import verify_answer
+from ...domain.schemas import AnswerPlan, EvidencePack, ExecutionPlan, OrchestrationDecision, ResolveShopResult, ShopRef, ToolCallSpec, ToolResult
+from ...domain.state import SessionState
+from ...engine._compat import _log, _unwrap_resolve_shop_result
+from ...observability.file_logger import get_python_service_logger, log_kv
+from ...planning.evidence.evidence_builder import build_evidence
+from ...planning.goal.goal_planner import _infer_explicit_mentions_from_text
+from ...target.clarification import build_pending_clarification, format_pending_prompt
+from ...target.reference_resolver import resolve_references
+from ...target.shop_resolver import resolve_shop
+from ...tools.gateway import dispatch_tool_call
+
+_LOGGER = get_python_service_logger()
+
+_TASK_TOOL_MAP: dict[str, tuple[str, str]] = {
+    "shop_status": ("check_open_status", "open_status"),
+    "shop_distance": ("get_distance_eta", "distance"),
+    "shop_coupon": ("get_coupon_list", "coupon"),
+    "shop_review_summary": ("get_shop_review_summary", "review_summary"),
+    "shop_price": ("get_shop_detail", "price"),
+}
+
+_DEAL_TASK_NAMES = {"deal", "group_deal", "group_deal_query", "deal_query", "deal_compare"}
+
+
+def _to_dict(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump()
+        return dumped if isinstance(dumped, dict) else {}
+    return dict(getattr(value, "__dict__", {}) or {})
+
+
+def _enum_value(value: Any) -> str:
+    if value is None:
+        return ""
+    raw = getattr(value, "value", value)
+    return str(raw or "").strip()
+
+
+def _session_value(state: dict[str, Any], field: str) -> Any:
+    session_state = state.get("session_state")
+    if isinstance(session_state, SessionState):
+        return getattr(session_state, field, None)
+    if isinstance(session_state, dict):
+        return session_state.get(field)
+    session_state_before = state.get("session_state_before")
+    if isinstance(session_state_before, SessionState):
+        return getattr(session_state_before, field, None)
+    if isinstance(session_state_before, dict):
+        return session_state_before.get(field)
+    return state.get(field)
+
+
+def _extract_user_location(state: dict[str, Any]) -> dict[str, Any]:
+    candidates = [
+        state.get("user_context"),
+        state.get("turn_input"),
+        _session_value(state, "user_context"),
+    ]
+    for item in candidates:
+        item_dict = _to_dict(item)
+        lat = item_dict.get("lat")
+        lng = item_dict.get("lng")
+        if lat is None or lng is None:
+            continue
+        try:
+            return {
+                "lat": float(lat),
+                "lng": float(lng),
+                "label": str(item_dict.get("location_name", item_dict.get("label", "")) or ""),
+            }
+        except Exception:
+            continue
+    return {}
+
+
+def _task_to_tool(task_type: str, semantic_frame: dict[str, Any]) -> tuple[str, str] | None:
+    normalized_task = _enum_value(task_type)
+    if normalized_task in _TASK_TOOL_MAP:
+        return _TASK_TOOL_MAP[normalized_task]
+    if normalized_task == "coupon_query":
+        return "get_coupon_list", "coupon"
+    if normalized_task in _DEAL_TASK_NAMES:
+        return "get_deal_list", "deal"
+
+    facets = [
+        str(item.get("name", "") or item.get("facet", "") or "").strip()
+        for item in (semantic_frame.get("facets") or [])
+        if isinstance(item, dict)
+    ]
+    for facet_name in facets:
+        if facet_name == "coupon":
+            return "get_coupon_list", "coupon"
+        if facet_name == "distance":
+            return "get_distance_eta", "distance"
+        if facet_name in {"open_status", "status"}:
+            return "check_open_status", "open_status"
+        if facet_name == "review_summary":
+            return "get_shop_review_summary", "review_summary"
+        if facet_name == "price":
+            return "get_shop_detail", "price"
+
+    if normalized_task == "single_shop_query" and not facets:
+        return "get_shop_detail", "detail"
+
+    primary_task = str(semantic_frame.get("primary_task", "") or "").lower()
+    for key, tool in _TASK_TOOL_MAP.items():
+        if key in primary_task:
+            return tool
+
+    if any(token in primary_task for token in ("coupon", "券", "团购", "套餐", "deal")):
+        return "get_coupon_list", "coupon"
+    if any(token in primary_task for token in ("distance", "eta", "距离", "多远")):
+        return "get_distance_eta", "distance"
+    if any(token in primary_task for token in ("status", "open", "营业", "开门")):
+        return "check_open_status", "open_status"
+    if any(token in primary_task for token in ("review", "summary", "评价", "口碑")):
+        return "get_shop_review_summary", "review_summary"
+    if any(token in primary_task for token in ("price", "cost", "多少钱", "人均")):
+        return "get_shop_detail", "price"
+
+    if any(token in primary_task for token in ("deal", "group", "团购", "套餐", "套餐券")):
+        return "get_deal_list", "deal"
+    if normalized_task == "single_shop_query":
+        return "get_shop_detail", "detail"
+    return None
+
+
+def _presentation_task_type(task_type: str, facet: str) -> str:
+    normalized_task = _enum_value(task_type)
+    if normalized_task in _TASK_TOOL_MAP or normalized_task in _DEAL_TASK_NAMES:
+        return normalized_task
+    facet_map = {
+        "coupon": "shop_coupon",
+        "distance": "shop_distance",
+        "open_status": "shop_status",
+        "review_summary": "shop_review_summary",
+        "price": "shop_price",
+        "detail": "single_shop_query",
+        "deal": "deal_query",
+    }
+    return facet_map.get(facet, normalized_task or "single_shop_query")
+
+
+def _sort_candidate_targets(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def _key(item: dict[str, Any]) -> tuple[int, str, str]:
+        shop_id = str(item.get("shop_id", "") or "").strip()
+        shop_name = str(item.get("shop_name", "") or "").strip()
+        return (-len(shop_id), shop_id, shop_name)
+
+    return sorted([dict(item) for item in candidates if isinstance(item, dict)], key=_key)
+
+
+def _semantic_mention_matches_raw_hint(semantic_mention: str, raw_hint: str) -> bool:
+    semantic = re.sub(r"[\s()（）,，。?？！!~·]", "", str(semantic_mention or ""))
+    raw = re.sub(r"[\s()（）,，。?？！!~·]", "", str(raw_hint or ""))
+    if not semantic or not raw:
+        return False
+    if raw in semantic:
+        return True
+    if "店" not in raw:
+        return False
+    prefix = raw.split("店", 1)[0]
+    if len(prefix) <= 3:
+        return False
+    brand = prefix[:3]
+    tail = prefix[-3:] if len(prefix) >= 3 else prefix
+    return brand in semantic and tail in semantic
+
+
+def _route_info_from_raw_text(raw_text: str) -> tuple[str, str] | None:
+    text = str(raw_text or "")
+    lowered = text.lower()
+    if "营业" in text or "开门" in text or "open" in lowered:
+        return "check_open_status", "open_status"
+    if "有券" in text or "优惠券" in text or "团购" in text or "coupon" in lowered:
+        return "get_coupon_list", "coupon"
+    if "距离" in text or "多远" in text or "多久" in text or "eta" in lowered:
+        return "get_distance_eta", "distance"
+    if "评价" in text or "review" in lowered:
+        return "get_shop_review_summary", "review_summary"
+    if "价格" in text or "多少钱" in text or "price" in lowered:
+        return "get_shop_detail", "price"
+    return None
+
+
+def _single_target_from_resolution(resolution: dict[str, Any]) -> dict[str, Any] | None:
+    direct_target = resolution.get("target")
+    if direct_target is not None:
+        shop_dict = _to_dict(direct_target)
+        shop_id = str(shop_dict.get("shop_id", "") or "").strip()
+        shop_name = str(shop_dict.get("shop_name", "") or "").strip()
+        if shop_id and shop_name:
+            return {
+                "shop_id": shop_id,
+                "shop_name": shop_name,
+                "address": str(shop_dict.get("address", "") or "").strip(),
+                "alias": shop_dict.get("alias", ""),
+                "reference": str(resolution.get("reason", "") or resolution.get("reference", "") or ""),
+                "source_text": str(resolution.get("source_ref", "") or ""),
+            }
+    targets = resolution.get("targets") or []
+    if len(targets) != 1:
+        return None
+    target = _to_dict(targets[0])
+    shop = target.get("shop") or target.get("resolved_shop") or target
+    shop_dict = _to_dict(shop)
+    shop_id = str(shop_dict.get("shop_id", "") or "").strip()
+    shop_name = str(shop_dict.get("shop_name", "") or "").strip()
+    if not shop_id or not shop_name:
+        return None
+    return {
+        "shop_id": shop_id,
+        "shop_name": shop_name,
+        "address": str(shop_dict.get("address", "") or "").strip(),
+        "alias": shop_dict.get("alias", ""),
+        "reference": str(target.get("reference", "") or ""),
+        "source_text": str(target.get("source_text", "") or ""),
+    }
+
+
+def _resolve_single_shop_target(state: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
+    semantic_frame = _to_dict(state.get("semantic_frame"))
+    raw_text = str(state.get("raw_text", "") or state.get("normalized_text", "") or "")
+    session_state = state.get("session_state") or state.get("session_state_before")
+
+    explicit_queries: list[str] = []
+    merchant_mentions = [str(item).strip() for item in (semantic_frame.get("merchant_mentions") or []) if str(item).strip()]
+    branch_mentions = [str(item).strip() for item in (semantic_frame.get("branch_mentions") or []) if str(item).strip()]
+    trusted_mentions = [item for item in merchant_mentions if item and item in raw_text]
+    inferred_mentions = _infer_explicit_mentions_from_text(raw_text)
+    if not trusted_mentions and inferred_mentions:
+        trusted_mentions = [
+            item
+            for item in merchant_mentions
+            if any(_semantic_mention_matches_raw_hint(item, hint) for hint in inferred_mentions)
+        ]
+    full_mentions = [item for item in trusted_mentions if "(" in item or "（" in item]
+    if full_mentions:
+        explicit_queries = full_mentions
+    elif trusted_mentions and branch_mentions and any(branch in raw_text for branch in branch_mentions):
+        explicit_queries = [f"{trusted_mentions[0]}({branch_mentions[0]})"]
+    else:
+        explicit_queries = trusted_mentions
+    if not explicit_queries:
+        explicit_queries = inferred_mentions
+    explicit_queries = [query for query in explicit_queries if query]
+
+    if explicit_queries:
+        session_shop_ids: list[str] = []
+        current_shop = _to_dict(_session_value(state, "current_shop"))
+        if current_shop.get("shop_id"):
+            session_shop_ids.append(str(current_shop.get("shop_id", "")).strip())
+        for item in _session_value(state, "last_recommendation_list") or []:
+            item_dict = _to_dict(item)
+            shop_id = str(item_dict.get("shop_id", "") or "").strip()
+            if shop_id and shop_id not in session_shop_ids:
+                session_shop_ids.append(shop_id)
+        for query in explicit_queries:
+            resolved = _unwrap_resolve_shop_result(_to_dict(resolve_shop(query, location={}, session_shop_ids=session_shop_ids)))
+            status = str(resolved.get("status", "") or "").upper()
+            if status == "RESOLVED":
+                shop = _to_dict(resolved.get("shop") or resolved.get("resolved_shop") or {})
+                shop_id = str(shop.get("shop_id", "") or "").strip()
+                shop_name = str(shop.get("shop_name", "") or "").strip()
+                if shop_id and shop_name:
+                    return {
+                        "shop_id": shop_id,
+                        "shop_name": shop_name,
+                        "address": str(shop.get("address", "") or "").strip(),
+                        "alias": shop.get("alias", ""),
+                        "reference": "explicit_mention",
+                        "source_text": query,
+                    }, None, "explicit_reference_resolved"
+            if status == "AMBIGUOUS":
+                pending = build_pending_clarification(
+                    original_text=raw_text,
+                    original_semantic_frame=semantic_frame,
+                    original_task_type=_enum_value(state.get("task_type")) or _enum_value(semantic_frame.get("task_type")),
+                    candidate_targets=_sort_candidate_targets([
+                        {
+                            "shop_id": str(candidate.get("shop_id", "") or "").strip(),
+                            "shop_name": str(candidate.get("shop_name", "") or "").strip(),
+                            "address": str(candidate.get("address", "") or "").strip(),
+                        }
+                        for candidate in (resolved.get("candidates") or [])
+                        if str(candidate.get("shop_id", "") or "").strip() and str(candidate.get("shop_name", "") or "").strip()
+                    ]),
+                    reason=str(resolved.get("error_code", "") or "explicit_shop_ambiguous"),
+                    source_node="deterministic_tool_workflow",
+                )
+                return None, pending.model_dump(), "explicit_shop_ambiguous"
+
+    legacy_resolution = _to_dict(state.get("reference_resolution") or state.get("comparison_target_resolution"))
+    legacy_targets = legacy_resolution.get("resolved_targets") or legacy_resolution.get("targets") or []
+    if isinstance(legacy_targets, list) and legacy_targets:
+        normalized_targets: list[dict[str, Any]] = []
+        for item in legacy_targets:
+            target = _to_dict(item)
+            shop = _to_dict(target.get("resolved_shop") or target.get("shop") or target)
+            shop_id = str(shop.get("shop_id", "") or "").strip()
+            shop_name = str(shop.get("shop_name", "") or "").strip()
+            if shop_id and shop_name:
+                normalized_targets.append(
+                    {
+                        "shop_id": shop_id,
+                        "shop_name": shop_name,
+                        "address": str(shop.get("address", "") or "").strip(),
+                        "alias": shop.get("alias", ""),
+                    }
+                )
+        if len(normalized_targets) == 1:
+            return normalized_targets[0], None, "reference_resolved"
+        if len(normalized_targets) > 1:
+            pending = build_pending_clarification(
+                original_text=raw_text,
+                original_semantic_frame=semantic_frame,
+                original_task_type=_enum_value(state.get("task_type")) or _enum_value(semantic_frame.get("task_type")),
+                candidate_targets=normalized_targets,
+                reason="comparison_targets_need_clarification",
+                source_node="deterministic_tool_workflow",
+            )
+            return None, pending.model_dump(), "comparison_targets_need_clarification"
+
+    resolution = _to_dict(resolve_references(raw_text, session_state, semantic_frame))
+    resolution_status = str(resolution.get("status", "") or "").upper()
+
+    if resolution_status == "RESOLVED":
+        target = _single_target_from_resolution(resolution)
+        if target is not None:
+            return target, None, "reference_resolved"
+
+    if resolution_status == "PARTIAL":
+        targets = resolution.get("targets") or []
+        if len(targets) == 1:
+            target = _single_target_from_resolution({**resolution, "targets": targets})
+            if target is not None:
+                return target, None, "reference_resolved"
+
+    current_shop = _to_dict(_session_value(state, "current_shop"))
+    if current_shop.get("shop_id") and current_shop.get("shop_name"):
+        has_explicit_reference = any(
+            semantic_frame.get(key)
+            for key in ("comparison_targets", "ordinal_references", "deictic_references", "merchant_mentions", "branch_mentions")
+        )
+        if not has_explicit_reference and not raw_text.strip():
+            return {
+                "shop_id": str(current_shop.get("shop_id", "") or "").strip(),
+                "shop_name": str(current_shop.get("shop_name", "") or "").strip(),
+                "address": str(current_shop.get("address", "") or "").strip(),
+                "alias": current_shop.get("alias", ""),
+                "reference": "current_shop",
+                "source_text": "",
+            }, None, "current_shop"
+        if not has_explicit_reference and resolution.get("status") in {"NOT_FOUND", "NEED_CLARIFICATION"}:
+            return {
+                "shop_id": str(current_shop.get("shop_id", "") or "").strip(),
+                "shop_name": str(current_shop.get("shop_name", "") or "").strip(),
+                "address": str(current_shop.get("address", "") or "").strip(),
+                "alias": current_shop.get("alias", ""),
+                "reference": "current_shop",
+                "source_text": "",
+            }, None, "current_shop"
+
+    reason = str(resolution.get("reason", "") or "shop_target_needs_clarification")
+    candidate_targets = [dict(item) for item in (resolution.get("targets") or []) if isinstance(item, dict)]
+    pending = build_pending_clarification(
+        original_text=raw_text,
+        original_semantic_frame=semantic_frame,
+        original_task_type=_enum_value(state.get("task_type")) or _enum_value(semantic_frame.get("task_type")),
+        candidate_targets=_sort_candidate_targets(candidate_targets),
+        reason=reason,
+        source_node="deterministic_tool_workflow",
+    )
+    return None, pending.model_dump(), reason
+
+
+def _tool_args_for_task(task_type: str, target_shop_id: str, state: dict[str, Any]) -> dict[str, Any]:
+    args: dict[str, Any] = {"shop_id": target_shop_id}
+    normalized_task = _enum_value(task_type)
+    if normalized_task == "shop_distance":
+        user_location = _extract_user_location(state)
+        if user_location:
+            args["from_location"] = user_location
+    elif normalized_task == "shop_review_summary":
+        semantic_frame = _to_dict(state.get("semantic_frame"))
+        facets = [str(item.get("name", "") or item.get("facet", "") or "").strip() for item in semantic_frame.get("facets", []) or [] if isinstance(item, dict)]
+        aspects = [facet for facet in facets if facet]
+        if aspects:
+            args["aspects"] = aspects
+    return args
+
+
+def _build_execution_plan(task_type: str, target_shop_id: str, tool_name: str, facet: str, args: dict[str, Any], state: dict[str, Any]) -> ExecutionPlan:
+    normalized_task = _enum_value(task_type)
+    stage = {
+        "stage_id": "stage_1",
+        "description": f"deterministic call for {normalized_task}",
+        "tool_names": [tool_name],
+        "depends_on": [],
+        "max_parallelism": 1,
+    }
+    call = {
+        "call_id": "call_1",
+        "tool_name": tool_name,
+        "args": args,
+        "target_shop_id": target_shop_id,
+        "required": True,
+        "facet": facet,
+        "depends_on": [],
+        "timeout_ms": 3000,
+        "retry_policy": {"max_attempts": 1, "backoff_ms": 200},
+        "fallback_policy": {"fallback_tool": "", "fallback_args": {}},
+        "group_id": "deterministic_tool",
+        "max_parallelism": 1,
+    }
+    return ExecutionPlan.model_validate(
+        {
+            "plan_id": f"deterministic_{normalized_task}_{target_shop_id}",
+            "task_type": normalized_task,
+            "tool_calls": [call],
+            "stages": [stage],
+            "target_shop_ids": [target_shop_id],
+            "query_terms": [str(state.get("raw_text", "") or "")],
+            "scene_terms": [],
+            "open_now_preferred": normalized_task == "shop_status",
+            "coupon_preferred": normalized_task == "shop_coupon",
+            "nearby_preferred": normalized_task == "shop_distance",
+            "plan_source": "deterministic_tool_workflow",
+            "planning_notes": ["phase_6_deterministic_tool"],
+            "assumptions_used": [],
+        }
+    )
+
+
+def _normalize_tool_result(call_id: str, tool_name: str, target_shop_id: str, raw_result: dict[str, Any]) -> ToolResult:
+    payload = dict(raw_result or {})
+    if not payload.get("call_id"):
+        payload["call_id"] = call_id
+    if not payload.get("tool_name"):
+        payload["tool_name"] = tool_name
+    if not payload.get("shop_id"):
+        payload["shop_id"] = target_shop_id
+    if payload.get("error_code") == "":
+        payload.pop("error_code", None)
+    return ToolResult.model_validate(payload)
+
+
+def _facet_from_task(task_type: str) -> str:
+    normalized_task = _enum_value(task_type)
+    if normalized_task in _TASK_TOOL_MAP:
+        return _TASK_TOOL_MAP[normalized_task][1]
+    if normalized_task in _DEAL_TASK_NAMES:
+        return "deal"
+    return "detail"
+
+
+def _tool_result_to_text(task_type: str, evidence: dict[str, Any], tool_result: ToolResult) -> str:
+    evidence_dict = _to_dict(evidence)
+    snapshot = evidence_dict.get("ranking_snapshot") or {}
+    shop_name = str(snapshot.get("shop_name", "") or "").strip() or str(tool_result.data.get("shop_name", "") if isinstance(tool_result.data, dict) else "").strip() or "这家店"
+    status = str(tool_result.result_status.value if hasattr(tool_result.result_status, "value") else tool_result.result_status or "").lower()
+    data = tool_result.data
+
+    if task_type == "shop_status":
+        open_status = "unknown"
+        if isinstance(data, dict):
+            open_status = str(
+                data.get("open_status")
+                or ("open" if data.get("is_open") is True else "closed" if data.get("is_open") is False else data.get("open_status_text", "unknown"))
+            ).lower()
+        if status == "ok" and open_status == "open":
+            return f"{shop_name}目前营业中。"
+        if status == "ok" and open_status == "closed":
+            return f"{shop_name}当前未营业。"
+        return f"{shop_name}的营业状态暂时无法确认。"
+
+    if task_type == "shop_distance":
+        if status == "ok" and isinstance(data, dict):
+            distance_km = data.get("distance_km")
+            eta_minutes = data.get("eta_minutes")
+            parts = [f"{shop_name}距离你约 {distance_km} 公里" if distance_km is not None else f"{shop_name}的距离暂时无法确认"]
+            if eta_minutes is not None:
+                parts.append(f"预计 {eta_minutes} 分钟到达")
+            return "，".join(parts) + "。"
+        return f"{shop_name}的距离暂时无法确认。"
+
+    if task_type == "shop_coupon":
+        if status == "ok" and isinstance(data, list):
+            titles = [str(item.get("title", "")).strip() for item in data if isinstance(item, dict) and str(item.get("title", "")).strip()]
+            if titles:
+                return f"{shop_name}当前可用优惠券有：{'、'.join(titles[:3])}。"
+            return f"{shop_name}当前暂无可用优惠券。"
+        if status == "empty":
+            return f"{shop_name}当前暂无可用优惠券。"
+        return f"{shop_name}的优惠券情况暂时无法确认。"
+
+    if task_type == "shop_review_summary":
+        if status in {"ok", "partial"} and isinstance(data, dict):
+            items = data.get("items") or []
+            first = items[0] if items and isinstance(items[0], dict) else {}
+            summary = str(first.get("summary", "") or "").strip()
+            rating = first.get("rating")
+            highlights = [str(item).strip() for item in first.get("highlights", []) or [] if str(item).strip()]
+            parts = [f"{shop_name}的评价摘要："]
+            if rating is not None:
+                parts.append(f"评分约 {rating} 分")
+            if summary:
+                parts.append(summary)
+            if highlights:
+                parts.append(f"亮点：{'、'.join(highlights[:3])}")
+            return " ".join(parts) + "。"
+        return f"{shop_name}的评价摘要暂时无法确认。"
+
+    if task_type == "shop_price":
+        if status == "ok" and isinstance(data, dict):
+            avg_price = data.get("avg_price")
+            price_level = data.get("price_level")
+            if avg_price is not None:
+                level_text = f"，价格档位偏{price_level}" if price_level else ""
+                return f"{shop_name}的人均约 {avg_price} 元{level_text}。"
+        return f"{shop_name}的人均价格暂时无法确认。"
+
+    if task_type in _DEAL_TASK_NAMES:
+        if status in {"ok", "partial"} and isinstance(data, dict):
+            items = data.get("items") or []
+            titles = [str(item.get("title", "")).strip() for item in items if isinstance(item, dict) and str(item.get("title", "")).strip()]
+            if titles:
+                return f"{shop_name}当前可选团购/套餐有：{'、'.join(titles[:3])}。"
+            return f"{shop_name}当前暂无可用团购/套餐。"
+        if status == "empty":
+            return f"{shop_name}当前暂无可用团购/套餐。"
+        return f"{shop_name}的团购/套餐信息暂时无法确认。"
+
+    return f"{shop_name}的信息我已经整理好了。"
+
+
+def _build_success_patch(
+    *,
+    state: dict[str, Any],
+    decision: OrchestrationDecision,
+    task_type: str,
+    target: dict[str, Any],
+    execution_plan: ExecutionPlan,
+    tool_result: ToolResult,
+    evidence: EvidencePack,
+    answer_plan: AnswerPlan,
+    facet: str,
+) -> dict[str, Any]:
+    state_task_type = _enum_value(state.get("task_type")) or _enum_value(_to_dict(state.get("semantic_frame")).get("task_type")) or _enum_value(task_type)
+    presentation_task_type = _presentation_task_type(task_type, facet)
+    resolved_target = ResolveShopResult(
+        status="RESOLVED",
+        resolved_shop=ShopRef(shop_id=target["shop_id"], shop_name=target["shop_name"]),
+        confidence=1.0,
+        reason="deterministic_target_resolved",
+    )
+    answer_text = _tool_result_to_text(presentation_task_type, evidence.model_dump(), tool_result)
+    verify = verify_answer(answer_text, evidence.model_dump(), presentation_task_type)
+    if not verify.get("passed", False):
+        answer_text = _tool_result_to_text(presentation_task_type, evidence.model_dump(), tool_result)
+    timestamp = datetime.now(timezone.utc).isoformat()
+    return {
+        "workflow_name": "deterministic_tool",
+        "orchestration_pattern": "deterministic_tool",
+        "task_type": state_task_type,
+        "workflow_reason": str(decision.workflow_reason or f"deterministic tool for {presentation_task_type}"),
+        "workflow_run_status": "completed",
+        "workflow_runner_error": "",
+        "workflow_runner_reason": str(decision.workflow_reason or f"deterministic tool for {presentation_task_type}"),
+        "workflow_started_at": timestamp,
+        "workflow_finished_at": timestamp,
+        "workflow_callable": "run_deterministic_tool_workflow",
+        "workflow_registered": True,
+        "response_mode": "direct",
+        "next_action": "run_workflow",
+        "execution_plan": execution_plan,
+        "validated_plan": execution_plan,
+        "tool_results": {tool_result.call_id: tool_result},
+        "tool_result_set": {tool_result.call_id: tool_result},
+        "resolved_target": resolved_target,
+        "resolve_shop_result": resolved_target,
+        "evidence_pack": evidence,
+        "answer_plan": answer_plan,
+        "final_response": answer_text,
+        "draft_response": answer_text,
+        "answer_source": "deterministic_tool_workflow",
+        "answer_verify_passed": bool(verify.get("passed", False)),
+        "answer_verify_violations": list(verify.get("issues") or []),
+        "verify_result": "pass" if verify.get("passed", False) else "rewrite_needed",
+        "final_safety_status": "safe" if verify.get("passed", False) else "fallback",
+        "fallback_reason": "" if verify.get("passed", False) else "deterministic_verifier_rejected",
+        "answer_fallback_reason": "" if verify.get("passed", False) else "deterministic_verifier_rejected",
+        "llm_verbalizer_called": False,
+        "llm_called": False,
+        "llm_backend": "deterministic",
+        "llm_verbalizer_violation": None,
+        "llm_verbalizer_error": None,
+        "generated_llm_answer_before_fallback": "",
+        "reference_resolution_source": "deterministic_tool_workflow",
+        "comparison_targets": [],
+        "last_recommendation_list": state.get("last_recommendation_list", []),
+        "last_answer_order": state.get("last_answer_order", []),
+    }
+
+
+def _build_clarify_patch(state: dict[str, Any], decision: OrchestrationDecision, pending: dict[str, Any], reason: str) -> dict[str, Any]:
+    state_task_type = _enum_value(state.get("task_type")) or _enum_value(_to_dict(state.get("semantic_frame")).get("task_type"))
+    prompt = format_pending_prompt(pending)
+    timestamp = datetime.now(timezone.utc).isoformat()
+    candidate_targets = [
+        {
+            "shop_id": str(item.get("shop_id", "") or "").strip(),
+            "shop_name": str(item.get("shop_name", "") or "").strip(),
+            "address": str(item.get("address", "") or "").strip(),
+        }
+        for item in (pending.get("candidate_targets") or [])
+        if str(item.get("shop_id", "") or "").strip() and str(item.get("shop_name", "") or "").strip()
+    ]
+    resolve_status = "AMBIGUOUS" if candidate_targets else "NOT_FOUND"
+    resolve_kwargs: dict[str, Any] = {
+        "status": resolve_status,
+        "candidates": candidate_targets,
+        "confidence": 0.0,
+        "reason": reason,
+    }
+    if resolve_status == "NOT_FOUND":
+        resolve_kwargs["candidates"] = []
+    return {
+        "workflow_name": "clarification_fallback",
+        "orchestration_pattern": "clarification_fallback",
+        "task_type": state_task_type,
+        "workflow_reason": reason,
+        "workflow_run_status": "fallback",
+        "workflow_runner_error": "",
+        "workflow_runner_reason": reason,
+        "workflow_started_at": timestamp,
+        "workflow_finished_at": timestamp,
+        "workflow_callable": "run_deterministic_tool_workflow",
+        "workflow_registered": True,
+        "response_mode": "clarify",
+        "next_action": "clarify",
+        "pending_clarification": pending,
+        "resolve_shop_result": ResolveShopResult.model_validate(resolve_kwargs),
+        "final_response": prompt,
+        "draft_response": prompt,
+        "answer_source": "clarify_message",
+        "answer_verify_passed": False,
+        "answer_verify_violations": [],
+        "verify_result": "pass",
+        "final_safety_status": "safe",
+        "fallback_reason": reason,
+        "answer_fallback_reason": reason,
+        "llm_verbalizer_called": False,
+        "llm_called": False,
+        "llm_backend": "deterministic",
+        "comparison_targets": [],
+        "last_recommendation_list": state.get("last_recommendation_list", []),
+        "last_answer_order": state.get("last_answer_order", []),
+    }
+
+
+def run_deterministic_tool_workflow(
+    state: dict[str, Any],
+    decision: OrchestrationDecision | None = None,
+    *,
+    dispatch_tool_call=None,
+) -> dict[str, Any]:
+    """Run the Phase 6 deterministic tool workflow."""
+
+    decision = decision or _to_dict(state.get("orchestration_decision"))
+    if not isinstance(decision, OrchestrationDecision):
+        decision = OrchestrationDecision.model_validate(_to_dict(decision) or {
+            "orchestration_pattern": "deterministic_tool",
+            "workflow_name": "deterministic_tool",
+            "workflow_reason": "deterministic tool workflow",
+            "task_complexity": "low",
+            "requires_tool": True,
+            "requires_clarification": False,
+            "response_mode": "tool_answer",
+            "confidence": 0.0,
+            "missing_fields": [],
+            "next_action": "run_workflow",
+        })
+
+    semantic_frame = _to_dict(state.get("semantic_frame"))
+    task_type = _enum_value(state.get("task_type")) or _enum_value(semantic_frame.get("task_type"))
+    if dispatch_tool_call is None:
+        from ...engine import graph_builder as _graph_builder
+
+        dispatch_tool_call = _graph_builder.dispatch_tool_call
+    route_info = _task_to_tool(task_type, semantic_frame)
+    if route_info is None:
+        route_info = _route_info_from_raw_text(str(state.get("raw_text", "") or state.get("normalized_text", "") or ""))
+    else:
+        raw_route_info = _route_info_from_raw_text(str(state.get("raw_text", "") or state.get("normalized_text", "") or ""))
+        has_context_reference = bool(
+            semantic_frame.get("ordinal_references")
+            or semantic_frame.get("deictic_references")
+            or semantic_frame.get("comparison_targets")
+        )
+        has_session_anchor = bool(_to_dict(_session_value(state, "current_shop")).get("shop_id") or _to_dict(_session_value(state, "current_shop")).get("shop_name"))
+        has_explicit_mentions = bool(semantic_frame.get("merchant_mentions"))
+        if raw_route_info is not None and raw_route_info != route_info and (
+            task_type == "recommendation"
+            or has_context_reference
+            or (has_session_anchor and not has_explicit_mentions)
+        ):
+            route_info = raw_route_info
+    log_kv(
+        _LOGGER,
+        20,
+        "[SUBGRAPH_ENTER]",
+        tone="route",
+        subgraph="deterministic_tool_workflow",
+        trace_id=state.get("trace_id", ""),
+        session_id=state.get("session_id", ""),
+        turn_id=state.get("turn_id", ""),
+        task_type=task_type,
+        workflow_name="deterministic_tool",
+    )
+
+    if route_info is None:
+        pending = build_pending_clarification(
+            original_text=str(state.get("raw_text", "") or ""),
+            original_semantic_frame=semantic_frame,
+            original_task_type=task_type,
+            candidate_targets=[],
+            reason="deterministic_task_unsupported",
+            source_node="deterministic_tool_workflow",
+        ).model_dump()
+        patch = _build_clarify_patch(state, decision, pending, "deterministic_task_unsupported")
+        patch.update(_log(state, "deterministic_tool_workflow", workflow_name="deterministic_tool", task_type=task_type, status="clarify", reason="deterministic_task_unsupported"))
+        return patch
+
+    target, pending, reason = _resolve_single_shop_target(state)
+    if target is None or pending is not None:
+        patch = _build_clarify_patch(state, decision, pending or {}, reason)
+        patch.update(_log(state, "deterministic_tool_workflow", workflow_name="deterministic_tool", task_type=task_type, status="clarify", reason=reason))
+        return patch
+
+    tool_name, facet = route_info
+    args = _tool_args_for_task(task_type, target["shop_id"], state)
+    execution_plan = _build_execution_plan(task_type, target["shop_id"], tool_name, facet, args, state)
+
+    raw_result = dispatch_tool_call(tool_name, args)
+    tool_result = _normalize_tool_result("call_1", tool_name, target["shop_id"], raw_result)
+
+    evidence_dict = build_evidence(
+        tool_results={"call_1": tool_result.model_dump()},
+        resolved_target={"status": "RESOLVED", "resolved_shop": {"shop_id": target["shop_id"], "shop_name": target["shop_name"]}},
+        execution_plan=execution_plan.model_dump(),
+        recommendation_candidates=[],
+        comparison_targets=[],
+    )
+
+    if facet == "price":
+        snapshot = evidence_dict.get("ranking_snapshot") or {}
+        if isinstance(tool_result.data, dict):
+            snapshot["avg_price"] = tool_result.data.get("avg_price")
+            snapshot["price_level"] = tool_result.data.get("price_level")
+            evidence_dict["ranking_snapshot"] = snapshot
+            facet_results = list(evidence_dict.get("facet_results") or [])
+            if facet_results:
+                facet_results[-1]["value"] = tool_result.data.get("avg_price")
+                facet_results[-1]["status"] = "ok" if tool_result.result_status.value in {"ok", "partial"} else tool_result.result_status.value
+                evidence_dict["facet_results"] = facet_results
+
+    evidence = EvidencePack.model_validate(evidence_dict)
+    answer_plan = AnswerPlan.model_validate(build_answer_plan(task_type, evidence.model_dump()))
+
+    patch = _build_success_patch(
+        state=state,
+        decision=decision,
+        task_type=task_type,
+        target=target,
+        execution_plan=execution_plan,
+        tool_result=tool_result,
+        evidence=evidence,
+        answer_plan=answer_plan,
+        facet=facet,
+    )
+    patch["workflow_reason"] = str(decision.workflow_reason or f"deterministic tool for {task_type}")
+    patch["workflow_runner_reason"] = patch["workflow_reason"]
+    patch["workflow_run_status"] = "completed" if patch.get("answer_verify_passed", False) else "fallback"
+    if not patch.get("answer_verify_passed", False):
+        patch["response_mode"] = "fallback"
+        patch["next_action"] = "fallback"
+        patch["workflow_runner_error"] = "ANSWER_VERIFIER_FAILED"
+    patch.update(_log(state, "deterministic_tool_workflow", workflow_name="deterministic_tool", task_type=task_type, status=patch["workflow_run_status"], tool_name=tool_name, facet=facet, target_shop_id=target["shop_id"]))
+    log_kv(
+        _LOGGER,
+        20 if patch["workflow_run_status"] == "completed" else 30,
+        "[WORKFLOW_RUNNER]",
+        tone="route" if patch["workflow_run_status"] == "completed" else "warn",
+        node_name="deterministic_tool_workflow",
+        workflow_name="deterministic_tool",
+        task_type=task_type,
+        tool_name=tool_name,
+        facet=facet,
+        target_shop_id=target["shop_id"],
+        status=patch["workflow_run_status"],
+    )
+    return patch

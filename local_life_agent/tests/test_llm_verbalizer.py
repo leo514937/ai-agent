@@ -82,39 +82,78 @@ def test_verbalizer_success_natural(monkeypatch: pytest.MonkeyPatch):
 
 def test_verbalizer_failure_fallback(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("local_life_agent.config.ENABLE_LLM_VERBALIZER", True)
-    
+
     answer_plan = {"answer_type": "single_shop"}
     evidence = {
-        "ranking_snapshot": {
-            "status": "ok",
-            "shop_name": "川味轩(知春路店)",
-        }
+        "evidence_items": [
+            {
+                "shop_name": "川味轩(知春路店)",
+                "facet": "open_status",
+                "value": "open",
+            }
+        ]
     }
-    
+
     # LLM returns error — no template fallback, returns LLM error message
     client = _mock_llm_client("ERROR", ok=False)
-    res = generate_answer(answer_plan, evidence, llm_client=client)
-    assert "【LLM 出错】" in res
-    assert "LLM 调用失败" in res
+    metadata_out: dict[str, Any] = {}
+    res = generate_answer(answer_plan, evidence, llm_client=client, metadata_out=metadata_out)
+    assert "川味轩" in res or "这家店" in res
+    assert metadata_out["answer_source"] == "template_fallback"
+    assert metadata_out["answer_verify_passed"] is False
+
+
+def test_template_fallback_metadata_is_explicitly_degraded(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("local_life_agent.config.ENABLE_LLM_VERBALIZER", True)
+
+    from local_life_agent.answer.generator import _build_decision_plan
+
+    answer_plan = {"answer_type": "single_shop"}
+    evidence = {
+        "evidence_items": [
+            {
+                "shop_name": "川味轩(知春路店)",
+                "facet": "open_status",
+                "value": "open",
+            }
+        ]
+    }
+
+    plan = _build_decision_plan(answer_plan, evidence)
+    metadata_out: dict[str, Any] = {}
+    res = verbalize_decision_plan(plan, llm_client=None, metadata_out=metadata_out)
+
+    assert res
+    assert metadata_out["answer_source"] == "template_fallback"
+    assert metadata_out["answer_verify_passed"] is False
+    assert metadata_out["final_safety_status"] == "fallback"
+    assert metadata_out["verifier_result"] == "fallback"
+    assert metadata_out["verifier_failure_code"] == "template_fallback"
+    assert metadata_out["answer_verify_violations"] == ["template_fallback"]
 
 
 def test_verbalizer_exception_fallback(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr("local_life_agent.config.ENABLE_LLM_VERBALIZER", True)
-    
+
     answer_plan = {"answer_type": "single_shop"}
     evidence = {
-        "ranking_snapshot": {
-            "status": "ok",
-            "shop_name": "川味轩(知春路店)",
-        }
+        "evidence_items": [
+            {
+                "shop_name": "川味轩(知春路店)",
+                "facet": "open_status",
+                "value": "open",
+            }
+        ]
     }
-    
+
     def bad_client(*args, **kwargs):
         raise RuntimeError("LLM crashed")
-        
-    res = generate_answer(answer_plan, evidence, llm_client=bad_client)
-    assert "【LLM 出错】" in res
-    assert "LLM crashed" in res
+
+    metadata_out: dict[str, Any] = {}
+    res = generate_answer(answer_plan, evidence, llm_client=bad_client, metadata_out=metadata_out)
+    assert "川味轩" in res or "这家店" in res
+    assert metadata_out["answer_source"] == "template_fallback"
+    assert metadata_out["verifier_result"] == "fallback"
 
 
 def test_verbalizer_unauthorized_shop_fallback(monkeypatch: pytest.MonkeyPatch):

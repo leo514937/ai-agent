@@ -6,6 +6,10 @@ import math
 from typing import Any
 
 from . import db_client
+from ..input.normalizer import normalize_text
+from ..semantic.alias_index import build_alias_index
+from pathlib import Path
+import json
 
 # ── Speed constants (km/h) ────────────────────────────────────────
 WALKING_SPEED_KMH = 5.0
@@ -40,11 +44,56 @@ def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
 
 def _lookup_shop(shop_id: str) -> dict[str, Any] | None:
     """Query a single shop by numeric ID string."""
+    mock = _mock_lookup_shop(shop_id)
+    if mock is not None:
+        return mock
     return db_client.query_shop_by_id(shop_id)
 
 
+def _mock_data_dir() -> Path:
+    return Path(__file__).resolve().parents[1] / "mock_data"
+
+
+def _load_mock_json(name: str) -> list[dict[str, Any]]:
+    path = _mock_data_dir() / name
+    if not path.exists():
+        return []
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+
+def _is_mock_shop_id(shop_id: str) -> bool:
+    return str(shop_id or "").strip().startswith("shop_sc_")
+
+
+def _mock_lookup_shop(shop_id: str) -> dict[str, Any] | None:
+    if not _is_mock_shop_id(shop_id):
+        return None
+    for shop in _load_mock_json("shops.json"):
+        if str(shop.get("shop_id", "")).strip() == str(shop_id).strip():
+            return dict(shop)
+    return None
+
+
+def _mock_coupons_for_shop(shop_id: str) -> list[dict[str, Any]]:
+    if not _is_mock_shop_id(shop_id):
+        return []
+    return [dict(item) for item in _load_mock_json("coupons.json") if str(item.get("shop_id", "")).strip() == str(shop_id).strip()]
+
+
+def _mock_distance_for_shop(shop_id: str) -> dict[str, Any] | None:
+    if not _is_mock_shop_id(shop_id):
+        return None
+    for item in _load_mock_json("distance_eta.json"):
+        if str(item.get("shop_id", "")).strip() == str(shop_id).strip():
+            return dict(item)
+    return None
+
+
 def _normalize_query(query: str) -> str:
-    return query.strip().lower()
+    return normalize_text(query).strip().lower()
 
 
 # ── 6 registered tools ────────────────────────────────────────────
@@ -78,22 +127,44 @@ def resolve_shop(
         }
 
     q = _normalize_query(query)
-
-    # Step 1: exact name match
+    alias_index = build_alias_index()
     all_shops = db_client.query_all_shops()
+    shop_by_name = {
+        _normalize_query(str(shop.get("shop_name", ""))): shop
+        for shop in all_shops
+        if str(shop.get("shop_name", "")).strip()
+    }
+
+    def _collect_alias_matches() -> list[dict[str, Any]]:
+        matched: list[dict[str, Any]] = []
+        for canonical, aliases in alias_index.items():
+            if q not in aliases:
+                continue
+            shop = shop_by_name.get(canonical)
+            if shop:
+                matched.append(shop)
+        return matched
+
     matched: list[dict[str, Any]] = []
 
+    # Step 1: exact name match
     for s in all_shops:
-        if s["shop_name"].lower() == q:
+        if _normalize_query(str(s.get("shop_name", ""))) == q:
             matched.append(s)
 
-    # Step 2: partial match (if no exact match)
+    # Step 2: alias match (if no exact match)
+    if not matched:
+        matched.extend(_collect_alias_matches())
+
+    # Step 3: partial match (if no exact / alias match)
     if not matched:
         for s in all_shops:
-            if q in s["shop_name"].lower() or q in s["category"].lower():
+            name = _normalize_query(str(s.get("shop_name", "")))
+            category = _normalize_query(str(s.get("category", "")))
+            if q in name or q in category:
                 matched.append(s)
 
-    # Step 3: session hint fallback
+    # Step 4: session hint fallback
     if not matched and session_shop_ids:
         for sid in session_shop_ids:
             s = _lookup_shop(sid)
@@ -231,7 +302,11 @@ def get_coupon_list(shop_id: str) -> dict:
     Returns:
         Coupon list result.
     """
-    coupons = db_client.query_coupons_by_shop_id(shop_id)
+    if str(shop_id).strip() == "shop_sc_06":
+        raise TimeoutError("Coupon query timed out for shop_sc_06 (simulated)")
+    coupons = _mock_coupons_for_shop(shop_id)
+    if not coupons:
+        coupons = db_client.query_coupons_by_shop_id(shop_id)
     return {
         "success": True,
         "result_status": "ok" if coupons else "empty",
@@ -329,6 +404,7 @@ def get_distance_eta(shop_id: str, from_location: dict[str, float]) -> dict:
     Returns:
         Distance & ETA result.
     """
+    mock_distance = _mock_distance_for_shop(shop_id)
     shop = _lookup_shop(shop_id)
     if shop is None:
         return {
@@ -336,6 +412,21 @@ def get_distance_eta(shop_id: str, from_location: dict[str, float]) -> dict:
             "result_status": "failed",
             "error_code": "SHOP_NOT_FOUND",
             "data": None,
+        }
+
+    if mock_distance is not None:
+        etas = mock_distance.get("etas") or _calc_etas(float(mock_distance.get("distance_km", 0) or 0))
+        return {
+            "success": True,
+            "result_status": "ok",
+            "data": {
+                "shop_id": shop_id,
+                "shop_name": shop["shop_name"],
+                "distance_km": mock_distance.get("distance_km"),
+                "eta_minutes": mock_distance.get("eta_minutes", etas["driving"]),
+                "etas": etas,
+                "traffic_level": mock_distance.get("traffic_level", "low"),
+            },
         }
 
     lat1 = from_location.get("lat", 39.9609)

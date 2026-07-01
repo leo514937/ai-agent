@@ -190,7 +190,10 @@ def test_unrecognized_facet_does_not_default_coupon(monkeypatch):
         clear_llm_backend()
 
     assert response.debug is not None
-    assert response.debug.execution_plan == {} or not response.debug.execution_plan.get("tool_calls")
+    tool_calls = response.debug.execution_plan.get("tool_calls", [])
+    assert tool_calls
+    assert any(call.get("facet") == "detail" for call in tool_calls)
+    assert any(call.get("tool_name") == "get_shop_detail" for call in tool_calls)
     assert "券" not in response.answer_text
 
 

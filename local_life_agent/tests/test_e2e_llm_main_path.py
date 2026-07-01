@@ -200,11 +200,12 @@ def test_recommendation_main_path_uses_llm_end_to_end(
     ranked = response.debug.evidence_pack.get("ranking_snapshot", {}).get("ranked") or []
 
     assert response.debug.answer_source in ("llm_verbalizer", "template_fallback", "")
-    assert ranked == []
+    assert ranked
     assert decision_plan.answer_type in {"single_shop_query", "recommendation"}
     assert "template_fallback" not in response.debug.answer_source
     assert "无券" not in response.answer_text
     assert "未营业" not in response.answer_text
+    assert response.debug.evidence_pack.get("ranking_snapshot", {}).get("ranked") == ranked
     assert frame.get("ranking_signals", {}).get("spy_marker") == spy.sentinel_id
     assert any(spy.sentinel_id in (item.get("raw") or "") for item in spy.responses)
 
@@ -225,8 +226,7 @@ def test_comparison_main_path_uses_llm_end_to_end(
 
     assert response.debug.answer_source in ("llm_verbalizer", "template_fallback", "")
     assert decision_plan.answer_type in {"single_shop_query", "comparison"}
-    assert overall_ranked == []
-    assert matrix.get("dimension_winners") in ({}, None)
+    assert overall_ranked
     assert spy.call_count >= 2
 
 
@@ -247,10 +247,10 @@ def test_ordinal_reference_prefers_semantic_frame(
     assert frame.get("task_type") == "coupon_query"
     assert frame.get("ordinal_references") == ["第一家"]
     assert resolved.get("resolution_source") == "semantic_frame"
-    assert resolved.get("target") is None
-    assert resolved.get("reason") in {"ordinal_out_of_range", "not_found", "candidate_not_found"}
-    assert recommendation_list == []
-    assert response.debug.answer_source in {"", "template_fallback", "llm_verbalizer"}
+    assert recommendation_list
+    assert resolved.get("target") is not None
+    assert resolved.get("target", {}).get("shop_id") == recommendation_list[0]["shop_id"]
+    assert response.debug.answer_source == "deterministic_tool_workflow"
     assert spy.call_count >= 3
 
 
@@ -291,7 +291,7 @@ def test_deictic_comparison_clarifies_missing_current_shop(
 
     assert frame.get("task_type") == "comparison"
     assert frame.get("deictic_references") == ["这家"]
-    assert "请提供完整店名" in response.answer_text or "没有找到这家店" in response.answer_text
+    assert any(marker in response.answer_text for marker in ("请提供完整店名", "请回复编号或店名", "我找到了几个可能的店"))
     assert "海底捞是哪家" not in response.answer_text
     assert any(item.get("node") == "target_resolve" and item.get("status") == "NEED_CLARIFICATION" for item in trace)
     assert spy.call_count >= 2

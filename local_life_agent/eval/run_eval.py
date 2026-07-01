@@ -48,7 +48,10 @@ class EvalSpyBackend:
         if "意图类型: comparison" in prompt:
             names = ranked[:2] or selected[:2]
             if len(names) >= 2:
-                text = f"这两家里，{names[0]}整体更占优，{names[1]}也可以作为备选。"
+                if "不确定项/无法确认项" in prompt and "[]" not in prompt.split("不确定项/无法确认项:", 1)[1].splitlines()[0]:
+                    text = f"这两家目前信息还不够完整，我暂时无法确认谁更好，先参考{names[0]}和{names[1]}的已知信息。"
+                else:
+                    text = f"综合当前已知信息，我会优先推荐{names[0]}，其次是{names[1]}。"
             else:
                 text = "这两家各有侧重，需要结合你的关注点来选。"
         elif "意图类型: recommendation" in prompt:

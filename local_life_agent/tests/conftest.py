@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import os
 import json
 import re
 import uuid
+import sys
+from pathlib import Path
 from typing import Any
 
 import pytest
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 # ── Force runtime backend away from removed mock executor ───────────────
 # Tests that need fake tool outputs must inject them explicitly from
@@ -16,6 +23,7 @@ import local_life_agent.config as _cfg
 _cfg.TOOL_BACKEND = "db"
 
 LLM_SENTINEL_PREFIX = "LLM_SENTINEL_"
+_SPY_OPT_OUT_MARKERS = {"no_spy_llm_backend", "real_llm_backend"}
 
 
 class SpyRealLLMBackend:
@@ -71,6 +79,7 @@ class SpyRealLLMBackend:
         timeout_ms: int = 3000,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        prompt_bundle = "\n".join(part for part in (system_prompt, prompt) if part)
         request = {
             "prompt": prompt,
             "system_prompt": system_prompt,
@@ -80,22 +89,24 @@ class SpyRealLLMBackend:
         self.requests.append(request)
         self.prompts.append(prompt)
 
-        if "# Goal Planner" in prompt:
-            response = self._goal_plan_response(prompt, timeout_ms, kwargs)
-        elif "# Evidence Planner" in prompt:
-            response = self._execution_plan_response(prompt, timeout_ms, kwargs)
-        elif "# Evidence Sufficiency Review" in prompt:
-            response = self._evidence_review_response(prompt, timeout_ms, kwargs)
-        elif "# Decision Planner" in prompt:
-            response = self._decision_plan_response(prompt, timeout_ms, kwargs)
-        elif "# 答案校验 Verifier" in prompt:
-            response = self._answer_verifier_response(prompt, timeout_ms, kwargs)
-        elif "## DecisionPlan" in prompt or "DecisionPlan 事实数据" in prompt or "natural_response" in prompt:
-            response = self._verbalizer_response(prompt, timeout_ms, kwargs)
-        elif "# Top Intent Router" in prompt or "# 顶层意图路由" in prompt:
-            response = self._top_intent_response(prompt, timeout_ms, kwargs)
+        if "Goal Planner" in prompt_bundle:
+            response = self._goal_plan_response(prompt_bundle, timeout_ms, kwargs)
+        elif "Evidence Planner" in prompt_bundle:
+            response = self._execution_plan_response(prompt_bundle, timeout_ms, kwargs)
+        elif "Evidence Sufficiency Review" in prompt_bundle:
+            response = self._evidence_review_response(prompt_bundle, timeout_ms, kwargs)
+        elif "Decision Planner" in prompt_bundle:
+            response = self._decision_plan_response(prompt_bundle, timeout_ms, kwargs)
+        elif "答案校验器" in prompt_bundle or "答案校验 Verifier" in prompt_bundle:
+            response = self._answer_verifier_response(prompt_bundle, timeout_ms, kwargs)
+        elif "本地生活助手（顾问）" in prompt_bundle or "DecisionPlan 事实数据" in prompt_bundle or "natural_response" in prompt_bundle:
+            response = self._verbalizer_response(prompt_bundle, timeout_ms, kwargs)
+        elif "顶层意图路由" in prompt_bundle or "意图分类器" in prompt_bundle:
+            response = self._top_intent_response(prompt_bundle, timeout_ms, kwargs)
+        elif "本地生活语义解析器" in prompt_bundle or "本地生活语义框架提取器" in prompt_bundle:
+            response = self._semantic_response(prompt_bundle, timeout_ms, kwargs)
         else:
-            response = self._semantic_response(prompt, timeout_ms, kwargs)
+            response = self._semantic_response(prompt_bundle, timeout_ms, kwargs)
 
         self.responses.append(response)
         return response
@@ -130,6 +141,40 @@ class SpyRealLLMBackend:
         return self._wrap(payload, timeout_ms, kwargs)
 
     def _scenario_payload(self, text: str) -> dict[str, Any]:
+        if (
+            "哪个好" in text
+            or "哪个更好" in text
+            or "哪家更好" in text
+            or "谁更好" in text
+            or "对比" in text
+            or "比较" in text
+            or "比一比" in text
+            or ("和" in text and "比" in text and any(token in text for token in ("第一家", "第二家", "第三家", "这家", "这三家", "这几家", "海底捞", "山城一锅")))
+        ):
+            return {
+                "top_intent": "local_life",
+                "task_type": "comparison",
+                "primary_task": "comparison",
+                "facets": [],
+                "merchant_mentions": [token for token in ("海底捞", "山城一锅") if token in text],
+                "reference_mentions": [token for token in ("第一家", "第二家", "第三家", "这家", "这三家", "这几家") if token in text],
+                "comparison_targets": [
+                    {"shop_name": token, "reference": "ordinal" if token.startswith("第") else "deictic", "source_text": token}
+                    for token in ("第一家", "第二家", "第三家", "这家", "这三家", "这几家")
+                    if token in text
+                ],
+                "ordinal_references": [token for token in ("第一家", "第二家", "第三家") if token in text],
+                "deictic_references": [token for token in ("这家", "这三家", "这几家") if token in text],
+                "focused_facets": [],
+                "comparison_focus": "overall",
+                "hard_constraints": {},
+                "soft_preferences": {},
+                "ranking_signals": {"query_terms": ["火锅"]},
+                "follow_up": {"is_follow_up": True, "refine_action": "comparison"},
+                "confidence": 0.97,
+                "need_context": False,
+            }
+
         for marker, payload in self._scenario_payloads.items():
             if marker == "__default__":
                 return dict(payload)
@@ -178,7 +223,7 @@ class SpyRealLLMBackend:
                 "ranking_signals": {"query_terms": ["海底捞"]},
                 "follow_up": {"is_follow_up": True, "refine_action": "comparison"},
                 "confidence": 0.97,
-                "need_context": True,
+                "need_context": False,
             }
 
         if "便宜一点" in text:
@@ -285,7 +330,10 @@ class SpyRealLLMBackend:
             if isinstance(item, dict) and str(item.get("shop_name", "")).strip()
         ]
         if answer_type == "comparison" and len(shop_names) >= 2:
-            text = f"综合当前已知信息，我会优先推荐{shop_names[0]}，其次是{shop_names[1]}。"
+            if uncertainties:
+                text = f"这两家目前信息还不够完整，我暂时无法确认谁更好，先参考{shop_names[0]}和{shop_names[1]}的已知信息。"
+            else:
+                text = f"综合当前已知信息，我会优先推荐{shop_names[0]}，其次是{shop_names[1]}。"
         elif answer_type == "recommendation" and shop_names:
             preview = "、".join(shop_names[:3])
             text = f"附近这几家更值得优先看：{preview}。"
@@ -302,7 +350,10 @@ class SpyRealLLMBackend:
                 text = f"{target_name}这项信息我已经按当前查询结果整理好了。"
         else:
             target_name = str(main_recommendation.get("shop_name", "")).strip() if main_recommendation else ""
-            text = f"我会优先参考{target_name or '当前结果'}来回答。"
+            if uncertainties:
+                text = f"当前信息还不够完整，我暂时无法确认{target_name or '当前结果'}的全部细节。"
+            else:
+                text = f"我会优先参考{target_name or '当前结果'}来回答。"
 
         payload = {"natural_response": text}
         return self._wrap(payload, timeout_ms, kwargs)
@@ -331,11 +382,28 @@ class SpyRealLLMBackend:
             else:
                 optional.append(name)
         requested_count = int(semantic.get("candidate_limit") or (2 if goal_type == "comparison" else 3 if goal_type == "recommendation" else 1))
+        mentions = list(semantic.get("merchant_mentions") or [])
+        ordinals = list(semantic.get("ordinal_references") or [])
+        deictics = list(semantic.get("deictic_references") or [])
+        comparison_targets = list(semantic.get("comparison_targets") or [])
+        reference_mentions = list(semantic.get("reference_mentions") or [])
+        has_structured_refs = bool(ordinals or deictics or comparison_targets or reference_mentions)
+        has_mentions = bool(mentions)
+        if semantic.get("candidate_source") is not None:
+            candidate_source = str(semantic.get("candidate_source") or "")
+        elif has_mentions and has_structured_refs:
+            candidate_source = "mixed"
+        elif has_structured_refs:
+            candidate_source = "context"
+        elif has_mentions:
+            candidate_source = "explicit"
+        else:
+            candidate_source = "discovery"
         payload = {
             "goal_type": goal_type,
             "goal_source": "semantic_frame",
             "goal_summary": str(semantic.get("primary_task") or task_type or text),
-            "candidate_source": str(semantic.get("candidate_source") or ("explicit" if semantic.get("merchant_mentions") else "discovery")),
+            "candidate_source": candidate_source,
             "candidate_category": str(semantic.get("candidate_category") or (semantic.get("hard_constraints") or {}).get("category") or "") or None,
             "candidate_limit": semantic.get("candidate_limit"),
             "requested_count": requested_count,
@@ -365,6 +433,15 @@ class SpyRealLLMBackend:
         ]
         required_facets = list(goal.get("required_facets") or [])
         optional_facets = [f for f in (goal.get("optional_facets") or []) if f not in required_facets]
+        if not required_facets and not optional_facets:
+            if task_type == "comparison":
+                required_facets = ["distance", "open_status", "coupon"]
+                optional_facets = ["detail"]
+            elif task_type == "recommendation":
+                required_facets = ["distance", "open_status", "coupon"]
+                optional_facets = ["detail"]
+            elif task_type == "single_shop_query":
+                required_facets = ["detail"]
         all_facets = required_facets + optional_facets
         tool_map = {
             "coupon": "get_coupon_list",
@@ -549,9 +626,31 @@ class SpyRealLLMBackend:
         return parsed if isinstance(parsed, dict) else {}
 
     def _extract_json_fragment(self, prompt: str, label: str) -> str:
-        pattern = re.escape(label) + r"\s*(.+)"
-        match = re.search(pattern, prompt)
-        return match.group(1).strip() if match else ""
+        lines = prompt.splitlines()
+        for index, line in enumerate(lines):
+            if not line.startswith(label):
+                continue
+            after = line.split(":", 1)[1].strip()
+            if after and not after.startswith(("{", "[")):
+                return after
+            collected: list[str] = [after] if after else []
+            depth = after.count("{") + after.count("[") - after.count("}") - after.count("]")
+            started = bool(after)
+            for next_line in lines[index + 1 :]:
+                stripped = next_line.strip()
+                if started and stripped.startswith("- ") and depth <= 0:
+                    break
+                if not started:
+                    if not stripped:
+                        continue
+                    started = True
+                collected.append(next_line)
+                depth += next_line.count("{") + next_line.count("[")
+                depth -= next_line.count("}") + next_line.count("]")
+                if started and depth <= 0 and collected:
+                    break
+            return "\n".join(collected).strip()
+        return ""
 
     def _wrap(self, payload: dict[str, Any], timeout_ms: int, kwargs: dict[str, Any]) -> dict[str, Any]:
         raw_payload = json.dumps(
@@ -580,6 +679,39 @@ class SpyRealLLMBackend:
 def spy_backend() -> SpyRealLLMBackend:
     """Create a fresh SpyRealLLMBackend for each test."""
     return SpyRealLLMBackend()
+
+
+@pytest.fixture(autouse=True)
+def _default_test_llm_backend(request: pytest.FixtureRequest, spy_backend: SpyRealLLMBackend) -> None:
+    """Inject the spy backend by default for deterministic offline tests."""
+
+    if os.environ.get("LOCAL_LIFE_TEST_LLM") == "1":
+        yield
+        return
+    if any(request.node.get_closest_marker(marker) is not None for marker in _SPY_OPT_OUT_MARKERS):
+        yield
+        return
+
+    from local_life_agent.llm.client import clear_llm_backend, set_llm_backend
+
+    set_llm_backend(spy_backend)
+    try:
+        yield
+    finally:
+        clear_llm_backend()
+
+
+@pytest.fixture(autouse=True)
+def _isolated_session_store() -> None:
+    """Reset the process-wide session store around every test."""
+
+    from local_life_agent.session.store import reset_session_store
+
+    reset_session_store()
+    try:
+        yield
+    finally:
+        reset_session_store()
 
 
 @pytest.fixture

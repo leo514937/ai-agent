@@ -485,16 +485,29 @@ def build_candidate_decision_plan(
             rank=ev_val.rank
         )
         candidates.append(candidate_item)
-        
+
     final_reco = None
-    if decision_type == "recommendation" and candidates:
-        final_reco = candidates[0].shop_name
-    elif decision_type == "comparison" and candidates:
-        if len(candidates) >= 2 and candidates[0].score != candidates[1].score:
-            final_reco = candidates[0].shop_name
-        elif len(candidates) == 1:
-            final_reco = candidates[0].shop_name
-            
+    if candidates:
+        scored_candidates = sorted(
+            candidates,
+            key=lambda item: (
+                -(float(item.score or 0.0)),
+                item.rank if item.rank is not None else 9999,
+                item.shop_name,
+                item.shop_id,
+            ),
+        )
+        top_candidate = scored_candidates[0]
+        second_candidate = scored_candidates[1] if len(scored_candidates) > 1 else None
+        top_score = float(top_candidate.score or 0.0)
+        second_score = float(second_candidate.score or 0.0) if second_candidate is not None else None
+        if decision_type == "recommendation":
+            if top_score > 0 and (second_candidate is None or top_score > (second_score or 0.0)):
+                final_reco = top_candidate.shop_name
+        elif decision_type == "comparison":
+            if second_candidate is not None and top_score > 0 and top_score > (second_score or 0.0):
+                final_reco = top_candidate.shop_name
+
     plan = CandidateDecisionPlan(
         decision_type=decision_type,
         user_goal=user_goal,
@@ -516,8 +529,8 @@ def map_candidate_decision_plan_to_decision_plan(plan: CandidateDecisionPlan) ->
     sorted_candidates = sorted(
         plan.candidates,
         key=lambda candidate: (
-            candidate.rank if candidate.rank is not None else 9999,
             -(candidate.score or 0.0),
+            candidate.rank if candidate.rank is not None else 9999,
             candidate.shop_name,
             candidate.shop_id,
         ),
@@ -555,9 +568,7 @@ def map_candidate_decision_plan_to_decision_plan(plan: CandidateDecisionPlan) ->
             if target["shop_name"] == plan.final_recommendation:
                 main_recommendation = target
                 break
-        if not main_recommendation:
-            main_recommendation = selected_targets[0]
-            
+
     best_for = {}
     if plan.decision_type == "comparison":
         dim_labels = {

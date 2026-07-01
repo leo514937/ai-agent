@@ -9,6 +9,15 @@ from .. import config
 from ..domain.schemas import ComparisonTargetResolution
 from ..domain.state import SessionState
 
+
+def _unwrap_resolve_shop_result(raw: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    data = raw.get("data")
+    if isinstance(data, dict) and "status" in data:
+        return data
+    return raw
+
 _SINGLE_DEICTIC_HINTS = ("这家", "它", "那家", "这间", "那间")
 _LIST_DEICTIC_HINTS = ("这三家", "这几家", "这几间", "这些", "上面这些", "刚才这几家", "这几个", "这三个")
 _ORDINAL_RE = re.compile(r"第\s*([1-9一二三四五六七八九十])\s*(个|家|间|店)?")
@@ -101,6 +110,13 @@ def _resolved_target(shop: dict[str, Any], *, source: str, source_ref: str) -> d
     }
 
 
+def _comparison_shop(shop: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "shop_id": str(shop.get("shop_id", "")).strip(),
+        "shop_name": str(shop.get("shop_name", "")).strip(),
+    }
+
+
 def _append_unique(targets: list[dict[str, Any]], target: dict[str, Any]) -> None:
     shop_id = str(target.get("shop_id", "")).strip()
     shop_name = str(target.get("shop_name", "")).strip()
@@ -121,10 +137,8 @@ def _resolve_ordinal_reference(reference: str, session_state: dict | SessionStat
         return {
             "status": "resolved",
             "reason": "ordinal_reference",
-            "target": _resolved_target(
+            "target": _comparison_shop(
                 candidates[index - 1],
-                source="last_recommendation_list",
-                source_ref=reference,
             ),
         }
     return {
@@ -147,10 +161,7 @@ def _resolve_deictic_reference(reference: str, session_state: dict | SessionStat
             return {
                 "status": "resolved_list",
                 "reason": "recommendation_list_reference",
-                "targets": [
-                    _resolved_target(shop, source="last_recommendation_list", source_ref=compact)
-                    for shop in selected
-                ],
+                "targets": [_comparison_shop(shop) for shop in selected],
             }
         return {
             "status": "ambiguous",
@@ -163,7 +174,7 @@ def _resolve_deictic_reference(reference: str, session_state: dict | SessionStat
             return {
                 "status": "resolved",
                 "reason": "current_shop_reference",
-                "target": _resolved_target(current_shop, source="current_shop", source_ref=compact),
+                "target": _comparison_shop(current_shop),
             }
         return {
             "status": "ambiguous",
@@ -180,11 +191,25 @@ def resolve_comparison_targets(
 ) -> dict[str, Any]:
     """Resolve multi-target comparison references from semantic structure first."""
     frame = _frame_dict(semantic_frame)
+    merchant_mentions = [str(item).strip() for item in frame.get("merchant_mentions", []) or [] if str(item).strip()]
+    explicit_mention_count = len(merchant_mentions)
     targets: list[dict[str, Any]] = []
     unresolved_targets: list[dict[str, Any]] = []
+    resolved_explicit_queries: set[str] = set()
     comparison_targets = frame.get("comparison_targets", []) or []
     ordinal_references = [str(item).strip() for item in frame.get("ordinal_references", []) or [] if str(item).strip()]
     deictic_references = [str(item).strip() for item in frame.get("deictic_references", []) or [] if str(item).strip()]
+    reference_mentions = [str(item).strip() for item in frame.get("reference_mentions", []) or [] if str(item).strip()]
+
+    def _resolve_explicit(query: str) -> dict[str, Any]:
+        try:
+            from ..engine import graph_builder as _graph_builder
+        except Exception:
+            return {"status": "NOT_FOUND", "error_code": "SHOP_RESOLVE_FAILED"}
+        try:
+            return _unwrap_resolve_shop_result(_graph_builder.resolve_shop(query, location={}))
+        except Exception:
+            return {"status": "NOT_FOUND", "error_code": "SHOP_RESOLVE_FAILED"}
 
     if not comparison_targets:
         comparison_targets = []
@@ -192,14 +217,69 @@ def resolve_comparison_targets(
             comparison_targets.append({"reference": "ordinal", "source_text": token, "shop_name": token})
         for token in deictic_references:
             comparison_targets.append({"reference": "deictic", "source_text": token, "shop_name": token})
+        for token in reference_mentions:
+            if _parse_ordinal(token) is not None:
+                comparison_targets.append({"reference": "ordinal", "source_text": token, "shop_name": token})
+                continue
+            if token in _SINGLE_DEICTIC_HINTS or token in _LIST_DEICTIC_HINTS or token.startswith("这") or token.startswith("那"):
+                comparison_targets.append({"reference": "deictic", "source_text": token, "shop_name": token})
+        if not comparison_targets:
+            compact_text = str(text or "").replace(" ", "")
+            for match in _ORDINAL_RE.finditer(compact_text):
+                token = match.group(0).strip()
+                if token:
+                    comparison_targets.append({"reference": "ordinal", "source_text": token, "shop_name": token})
+            for token in _LIST_DEICTIC_HINTS + _SINGLE_DEICTIC_HINTS:
+                if token in compact_text:
+                    comparison_targets.append({
+                        "reference": "deictic",
+                        "source_text": token,
+                        "shop_name": token,
+                    })
 
     for item in comparison_targets:
         target = _shop_dict(item)
         reference_type = str(target.get("reference", "")).strip()
         source_ref = str(target.get("source_text", "") or target.get("shop_name", "")).strip()
         if reference_type == "explicit":
+            query = str(target.get("shop_name", "")).strip()
+            if not query:
+                continue
+            resolved = _resolve_explicit(query)
+            status = str(resolved.get("status", "") or "").upper()
+            if status == "RESOLVED":
+                shop = resolved.get("shop") or resolved.get("resolved_shop") or {}
+                _append_unique(targets, _comparison_shop(_shop_dict(shop)))
+                resolved_explicit_queries.add(query)
+                continue
+            if status == "AMBIGUOUS":
+                cand_list = resolved.get("candidates") or []
+                if cand_list:
+                    for cand in cand_list:
+                        cand_dict = _shop_dict(cand.get("shop") if isinstance(cand, dict) else cand)
+                        _append_unique(targets, _comparison_shop(cand_dict))
+                unresolved_targets.append(
+                    {
+                        "reference": "explicit",
+                        "query": query,
+                        "source_ref": source_ref,
+                        "candidates": [
+                            _comparison_shop(_shop_dict(cand.get("shop") if isinstance(cand, dict) else cand))
+                            for cand in cand_list
+                            if _shop_dict(cand.get("shop") if isinstance(cand, dict) else cand)
+                        ],
+                    }
+                )
+                return ComparisonTargetResolution(
+                    status="NEED_CLARIFICATION",
+                    targets=targets,
+                    unresolved_targets=unresolved_targets,
+                    ambiguous_target={"source_ref": source_ref, "reference": reference_type},
+                    reason=str(resolved.get("reason", "comparison_reference_ambiguous")),
+                    prompt="请明确你说的是哪家店。",
+                ).model_dump()
             unresolved_targets.append(
-                {"reference": "explicit", "query": str(target.get("shop_name", "")).strip(), "source_ref": source_ref}
+                {"reference": "explicit", "query": query, "source_ref": source_ref}
             )
             continue
         if reference_type == "ordinal":
@@ -210,11 +290,11 @@ def resolve_comparison_targets(
             continue
         status = resolved.get("status")
         if status == "resolved":
-            _append_unique(targets, resolved.get("target", {}))
+            _append_unique(targets, _comparison_shop(_shop_dict(resolved.get("target", {}))))
             continue
         if status == "resolved_list":
             for candidate in resolved.get("targets", []) or []:
-                _append_unique(targets, candidate)
+                _append_unique(targets, _comparison_shop(_shop_dict(candidate)))
             continue
         if status == "ambiguous":
             return ComparisonTargetResolution(
@@ -237,8 +317,52 @@ def resolve_comparison_targets(
 
     for query in frame.get("merchant_mentions", []) or []:
         query_text = str(query or "").strip()
-        if query_text and not any(item.get("query") == query_text for item in unresolved_targets):
-            unresolved_targets.append({"reference": "explicit", "query": query_text, "source_ref": query_text})
+        if not query_text:
+            continue
+        if query_text in resolved_explicit_queries:
+            continue
+        if any(
+            query_text == str(item.get("shop_name", "")).strip()
+            or query_text == str(item.get("shop_name", "")).strip().split("(", 1)[0].strip()
+            for item in targets
+        ):
+            continue
+        resolved = _resolve_explicit(query_text)
+        status = str(resolved.get("status", "") or "").upper()
+        if status == "RESOLVED":
+            shop = resolved.get("shop") or resolved.get("resolved_shop") or {}
+            _append_unique(targets, _comparison_shop(_shop_dict(shop)))
+            resolved_explicit_queries.add(query_text)
+            continue
+        if status == "AMBIGUOUS":
+            cand_list = resolved.get("candidates") or []
+            if cand_list:
+                for cand in cand_list:
+                    cand_dict = _shop_dict(cand.get("shop") if isinstance(cand, dict) else cand)
+                    _append_unique(targets, _comparison_shop(cand_dict))
+            unresolved_targets.append(
+                {
+                    "reference": "explicit",
+                    "query": query_text,
+                    "source_ref": query_text,
+                    "candidates": [
+                        _comparison_shop(_shop_dict(cand.get("shop") if isinstance(cand, dict) else cand))
+                        for cand in cand_list
+                        if _shop_dict(cand.get("shop") if isinstance(cand, dict) else cand)
+                    ],
+                }
+            )
+            if explicit_mention_count < 2:
+                return ComparisonTargetResolution(
+                    status="NEED_CLARIFICATION",
+                    targets=targets,
+                    unresolved_targets=unresolved_targets,
+                    ambiguous_target={"source_ref": query_text, "reference": "explicit"},
+                    reason=str(resolved.get("reason", "comparison_reference_ambiguous")),
+                    prompt="请明确你说的是哪家店。",
+                ).model_dump()
+            if not any(item.get("query") == query_text for item in unresolved_targets):
+                unresolved_targets.append({"reference": "explicit", "query": query_text, "source_ref": query_text})
 
     deduped_count = len(targets)
     if deduped_count > config.COMPARISON_MAX_SHOP_LIMIT:
@@ -249,7 +373,30 @@ def resolve_comparison_targets(
             reason="comparison_too_many_shops",
             prompt="最多支持 5 家店对比，请缩小范围后再试。",
         ).model_dump()
-    if deduped_count == 1 and not unresolved_targets:
+    if unresolved_targets:
+        if deduped_count == 0:
+            return ComparisonTargetResolution(
+                status="NEED_CLARIFICATION",
+                targets=[],
+                unresolved_targets=unresolved_targets,
+                reason=str(unresolved_targets[0].get("reason", "") or "comparison_targets_need_clarification"),
+                prompt="请明确你说的是哪家店。",
+            ).model_dump()
+        if deduped_count >= 2 and explicit_mention_count >= 2:
+            return ComparisonTargetResolution(
+                status="RESOLVED",
+                targets=targets,
+                unresolved_targets=[],
+                reason="comparison_targets_resolved",
+            ).model_dump()
+        return ComparisonTargetResolution(
+            status="NEED_CLARIFICATION",
+            targets=targets,
+            unresolved_targets=unresolved_targets,
+            reason="comparison_targets_need_clarification",
+            prompt="请明确你说的是哪家店。",
+        ).model_dump()
+    if deduped_count == 1:
         return ComparisonTargetResolution(
             status="NEED_CLARIFICATION",
             targets=targets,
@@ -257,19 +404,12 @@ def resolve_comparison_targets(
             reason="comparison_requires_at_least_two_shops",
             prompt="对比至少需要两家不同的店，请补充另一家店名。",
         ).model_dump()
-    if deduped_count >= 2 and not unresolved_targets:
+    if deduped_count >= 2:
         return ComparisonTargetResolution(
             status="RESOLVED",
             targets=targets,
             unresolved_targets=[],
             reason="comparison_targets_resolved",
-        ).model_dump()
-    if deduped_count == 0 and unresolved_targets:
-        return ComparisonTargetResolution(
-            status="NOT_FOUND",
-            targets=[],
-            unresolved_targets=unresolved_targets,
-            reason="comparison_targets_need_explicit_resolution",
         ).model_dump()
     if deduped_count == 0 and not unresolved_targets:
         return ComparisonTargetResolution(
@@ -309,6 +449,8 @@ def resolve_references(
     handled upstream.
     """
     frame = _frame_dict(semantic_frame)
+    if str(frame.get("shop_id", "") or "") or str(frame.get("tool_name", "") or "") or str(frame.get("error_code", "") or "") == "SCHEMA_VALIDATION_FAILED":
+        return {"status": "unresolved", "reason": "forbidden_semantic_frame", "resolution_source": "semantic_frame"}
     ordinal_refs = [str(item).strip() for item in frame.get("ordinal_references", []) or [] if str(item).strip()]
     deictic_refs = [str(item).strip() for item in frame.get("deictic_references", []) or [] if str(item).strip()]
 

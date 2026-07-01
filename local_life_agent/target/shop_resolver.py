@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from ..tools.gateway import dispatch_tool_call
+
 
 class ShopResolver:
     """Resolve a shop mention through the unified tool gateway."""
@@ -17,7 +19,6 @@ class ShopResolver:
         session_shop_ids: list[str] | None = None,
     ) -> dict[str, Any]:
         from ..engine import graph_builder as gb
-        from ..tools.gateway import dispatch_tool_call
 
         graph_builder_resolve: Callable[..., dict[str, Any]] | None = getattr(gb, "resolve_shop", None)
         payload = {

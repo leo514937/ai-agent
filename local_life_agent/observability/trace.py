@@ -299,7 +299,7 @@ def build_turn_trace(final_state: dict[str, Any], *, user_text: str = "", total_
         verifier_false_fields=[str(item) for item in (final_state.get("verifier_false_fields") or []) if str(item).strip()],
         verifier_recoverable=_coerce_optional_bool(final_state.get("verifier_recoverable")),
         rewrite_count=int(final_state.get("rewrite_count", 0) or 0),
-        fallback_reason=_coerce_optional_str(final_state.get("fallback_reason")),
+        fallback_reason=_coerce_optional_str(final_state.get("fallback_reason")) or _coerce_optional_str(semantic_frame.get("fallback_reason")),
         fallback_used=_infer_fallback_used(final_state, semantic_frame),
         template_fallback_used=_coerce_optional_bool(final_state.get("template_fallback_used")),
         raw_text_fallback_source=_coerce_optional_str(final_state.get("raw_text_fallback_source")),
@@ -545,7 +545,7 @@ def _infer_tool_backend(final_state: dict[str, Any], evidence_pack: dict[str, An
         value = _coerce_optional_str(final_state.get(key))
         if value:
             return value
-    tool_results = _coerce_dict(final_state.get("tool_result_set") or final_state.get("tool_results"))
+    tool_results = _coerce_dict(final_state.get("tool_results") or final_state.get("tool_result_set"))
     for result in tool_results.values():
         if isinstance(result, dict):
             value = _coerce_optional_str(result.get("tool_backend")) or _coerce_optional_str(result.get("backend_source"))
@@ -590,7 +590,7 @@ def _infer_tool_call_count(execution_plan: dict[str, Any], final_state: dict[str
     tool_calls = execution_plan.get("tool_calls") or []
     if tool_calls:
         return len(tool_calls)
-    tool_results = _coerce_dict(final_state.get("tool_result_set") or final_state.get("tool_results"))
+    tool_results = _coerce_dict(final_state.get("tool_results") or final_state.get("tool_result_set"))
     return len(tool_results)
 
 

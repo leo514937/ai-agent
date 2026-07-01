@@ -10,9 +10,11 @@ appropriate resolution strategy based on the candidate source:
 
 from __future__ import annotations
 
+import re
 from typing import Any, Callable
 
 from ..config import SEARCH_LIMIT
+from ..tools import db_client
 from ..domain.candidate import (
     CandidateSet,
     CandidateSource,
@@ -22,10 +24,21 @@ from ..domain.candidate import (
 )
 
 
+def _unwrap_resolve_shop_result(raw: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {}
+    data = raw.get("data")
+    if isinstance(data, dict) and "status" in data:
+        return data
+    return raw
+
+
 def _default_resolve_shop(query: str, **kw: Any) -> dict[str, Any]:
     from ..engine import graph_builder as gb
 
-    return gb.resolve_shop(query, **(kw or {}))
+    params = dict(kw or {})
+    params.setdefault("location", {})
+    return gb.resolve_shop(query, **params)
 
 
 def _default_search_shops(query: str, **kw: Any) -> dict[str, Any]:
@@ -82,6 +95,70 @@ def _session_shop_ids(state: dict[str, Any] | None) -> list[str]:
         if sid and sid not in deduped:
             deduped.append(sid)
     return deduped
+
+
+def _normalize_shop_key(value: str) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return ""
+    text = re.sub(r"[()\[\]{}（）【】\s、,，.。·\-_/]", "", text)
+    return text
+
+
+def _filter_discovery_candidates_by_mentions(
+    candidates: list[ResolvedCandidate],
+    mentions: list[str],
+) -> list[ResolvedCandidate]:
+    """Prefer discovery hits that actually contain the explicit shop mention."""
+    if not candidates or not mentions:
+        return []
+
+    normalized_mentions = [_normalize_shop_key(mention) for mention in mentions if _normalize_shop_key(mention)]
+    if not normalized_mentions:
+        return []
+
+    matched: list[ResolvedCandidate] = []
+    for candidate in candidates:
+        candidate_key = _normalize_shop_key(getattr(candidate, "shop_name", "") or "")
+        if not candidate_key:
+            continue
+        if any(
+            mention_key == candidate_key
+            or mention_key in candidate_key
+            or candidate_key in mention_key
+            for mention_key in normalized_mentions
+        ):
+            matched.append(candidate)
+
+    return matched
+
+
+def _resolve_exact_shop_match(mention: str) -> list[dict[str, Any]]:
+    """Try an exact catalog lookup before falling back to gateway search.
+
+    This keeps explicit single-shop mentions narrow when the query already
+    names the exact shop, while preserving the normal tool path for fuzzy
+    recovery.
+    """
+    query = str(mention or "").strip()
+    if not query:
+        return []
+
+    try:
+        matches = db_client.query_shop_by_name(query)
+    except Exception:
+        return []
+
+    exact_matches: list[dict[str, Any]] = []
+    for shop in matches:
+        shop_dict = _to_dict(shop)
+        if _normalize_shop_key(str(shop_dict.get("shop_name", "") or "")) == _normalize_shop_key(query):
+            exact_matches.append(shop_dict)
+    if exact_matches:
+        return exact_matches
+    if len(matches) == 1:
+        return [_to_dict(matches[0])]
+    return []
 
 
 def _normalize_discovery_query(query: str) -> str:
@@ -223,6 +300,17 @@ class CandidateResolver:
         AMBIGUOUS mentions remain ambiguous and must be clarified.
         NOT_FOUND mentions are skipped.
         """
+        if state:
+            semantic_frame = _to_dict(state.get("semantic_frame"))
+            if str(state.get("error_code", "") or "") == "SCHEMA_VALIDATION_FAILED" or semantic_frame.get("shop_id") or semantic_frame.get("tool_name"):
+                return CandidateSet(
+                    status=CandidateStatus.NOT_FOUND,
+                    source=CandidateSource.EXPLICIT,
+                    candidates=[],
+                    requested_count=spec.limit or 1,
+                    min_required=1,
+                    max_allowed=spec.limit or 5,
+                )
         mentions = spec.explicit_mentions or []
         if not mentions:
             return CandidateSet(
@@ -241,7 +329,35 @@ class CandidateResolver:
             kwargs: dict[str, Any] = {}
             if session_shop_id_list:
                 kwargs["session_shop_ids"] = session_shop_id_list
-            result = self._resolve_shop(mention, **kwargs)
+            exact_matches = _resolve_exact_shop_match(mention)
+            if len(exact_matches) == 1:
+                shop = exact_matches[0]
+                sid = str(shop.get("shop_id", "")).strip()
+                if sid:
+                    candidates.append(ResolvedCandidate(
+                        shop_id=sid,
+                        shop_name=str(shop.get("shop_name", mention)),
+                        source=CandidateSource.EXPLICIT,
+                        rank=idx,
+                        confidence=0.99,
+                        raw=shop,
+                    ))
+                    continue
+            if len(exact_matches) > 1:
+                for cand in exact_matches:
+                    sid = str(cand.get("shop_id", "")).strip()
+                    if sid:
+                        ambiguous_candidates.append(ResolvedCandidate(
+                            shop_id=sid,
+                            shop_name=str(cand.get("shop_name", mention)),
+                            source=CandidateSource.EXPLICIT,
+                            rank=idx,
+                            confidence=0.6,
+                            raw=cand,
+                        ))
+                continue
+
+            result = _unwrap_resolve_shop_result(_to_dict(self._resolve_shop(mention, **kwargs)))
             status = str(result.get("status", "NOT_FOUND") or "NOT_FOUND")
 
             if status == "RESOLVED":
@@ -276,6 +392,16 @@ class CandidateResolver:
             for item in [*candidates, *ambiguous_candidates]:
                 if not any(existing.shop_id == item.shop_id for existing in merged):
                     merged.append(item)
+            if len(mentions) >= 2:
+                return CandidateSet(
+                    status=CandidateStatus.RESOLVED,
+                    source=CandidateSource.EXPLICIT,
+                    candidates=merged,
+                    warnings=["comparison_explicit_ambiguity_tolerated"],
+                    requested_count=spec.limit or len(merged) or 1,
+                    min_required=2,
+                    max_allowed=spec.limit or 5,
+                )
             return CandidateSet(
                 status=CandidateStatus.AMBIGUOUS,
                 source=CandidateSource.EXPLICIT,
@@ -302,6 +428,21 @@ class CandidateResolver:
                 )
                 discovery_set = self.resolve_discovery(goal, fallback_spec)
                 if discovery_set.status == CandidateStatus.RESOLVED and discovery_set.candidates:
+                    matched_candidates = _filter_discovery_candidates_by_mentions(
+                        list(discovery_set.candidates or []),
+                        list(mentions),
+                    )
+                    if matched_candidates:
+                        return CandidateSet(
+                            status=CandidateStatus.RESOLVED,
+                            source=CandidateSource.MIXED,
+                            candidates=matched_candidates,
+                            warnings=["explicit_not_found_fallback_to_discovery"],
+                            original_spec=spec,
+                            requested_count=spec.limit or len(matched_candidates),
+                            min_required=1,
+                            max_allowed=spec.limit or 5,
+                        )
                     return CandidateSet(
                         status=CandidateStatus.RESOLVED,
                         source=CandidateSource.MIXED,
@@ -349,6 +490,8 @@ class CandidateResolver:
         """
         state = state or {}
         candidates: list[ResolvedCandidate] = []
+        context_ref = str(getattr(spec, "context_ref", "") or "").strip()
+        single_deictic = any(h in context_ref for h in ("这家", "它", "那家", "这间", "那间"))
 
         # 1. comparison_targets
         ct = state.get("comparison_targets") or []
@@ -357,7 +500,7 @@ class CandidateResolver:
             shop = data.get("resolved_shop") or data.get("shop") or data
             shop_dict = _to_dict(shop)
             sid = str(shop_dict.get("shop_id", "")).strip()
-            if sid:
+            if sid and not any(c.shop_id == sid for c in candidates):
                 candidates.append(ResolvedCandidate(
                     shop_id=sid,
                     shop_name=str(shop_dict.get("shop_name", "")),
@@ -366,20 +509,43 @@ class CandidateResolver:
                     confidence=0.9,
                 ))
 
-        # 2. last_recommendation_list
-        rec_list = state.get("last_recommendation_list") or []
-        for idx, item in enumerate(rec_list):
-            shop = _to_dict(item)
-            sid = str(shop.get("shop_id", "")).strip()
-            if sid:
-                candidates.append(ResolvedCandidate(
-                    shop_id=sid,
-                    shop_name=str(shop.get("shop_name", "")),
+        comparison_resolution = state.get("comparison_target_resolution") if isinstance(state, dict) else None
+        comparison_resolution_status = str(_to_dict(comparison_resolution).get("status", "") or "").upper()
+        goal_type = getattr(getattr(goal, "goal_type", None), "value", getattr(goal, "goal_type", None))
+        if goal_type == "comparison" and comparison_resolution_status:
+            if candidates:
+                return CandidateSet(
+                    status=CandidateStatus.RESOLVED,
                     source=CandidateSource.CONTEXT,
-                    rank=len(candidates),
-                    confidence=0.8,
-                    raw=shop,
-                ))
+                    candidates=candidates,
+                    requested_count=spec.limit or len(candidates),
+                    min_required=2,
+                    max_allowed=spec.limit or 5,
+                )
+            return CandidateSet(
+                status=CandidateStatus.NOT_FOUND,
+                source=CandidateSource.CONTEXT,
+                candidates=[],
+                requested_count=spec.limit or 1,
+                min_required=2,
+                max_allowed=spec.limit or 5,
+            )
+
+        # 2. last_recommendation_list
+        if not single_deictic:
+            rec_list = state.get("last_recommendation_list") or []
+            for idx, item in enumerate(rec_list):
+                shop = _to_dict(item)
+                sid = str(shop.get("shop_id", "")).strip()
+                if sid and not any(c.shop_id == sid for c in candidates):
+                    candidates.append(ResolvedCandidate(
+                        shop_id=sid,
+                        shop_name=str(shop.get("shop_name", "")),
+                        source=CandidateSource.CONTEXT,
+                        rank=len(candidates),
+                        confidence=0.8,
+                        raw=shop,
+                    ))
 
         # 3. current_shop
         cs = state.get("current_shop") or {}
@@ -523,6 +689,27 @@ class CandidateResolver:
             if c.shop_id and c.shop_id not in seen_ids:
                 merged.append(c)
                 seen_ids.add(c.shop_id)
+
+        comparison_resolution = state.get("comparison_target_resolution") if isinstance(state, dict) else None
+        comparison_resolution_status = str(_to_dict(comparison_resolution).get("status", "") or "").upper()
+        if getattr(getattr(goal, "goal_type", None), "value", getattr(goal, "goal_type", None)) == "comparison" and comparison_resolution_status:
+            if not merged:
+                return CandidateSet(
+                    status=CandidateStatus.NOT_FOUND,
+                    source=CandidateSource.MIXED,
+                    candidates=[],
+                    requested_count=spec.limit or 1,
+                    min_required=2,
+                    max_allowed=spec.limit or 5,
+                )
+            return CandidateSet(
+                status=CandidateStatus.RESOLVED,
+                source=CandidateSource.MIXED,
+                candidates=merged,
+                requested_count=spec.limit or len(merged),
+                min_required=2,
+                max_allowed=spec.limit or 5,
+            )
 
         for c in (discovery_set.candidates or []):
             if c.shop_id and c.shop_id not in seen_ids:

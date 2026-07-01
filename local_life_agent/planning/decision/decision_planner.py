@@ -98,7 +98,11 @@ def _build_claims_from_evidence(
 def _extract_ranking(
     evidence_dict: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Extract ranking from EvidencePack's ranking_snapshot."""
+    """Extract ranking from EvidencePack's ranking_snapshot.
+
+    Ranking is retained for trace/display compatibility only and must not
+    be used as a winner fallback.
+    """
     snapshot = evidence_dict.get("ranking_snapshot") or {}
     if isinstance(snapshot, dict):
         ranked = (snapshot.get("ranked") or
@@ -114,13 +118,86 @@ def _extract_ranking(
     return []
 
 
-def _find_winner_from_ranking(
-    ranking: list[dict[str, Any]],
-) -> str | None:
-    """Find the top-ranked shop from evidence ranking."""
-    if ranking and isinstance(ranking[0], dict):
-        return str(ranking[0].get("shop_id", "") or "") or None
-    return None
+def _find_winner_from_evidence(
+    evidence_dict: dict[str, Any],
+    candidates: list[str],
+    ranking: list[dict[str, Any]] | None = None,
+) -> tuple[str | None, list[dict[str, Any]], list[str], str, str, bool]:
+    """Pick a winner from evidence coverage only.
+
+    Returns:
+        winner_shop_id, evidence_ranking, missing_fields, next_action,
+        reason, insufficient_evidence
+    """
+    if not candidates:
+        return None, [], ["candidate_set"], "clarify", "no candidates available", True
+
+    support_count: dict[str, int] = {sid: 0 for sid in candidates}
+    evidence_refs: dict[str, list[str]] = {sid: [] for sid in candidates}
+
+    for item in evidence_dict.get("evidence_items", []) or []:
+        item_dict = _to_dict(item)
+        shop_id = str(item_dict.get("shop_id", "") or "").strip()
+        if shop_id not in support_count:
+            continue
+        if _classify_facet_status(item_dict) != "answerable":
+            continue
+        support_count[shop_id] += 1
+        evidence_id = str(item_dict.get("evidence_id", "") or "").strip()
+        if evidence_id and evidence_id not in evidence_refs[shop_id]:
+            evidence_refs[shop_id].append(evidence_id)
+
+    comparison_matrix = evidence_dict.get("comparison_matrix") or {}
+    if isinstance(comparison_matrix, dict):
+        dimension_winners = comparison_matrix.get("dimension_winners") or {}
+        if isinstance(dimension_winners, dict):
+            for dimension, winners in dimension_winners.items():
+                if not isinstance(winners, list):
+                    continue
+                unique_winner_ids: list[str] = []
+                for winner in winners:
+                    winner_dict = _to_dict(winner)
+                    shop_id = str(winner_dict.get("shop_id", "") or "").strip()
+                    if shop_id not in support_count:
+                        continue
+                    unique_winner_ids.append(shop_id)
+                    evidence_ref = f"comparison_matrix.dimension_winners.{dimension}"
+                    if evidence_ref not in evidence_refs[shop_id]:
+                        evidence_refs[shop_id].append(evidence_ref)
+                if len(unique_winner_ids) == 1:
+                    support_count[unique_winner_ids[0]] += 1
+
+    winner_shop_id = None
+    winner_score = 0
+    tied = False
+    for shop_id, score in support_count.items():
+        if score > winner_score:
+            winner_shop_id = shop_id
+            winner_score = score
+            tied = False
+        elif score == winner_score and score > 0 and shop_id != winner_shop_id:
+            tied = True
+
+    if winner_score <= 0:
+        missing_fields = ["claim_refs"]
+        if not evidence_dict.get("evidence_items"):
+            missing_fields.append("evidence_items")
+        return None, [], missing_fields, "insufficient_evidence", "insufficient evidence to choose a winner", True
+
+    if tied:
+        return None, [], ["tie_break_evidence"], "present_tie", "tie or insufficient differentiating evidence", True
+
+    evidence_ranking = [
+        {
+            "shop_id": shop_id,
+            "evidence_count": score,
+            "evidence_ids": evidence_refs[shop_id],
+        }
+        for shop_id, score in support_count.items()
+        if score > 0
+    ]
+    evidence_ranking.sort(key=lambda item: (-int(item.get("evidence_count", 0) or 0), str(item.get("shop_id", ""))))
+    return winner_shop_id, evidence_ranking, [], "finish", "", False
 
 
 def _determine_decision_type(goal: GoalPlan | None) -> DecisionType:
@@ -193,7 +270,11 @@ def plan_decision(
 
     # --- 3. Build ranking ---
     ranking = _extract_ranking(evidence_dict)
-    winner_shop_id = _find_winner_from_ranking(ranking)
+    winner_shop_id, evidence_ranking, missing_fields, next_action, reason, insufficient_evidence = _find_winner_from_evidence(
+        evidence_dict,
+        candidates,
+        ranking=ranking,
+    )
 
     # --- 4. Build claims ---
     claims = _build_claims_from_evidence(evidence_dict, candidates)
@@ -243,15 +324,25 @@ def plan_decision(
         "unknown_facet_count": len(unknown_facets),
         "failed_facet_count": len(failed_facets),
         "has_winner": winner_shop_id is not None,
+        "missing_fields": list(missing_fields),
+        "next_action": next_action,
+        "reason": reason,
+        "insufficient_evidence": insufficient_evidence,
     }
 
-    winner_evidence_refs = []
+    winner_evidence_refs: list[str] = []
     if winner_shop_id is not None:
         winner_claim_refs = []
         for claim in claims:
             if str(claim.get("shop_id", "") or "") == str(winner_shop_id):
                 winner_claim_refs.extend([str(ev).strip() for ev in (claim.get("evidence_ids") or []) if str(ev).strip()])
-        winner_evidence_refs = winner_claim_refs or (["ranking_snapshot"] if ranking else [])
+        winner_evidence_refs = winner_claim_refs
+        if not winner_evidence_refs and evidence_ranking:
+            for row in evidence_ranking:
+                if str(row.get("shop_id", "") or "") == str(winner_shop_id):
+                    winner_evidence_refs.extend([str(ev).strip() for ev in (row.get("evidence_ids") or []) if str(ev).strip()])
+
+    decision_reason = reason or ("winner selected from evidence" if winner_shop_id else "insufficient evidence to choose a winner")
 
     return DecisionPlan(
         decision_type=decision_type,
@@ -269,12 +360,17 @@ def plan_decision(
         must_mention_unknowns=must_mention_unknowns,
         decision_context=decision_context,
         decision_source="deterministic_decision_planner",
-        decision_confidence=0.0,
+        decision_confidence=1.0 if winner_shop_id is not None else 0.0,
         claim_bindings=[
             {"claim_id": f"claim_{idx+1}", "evidence_ids": claim.get("evidence_ids", [])}
             for idx, claim in enumerate(claims)
         ],
         winner_evidence_refs=winner_evidence_refs,
+        missing_fields=list(missing_fields),
+        next_action=next_action,
+        reason=reason,
+        decision_reason=decision_reason,
+        insufficient_evidence=insufficient_evidence,
     )
 
 

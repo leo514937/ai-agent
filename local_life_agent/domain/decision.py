@@ -203,6 +203,11 @@ class DecisionPlan(BaseModel):
     decision_confidence: float = 0.0
     claim_bindings: list[dict[str, Any]] = Field(default_factory=list)
     winner_evidence_refs: list[str] = Field(default_factory=list)
+    missing_fields: list[str] = Field(default_factory=list)
+    next_action: str = ""
+    reason: str = ""
+    decision_reason: str = ""
+    insufficient_evidence: bool = False
 
 
 class DecisionReviewResult(BaseModel):

@@ -290,6 +290,32 @@ def test_generator_unified_pipeline_recommendation(monkeypatch: pytest.MonkeyPat
     }
     
     evidence = {
+        "target_shop_ids": ["shop_01"],
+        "tool_results": {
+            "call_detail": {
+                "tool_name": "get_shop_detail",
+                "result_status": "ok",
+                "shop_id": "shop_01",
+                "data": {
+                    "shop_id": "shop_01",
+                    "shop_name": "川味轩",
+                    "rating": 4.8,
+                },
+            }
+        }
+    }
+    
+    # Mock LLM verbalizer output
+    client = _mock_llm_client("这是LLM润色后的推荐回复：推荐川味轩，评分4.8，营业中。")
+    res = generate_answer(answer_plan, evidence, llm_client=client)
+    assert "推荐川味轩" in res
+
+
+def test_build_decision_plan_does_not_promote_snapshot_to_winner():
+    answer_plan = {
+        "answer_type": "recommendation",
+    }
+    evidence = {
         "ranking_snapshot": {
             "status": "ok",
             "ranked": [
@@ -304,11 +330,12 @@ def test_generator_unified_pipeline_recommendation(monkeypatch: pytest.MonkeyPat
             ]
         }
     }
-    
-    # Mock LLM verbalizer output
-    client = _mock_llm_client("这是LLM润色后的推荐回复：推荐川味轩，评分4.8，营业中。")
-    res = generate_answer(answer_plan, evidence, llm_client=client)
-    assert "推荐川味轩" in res
+
+    plan = _build_decision_plan(answer_plan, evidence)
+
+    assert plan.selected_targets == []
+    assert plan.main_recommendation is None
+    assert plan.overall_ranking == []
 
 
 def test_generator_unified_pipeline_comparison(monkeypatch: pytest.MonkeyPatch):

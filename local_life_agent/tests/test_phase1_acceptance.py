@@ -6,6 +6,8 @@ test should fail so the gap is visible in QA.
 
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 from pydantic import ValidationError
 
@@ -23,7 +25,8 @@ from ..domain.schemas import (
     ToolResult,
     UserContext,
 )
-from ..tools.gateway import dispatch_tool_call
+from ..tools.gateway import ToolCallGateway, dispatch_tool_call
+from ..tools.executor import ToolExecutor
 
 
 def test_schema_validation_requires_toolresult_shop_id():
@@ -172,7 +175,14 @@ def test_resolve_shop_result_enforces_status_consistency():
 
 def test_gateway_wraps_timeout_for_coupon_shop():
     """MockToolExecutor/Gateway 对 timeout 场景必须返回统一 ToolResult。"""
-    result = dispatch_tool_call("get_coupon_list", {"shop_id": "shop_sc_06"})
+    class _TimeoutExecutor(ToolExecutor):
+        async def execute(self, tool_def: dict, args: dict):
+            raise TimeoutError("Coupon query timed out for shop_sc_06 (simulated)")
+
+    timeout_gateway = ToolCallGateway(executor=_TimeoutExecutor())
+    # Force dispatch_tool_call to traverse the timeout wrapping path explicitly.
+    with patch("local_life_agent.tools.gateway.get_gateway", return_value=timeout_gateway):
+        result = dispatch_tool_call("get_coupon_list", {"shop_id": "shop_sc_06"})
     assert result["success"] is False
     assert result["result_status"] == "unknown"
     assert result["error_code"] == ErrorCode.TOOL_TIMEOUT.value

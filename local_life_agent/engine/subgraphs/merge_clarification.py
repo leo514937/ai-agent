@@ -14,6 +14,7 @@ from .._compat import _log, _run_step, _state_delta
 from .._routes import (
     _OUTER_ROUTE_CLARIFY,
     _OUTER_ROUTE_FALLBACK,
+    _OUTER_ROUTE_EXECUTE,
     _OUTER_ROUTE_PROCEED,
 )
 from ...domain.graph_state import GraphState
@@ -29,7 +30,10 @@ def h_merge_clarification(state: GraphState) -> dict:
     log_kv(_LOGGER, logging.INFO, "[SUBGRAPH_ENTER]", tone="route", subgraph="merge_clarification", trace_id=state.get("trace_id", ""), has_pending=bool(state.get("pending_clarification")))
     working = _run_step(state, _h_check_pending)
     pending_result = str(working.get("pending_check_result", "") or "")
-    if pending_result in {"restore", "topic_switch", "pass"}:
+    if pending_result == "restore":
+        route = _OUTER_ROUTE_EXECUTE
+        response_mode = "answer"
+    elif pending_result in {"topic_switch", "pass", "cancelled"}:
         route = _OUTER_ROUTE_PROCEED
         response_mode = "answer"
     else:
@@ -58,11 +62,15 @@ def _h_check_pending(state: GraphState) -> dict:
 
     updates: dict[str, Any] = {
         "pending_check_result": action,
+        "merge_clarification_result": action,
+        "clarification_result": action,
     }
 
     if action == "restore":
         if result.get("pending_clarification") is None:
             updates["pending_clarification"] = None
+        if result.get("restored_task") is not None:
+            updates["restored_task"] = str(result.get("restored_task", "") or "")
         if result.get("semantic_frame") is not None:
             from ...domain.schemas import SemanticFrame
             restored_frame = result.get("semantic_frame")
@@ -81,6 +89,15 @@ def _h_check_pending(state: GraphState) -> dict:
             updates["resolve_shop_result"] = result.get("resolved_target")
         if result.get("comparison_targets") is not None:
             updates["comparison_targets"] = result.get("comparison_targets")
+        if result.get("selected_candidate") is not None:
+            updates["selected_candidate"] = result.get("selected_candidate")
+        else:
+            updates["selected_candidate"] = None
+        if result.get("selected_index") is not None:
+            updates["selected_index"] = result.get("selected_index")
+        else:
+            updates["selected_index"] = 0
+        updates["clarification_request"] = None
         updates["final_response"] = ""
         return {
             **updates,
@@ -89,6 +106,33 @@ def _h_check_pending(state: GraphState) -> dict:
 
     if action == "topic_switch":
         updates["pending_clarification"] = None
+        updates["clarification_request"] = None
+        updates["selected_candidate"] = None
+        updates["selected_index"] = 0
+        updates["last_candidate_set"] = []
+        updates["last_candidate_spec"] = None
+        updates["active_goal"] = None
+        updates["resolved_target"] = None
+        updates["resolve_shop_result"] = None
+        session_snapshot = state.get("session_state_before") or state.get("session_state")
+        if session_snapshot is not None:
+            try:
+                session_snapshot.last_candidate_set = []
+                session_snapshot.last_candidate_spec = None
+                session_snapshot.active_goal = None
+            except Exception:
+                pass
+        updates["final_response"] = ""
+        return {
+            **updates,
+            **_log(state, "check_pending_clarification", has_pending=True, action=action),
+        }
+
+    if action == "cancelled":
+        updates["pending_clarification"] = None
+        updates["clarification_request"] = None
+        updates["selected_candidate"] = None
+        updates["selected_index"] = 0
         updates["final_response"] = ""
         return {
             **updates,
@@ -97,6 +141,9 @@ def _h_check_pending(state: GraphState) -> dict:
 
     if action == "expired":
         updates["pending_clarification"] = None
+        updates["clarification_request"] = None
+        updates["selected_candidate"] = None
+        updates["selected_index"] = 0
         updates["final_response"] = result.get("final_response", "")
         return {
             **updates,
@@ -104,6 +151,8 @@ def _h_check_pending(state: GraphState) -> dict:
         }
 
     if action in {"invalid", "out_of_range"}:
+        updates["selected_candidate"] = result.get("selected_candidate")
+        updates["selected_index"] = result.get("selected_index", 0) or 0
         updates["final_response"] = result.get("final_response", "")
         return {
             **updates,

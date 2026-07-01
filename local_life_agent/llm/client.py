@@ -23,6 +23,7 @@ from pydantic import BaseModel, Field, ValidationError
 from ..config import LLM_TIMEOUT_MS
 from ..input.normalizer import normalize_text
 from ..observability.file_logger import get_python_service_logger, log_kv
+from ..streaming.runtime import TurnCancelledError, raise_if_turn_cancelled
 from .json_parser import LLMJSONParseError, parse_json_response
 
 _LLM_LOGGER = get_python_service_logger()
@@ -46,6 +47,15 @@ _LLM_BACKEND: LLMBackend | None = None
 _EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="llm-client")
 
 
+def _invalidate_graph_cache() -> None:
+    """Drop the cached graph so backend changes take effect on next turn."""
+    try:
+        from .. import agent as _agent
+        _agent._GRAPH_CACHE = None
+    except Exception:
+        pass
+
+
 class _TopIntentProbe(BaseModel):
     top_intent: str = Field(...)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -56,6 +66,7 @@ def set_llm_backend(backend: LLMBackend | None) -> None:
     """Register a fake/mock backend for tests."""
     global _LLM_BACKEND
     _LLM_BACKEND = backend
+    _invalidate_graph_cache()
 
 
 def clear_llm_backend() -> None:
@@ -273,7 +284,10 @@ def _invoke_backend(
     timeout_ms: int,
 ) -> Any:
     """Invoke *backend* inside a worker thread to enforce timeout."""
+    raise_if_turn_cancelled()
+
     def _call() -> Any:
+        raise_if_turn_cancelled()
         result = backend(
             prompt=prompt,
             system_prompt=system_prompt,
@@ -486,6 +500,8 @@ def call_llm(
                 "temperature": temperature,
                 "timeout_ms": timeout_ms,
             }
+        except TurnCancelledError:
+            raise
         except LLMJSONParseError as exc:
             last_error_code = "LLM_JSON_PARSE_ERROR"
             last_error_message = str(exc)

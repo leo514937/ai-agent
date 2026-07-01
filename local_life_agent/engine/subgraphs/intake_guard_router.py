@@ -30,6 +30,7 @@ from ...input.hard_guard import check_hard_guard
 from ...input.normalizer import normalize_text as input_normalize_text
 from ...input.receiver import receive_input as assemble_turn_input
 from ...input.validator import validate_basic_input
+from .active_turn_resolver import _h_active_turn_resolver, _should_treat_as_topic_switch
 from ...semantic.intent_parser import parse_top_intent
 from ...session.store import get_session_store
 from ...observability.file_logger import get_python_service_logger, log_kv
@@ -69,13 +70,51 @@ def h_intake_guard_router(state: GraphState) -> dict:
         log_kv(_LOGGER, logging.INFO, "[ROUTE_DECISION]", tone="route", subgraph="intake_guard_router", route=route, response_mode=response_mode, reason="hard_guard_or_input_error")
         return _state_delta(before, after, always_include={"intake_route", "response_mode"})
 
+    working = _run_step(working, _h_active_turn_resolver)
+    active_turn_result = working.get("active_turn_result") or {}
+    active_route = str(active_turn_result.get("route", "") or "normal_query")
+    if active_route == "topic_switch":
+        working = {
+            **working,
+            "pending_clarification": None,
+            "clarification_request": None,
+            "pending_check_result": "topic_switch",
+            "merge_clarification_result": "topic_switch",
+            "clarification_result": "topic_switch",
+            "last_candidate_set": [],
+            "last_candidate_spec": None,
+            "active_goal": None,
+            "resolved_target": None,
+            "resolve_shop_result": None,
+        }
+    elif active_route in {"pending_restored", "pending_out_of_range", "pending_expired", "pending_invalid", "pending_cancelled"}:
+        if active_route == "pending_cancelled" and _should_treat_as_topic_switch(str(state.get("raw_text", "") or state.get("normalized_text", "") or "")):
+            working = {
+                **working,
+                "pending_clarification": None,
+                "clarification_request": None,
+                "pending_check_result": "topic_switch",
+                "merge_clarification_result": "topic_switch",
+                "clarification_result": "topic_switch",
+                "last_candidate_set": [],
+                "last_candidate_spec": None,
+                "active_goal": None,
+                "resolved_target": None,
+                "resolve_shop_result": None,
+            }
+        else:
+            response_mode = "answer"
+            after = {
+                **working,
+                "intake_route": _OUTER_ROUTE_CLARIFICATION_REPLY,
+                "response_mode": response_mode,
+            }
+            log_kv(_LOGGER, logging.INFO, "[ROUTE_DECISION]", tone="route", subgraph="intake_guard_router", route=_OUTER_ROUTE_CLARIFICATION_REPLY, response_mode=response_mode, active_turn_route=active_route, reason=str(active_turn_result.get("reason", "") or "active_turn_pending"))
+            return _state_delta(before, after, always_include={"intake_route", "response_mode"})
+
     working = _run_step(working, _h_top_intent_router)
     session_before = working.get("session_state_before") or working.get("session_state")
-    has_pending = bool(
-        getattr(session_before, "pending_clarification", None)
-        if session_before is not None
-        else False
-    )
+    has_pending = bool(working.get("pending_clarification"))
     top_intent = working.get("top_intent")
     response_mode = "answer"
     if working.get("error_code"):
@@ -125,9 +164,15 @@ def _h_load_session(state: GraphState) -> dict:
         "active_constraints": existing.active_constraints,
         "comparison_result": existing.comparison_result,
         "pending_clarification": existing.pending_clarification,
+        "clarification_request": existing.pending_clarification,
+        "active_turn_result": {},
+        "active_turn_route": "",
+        "restored_task": "",
         "comparison_targets": existing.comparison_targets,
         "recommendation_candidates": [],
         "pending_check_result": "pass",
+        "merge_clarification_result": "",
+        "clarification_result": "",
         **_log(state, "load_session_state"),
     }
 

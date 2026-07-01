@@ -200,7 +200,7 @@ class TestResolveExplicit:
         assert {c.shop_id for c in result.candidates} >= {"shop_007", "shop_sc_01"}
         assert result.min_required == 2
 
-    def test_not_found_mention_skipped(self, resolver: CandidateResolver):
+    def test_not_found_mention_skipped_uses_current_seed_id(self, resolver: CandidateResolver):
         goal = _goal(goal_type=GoalType.COMPARISON, candidate_source=CandidateSource.EXPLICIT, candidate_limit=2)
         spec = _spec(
             source=CandidateSource.EXPLICIT,
@@ -210,7 +210,7 @@ class TestResolveExplicit:
         result = resolver.resolve_explicit(goal, spec)
         assert result.status == CandidateStatus.RESOLVED
         assert len(result.candidates) == 1
-        assert result.candidates[0].shop_id == "shop_007"
+        assert result.candidates[0].shop_id == "900007"
 
 
 # ===================================================================

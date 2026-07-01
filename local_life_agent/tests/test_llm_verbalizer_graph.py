@@ -245,7 +245,7 @@ def test_graph_verbalizer_comparison_ranking_violation_fallback():
     assert response.answer_text
 
 
-def test_graph_verbalizer_single_shop_success():
+def test_graph_single_shop_uses_deterministic_workflow():
     client = _mock_llm_client()
     set_llm_backend(client)
     
@@ -253,7 +253,7 @@ def test_graph_verbalizer_single_shop_success():
     
     response = run_agent_graph("第一家营业中吗", "graph_single_success")
     assert response.debug is not None
-    assert response.debug.answer_source == "llm_verbalizer"
+    assert response.debug.answer_source == "deterministic_tool_workflow"
     assert "营业中" in response.answer_text
 
 

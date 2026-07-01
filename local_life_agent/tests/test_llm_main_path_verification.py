@@ -369,7 +369,7 @@ def _fail_semantic_only(error_code: str = "LLM_TIMEOUT"):
 class TestLLMFailureFallback:
     """When LLM truly fails, the fallback path should produce correct metadata."""
 
-    def test_llm_failure_triggers_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_llm_failure_uses_diagnostic_fallback(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """LLM failure must not fabricate a semantic frame."""
         monkeypatch.setattr(graph_builder, "call_llm", _fail_semantic_only("LLM_TIMEOUT"))
 
@@ -378,7 +378,7 @@ class TestLLMFailureFallback:
         assert response.debug is not None
         sf = response.debug.semantic_frame
         assert sf.get("semantic_frame") is None
-        assert sf.get("semantic_source") in (None, "")
+        assert sf.get("semantic_source") == "diagnostic_rules"
         assert response.debug.turn_trace.get("fallback_reason") == "LLM_TIMEOUT"
         assert response.debug.turn_trace.get("llm_called") is True
 

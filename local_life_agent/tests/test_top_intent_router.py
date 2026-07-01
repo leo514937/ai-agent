@@ -80,7 +80,7 @@ def test_invalid_llm_return_falls_back_to_out_of_scope():
 
 
 def test_invalid_llm_fallback_cjk_goes_to_local_life():
-    """CJK text should fall back to local_life when LLM fails."""
+    """CJK text with local-life keywords should fall back to local_life when LLM fails."""
     def fake_call_llm(prompt, **kwargs):
         return {
             "ok": False,
@@ -94,7 +94,7 @@ def test_invalid_llm_fallback_cjk_goes_to_local_life():
 
     result = TopIntentRouter(llm_call=fake_call_llm).route("\u9644\u8fd1\u63a8\u8350\u706b\u9505")
 
-    assert result["top_intent"] == TopIntent.out_of_scope
+    assert result["top_intent"] == TopIntent.local_life
     assert result["error_code"] == "LLM_JSON_PARSE_ERROR"
 
 

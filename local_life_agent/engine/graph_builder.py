@@ -49,7 +49,9 @@ from ._routes import (
     _route_merge_clarification,
     _route_planning_subgraph,
     _route_response_subgraph,
+    _route_workflow_runner,
     _route_understanding_subgraph,
+    _WORKFLOW_RUNNER_ROUTES,
 )
 from .nodes import ExecutionNode
 
@@ -57,12 +59,14 @@ from .nodes import ExecutionNode
 from .subgraphs import (
     h_execution_review_subgraph,
     h_intake_guard_router,
+    h_orchestration_router_shadow,
     h_merge_clarification,
     h_planning_subgraph,
     h_response_subgraph,
     h_state_update_plan_outer,
     h_understanding_subgraph,
 )
+from .workflow_runner import h_workflow_runner
 # -- Internal step handlers (re-exported for test backward compat) --
 from .subgraphs.intake_guard_router import (  # noqa: F401
     _h_basic_validate,
@@ -238,11 +242,13 @@ _HANDLERS: dict[str, GraphNodeFunc] = {
     "emit_response": _h_emit_response,
 }
 
-# Outer orchestration nodes (the 7 subgraphs in the architecture diagram)
+# Outer orchestration nodes (the 8 subgraphs in the architecture diagram)
 _GRAPH_HANDLERS: dict[str, GraphNodeFunc] = {
     "intake_guard_router": h_intake_guard_router,
     "merge_clarification": h_merge_clarification,
     "understanding_subgraph": h_understanding_subgraph,
+    "orchestration_router_shadow": h_orchestration_router_shadow,
+    "workflow_runner": h_workflow_runner,
     "planning_subgraph": h_planning_subgraph,
     "execution_review_subgraph": h_execution_review_subgraph,
     "response_subgraph": h_response_subgraph,
@@ -277,13 +283,7 @@ _NORMAL_EDGES: dict[str, str] = {
     "persist_session_state": "emit_response",
 }
 
-_GRAPH_NORMAL_EDGES: dict[str, str] = {
-    "merge_clarification": "understanding_subgraph",
-    "understanding_subgraph": "planning_subgraph",
-    "planning_subgraph": "execution_review_subgraph",
-    "execution_review_subgraph": "response_subgraph",
-    "response_subgraph": "state_update_plan",
-}
+_GRAPH_NORMAL_EDGES: dict[str, str] = {}
 
 # ===================================================================
 # Graph builder
@@ -302,6 +302,7 @@ def build_graph() -> CompiledStateGraph:
 
     Raises ``ValueError`` if the graph fails completeness verification.
     """
+    ensure_real_llm_backend()
     builder: StateGraph = StateGraph(GraphState)
 
     # 1. Add outer orchestration nodes only
@@ -329,6 +330,12 @@ def build_graph() -> CompiledStateGraph:
         "understanding_subgraph",
         _route_understanding_subgraph,
         _GRAPH_UNDERSTANDING_ROUTES,
+    )
+    builder.add_edge("orchestration_router_shadow", "workflow_runner")
+    builder.add_conditional_edges(
+        "workflow_runner",
+        _route_workflow_runner,
+        _WORKFLOW_RUNNER_ROUTES,
     )
     builder.add_conditional_edges(
         "planning_subgraph",
@@ -432,8 +439,10 @@ _EDGE_TABLE_ROWS: list[tuple[str, str, str]] = [
 
 _GRAPH_NODE_TABLE_NEXT_HOPS: dict[str, list[str]] = {
     "intake_guard_router": ["response_subgraph", "merge_clarification", "understanding_subgraph"],
-    "merge_clarification": ["understanding_subgraph", "response_subgraph"],
-    "understanding_subgraph": ["planning_subgraph", "response_subgraph"],
+    "merge_clarification": ["planning_subgraph", "response_subgraph"],
+    "understanding_subgraph": ["orchestration_router_shadow", "response_subgraph"],
+    "orchestration_router_shadow": ["workflow_runner"],
+    "workflow_runner": ["planning_subgraph", "response_subgraph"],
     "planning_subgraph": ["execution_review_subgraph", "response_subgraph"],
     "execution_review_subgraph": ["response_subgraph", "planning_subgraph"],
     "response_subgraph": ["state_update_plan"],
@@ -444,9 +453,13 @@ _GRAPH_EDGE_TABLE_ROWS: list[tuple[str, str, str]] = [
     ("intake_guard_router", "terminal/direct/reject", "response_subgraph"),
     ("intake_guard_router", "clarification_reply", "merge_clarification"),
     ("intake_guard_router", "local_life", "understanding_subgraph"),
-    ("merge_clarification", "restore/topic_switch/pass", "understanding_subgraph"),
+    ("merge_clarification", "restore", "planning_subgraph"),
+    ("merge_clarification", "topic_switch/pass", "understanding_subgraph"),
     ("merge_clarification", "clarify/fallback", "response_subgraph"),
-    ("understanding_subgraph", "proceed", "planning_subgraph"),
+    ("understanding_subgraph", "proceed", "orchestration_router_shadow"),
+    ("orchestration_router_shadow", "shadow->runner", "workflow_runner"),
+    ("workflow_runner", "dispatch", "planning_subgraph"),
+    ("workflow_runner", "fallback/unsupported/fail", "response_subgraph"),
     ("understanding_subgraph", "clarify/fallback", "response_subgraph"),
     ("planning_subgraph", "execute", "execution_review_subgraph"),
     ("planning_subgraph", "clarify/fallback", "response_subgraph"),
@@ -503,10 +516,26 @@ _GRAPH_STATE_FIELDS: list[str] = [
     "intake_route",
     "merge_clarification_route",
     "understanding_route",
+    "orchestration_pattern",
+    "workflow_name",
+    "workflow_reason",
+    "task_complexity",
+    "requires_tool",
+    "requires_clarification",
     "planning_route",
     "execution_review_route",
     "response_route",
     "response_mode",
+    "next_action",
+    "orchestration_error_code",
+    "orchestration_error_message",
+    "workflow_run_status",
+    "workflow_runner_error",
+    "workflow_runner_reason",
+    "workflow_started_at",
+    "workflow_finished_at",
+    "workflow_registered",
+    "workflow_callable",
     # 会话快照
     "session_state_before",
     "session_state_after",
@@ -527,7 +556,7 @@ def verify_graph_completeness(
     """Verify the graph against the todo/05 contract.
 
     Checks:
-      1. All 26 nodes from §2 Node Table exist.
+      1. All nodes from §2 Node Table exist.
       2. All §3 conditional edges have their ``from`` nodes present.
       3. No orphan destinations (every ``下一跳`` target exists as a node).
       4. All §1 state fields are documented.

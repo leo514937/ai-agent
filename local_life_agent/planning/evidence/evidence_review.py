@@ -345,6 +345,19 @@ def review_evidence(
     return result
 
 
+def _deep_dump(obj: Any) -> Any:
+    """Recursively convert Pydantic models to dicts for JSON-safe serialization."""
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump()
+    if hasattr(obj, "dict"):
+        return obj.dict()
+    if isinstance(obj, dict):
+        return {k: _deep_dump(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_deep_dump(v) for v in obj]
+    return obj
+
+
 def review_evidence_with_llm(
     goal: LocalLifeGoalDraft,
     evidence_pack: dict[str, Any],
@@ -354,7 +367,11 @@ def review_evidence_with_llm(
     llm_call: Callable[..., dict[str, Any]] | None = None,
     strict: bool = False,
 ) -> tuple[EvidenceReviewResult | None, dict[str, Any]]:
-    """Run evidence sufficiency review through an LLM."""
+    """Run evidence sufficiency review through an LLM.
+
+    Note: tool_results values are sanitised via ``_deep_dump`` to ensure
+    JSON-serialisable dicts (ToolResult BaseModel → dict).
+    """
     log_kv(
         _logger,
         logging.INFO,
@@ -368,8 +385,8 @@ def review_evidence_with_llm(
     )
     replacements = {
         "{{GOAL_PLAN}}": goal.model_dump() if hasattr(goal, "model_dump") else dict(goal),
-        "{{EVIDENCE_PACK}}": evidence_pack,
-        "{{TOOL_RESULTS}}": tool_results or {},
+        "{{EVIDENCE_PACK}}": _deep_dump(evidence_pack),
+        "{{TOOL_RESULTS}}": _deep_dump(tool_results) if tool_results else {},
         "{{CANDIDATE_REVIEW}}": candidate_review.model_dump() if hasattr(candidate_review, "model_dump") else (candidate_review or {}),
     }
     try:

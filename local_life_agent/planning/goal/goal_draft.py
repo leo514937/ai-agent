@@ -9,6 +9,7 @@ Translates the LLM-derived ``SemanticFrame`` into:
 
 from __future__ import annotations
 
+import re
 from enum import Enum
 from typing import Any
 
@@ -83,8 +84,10 @@ def _candidate_source_from_frame(frame: SemanticFrame) -> CandidateSource:
     mentions = list(frame.merchant_mentions or [])
     ordinals = list(frame.ordinal_references or [])
     deictics = list(frame.deictic_references or [])
+    comparison_targets = list(frame.comparison_targets or [])
+    reference_mentions = list(frame.reference_mentions or [])
 
-    has_structured_refs = bool(ordinals or deictics)
+    has_structured_refs = bool(ordinals or deictics or comparison_targets or reference_mentions)
     has_mentions = len(mentions) >= 1
 
     if has_mentions and has_structured_refs:
@@ -94,6 +97,57 @@ def _candidate_source_from_frame(frame: SemanticFrame) -> CandidateSource:
     if has_structured_refs:
         return CandidateSource.CONTEXT
     return CandidateSource.DISCOVERY
+
+
+def _infer_explicit_mentions_from_text(raw_text: str) -> list[str]:
+    """从原文里保守提取明确店名片段，供 explicit 解析使用。"""
+    text = str(raw_text or "").strip()
+    if not text:
+        return []
+
+    mentions: list[str] = []
+    bracket_pattern = r"[\u4e00-\u9fffA-Za-z0-9·&]+[（(][^）)]+[）)]"
+    mentions.extend(re.findall(bracket_pattern, text))
+
+    cut_markers = (
+        "有券",
+        "团购",
+        "营业",
+        "开门",
+        "多久",
+        "多远",
+        "距离",
+        "离我",
+        "多少钱",
+        "便宜",
+        "优惠",
+        "套餐",
+    )
+    cut_index = len(text)
+    for marker in cut_markers:
+        idx = text.find(marker)
+        if 0 < idx < cut_index:
+            cut_index = idx
+    if cut_index < len(text):
+        prefix = text[:cut_index].strip(" ，,。?？！!~")
+        if prefix and any(token in prefix for token in ("店", "馆", "轩", "居", "坊", "园", "楼", "火锅", "烧烤", "餐厅", "饭店", "酒楼")):
+            mentions.append(prefix)
+        elif (
+            prefix
+            and 2 <= len(prefix) <= 12
+            and any("\u4e00" <= ch <= "\u9fff" for ch in prefix)
+            and not any(token in prefix for token in ("这家", "那家", "第一家", "第二家", "第三家", "附近", "推荐"))
+        ):
+            mentions.append(prefix)
+
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for mention in mentions:
+        cleaned = str(mention).strip()
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            ordered.append(cleaned)
+    return ordered
 
 
 def build_local_life_goal_draft(
@@ -131,19 +185,6 @@ def build_local_life_goal_draft(
         candidate_category = _stringify_category(frame.hard_constraints.get("category", ""))
     if not candidate_category:
         candidate_category = _stringify_category(frame.candidate_category)
-
-    # If the user did not name a specific shop and only provided a
-    # category / scene-like request, prefer recommendation over a
-    # hard single-shop interpretation.  This lets "火锅 有券吗" flow
-    # into a similar-shop recommendation instead of a clarification
-    # dead-end when no exact shop match exists.
-    if goal_type == GoalType.SINGLE_SHOP_QUERY and not list(frame.merchant_mentions or []):
-        query_terms = []
-        ranking = frame.ranking_signals or {}
-        if isinstance(ranking, dict):
-            query_terms = list(ranking.get("query_terms", []) or [])
-        if candidate_category or query_terms or list(frame.focused_facets or []):
-            goal_type = GoalType.RECOMMENDATION
 
     # Parse candidate_limit from frame or hard_constraints
     candidate_limit: int | None = None
@@ -269,9 +310,11 @@ def build_candidate_spec(
     # Location scope
     if state:
         mock_loc = state.get("user_context")
-        if mock_loc is None:
-            from ...config import MOCK_LOCATION
-            mock_loc = MOCK_LOCATION
+        if isinstance(mock_loc, dict):
+            status = str(mock_loc.get("location_status", "") or "").lower()
+            source = str(mock_loc.get("location_source", "") or "").lower()
+            if status not in {"provided", "test_mock"} and source not in {"provided", "test_mock"}:
+                mock_loc = None
         if isinstance(mock_loc, dict):
             spec.location_scope = {
                 "name": str(mock_loc.get("name", "") or ""),
@@ -286,10 +329,55 @@ def build_candidate_spec(
             spec.sort_by = raw_sort if isinstance(raw_sort, list) else [raw_sort]
 
     spec.limit = goal.candidate_limit
+    if goal.goal_type == GoalType.SINGLE_SHOP_QUERY and goal.candidate_source == CandidateSource.DISCOVERY:
+        # Discovery-style single-shop queries need enough breadth to detect
+        # ambiguity instead of collapsing to the first hit.
+        spec.limit = max(spec.limit or 0, 5)
 
     # Explicit mentions
     if frame is not None:
-        spec.explicit_mentions = list(frame.merchant_mentions or [])
+        merchant_mentions = [str(item).strip() for item in (frame.merchant_mentions or []) if str(item).strip()]
+        branch_mentions = [str(item).strip() for item in (frame.branch_mentions or []) if str(item).strip()]
+        full_mentions = [item for item in merchant_mentions if "(" in item or "（" in item]
+        inferred_mentions: list[str] = []
+        if state:
+            inferred_mentions = _infer_explicit_mentions_from_text(str(state.get("raw_text", "") or ""))
+        if goal.goal_type == GoalType.SINGLE_SHOP_QUERY and goal.candidate_source in {CandidateSource.EXPLICIT, CandidateSource.MIXED}:
+            if inferred_mentions:
+                spec.explicit_mentions = inferred_mentions
+            elif full_mentions:
+                spec.explicit_mentions = full_mentions
+            elif merchant_mentions and branch_mentions:
+                spec.explicit_mentions = [f"{merchant_mentions[0]}({branch_mentions[0]})"]
+            else:
+                spec.explicit_mentions = merchant_mentions
+        else:
+            spec.explicit_mentions = merchant_mentions
+        if (
+            goal.goal_type == GoalType.SINGLE_SHOP_QUERY
+            and goal.candidate_source in {CandidateSource.EXPLICIT, CandidateSource.MIXED}
+            and len(spec.explicit_mentions) > 1
+        ):
+            # Multi-mention single-shop queries need enough breadth to
+            # surface ambiguity instead of collapsing to the first hit.
+            spec.limit = max(spec.limit or 0, len(spec.explicit_mentions))
+        if (
+            goal.goal_type == GoalType.SINGLE_SHOP_QUERY
+            and goal.candidate_source in {CandidateSource.EXPLICIT, CandidateSource.MIXED}
+            and not spec.explicit_mentions
+            and state
+        ):
+            inferred_mentions = _infer_explicit_mentions_from_text(str(state.get("raw_text", "") or ""))
+            if inferred_mentions:
+                spec.explicit_mentions = inferred_mentions
+                if len(spec.explicit_mentions) > 1:
+                    spec.limit = max(spec.limit or 0, len(spec.explicit_mentions))
+        if (
+            goal.goal_type == GoalType.SINGLE_SHOP_QUERY
+            and goal.candidate_source in {CandidateSource.EXPLICIT, CandidateSource.MIXED}
+            and spec.explicit_mentions
+        ):
+            spec.query = " ".join(spec.explicit_mentions)
 
     # Context ref
     if goal.candidate_source == CandidateSource.CONTEXT and frame is not None:

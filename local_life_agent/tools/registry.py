@@ -80,12 +80,9 @@ _COUPON_SCHEMA = {
         "shop_id": {"type": "string"},
         "title": {"type": "string"},
         "description": {"type": "string"},
-        "discount_type": {"type": "string"},
-        "discount_value": {"type": "number"},
-        "min_consume": {"type": "number"},
-        "valid_from": {"type": "string"},
-        "valid_until": {"type": "string"},
-        "stock": {"type": "integer"},
+        "pay_value": {"type": "number"},
+        "actual_value": {"type": "number"},
+        "status": {"type": "string", "enum": ["available", "unavailable"]},
     },
 }
 _OPEN_STATUS_SCHEMA = {
@@ -231,7 +228,7 @@ _RESOLVE_RESULT_SCHEMA = {
 
 # ── Output status enum per tool ─────────────────────────────────
 
-_OUTPUT_STATUS_ENUM = ["ok", "empty", "failed", "circuit_open", "unknown"]
+_OUTPUT_STATUS_ENUM = ["ok", "empty", "failed", "circuit_open", "unsupported", "unknown"]
 
 # ── Tool definitions ─────────────────────────────────────────────
 
@@ -282,11 +279,8 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "required": ["query"],
         },
         "output_schema": {
-            "type": "object",
-            "properties": {
-                "data": {"type": "array", "items": _SHOP_RESULT_SCHEMA},
-                "total": {"type": "integer"},
-            },
+            "type": "array",
+            "items": _SHOP_RESULT_SCHEMA,
         },
         "timeout_ms": 5000,
         "max_retries": 2,
@@ -316,11 +310,8 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "required": ["shop_id"],
         },
         "output_schema": {
-            "type": "object",
-            "properties": {
-                "data": {"type": "array", "items": _COUPON_SCHEMA},
-                "total": {"type": "integer"},
-            },
+            "type": "array",
+            "items": _COUPON_SCHEMA,
         },
         "timeout_ms": 5000,
         "max_retries": 2,
@@ -377,7 +368,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "timeout_ms": 5000,
         "max_retries": 1,
         "circuit_breaker_enabled": False,
-        "output_status_enum": ["ok", "partial", "empty", "error", "unknown"],
+        "output_status_enum": ["ok", "partial", "empty", "error", "unsupported", "unknown"],
     },
     {
         "name": "get_shop_review_summary",
@@ -396,7 +387,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "timeout_ms": 5000,
         "max_retries": 1,
         "circuit_breaker_enabled": False,
-        "output_status_enum": ["ok", "partial", "empty", "error", "unknown"],
+        "output_status_enum": ["ok", "partial", "empty", "error", "unsupported", "unknown"],
     },
     {
         "name": "get_deal_list",
@@ -416,7 +407,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "timeout_ms": 5000,
         "max_retries": 1,
         "circuit_breaker_enabled": False,
-        "output_status_enum": ["ok", "partial", "empty", "error", "unknown"],
+        "output_status_enum": ["ok", "partial", "empty", "error", "unsupported", "unknown"],
     },
 ]
 

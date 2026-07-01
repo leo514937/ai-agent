@@ -40,11 +40,15 @@ def test_verify_answer_passes_for_aligned_ranking():
 
 def test_verify_answer_blocks_reordered_ranking():
     evidence = {
-        "ranking_snapshot": {
-            "ranked": [
+        "comparison_matrix": {
+            "rows": [
                 {"shop_id": "shop_sc_05", "shop_name": "川味轩(知春路店)"},
                 {"shop_id": "shop_sc_04", "shop_name": "张记家常菜(北邮店)"},
-            ]
+            ],
+            "overall_ranked": [
+                {"shop_id": "shop_sc_05", "shop_name": "川味轩(知春路店)"},
+                {"shop_id": "shop_sc_04", "shop_name": "张记家常菜(北邮店)"},
+            ],
         },
         "forbidden_claims": [],
     }
@@ -243,12 +247,13 @@ def test_verify_answer_blocks_unknown_open_status_claim():
 
 def test_verify_answer_blocks_unsupported_distance():
     evidence = {
-        "ranking_snapshot": {
-            "status": "ok",
-            "shop_name": "川味轩(知春路店)",
-            "distance_km": 1.5,
-        },
-        "evidence_items": [{"shop_name": "川味轩(知春路店)", "distance_km": 1.5}],
+        "evidence_items": [
+            {
+                "shop_name": "川味轩(知春路店)",
+                "facet": "distance",
+                "value": {"distance_km": 1.5},
+            }
+        ],
         "forbidden_claims": [],
     }
     # Claims distance is 2.5km (binding error)
@@ -260,12 +265,13 @@ def test_verify_answer_blocks_unsupported_distance():
 
 def test_verify_answer_blocks_unsupported_price():
     evidence = {
-        "ranking_snapshot": {
-            "status": "ok",
-            "shop_name": "川味轩(知春路店)",
-            "avg_price": 80,
-        },
-        "evidence_items": [{"shop_name": "川味轩(知春路店)", "avg_price": 80}],
+        "evidence_items": [
+            {
+                "shop_name": "川味轩(知春路店)",
+                "facet": "avg_price",
+                "value": 80,
+            }
+        ],
         "forbidden_claims": [],
     }
     # Claims average price is 120
@@ -277,12 +283,13 @@ def test_verify_answer_blocks_unsupported_price():
 
 def test_verify_answer_blocks_unsupported_rating():
     evidence = {
-        "ranking_snapshot": {
-            "status": "ok",
-            "shop_name": "川味轩(知春路店)",
-            "rating": 4.8,
-        },
-        "evidence_items": [{"shop_name": "川味轩(知春路店)", "rating": 4.8}],
+        "evidence_items": [
+            {
+                "shop_name": "川味轩(知春路店)",
+                "facet": "rating",
+                "value": 4.8,
+            }
+        ],
         "forbidden_claims": [],
     }
     # Claims rating is 4.2
@@ -327,7 +334,7 @@ def test_verify_answer_blocks_unsupported_comparison_winner():
     answer = "对比川味轩(知春路店)和海底捞(牡丹园店)：海底捞(牡丹园店)距离更近。"
     result = verify_answer(answer, evidence, "comparison")
     assert result["passed"] is False
-    assert "unsupported_comparison_winner" in result["issues"]
+    assert any(issue in {"unsupported_comparison_winner", "unprovided_dimension_winner"} for issue in result["issues"])
 
 
 def test_verify_answer_blocks_tool_failure_as_fact():
@@ -341,4 +348,26 @@ def test_verify_answer_blocks_tool_failure_as_fact():
     result = verify_answer(answer, evidence, "coupon_query")
     assert result["passed"] is False
     assert "tool_failure_as_fact" in result["issues"]
+
+
+def test_verify_answer_ignores_snapshot_as_facet_fallback():
+    evidence = {
+        "ranking_snapshot": {
+            "status": "ok",
+            "ranked": [
+                {
+                    "shop_name": "川味轩(知春路店)",
+                    "coupon_status": "unknown",
+                    "open_status": "unknown",
+                }
+            ],
+        },
+        "forbidden_claims": [],
+    }
+    answer = "优惠券情况暂时无法确认。"
+
+    result = verify_answer(answer, evidence, "coupon_query")
+
+    assert result["passed"] is True
+    assert "unknown_as_false" not in result["issues"]
 

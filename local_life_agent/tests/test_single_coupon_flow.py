@@ -182,13 +182,22 @@ def test_timeout_coupon_shop_degrades_controlled(monkeypatch):
     response, calls, resolve_calls = _run_with_spy("远方烧烤(清河店)有券吗", monkeypatch)
 
     assert response.debug is not None
-    assert all(tool_name != "get_coupon_list" for tool_name, _ in calls)
+    assert any(tool_name == "get_coupon_list" for tool_name, _ in calls)
+    assert any(
+        (
+            (result.get("tool_name") if isinstance(result, dict) else getattr(result, "tool_name", "")) == "get_coupon_list"
+            and getattr(result.get("result_status") if isinstance(result, dict) else getattr(result, "result_status", ""), "value", result.get("result_status") if isinstance(result, dict) else getattr(result, "result_status", ""))
+            in {"empty", "ok"}
+        )
+        for result in (response.debug.tool_results or {}).values()
+    )
+    assert response.answer_text
 
 
 def test_fuzzy_shop_does_not_call_coupon_tool(monkeypatch):
     response, calls, resolve_calls = _run_with_spy("海底捞有券吗", monkeypatch)
 
-    assert any(tool_name == "get_coupon_list" for tool_name, _ in calls)
+    assert all(tool_name != "get_coupon_list" for tool_name, _ in calls)
     assert response.debug is not None
     sf = response.debug.semantic_frame
     need_context = getattr(sf, "need_context", None)

@@ -94,17 +94,16 @@ def _row_to_matched_shop(row: dict[str, Any]) -> dict[str, Any]:
 
 def _row_to_coupon(row: dict[str, Any]) -> dict[str, Any]:
     """Map a tb_voucher row to the coupon output format."""
+    raw_status = row.get("status")
+    status = "available" if str(raw_status) in {"1", "available", "AVAILABLE"} or raw_status == 1 else "unavailable"
     return {
         "coupon_id": str(row["id"]),
         "shop_id": str(row["shop_id"]),
         "title": str(row.get("title", "") or ""),
         "description": str(row.get("rules", "") or row.get("sub_title", "") or ""),
-        "discount_type": "fixed",
-        "discount_value": float((row.get("pay_value", 0) or 0) - (row.get("actual_value", 0) or 0)) if row.get("pay_value") and row.get("actual_value") else 0.0,
-        "min_consume": float(row.get("actual_value", 0) or 0) / 100.0,
-        "valid_from": "",
-        "valid_until": "",
-        "stock": 9999,
+        "pay_value": row.get("pay_value", 0),
+        "actual_value": row.get("actual_value", 0),
+        "status": status,
     }
 
 

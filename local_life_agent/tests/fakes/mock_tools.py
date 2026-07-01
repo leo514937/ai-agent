@@ -5,6 +5,8 @@ import math
 from pathlib import Path
 from typing import Any
 
+from ...input.normalizer import normalize_text
+
 
 _FIXTURE_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "mock_data"
 
@@ -40,6 +42,28 @@ def _find_shop(shop_id: str) -> dict[str, Any] | None:
     return None
 
 
+def _normalize_query(text: str) -> str:
+    return normalize_text(text).strip().lower()
+
+
+def _build_alias_index() -> dict[str, list[str]]:
+    index: dict[str, list[str]] = {}
+    for shop in _all_shops():
+        canonical = _normalize_query(str(shop.get("shop_name", "")))
+        if not canonical:
+            continue
+        aliases = [canonical]
+        alias_field = _normalize_query(str(shop.get("alias", "") or ""))
+        if alias_field:
+            aliases.append(alias_field)
+        for alias_item in shop.get("aliases", []) or []:
+            alias_norm = _normalize_query(str(alias_item))
+            if alias_norm:
+                aliases.append(alias_norm)
+        index[canonical] = list(dict.fromkeys(aliases))
+    return index
+
+
 def _calc_etas(distance_km: float) -> dict[str, int]:
     """Calculate ETA minutes for walking/cycling/driving."""
     speeds = {"walking": 5.0, "cycling": 15.0, "driving": 30.0}
@@ -57,24 +81,32 @@ def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
 def resolve_shop(query: str, location: dict[str, float] | None = None, session_shop_ids: list[str] | None = None) -> dict[str, Any]:
     if not query or not query.strip():
         return {"status": "NOT_FOUND", "shop": None, "candidates": [], "confidence": 0.0, "error_code": None}
-    query_lower = query.strip().lower()
+    query_lower = _normalize_query(query)
+    alias_index = _build_alias_index()
+    shops_by_name = {
+        _normalize_query(str(shop.get("shop_name", ""))): dict(shop)
+        for shop in _all_shops()
+        if str(shop.get("shop_name", "")).strip()
+    }
     matched: list[dict[str, Any]] = []
     for shop in _all_shops():
-        if str(shop.get("shop_name", "")).lower() == query_lower:
-            matched.append(shop)
+        if _normalize_query(str(shop.get("shop_name", ""))) == query_lower:
+            matched.append(dict(shop))
             continue
-        alias = str(shop.get("alias", "") or "")
-        if alias and alias.lower() == query_lower:
-            matched.append(shop)
-            continue
-        aliases = [str(item).lower() for item in (shop.get("aliases") or [])]
-        if query_lower in aliases:
-            matched.append(shop)
-            continue
+    if not matched:
+        for canonical, aliases in alias_index.items():
+            if query_lower in aliases and canonical in shops_by_name:
+                matched.append(dict(shops_by_name[canonical]))
+    if not matched:
+        for shop in _all_shops():
+            name_lower = _normalize_query(str(shop.get("shop_name", "")))
+            category_lower = _normalize_query(str(shop.get("category", "")))
+            if query_lower in name_lower or query_lower in category_lower:
+                matched.append(dict(shop))
     if not matched and query_lower not in {"它", "这家", "那家"}:
         for shop in _all_shops():
-            if query_lower in str(shop.get("shop_name", "")).lower() or query_lower in str(shop.get("category", "")).lower():
-                matched.append(shop)
+            if query_lower in _normalize_query(str(shop.get("shop_name", ""))) or query_lower in _normalize_query(str(shop.get("category", ""))):
+                matched.append(dict(shop))
     if not matched and session_shop_ids:
         for shop_id in session_shop_ids:
             shop = _find_shop(str(shop_id))

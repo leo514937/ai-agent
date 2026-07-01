@@ -200,6 +200,20 @@ def handle_clarification_reply(
     pending_data = _as_dict(pending)
     candidates = _pending_candidates(pending)
 
+    compact = (text or "").strip()
+    if compact in {"取消", "算了", "不用了", "不查了", "别查了", "重新来", "先不看了", "放弃", "不选了"}:
+        return {
+            "status": "cancelled",
+            "pending_clarification": None,
+            "final_response": "",
+        }
+    if any(term in compact for term in ("取消", "算了", "不用了", "不查了", "别查了", "放弃", "不选了")) and _should_treat_as_topic_switch(compact):
+        return {
+            "status": "topic_switch",
+            "pending_clarification": None,
+            "final_response": "",
+        }
+
     if _pending_expired(pending_data):
         return {
             "status": "expired",
@@ -207,7 +221,6 @@ def handle_clarification_reply(
             "final_response": "之前的问题已过期，请重新说明店名。",
         }
 
-    compact = (text or "").strip()
     selection = _parse_selection(compact)
     selected_candidate = None
     if selection is not None:
@@ -227,6 +240,11 @@ def handle_clarification_reply(
             selection = matched_index
 
     if selected_candidate is not None:
+        restored_task_type = str(
+            pending_data.get("original_task_type")
+            or pending_data.get("task_type")
+            or "coupon_query"
+        )
         resolved_target = ResolveShopResult(
             status="RESOLVED",
             resolved_shop=ShopRef(
@@ -240,6 +258,28 @@ def handle_clarification_reply(
         if original_frame is None:
             original_frame = _session_get(session_state, "semantic_frame")
             original_frame = _as_dict(original_frame)
+        if not original_frame:
+            original_frame = {
+                "top_intent": "local_life",
+                "task_type": restored_task_type,
+                "primary_task": "single_shop_query" if restored_task_type == "coupon_query" else restored_task_type,
+                "facets": [{"name": "coupon", "required": True}] if restored_task_type == "coupon_query" else [],
+                "merchant_mentions": [str(selected_candidate.get("shop_name", ""))] if selected_candidate.get("shop_name") else [],
+                "brand_mentions": [],
+                "branch_mentions": [],
+                "reference_mentions": [],
+                "comparison_targets": [],
+                "ordinal_references": [],
+                "deictic_references": [],
+                "focused_facets": ["coupon"] if restored_task_type == "coupon_query" else [],
+                "comparison_focus": "",
+                "hard_constraints": {},
+                "soft_preferences": {},
+                "ranking_signals": {},
+                "follow_up": None,
+                "confidence": 0.0,
+                "need_context": False,
+            }
         restored_targets = [
             _as_dict(item) for item in (pending_data.get("already_resolved_targets", []) or []) if _as_dict(item)
         ]
@@ -248,11 +288,13 @@ def handle_clarification_reply(
             "status": "restore",
             "pending_clarification": None,
             "semantic_frame": original_frame,
-            "task_type": pending_data.get("original_task_type", ""),
+            "task_type": restored_task_type,
+            "restored_task": restored_task_type,
             "resolved_target": resolved_target,
+            "selected_candidate": dict(selected_candidate),
+            "selected_index": selection,
             "comparison_targets": restored_targets,
             "final_response": "",
-            "selection_index": selection,
         }
 
     if selection is not None:

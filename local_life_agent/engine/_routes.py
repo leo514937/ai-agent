@@ -295,6 +295,13 @@ def _route_response_subgraph(state: GraphState) -> str:
     return str(state.get("response_route", "") or _OUTER_ROUTE_PASS)
 
 
+def _route_workflow_runner(state: GraphState) -> str:
+    workflow_name = str(state.get("workflow_name", "") or "")
+    if workflow_name == "discovery_decision":
+        return "planning_subgraph"
+    return "response_subgraph"
+
+
 # ===================================================================
 # Route maps  (paired with route functions for LangGraph add_conditional_edges)
 # ===================================================================
@@ -389,12 +396,13 @@ _GRAPH_INTAKE_ROUTES: dict[Any, str] = {
 
 _GRAPH_MERGE_ROUTES: dict[Any, str] = {
     _OUTER_ROUTE_PROCEED: "understanding_subgraph",
+    _OUTER_ROUTE_EXECUTE: "planning_subgraph",
     _OUTER_ROUTE_CLARIFY: "response_subgraph",
     _OUTER_ROUTE_FALLBACK: "response_subgraph",
 }
 
 _GRAPH_UNDERSTANDING_ROUTES: dict[Any, str] = {
-    _OUTER_ROUTE_PROCEED: "planning_subgraph",
+    _OUTER_ROUTE_PROCEED: "orchestration_router_shadow",
     _OUTER_ROUTE_CLARIFY: "response_subgraph",
     _OUTER_ROUTE_FALLBACK: "response_subgraph",
 }
@@ -418,5 +426,10 @@ _GRAPH_RESPONSE_ROUTES: dict[Any, str] = {
     _OUTER_ROUTE_PASS: "state_update_plan",
     _OUTER_ROUTE_FALLBACK_READY: "state_update_plan",
     _OUTER_ROUTE_CLARIFY_READY: "state_update_plan",
+}
+
+_WORKFLOW_RUNNER_ROUTES: dict[Any, str] = {
+    "planning_subgraph": "planning_subgraph",
+    "response_subgraph": "response_subgraph",
 }
 

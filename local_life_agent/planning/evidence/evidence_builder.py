@@ -195,6 +195,26 @@ def _comparison_target_shop(item: Any) -> dict[str, Any]:
     }
 
 
+def _evidence_backend_source(tool_results: dict, call_id: Any) -> str:
+    result = _to_dict((tool_results or {}).get(str(call_id), {}))
+    return (
+        str(result.get("backend_source", "") or "")
+        or str(result.get("tool_backend", "") or "")
+        or str(result.get("source", "") or "")
+        or "unknown"
+    )
+
+
+def _attach_backend_source(items: list[dict[str, Any]], tool_results: dict) -> list[dict[str, Any]]:
+    enriched: list[dict[str, Any]] = []
+    for item in items:
+        row = dict(item)
+        if not str(row.get("backend_source", "") or "").strip():
+            row["backend_source"] = _evidence_backend_source(tool_results, row.get("call_id", ""))
+        enriched.append(row)
+    return enriched
+
+
 def _comparison_dimension_score(row: dict[str, Any]) -> tuple[float, int]:
     known = 0
     score = 0.0
@@ -893,8 +913,8 @@ def build_evidence(
         "target_shop_ids": [shop_id] if shop_id else [],
         "requested_facets": requested_facets,
         "facet_results": facet_results,
-        "evidence_items": evidence_items,
-        "unknown_items": unknown_items,
+        "evidence_items": _attach_backend_source(evidence_items, tool_results or {}),
+        "unknown_items": _attach_backend_source(unknown_items, tool_results or {}),
         "forbidden_claims": forbidden_claims,
         "ranking_snapshot": ranking_snapshot,
         "comparison_matrix": comparison_matrix,
@@ -1287,8 +1307,8 @@ def _build_recommendation_evidence(
         "target_shop_ids": [item["shop_id"] for item in ranked_snapshot],
         "requested_facets": ["rating", "distance", "open_status", "coupon"],
         "facet_results": facet_results,
-        "evidence_items": evidence_items,
-        "unknown_items": unknown_items,
+        "evidence_items": _attach_backend_source(evidence_items, tool_results or {}),
+        "unknown_items": _attach_backend_source(unknown_items, tool_results or {}),
         "forbidden_claims": forbidden_claims,
         "ranking_snapshot": ranking_snapshot,
         "comparison_matrix": {

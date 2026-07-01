@@ -50,6 +50,7 @@ def fake_verifier_verify(self, plan: Any, response_text: str, **_: Any) -> dict[
     best_for = plan_dict.get("best_for") or {}
     decision_context = plan_dict.get("decision_context") or {}
     raw_comparison_rows = [item for item in (decision_context.get("raw_comparison_rows") or []) if isinstance(item, dict)]
+    raw_ranking_rows = [item for item in (decision_context.get("raw_ranking_rows") or []) if isinstance(item, dict)]
     uncertainty_notes = [str(item) for item in (plan_dict.get("uncertainty_notes") or []) if str(item).strip()]
     forbidden_claims = [str(item) for item in (plan_dict.get("forbidden_claims") or []) if str(item).strip()]
     omitted_targets = [item for item in (plan_dict.get("omitted_targets") or []) if isinstance(item, dict)]
@@ -58,6 +59,7 @@ def fake_verifier_verify(self, plan: Any, response_text: str, **_: Any) -> dict[
     unknown_fields: list[str] = []
     false_fields: list[str] = []
     unsupported_claims: list[str] = []
+    comparison_rows = raw_comparison_rows or raw_ranking_rows or selected_targets or overall_ranking
 
     def fail(code: str, *, recoverable: bool = True) -> dict[str, Any]:
         violations = list(issues)
@@ -96,9 +98,15 @@ def fake_verifier_verify(self, plan: Any, response_text: str, **_: Any) -> dict[
         return fail("hallucinated_shop_name", recoverable=False)
 
     # Recommendation / comparison ordering
-    if answer_type in {"recommendation", "comparison"} and len(overall_ranking) >= 2 and not _contains_any(response_text, ["更近", "距离更近", "离得更近"]):
-        expected_order = [str(item.get("shop_name", "")).strip() for item in overall_ranking if str(item.get("shop_name", "")).strip()]
+    if answer_type in {"recommendation", "comparison"} and len((overall_ranking or comparison_rows)) >= 2 and not _contains_any(response_text, ["更近", "距离更近", "离得更近"]):
+        expected_source = comparison_rows if answer_type == "comparison" and comparison_rows else (overall_ranking or comparison_rows)
+        expected_order = [str(item.get("shop_name", "")).strip() for item in expected_source if str(item.get("shop_name", "")).strip()]
         if expected_order:
+            if _contains_any(response_text, ["更好", "胜出", "领先", "更占优", "最推荐", "综合来看", "整体来看"]):
+                if expected_order[0] not in response_text:
+                    issues.append("ranking_changed_by_llm")
+                    unsupported_claims.append(response_text)
+                    return fail("ranking_changed_by_llm", recoverable=False)
             positions = [(response_text.find(name), name) for name in expected_order if response_text.find(name) >= 0]
             positions.sort(key=lambda item: item[0])
             mentioned_order = [name for _, name in positions]
@@ -108,8 +116,41 @@ def fake_verifier_verify(self, plan: Any, response_text: str, **_: Any) -> dict[
                 return fail("ranking_changed_by_llm", recoverable=False)
 
     if answer_type == "comparison":
+        negative_phrases = ["更差", "不如", "更弱", "更少"]
+        winner_phrases = ["综合来看", "整体来看", "最推荐", "更好", "胜出", "领先", "更占优"]
+        dimension_winners = plan_dict.get("best_for") or {}
+        if comparison_rows and _contains_any(response_text, negative_phrases):
+            for row in comparison_rows:
+                row_coupon = str(row.get("coupon_status", "unknown") or "unknown").lower()
+                row_open = str(row.get("open_status", "unknown") or "unknown").lower()
+                row_distance = row.get("distance_km")
+                if row_coupon == "unknown" or row_open == "unknown" or row_distance is None:
+                    issues.extend(["unknown_as_false", "unsupported_comparison_winner"])
+                    if row_coupon == "unknown":
+                        unknown_fields.append("coupon")
+                    if row_open == "unknown":
+                        unknown_fields.append("open_status")
+                    if row_distance is None:
+                        unknown_fields.append("distance")
+                    unsupported_claims.append(response_text)
+                    return fail("unknown_as_false")
+        if _contains_any(response_text, ["优惠", "有券", "券"]) and not dimension_winners.get("省钱"):
+            issues.append("unprovided_dimension_winner")
+            unsupported_claims.append(response_text)
+            return fail("unprovided_dimension_winner", recoverable=False)
+        if _contains_any(response_text, ["营业", "开门"]) and not dimension_winners.get("营业状态"):
+            issues.append("unprovided_dimension_winner")
+            unsupported_claims.append(response_text)
+            return fail("unprovided_dimension_winner", recoverable=False)
+        if _contains_any(response_text, ["距离", "更近", "近一点"]) and not dimension_winners.get("距离近"):
+            issues.append("unprovided_dimension_winner")
+            unsupported_claims.append(response_text)
+            return fail("unprovided_dimension_winner", recoverable=False)
+        if _contains_any(response_text, ["评分", "口碑", "评价"]) and not dimension_winners.get("评分"):
+            issues.append("unprovided_dimension_winner")
+            unsupported_claims.append(response_text)
+            return fail("unprovided_dimension_winner", recoverable=False)
         if _contains_any(response_text, ["更近", "距离更近", "离得更近"]):
-            comparison_rows = raw_comparison_rows
             expected_winner = ""
             if comparison_rows:
                 ranked_by_distance = [row for row in comparison_rows if row.get("distance_km") is not None]
@@ -129,8 +170,9 @@ def fake_verifier_verify(self, plan: Any, response_text: str, **_: Any) -> dict[
                     issues.append("unsupported_comparison_winner")
                     unsupported_claims.append(response_text)
                     return fail("unsupported_comparison_winner")
-        if _contains_any(response_text, ["综合来看", "整体来看", "最推荐", "更好", "胜出", "领先"]):
-            first_name = str(overall_ranking[0].get("shop_name", "")).strip() if overall_ranking else ""
+        if _contains_any(response_text, winner_phrases):
+            ranking_source = comparison_rows or overall_ranking
+            first_name = str(ranking_source[0].get("shop_name", "")).strip() if ranking_source else ""
             if first_name and first_name not in response_text:
                 issues.append("unsupported_comparison_winner")
                 unsupported_claims.append(response_text)

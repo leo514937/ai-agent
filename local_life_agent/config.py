@@ -65,8 +65,13 @@ _DOTENV_PATH = os.path.join(_CONFIG_DIR, ".env")
 
 
 def _parse_dotenv(path: str) -> dict[str, str]:
-    """Parse a .env file into a dict. No external dependency needed."""
-    if "PYTEST_CURRENT_TEST" in os.environ:
+    """Parse a .env file into a dict. No external dependency needed.
+
+    Under pytest the file is skipped by default so tests stay fast.
+    Set ``LOCAL_LIFE_TEST_LLM=1`` to re-enable real LLM config for
+    acceptance / smoke-test runs.
+    """
+    if "PYTEST_CURRENT_TEST" in os.environ and os.environ.get("LOCAL_LIFE_TEST_LLM") != "1":
         return {}
     result: dict[str, str] = {}
     try:

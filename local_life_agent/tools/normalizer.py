@@ -17,7 +17,27 @@ from typing import Any
 
 from .result_semantics import TOOL_FAILURE_STATUSES
 
-_VALID_STATUSES = {"ok", "partial", "empty", "failed", "error", "circuit_open", "unknown", "backend_unavailable"}
+_VALID_STATUSES = {"ok", "partial", "empty", "failed", "error", "circuit_open", "unknown", "backend_unavailable", "unsupported"}
+
+
+def _infer_retriable(
+    *,
+    success: bool,
+    result_status: str,
+    error_code: str | None = None,
+    fallback_from: str | None = None,
+) -> bool:
+    """Infer whether a tool result can be retried safely."""
+    if success:
+        return False
+    status = str(result_status or "unknown")
+    if status in {"timeout", "backend_unavailable", "unknown"}:
+        return True
+    if error_code in {"NETWORK_ERROR", "TOOL_TIMEOUT", "HTTP_TIMEOUT", "REMOTE_TIMEOUT"}:
+        return True
+    if fallback_from:
+        return True
+    return False
 
 
 def _canonical_tool_result(
@@ -37,9 +57,16 @@ def _canonical_tool_result(
     fallback_from: str | None = None,
     http_status: int | None = None,
     endpoint: str | None = None,
+    retriable: bool | None = None,
 ) -> dict[str, Any]:
     """Build a canonical ToolResult dict with every field guaranteed."""
     valid_status = result_status if result_status in _VALID_STATUSES else "unknown"
+    inferred_retriable = retriable if retriable is not None else _infer_retriable(
+        success=success,
+        result_status=valid_status,
+        error_code=error_code,
+        fallback_from=fallback_from,
+    )
     return {
         "call_id": call_id,
         "shop_id": shop_id,
@@ -56,6 +83,7 @@ def _canonical_tool_result(
         "fallback_from": fallback_from,
         "http_status": http_status,
         "endpoint": endpoint,
+        "retriable": inferred_retriable,
     }
 
 
@@ -75,20 +103,26 @@ def normalize_tool_result(tool_name: str, raw: dict) -> dict:
             success=bool(raw) if raw is not None else False,
             result_status="ok" if raw else "unknown",
             data=raw,
-            source=raw.get("source", "unknown") if hasattr(raw, "get") else "unknown",
-            tool_backend=raw.get("tool_backend", raw.get("backend_source", "unknown")) if hasattr(raw, "get") else "unknown",
-            backend_source=raw.get("backend_source", "unknown") if hasattr(raw, "get") else "unknown",
+            source="unknown",
+            tool_backend="unknown",
+            backend_source="unknown",
         )
 
     result_status = raw.get("result_status", "unknown")
+    if hasattr(result_status, "value"):
+        result_status = result_status.value
     if result_status not in _VALID_STATUSES:
         result_status = "unknown"
+
+    success = bool(raw.get("success", False))
+    if result_status in TOOL_FAILURE_STATUSES:
+        success = False
 
     return _canonical_tool_result(
         tool_name=tool_name,
         call_id=raw.get("call_id", ""),
         shop_id=raw.get("shop_id", ""),
-        success=raw.get("success", False) if result_status not in TOOL_FAILURE_STATUSES else False,
+        success=success,
         result_status=result_status,
         data=raw.get("data"),
         error_code=raw.get("error_code"),
@@ -126,6 +160,7 @@ def normalize_timeout_result(tool_name: str, kwargs: dict, error_message: str) -
         tool_backend="unknown",
         backend_source="unknown",
         degraded=True,
+        retriable=True,
     )
 
 
@@ -151,6 +186,7 @@ def normalize_circuit_open_result(tool_name: str, kwargs: dict) -> dict:
         tool_backend="unknown",
         backend_source="unknown",
         degraded=True,
+        retriable=False,
     )
 
 
@@ -176,4 +212,5 @@ def normalize_validation_error(tool_name: str, kwargs: dict, errors: list[str]) 
         source="unknown",
         tool_backend="unknown",
         backend_source="unknown",
+        retriable=False,
     )

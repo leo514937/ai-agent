@@ -42,12 +42,33 @@ class TestPlanEvidence:
                 ResolvedCandidate(shop_id="s1", shop_name="Shop A", rank=1),
             ],
         )
-        plan = plan_evidence(goal, cs)
+        plan = plan_evidence(goal, cs, location={"lat": 39.9609, "lng": 116.3581})
         assert len(plan.tool_calls) == 3
         call_facets = {c.facet for c in plan.tool_calls}
         assert call_facets == {"coupon", "open_status", "distance"}
         call_names = {c.tool_name for c in plan.tool_calls}
         assert call_names == {"get_coupon_list", "check_open_status", "get_distance_eta"}
+        distance_call = next(c for c in plan.tool_calls if c.facet == "distance")
+        assert distance_call.args["from_location"] == {"lat": 39.9609, "lng": 116.3581}
+
+    def test_missing_location_skips_distance_call(self):
+        goal = LocalLifeGoalDraft(
+            goal_type=GoalType.SINGLE_SHOP_QUERY,
+            required_facets=["coupon", "open_status"],
+            optional_facets=["distance"],
+        )
+        cs = CandidateSet(
+            status=CandidateStatus.RESOLVED,
+            source=CandidateSource.DISCOVERY,
+            candidates=[
+                ResolvedCandidate(shop_id="s1", shop_name="Shop A", rank=1),
+            ],
+        )
+        plan = plan_evidence(goal, cs)
+        call_facets = {c.facet for c in plan.tool_calls}
+        assert "distance" not in call_facets
+        assert any("缺少用户位置" in note for note in plan.planning_notes)
+        assert "distance_requires_user_location" in plan.assumptions_used
 
     def test_review_summary_uses_shop_ids(self):
         goal = LocalLifeGoalDraft(

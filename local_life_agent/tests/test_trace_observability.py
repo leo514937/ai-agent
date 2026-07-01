@@ -141,4 +141,6 @@ def test_turn_audit_reports_missing_nodes_and_failed_tools():
     assert audit["tool_call_count"] == 2
     assert audit["failed_tool_calls"] == ["call_2"]
     assert "understanding_subgraph" in audit["missing_nodes"]
+    assert "orchestration_router_shadow" in audit["missing_nodes"]
+    assert "workflow_runner" in audit["missing_nodes"]
     assert "execution_review_subgraph" in audit["missing_nodes"]

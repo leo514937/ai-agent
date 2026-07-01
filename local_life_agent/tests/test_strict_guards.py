@@ -292,9 +292,13 @@ class TestToolExecuteStrict:
 class TestLLMVerbalizerStrict:
     """template_fallback 不能是默认 happy path."""
 
-    def test_llm_verbalizer_not_default_template(self):
+    def test_llm_verbalizer_not_default_template(self, monkeypatch):
         """§5: verbalizer 开启时，答案来源应是 llm_verbalizer。"""
         from local_life_agent.answer.generator import generate_answer
+        monkeypatch.setattr(
+            "local_life_agent.answer.llm_verbalizer.verbalize_decision_plan",
+            lambda *args, **kwargs: "回答已生成。",
+        )
 
         def _fake_llm(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
             return {"ok": True, "content": {"natural_response": "回答已生成。"}, "confidence": 0.95, "raw": "{}", "error_code": "", "error_message": ""}

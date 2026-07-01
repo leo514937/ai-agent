@@ -401,7 +401,54 @@ def test_single_shop_multifacet_success_writes_current_shop():
     assert {"get_coupon_list", "check_open_status", "get_distance_eta"}.issuperset(set(_tool_names(result)))
 
 
-def test_tool_failed_does_not_update_current_shop():
+def test_tool_failed_does_not_update_current_shop(monkeypatch):
+    set_llm_backend(
+        SpyRealLLMBackend(
+            scenario_payloads={
+                "远方烧烤(清河店)有券吗": {
+                    "top_intent": "local_life",
+                    "task_type": "single_shop_query",
+                    "primary_task": "coupon_query",
+                    "facets": [{"name": "coupon", "required": True}],
+                    "merchant_mentions": ["远方烧烤(清河店)", "远方烧烤"],
+                    "brand_mentions": ["远方烧烤"],
+                    "branch_mentions": ["清河店"],
+                    "reference_mentions": [],
+                    "comparison_targets": [],
+                    "ordinal_references": [],
+                    "deictic_references": [],
+                    "focused_facets": ["coupon"],
+                    "comparison_focus": "",
+                    "hard_constraints": {},
+                    "soft_preferences": {},
+                    "ranking_signals": {},
+                    "follow_up": None,
+                    "confidence": 0.98,
+                    "need_context": False,
+                }
+            }
+        )
+    )
+    original_dispatch = build_graph.__globals__["dispatch_tool_call"]
+
+    def fake_dispatch(tool_name: str, kwargs: dict):
+        if tool_name == "get_coupon_list":
+            return {
+                "call_id": kwargs.get("call_id", ""),
+                "shop_id": kwargs.get("shop_id", ""),
+                "tool_name": tool_name,
+                "success": False,
+                "result_status": "failed",
+                "data": None,
+                "error_code": "NETWORK_ERROR",
+                "error_message": "simulated coupon timeout",
+                "source": "mock",
+                "degraded": False,
+                "retriable": True,
+            }
+        return original_dispatch(tool_name, kwargs)
+
+    monkeypatch.setitem(build_graph.__globals__, "dispatch_tool_call", fake_dispatch)
     result = _invoke("远方烧烤(清河店)有券吗", "fail_1")
     assert result["current_shop"] is None
     assert get_session_store().load("fail_1").current_shop is None

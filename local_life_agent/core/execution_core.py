@@ -1,0 +1,21 @@
+"""Thin wrapper around tool execution primitives."""
+
+from __future__ import annotations
+
+from typing import Any
+
+
+class ExecutionCore:
+    def __init__(self, call_fn: Any | None = None) -> None:
+        self._call_fn = call_fn
+
+    def execute_batch(self, tool_calls: list[Any]):
+        from ..tools.gateway import BatchToolExecutor, dispatch_tool_call
+
+        batch = BatchToolExecutor(call_fn=self._call_fn or dispatch_tool_call)
+        return batch.execute_sync(tool_calls)
+
+    def dispatch(self, tool_name: str, kwargs: dict[str, Any]):
+        from ..tools.gateway import dispatch_tool_call
+
+        return (self._call_fn or dispatch_tool_call)(tool_name, kwargs)

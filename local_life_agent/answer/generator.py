@@ -128,25 +128,23 @@ def _build_decision_plan(
 
     answer_type = ap.get("answer_type", "general")
     comparison_matrix = ev.get("comparison_matrix") or {}
-    ranking_snapshot = ev.get("ranking_snapshot") or {}
 
     decision_type = None
     if answer_type == "comparison" or (comparison_matrix and (comparison_matrix.get("rows") or comparison_matrix.get("overall_ranked"))):
         decision_type = "comparison"
-    elif answer_type == "recommendation" or (ranking_snapshot and ("ranked" in ranking_snapshot or "ranked_shops" in ranking_snapshot)):
+    elif answer_type == "recommendation":
         decision_type = "recommendation"
 
     if decision_type in ("recommendation", "comparison"):
         # 1. Extract shop_ids
-        shop_ids = []
+        shop_ids: list[str] = []
         if decision_type == "comparison":
             rows = comparison_matrix.get("rows") or []
             shop_ids = [str(r.get("shop_id", "")) for r in rows if isinstance(r, dict) and r.get("shop_id")]
             if not shop_ids:
                 shop_ids = [str(sid) for sid in ev.get("target_shop_ids", []) or [] if str(sid).strip()]
         else: # recommendation
-            ranked = ranking_snapshot.get("ranked") or ranking_snapshot.get("ranked_shops") or []
-            shop_ids = [str(r.get("shop_id", "")) for r in ranked if isinstance(r, dict) and r.get("shop_id")]
+            shop_ids = [str(sid) for sid in ap.get("target_shop_ids", []) or [] if str(sid).strip()]
             if not shop_ids:
                 last_rec = ev.get("last_recommendation_list") or []
                 shop_ids = [str(r.get("shop_id", "")) for r in last_rec if isinstance(r, dict) and r.get("shop_id")]
@@ -163,15 +161,15 @@ def _build_decision_plan(
         # 4. Evaluator
         evaluator = CandidateEvaluator()
         preferences = {
-            "query_terms": ap.get("query_terms") or ranking_snapshot.get("query_terms") or [],
-            "scene_terms": ap.get("scene_terms") or ranking_snapshot.get("scene_terms") or [],
+            "query_terms": ap.get("query_terms") or [],
+            "scene_terms": ap.get("scene_terms") or [],
         }
         evaluations = evaluator.evaluate(evidences, decision_type, preferences)
 
         # 5. Build candidate plan
         forbidden_claims = list(ap.get("forbidden_claims", []))
         must_mention_unknowns = list(ap.get("must_mention_unknowns", []))
-        location = ranking_snapshot.get("location") or "北京邮电大学"
+        location = str(ap.get("location") or ev.get("location") or "").strip()
         user_goal = ap.get("user_goal") or ""
         if not user_goal and preferences["query_terms"]:
             user_goal = " ".join(preferences["query_terms"])
@@ -198,8 +196,6 @@ def _build_decision_plan(
             shop_id_to_index = {str(sid): i for i, sid in enumerate(shop_ids)}
             plan.overall_ranking.sort(key=lambda x: shop_id_to_index.get(str(x.get("shop_id", "")), 999))
             plan.selected_targets.sort(key=lambda x: shop_id_to_index.get(str(x.get("shop_id", "")), 999))
-            if plan.overall_ranking:
-                plan.main_recommendation = plan.overall_ranking[0]
         return plan
 
     selected_targets = []
@@ -263,70 +259,25 @@ def _build_decision_plan(
         for note in notes:
             uncertainty_notes.append(str(note))
 
-    elif ranking_snapshot and ("ranked" in ranking_snapshot or "ranked_shops" in ranking_snapshot):
-        ranked_shops = ranking_snapshot.get("ranked") or ranking_snapshot.get("ranked_shops") or []
-        for item in ranked_shops:
-            item_dict = _to_dict(item)
-            if item_dict:
-                selected_targets.append(item_dict)
-                overall_ranking.append(item_dict)
-
-                sname = item_dict.get("shop_name") or "这家店"
-                facts = []
-                if item_dict.get("rating") is not None:
-                    facts.append(f"评分为 {item_dict.get('rating')}")
-                if item_dict.get("distance_km") is not None:
-                    dist_str = f"距离为 {item_dict.get('distance_km')} 公里"
-                    if item_dict.get("eta_minutes") is not None:
-                        dist_str += f"，预计时间 {item_dict.get('eta_minutes')} 分钟"
-                    facts.append(dist_str)
-                if item_dict.get("open_status") == "open":
-                    facts.append("营业状态为：目前营业中")
-                elif item_dict.get("open_status") == "closed":
-                    facts.append("营业状态为：目前已打烊")
-
-                coupon_count = item_dict.get("coupon_count")
-                if coupon_count is not None:
-                    try:
-                        cnt = int(coupon_count)
-                    except Exception:
-                        cnt = 0
-                    facts.append("有券" if cnt > 0 else "暂无可用券")
-                factual_points.append(f"{sname}: {'; '.join(facts)}")
-
-        if overall_ranking:
-            main_recommendation = overall_ranking[0]
-
     else:
         facet_results = ev.get("facet_results") or []
         evidence_items = ev.get("evidence_items") or []
         unknown_items = ev.get("unknown_items") or []
         sname = _shop_display_name(ev)
-        
+
         target_dict = {
             "shop_name": sname,
             "shop_id": ev.get("shop_id") or ev.get("target_shop_id") or "",
             "open_status": "unknown",
             "coupon_status": "unknown",
+            "coupon_titles": [],
+            "eta_minutes": None,
             "distance_km": None,
             "avg_price": None,
             "rating": None,
             "unknown_facts": [],
             "failed_facts": [],
         }
-
-        # Check ranking_snapshot for basic values
-        if ranking_snapshot:
-            if ranking_snapshot.get("open_status"):
-                target_dict["open_status"] = str(ranking_snapshot.get("open_status")).lower()
-            if ranking_snapshot.get("coupon_status"):
-                target_dict["coupon_status"] = str(ranking_snapshot.get("coupon_status")).lower()
-            if ranking_snapshot.get("distance_km") is not None:
-                target_dict["distance_km"] = ranking_snapshot.get("distance_km")
-            if ranking_snapshot.get("avg_price") is not None:
-                target_dict["avg_price"] = ranking_snapshot.get("avg_price")
-            if ranking_snapshot.get("rating") is not None:
-                target_dict["rating"] = ranking_snapshot.get("rating")
 
         # Overlay evidence_items values
         for ei in evidence_items:
@@ -337,6 +288,7 @@ def _build_decision_plan(
                 target_dict["open_status"] = str(val).lower()
             elif facet == "coupon":
                 if isinstance(val, list):
+                    target_dict["coupon_titles"] = [str(item) for item in val if str(item).strip()]
                     target_dict["coupon_status"] = "has_coupon" if val else "empty"
                 elif val:
                     target_dict["coupon_status"] = str(val).lower()
@@ -346,6 +298,8 @@ def _build_decision_plan(
                         distance_value = val.get("distance_km")
                         if distance_value is not None:
                             target_dict["distance_km"] = float(distance_value)
+                        if val.get("eta_minutes") is not None:
+                            target_dict["eta_minutes"] = val.get("eta_minutes")
                     else:
                         target_dict["distance_km"] = float(val)
                 except (ValueError, TypeError):
@@ -361,13 +315,14 @@ def _build_decision_plan(
             facet = item_dict.get("facet")
             status = item_dict.get("status")
             val = item_dict.get("value")
-            
+
             is_failed = status in ("failed", "circuit_open")
             is_unknown = status not in ("ok", "empty") or is_failed
 
             if facet == "coupon":
                 if status == "ok":
                     if isinstance(val, list):
+                        target_dict["coupon_titles"] = [str(item) for item in val if str(item).strip()]
                         target_dict["coupon_status"] = "has_coupon" if val else "empty"
                     elif val:
                         target_dict["coupon_status"] = str(val).lower()
@@ -377,7 +332,7 @@ def _build_decision_plan(
                     target_dict["coupon_status"] = "empty"
                 else:
                     target_dict["coupon_status"] = status if status else "unknown"
-                
+
                 if is_unknown:
                     target_dict["unknown_facts"].append("coupon")
                 if is_failed:
@@ -391,7 +346,7 @@ def _build_decision_plan(
                         target_dict["open_status"] = "open"
                 else:
                     target_dict["open_status"] = status if status else "unknown"
-                
+
                 if is_unknown:
                     target_dict["unknown_facts"].append("open_status")
                 if is_failed:
@@ -404,11 +359,13 @@ def _build_decision_plan(
                             distance_value = val.get("distance_km")
                             if distance_value is not None:
                                 target_dict["distance_km"] = float(distance_value)
+                            if val.get("eta_minutes") is not None:
+                                target_dict["eta_minutes"] = val.get("eta_minutes")
                         else:
                             target_dict["distance_km"] = float(val)
                     except (ValueError, TypeError):
                         pass
-                
+
                 if is_unknown:
                     target_dict["unknown_facts"].append("distance")
                 if is_failed:
@@ -425,7 +382,7 @@ def _build_decision_plan(
                         target_dict["rating"] = val
                     elif facet == "avg_price":
                         target_dict["avg_price"] = val
-                
+
                 if is_unknown:
                     target_dict["unknown_facts"].append("detail")
                 if is_failed:
@@ -463,27 +420,27 @@ def _build_decision_plan(
             facts.append("营业状态为：目前已打烊")
         elif "open_status" in target_dict["unknown_facts"]:
             uncertainty_notes.append(f"无法确认 {sname} 的营业状态")
-            
+
         if target_dict["coupon_status"] == "has_coupon":
-            titles = target_dict.get("coupon_titles") or ranking_snapshot.get("coupon_titles") or []
+            titles = target_dict.get("coupon_titles") or []
             facts.append(f"有券：{'、'.join(str(t) for t in titles[:3])}" if titles else "有券")
         elif target_dict["coupon_status"] == "empty":
             facts.append("当前暂无可用优惠券")
         elif "coupon" in target_dict["unknown_facts"]:
             uncertainty_notes.append(f"无法确认 {sname} 的优惠情况")
-            
+
         if target_dict["distance_km"] is not None:
             dist_str = f"距离为 {target_dict['distance_km']} 公里"
-            eta = target_dict.get("eta_minutes") or ranking_snapshot.get("eta_minutes")
+            eta = target_dict.get("eta_minutes")
             if eta is not None:
                 dist_str += f"，预计时间 {eta} 分钟"
             facts.append(dist_str)
         elif "distance" in target_dict["unknown_facts"]:
             uncertainty_notes.append(f"无法确认 {sname} 的距离/时间")
-            
+
         if target_dict["rating"] is not None:
             facts.append(f"评分为 {target_dict['rating']}")
-            
+
         if facts:
             factual_points.append(f"{sname}: {'; '.join(facts)}")
 
@@ -538,21 +495,19 @@ def generate_answer(
     ev_dict = _to_dict(evidence)
     answer_type_meta = ap_dict.get("answer_type", "general")
     comparison_matrix_meta = ev_dict.get("comparison_matrix") or {}
-    ranking_snapshot_meta = ev_dict.get("ranking_snapshot") or {}
-
     decision_type_meta = "general"
     if answer_type_meta == "comparison" or (comparison_matrix_meta and (comparison_matrix_meta.get("rows") or comparison_matrix_meta.get("overall_ranked"))):
         decision_type_meta = "comparison"
-    elif answer_type_meta == "recommendation" or (ranking_snapshot_meta and ("ranked" in ranking_snapshot_meta or "ranked_shops" in ranking_snapshot_meta)):
+    elif answer_type_meta == "recommendation":
         decision_type_meta = "recommendation"
-    elif answer_type_meta == "single_shop" or (ranking_snapshot_meta and ranking_snapshot_meta.get("shop_id")):
+    elif answer_type_meta in ("single_shop", "single_shop_query"):
         decision_type_meta = "single_shop"
 
     candidate_count_meta = 0
     if decision_type_meta == "comparison":
         candidate_count_meta = len(comparison_matrix_meta.get("rows") or [])
     elif decision_type_meta == "recommendation":
-        candidate_count_meta = len(ranking_snapshot_meta.get("ranked") or ranking_snapshot_meta.get("ranked_shops") or [])
+        candidate_count_meta = len(ap_dict.get("target_shop_ids") or ev_dict.get("target_shop_ids") or [])
     elif decision_type_meta == "single_shop":
         candidate_count_meta = 1
 
@@ -595,9 +550,10 @@ def generate_answer(
     metadata["llm_used"] = True
 
     if metadata_out is not None:
-        if not metadata_out.get("answer_source"):
+        if "answer_source" not in metadata_out:
             metadata["answer_source"] = "llm_verbalizer_rewrite" if rewrite_count > 0 else "llm_verbalizer"
-        metadata_out.update(metadata)
+        for key, value in metadata.items():
+            metadata_out.setdefault(key, value)
 
     return _normalize_coupon_phrase(verbalized)
 

@@ -317,7 +317,12 @@ def _fallback_semantic_frame(
     llm_called: bool,
     llm_backend: str = "",
 ) -> SemanticFrame:
-    payload = _safe_extract_slots(text, top_intent)
+    normalized_top_intent = str(top_intent or "").strip()
+    if normalized_top_intent not in {item.value for item in TopIntent}:
+        normalized_top_intent = TopIntent.out_of_scope.value
+    payload = _safe_extract_slots(text, normalized_top_intent)
+    if not str(payload.get("top_intent", "") or "").strip():
+        payload["top_intent"] = normalized_top_intent
     frame = SemanticFrame.model_validate(payload)
     return _annotate_frame(
         frame,
