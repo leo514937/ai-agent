@@ -83,3 +83,28 @@ PASS
 
 ## 17. 下一步建议
 可以进入真实 E2E / 真实 DB / 真实 LLM 验收，但不建议再扩大 Phase 9 范围。
+
+## 18. Post-Phase 9 验收补充
+本轮已补做真实运行态检查，结果如下：
+
+- `python -m compileall local_life_agent` -> 通过
+- `python -m pytest local_life_agent/tests/test_trace_observability.py -q` -> `5 passed`
+- `python -m pytest local_life_agent/tests/test_real_llm_acceptance.py -q` -> `4 passed, 1 skipped`
+- `python -m pytest local_life_agent/tests/test_e2e_llm_main_path.py -q` -> `7 passed, 1 skipped`
+- 真实 LLM 直连调用已验证通过，返回 `ok=True`，实际 transport 为 `httpx`
+- `python -m pytest local_life_agent/tests/test_real_llm_contract.py -q` -> `11 passed, 2 failed`，失败原因是当前环境 `localhost:3306` 无法连接 MySQL，触发的是真实 DB 不可达，不是本轮代码编译错误
+- `python -m pytest local_life_agent/tests/integration/test_java_backend_live.py -q` -> 全部 skipped，原因是当前环境未启用 `LOCAL_LIFE_RUN_JAVA_INTEGRATION=1` / `LOCAL_LIFE_TOOL_BACKEND=java_api`
+
+### 环境状态
+- Python: `3.11.9`
+- Git branch: `toolcall`
+- Git HEAD: `ef5443aa9edbd04d9fde5dba44faabdb9604046d`
+- 当前工作区仍有一批历史脏文件，未回滚
+- MySQL: `127.0.0.1:3306` 当前不可达
+- Java backend: `127.0.0.1:8081` 当前不可达
+- 真实 LLM 配置已可读取，`.env` 中 `LLM_MODEL=deepseek/deepseek-v4-flash`、`LLM_ENDPOINT=https://openrouter.ai/api/v1`
+
+### 观测结论
+- 新增 LLM 日志已改为 hash / metadata 形态，不再输出明文 prompt 预览
+- 真实 LLM 调用会记录 `temperature` 与 `temperature_source`
+- 文件日志落点仍是 `var/python_service.log`

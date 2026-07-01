@@ -308,6 +308,8 @@ def _instrument_handler(node_name: str, handler: GraphNodeFunc) -> GraphNodeFunc
             turn_id=turn_id,
             node=node_name,
             stage=stage,
+            workflow_name=str(state.get("workflow_name", "") or ""),
+            semantic_task_type=str(state.get("task_type", "") or ""),
         )
 
         # — Node entry log —

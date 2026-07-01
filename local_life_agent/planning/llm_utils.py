@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from typing import Any, Callable
@@ -14,6 +15,10 @@ from ..llm.json_parser import LLMJSONParseError, parse_json_response
 from ..observability.file_logger import get_python_service_logger, log_kv
 
 _PLAN_LOG = get_python_service_logger()
+
+
+def _hash_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest() if value else ""
 
 
 def load_two_part_prompt(name: str) -> tuple[str, str]:
@@ -85,8 +90,8 @@ def invoke_structured_llm(
         validator=validator_name,
         timeout_ms=timeout_ms,
         replacement_keys=list(replacements.keys()),
-        user_prompt_preview=user_prompt,
-        system_prompt_preview=system_prompt,
+        user_prompt_hash=_hash_text(user_prompt),
+        system_prompt_hash=_hash_text(system_prompt),
     )
 
     result = call(

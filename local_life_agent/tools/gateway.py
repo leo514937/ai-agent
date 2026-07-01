@@ -143,7 +143,12 @@ class _BatchToolCall:
 
 
 class BatchToolExecutor:
-    """Execute a batch of tool calls concurrently with a shared deadline."""
+    """Execute a batch of tool calls concurrently with a shared deadline.
+
+    This is the execution-layer batch fan-out used by the bounded workflow.
+    It is MapReduce-style at the business/execution layer, but it is not a
+    LangGraph-native Send/reducer graph.
+    """
 
     def __init__(
         self,
@@ -239,6 +244,8 @@ class BatchToolExecutor:
         semaphore = asyncio.Semaphore(max(1, min(self._max_concurrency, max(c.max_parallelism for c in batch_calls))))
         deadline = time.monotonic() + (self._deadline_ms / 1000.0)
 
+        # Logical map stage: execute the batch concurrently and merge the
+        # per-call payloads back into one result dict for the caller.
         tasks = [self._run_one(call, semaphore, deadline) for call in batch_calls]
         results: dict[str, dict[str, Any]] = {}
 

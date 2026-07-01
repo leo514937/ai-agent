@@ -8,6 +8,7 @@ backend injection for tests.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import inspect
 import json
 import logging
@@ -17,16 +18,18 @@ from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeou
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable
+from uuid import uuid4
 
 from pydantic import BaseModel, Field, ValidationError
 
 from ..config import LLM_TIMEOUT_MS
 from ..input.normalizer import normalize_text
-from ..observability.file_logger import get_python_service_logger, log_kv
+from ..observability.file_logger import current_log_context, get_python_service_logger, log_kv
 from ..streaming.runtime import TurnCancelledError, raise_if_turn_cancelled
 from .json_parser import LLMJSONParseError, parse_json_response
 
 _LLM_LOGGER = get_python_service_logger()
+_TEMPERATURE_UNSET = object()
 
 
 class LLMTimeoutError(RuntimeError):
@@ -264,6 +267,7 @@ def _default_llm_backend(
     system_prompt: str = "",
     temperature: float = 0.0,
     timeout_ms: int = LLM_TIMEOUT_MS,
+    **_metadata: Any,
 ) -> str:
     """Default fallback when no backend has been configured.
 
@@ -282,6 +286,7 @@ def _invoke_backend(
     system_prompt: str,
     temperature: float,
     timeout_ms: int,
+    backend_kwargs: dict[str, Any] | None = None,
 ) -> Any:
     """Invoke *backend* inside a worker thread to enforce timeout."""
     raise_if_turn_cancelled()
@@ -293,6 +298,7 @@ def _invoke_backend(
             system_prompt=system_prompt,
             temperature=temperature,
             timeout_ms=timeout_ms,
+            **(backend_kwargs or {}),
         )
         if inspect.isawaitable(result):
             result = asyncio.run(result)
@@ -355,13 +361,10 @@ def _validate_output_schema(
     return content if validated is None else validated
 
 
-def _prompt_tag(prompt: str) -> str:
-    """Extract a short 30-char tag from the first non-empty line."""
-    for line in prompt.splitlines():
-        line = line.strip()
-        if line and not line.startswith("#"):
-            return line[:60]
-    return prompt[:60]
+def _hash_text(text: str) -> str:
+    if not text:
+        return ""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def call_llm(
@@ -369,7 +372,7 @@ def call_llm(
     system_prompt: str = "",
     timeout_ms: int = LLM_TIMEOUT_MS,
     *,
-    temperature: float = 0.0,
+    temperature: float | None | object = _TEMPERATURE_UNSET,
     max_retries: int = 1,
     response_validator: Callable[[Any], Any] | None = None,
     backend: LLMBackend | None = None,
@@ -381,8 +384,14 @@ def call_llm(
     degrade gracefully.
     """
     _start_ts = time.monotonic()
-    prompt_tag = _prompt_tag(prompt)
-    system_tag = _prompt_tag(system_prompt) if system_prompt else "(none)"
+    context = current_log_context()
+    llm_call_id = str(context.get("llm_call_id") or f"llm_{uuid4().hex[:12]}")
+    temperature_was_explicit = temperature is not _TEMPERATURE_UNSET
+    effective_temperature = 0.0 if temperature is _TEMPERATURE_UNSET or temperature is None else float(temperature)
+    temperature_source = "default_config" if not temperature_was_explicit else "call_override"
+    prompt_hash = _hash_text(prompt)
+    system_prompt_hash = _hash_text(system_prompt)
+    prompt_version = f"sha256:{prompt_hash[:12]}" if prompt_hash else ""
 
     effective_backend = backend or _LLM_BACKEND or _default_llm_backend
     if effective_backend is _default_llm_backend:
@@ -404,23 +413,15 @@ def call_llm(
         "[LLM_CALL]",
         tone="llm",
         backend=backend_kind,
-        temperature=temperature,
+        llm_call_id=llm_call_id,
+        temperature=effective_temperature,
+        temperature_source=temperature_source,
         timeout_ms=timeout_ms,
         retries=max_retries,
-        prompt_tag=prompt_tag,
-        system_tag=system_tag,
-        prompt_len=len(prompt),
-        system_len=len(system_prompt),
+        prompt_version=prompt_version,
+        prompt_hash=prompt_hash,
+        system_prompt_hash=system_prompt_hash,
         validator=vname,
-    )
-    log_kv(
-        _LLM_LOGGER,
-        logging.DEBUG,
-        "[LLM_CALL_RAW]",
-        tone="llm",
-        backend=backend_kind,
-        prompt_preview=prompt,
-        system_preview=system_prompt,
     )
 
     attempts = max(1, int(max_retries) + 1)
@@ -438,8 +439,21 @@ def call_llm(
                 effective_backend,
                 prompt=prompt,
                 system_prompt=system_prompt,
-                temperature=temperature,
+                temperature=effective_temperature,
                 timeout_ms=timeout_ms,
+                backend_kwargs={
+                    "llm_call_id": llm_call_id,
+                    "node_name": str(context.get("node", "") or context.get("node_name", "") or ""),
+                    "workflow_name": str(context.get("workflow_name", "") or ""),
+                    "semantic_task_type": str(context.get("semantic_task_type", "") or context.get("task_type", "") or ""),
+                    "prompt_version": prompt_version,
+                    "user_prompt_hash": prompt_hash,
+                    "system_prompt_hash": system_prompt_hash,
+                    "temperature_source": temperature_source,
+                    "attempt_index": attempt,
+                    "retry_count": max_retries,
+                    "streaming": False,
+                },
             )
             backend_elapsed = (time.monotonic() - attempt_start) * 1000.0
             raw_text, parsed_dict, confidence = _normalise_backend_result(raw_result)
@@ -497,7 +511,8 @@ def call_llm(
                 "model": last_model,
                 "transport": last_transport,
                 "attempts": attempt,
-                "temperature": temperature,
+                "temperature": effective_temperature,
+                "temperature_source": temperature_source,
                 "timeout_ms": timeout_ms,
             }
         except TurnCancelledError:

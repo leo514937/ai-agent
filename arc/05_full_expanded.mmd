@@ -6,8 +6,9 @@ flowchart TD
     IGR -->|local_life| US[understanding_subgraph]
 
     MC --> CPC[check_pending_clarification]
-    CPC -->|proceed| US
-    CPC -->|clarify / fallback| RESP
+    CPC -->|restore| PS[planning_subgraph]
+    CPC -->|topic_switch / pass / cancelled| US
+    CPC -->|invalid / out_of_range / expired| RESP
 
     US --> SP[semantic_parse]
     SP --> SE[slot_extractor]
@@ -26,6 +27,17 @@ flowchart TD
     GR -->|FALLBACK| FB
     FV -->|error_code| CL
     SP -->|error_code| CL
+
+    US -->|proceed| ORS[orchestration_router_shadow]
+    US -->|clarify / fallback| RESP
+
+    ORS --> WR[workflow_runner]
+
+    WR -->|discovery_decision| PS
+    WR -->|deterministic_tool| RESP
+    WR -->|exploration_planning| RESP
+    WR -->|direct_response| RESP
+    WR -->|clarification_fallback| RESP
 
     EP --> PV[plan_validator]
     PV -->|tool_execute| TE[tool_execute]
@@ -65,6 +77,6 @@ flowchart TD
     FRD --> SUP
     FR --> SUP
 
-    SUP --> PS[persist_session_state]
-    PS --> EM[emit_response]
-    EM --> END([END])
+    SUP --> PS2[persist_session_state]
+    PS2 --> EM2[emit_response]
+    EM2 --> END([END])

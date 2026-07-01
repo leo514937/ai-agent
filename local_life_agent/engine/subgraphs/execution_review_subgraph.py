@@ -3,6 +3,11 @@
 Executes the validated plan (tool calls), builds evidence from results,
 reviews evidence sufficiency, and runs decision planning/review to
 determine whether to proceed, retry, or fall back.
+
+The execution path is intentionally MapReduce-style at the workflow level:
+batch-concurrent tool execution is followed by business-layer evidence
+aggregation and decision planning. It is not implemented as a LangGraph-
+native Send/reducer fan-out graph.
 """
 
 from __future__ import annotations
@@ -125,6 +130,8 @@ def _h_tool_execute(state: GraphState) -> dict:
                 remaining_specs.append(spec)
 
         if search_calls:
+            # Batch-concurrent map stage: search calls are executed together
+            # and then merged into the local raw_results dict.
             raw_results.update(execution_core.execute_batch(search_calls))
 
         resolved_batch: list[dict[str, Any]] = []
@@ -157,6 +164,8 @@ def _h_tool_execute(state: GraphState) -> dict:
             resolved_batch.append(resolved_call)
 
         if resolved_batch:
+            # Second batch pass for resolved follow-up calls. The merge stays
+            # in Python state, not in a LangGraph reducer.
             raw_results.update(execution_core.execute_batch(resolved_batch))
         raw_results.update(error_results)
 

@@ -5,11 +5,17 @@ flowchart TD
     IGR -->|clarification_reply| MC[merge_clarification]
     IGR -->|local_life| US[understanding_subgraph]
 
-    MC -->|proceed| US
-    MC -->|clarify / fallback| RESP
+    MC -->|restore / execute| PS[planning_subgraph]
+    MC -->|topic_switch / pass / cancelled| US
+    MC -->|clarify / fallback / invalid| RESP
 
-    US -->|proceed| PS[planning_subgraph]
+    US -->|proceed| ORS[orchestration_router_shadow]
     US -->|clarify / fallback| RESP
+
+    ORS --> WR[workflow_runner]
+
+    WR -->|discovery_decision| PS
+    WR -->|deterministic_tool / exploration_planning /<br>direct_response / clarification_fallback| RESP
 
     PS -->|execute| ERS[execution_review_subgraph]
     PS -->|clarify / fallback| RESP
