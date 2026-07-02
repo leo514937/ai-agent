@@ -1,0 +1,33 @@
+{
+  "query": "找几家安静适合聊天的咖啡店",
+  "initial_state": {},
+  "expected": {
+    "workflow_name": "discovery_decision",
+    "facets": ["coffee", "quiet", "lively"],
+    "target_resolution": {
+      "resolved": false,
+      "source": null
+    },
+    "evidence_status": {
+      "answerable": ["coffee", "quiet", "lively"],
+      "unknown": [],
+      "failed": []
+    },
+    "decision_expectations": {
+      "winner_shop_id": null,
+      "comparison_matrix": false,
+      "uncertainty_notes": ["quiet", "lively"]
+    },
+    "answer_expectations": {
+      "answer_type": "recommendation",
+      "allowed_claims": ["coffee", "quiet", "lively"],
+      "required_disclaimers": []
+    },
+    "state_update_expectations": {
+      "current_shop": false,
+      "last_recommendation_list": true,
+      "comparison_targets": false,
+      "pending_clarification": false
+    }
+  }
+}

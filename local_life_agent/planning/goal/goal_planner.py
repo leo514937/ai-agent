@@ -27,6 +27,7 @@ from ...domain.enums import Facet
 from ...domain.goal import GoalPlan, GoalSource
 from ...domain.schemas import SemanticFrame
 from ...domain.state import SessionState
+from ...domain.facets import normalize_query_facets
 from ...observability.file_logger import get_python_service_logger, log_kv
 from .unsupported_intent import (
     build_booking_unsupported_reason,
@@ -165,6 +166,7 @@ def _normalize_goal_plan_from_text(
     plan: GoalPlan,
     semantic_frame: SemanticFrame | dict[str, Any] | None,
     raw_text: str,
+    session_state: SessionState | dict[str, Any] | None = None,
 ) -> GoalPlan:
     """补齐明确店名信号，避免单店查询被误压成推荐。"""
     text = str(raw_text or "")
@@ -175,6 +177,12 @@ def _normalize_goal_plan_from_text(
         mentions = [str(item).strip() for item in (semantic_frame.get("merchant_mentions", []) or []) if str(item).strip()]
     if not mentions and text:
         mentions = _infer_explicit_mentions_from_text(text)
+
+    facet_set = normalize_query_facets(semantic_frame, session_state=session_state, raw_text=raw_text)
+    plan.facets = list(facet_set.facets or [])
+    plan.conflicting_facets = list(facet_set.conflicting_facets or [])
+    plan.ranking_policy = facet_set.ranking_policy
+    plan.target_resolution = facet_set.target_resolution
 
     if not mentions:
         return plan
@@ -206,10 +214,11 @@ def _get_facets(
         return required, optional
 
     if isinstance(frame, SemanticFrame):
-        facet_specs = list(frame.facets or [])
+        facet_specs = list(frame.facet_set.facets if frame.facet_set and frame.facet_set.facets else frame.facets or [])
         focused = list(frame.focused_facets or [])
     else:
-        facet_specs = list(frame.get("facets", []) or [])
+        facet_set = _to_dict(frame.get("facet_set")) if isinstance(frame, dict) else {}
+        facet_specs = list((facet_set.get("facets", []) if isinstance(facet_set, dict) else []) or frame.get("facets", []) or [])
         focused = list(frame.get("focused_facets", []) or [])
 
     for spec in facet_specs:
@@ -432,7 +441,7 @@ def _plan_goal_rules(
         planner_reason="rule_based_planner",
         planner_confidence=0.0,
     )
-    return _normalize_goal_plan_from_text(plan, semantic_frame, raw_text)
+    return _normalize_goal_plan_from_text(plan, semantic_frame, raw_text, session_state)
 
 
 def plan_goal_with_llm(
@@ -529,7 +538,7 @@ def plan_goal_with_llm(
         return plan, error
     if not plan.goal_source:
         plan.goal_source = GoalSource.SEMANTIC_FRAME
-    plan = _normalize_goal_plan_from_text(plan, semantic_frame, raw_text)
+    plan = _normalize_goal_plan_from_text(plan, semantic_frame, raw_text, session_state)
     plan.source_origin = plan.source_origin or "llm_goal_planner"
     plan.planner_source = plan.planner_source or "llm_goal_planner"
     plan.planner_reason = plan.planner_reason or "llm_structured_plan"

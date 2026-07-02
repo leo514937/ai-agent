@@ -52,6 +52,7 @@ from ...domain.schemas import (
     ShopRef,
     ToolResult,
 )
+from ...domain.facets import build_target_resolution_result, normalize_query_facets
 from ...domain.state import SessionState
 from ...planning.plans.candidate_review import review_candidate_set
 from ...planning.evidence.evidence_planner import (
@@ -292,6 +293,11 @@ def _h_goal_planner(state: GraphState) -> dict:
     # ──────────────────────────────────────────────────────────────────────────────
     result: dict[str, Any] = {
         "goal_plan": plan,
+        "facet_set": normalize_query_facets(sf, session_state=session, raw_text=raw_text),
+        "facets": list(getattr(plan, "facets", []) or []),
+        "target_resolution": getattr(plan, "target_resolution", None),
+        "conflicting_facets": list(getattr(plan, "conflicting_facets", []) or []),
+        "ranking_policy": getattr(plan, "ranking_policy", None),
         "task_type": goal_type_from_plan if (goal_type_from_plan and not state.get("task_type")) else state.get("task_type", ""),
         "goal_plan_source": plan.planner_source or plan.source_origin or "llm_goal_planner",
         "planning_llm_backend": meta.get("llm_backend", ""),

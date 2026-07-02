@@ -1,0 +1,33 @@
+{
+  "query": "第一家有券吗",
+  "initial_state": {},
+  "expected": {
+    "workflow_name": "clarification_fallback",
+    "facets": ["ordinal_reference", "coupon"],
+    "target_resolution": {
+      "resolved": false,
+      "unresolved_reason": "missing_last_recommendation_list"
+    },
+    "evidence_status": {
+      "answerable": [],
+      "unknown": ["ordinal_reference", "coupon"],
+      "failed": []
+    },
+    "decision_expectations": {
+      "winner_shop_id": null,
+      "comparison_matrix": false,
+      "uncertainty_notes": ["missing_last_recommendation_list"]
+    },
+    "answer_expectations": {
+      "answer_type": "clarification",
+      "allowed_claims": [],
+      "required_disclaimers": ["需要先有上轮推荐结果"]
+    },
+    "state_update_expectations": {
+      "current_shop": false,
+      "last_recommendation_list": false,
+      "comparison_targets": false,
+      "pending_clarification": true
+    }
+  }
+}

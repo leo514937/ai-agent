@@ -1,0 +1,33 @@
+{
+  "query": "LLM返回格式异常",
+  "initial_state": {},
+  "expected": {
+    "workflow_name": "clarification_fallback",
+    "facets": [],
+    "target_resolution": {
+      "resolved": false,
+      "source": null
+    },
+    "evidence_status": {
+      "answerable": [],
+      "unknown": [],
+      "failed": []
+    },
+    "decision_expectations": {
+      "winner_shop_id": null,
+      "comparison_matrix": false,
+      "uncertainty_notes": []
+    },
+    "answer_expectations": {
+      "answer_type": "clarification",
+      "allowed_claims": [],
+      "required_disclaimers": []
+    },
+    "state_update_expectations": {
+      "current_shop": false,
+      "last_recommendation_list": false,
+      "comparison_targets": false,
+      "pending_clarification": false
+    }
+  }
+}

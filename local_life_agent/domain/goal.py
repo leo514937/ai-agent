@@ -14,6 +14,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from ..planning.review_policy import NextAction
+from .facets import ConflictingFacet, QueryFacet, RankingPolicy, TargetResolutionResult
 
 
 class GoalSource(str, Enum):
@@ -46,6 +47,10 @@ class GoalPlan(BaseModel):
     max_allowed: int = 5
 
     # Evidence directives
+    facets: list[QueryFacet] = Field(default_factory=list)
+    target_resolution: TargetResolutionResult | None = None
+    conflicting_facets: list[ConflictingFacet] = Field(default_factory=list)
+    ranking_policy: RankingPolicy | None = None
     evidence_needs: list[str] = Field(default_factory=list)
     required_facets: list[str] = Field(default_factory=list)
     optional_facets: list[str] = Field(default_factory=list)

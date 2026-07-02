@@ -17,14 +17,19 @@ from .goal import GoalPlan, GoalReviewResult
 from .decision import DecisionPlan, DecisionReviewResult
 from .schemas import (
     AnswerPlan,
+    ConflictingFacet,
     ComparisonTargetResolution,
+    FacetSet,
     EvidencePack,
     ExecutionPlan,
     ExplorationPlan,
     OrchestrationDecision,
     PendingClarification,
+    QueryFacet,
     ResolveShopResult,
     SemanticFrame,
+    RankingPolicy,
+    TargetResolutionResult,
     ToolResult,
 )
 from .state import SessionState, SessionWriteDirective
@@ -55,6 +60,11 @@ class GraphState(TypedDict, total=False):
 
     # === 语义帧 (Semantic Frame) — write: semantic_parse/slot_extractor, read: context_recovery/task_router ===
     semantic_frame: Optional[SemanticFrame]
+    facet_set: Optional[FacetSet]
+    facets: list[QueryFacet]
+    target_resolution: Optional[TargetResolutionResult]
+    conflicting_facets: list[ConflictingFacet]
+    ranking_policy: Optional[RankingPolicy]
 
     # === 澄清状态 (Pending Clarification) — write: clarify_decide/resolve_shop, read: check_pending/context_recovery ===
     pending_clarification: Optional[PendingClarification]

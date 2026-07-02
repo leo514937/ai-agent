@@ -21,6 +21,7 @@ from ...answer.answer_plan_builder import build_answer_plan
 from ...answer.verifier import verify_answer
 from ...domain.schemas import AnswerPlan, EvidencePack, ExecutionPlan, OrchestrationDecision, ResolveShopResult, ShopRef, ToolCallSpec, ToolResult
 from ...domain.state import SessionState
+from ...domain.facets import build_target_resolution_result, normalize_query_facets
 from ...engine._compat import _log, _unwrap_resolve_shop_result
 from ...observability.file_logger import get_python_service_logger, log_kv
 from ...planning.evidence.evidence_builder import build_evidence
@@ -118,7 +119,7 @@ def _task_to_tool(task_type: str, semantic_frame: dict[str, Any]) -> tuple[str, 
             return "get_coupon_list", "coupon"
         if facet_name == "distance":
             return "get_distance_eta", "distance"
-        if facet_name in {"open_status", "status"}:
+        if facet_name in {"open_status", "open_now", "status"}:
             return "check_open_status", "open_status"
         if facet_name == "review_summary":
             return "get_shop_review_summary", "review_summary"
@@ -248,6 +249,32 @@ def _resolve_single_shop_target(state: dict[str, Any]) -> tuple[dict[str, Any] |
     semantic_frame = _to_dict(state.get("semantic_frame"))
     raw_text = str(state.get("raw_text", "") or state.get("normalized_text", "") or "")
     session_state = state.get("session_state") or state.get("session_state_before")
+    target_resolution = _to_dict(state.get("target_resolution"))
+    if target_resolution:
+        if bool(target_resolution.get("resolved", False)):
+            target = _to_dict(target_resolution.get("target_shop"))
+            shop_id = str(target.get("shop_id", "") or "").strip()
+            shop_name = str(target.get("shop_name", "") or "").strip()
+            if shop_id and shop_name:
+                return {
+                    "shop_id": shop_id,
+                    "shop_name": shop_name,
+                    "address": str(target.get("address", "") or "").strip(),
+                    "alias": target.get("alias", ""),
+                    "reference": str(target_resolution.get("reference_type", "") or target_resolution.get("source", "") or "target_resolution"),
+                    "source_text": str(raw_text or ""),
+                }, None, str(target_resolution.get("resolution_reason", "") or "target_resolution_resolved")
+        unresolved_reason = str(target_resolution.get("unresolved_reason", "") or target_resolution.get("resolution_reason", "") or "")
+        if unresolved_reason:
+            pending = build_pending_clarification(
+                original_text=raw_text,
+                original_semantic_frame=semantic_frame,
+                original_task_type=_enum_value(state.get("task_type")) or _enum_value(semantic_frame.get("task_type")),
+                candidate_targets=[],
+                reason=unresolved_reason,
+                source_node="deterministic_tool_workflow",
+            )
+            return None, pending.model_dump(), unresolved_reason
 
     explicit_queries: list[str] = []
     merchant_mentions = [str(item).strip() for item in (semantic_frame.get("merchant_mentions") or []) if str(item).strip()]
@@ -418,6 +445,14 @@ def _tool_args_for_task(task_type: str, target_shop_id: str, state: dict[str, An
 
 def _build_execution_plan(task_type: str, target_shop_id: str, tool_name: str, facet: str, args: dict[str, Any], state: dict[str, Any]) -> ExecutionPlan:
     normalized_task = _enum_value(task_type)
+    facet_set = normalize_query_facets(state.get("semantic_frame"), session_state=state.get("session_state") or state.get("session_state_before"), raw_text=str(state.get("raw_text", "") or state.get("normalized_text", "") or ""))
+    target_resolution = _to_dict(state.get("target_resolution"))
+    if not target_resolution:
+        target_resolution = build_target_resolution_result(
+            state.get("semantic_frame"),
+            session_state=state.get("session_state") or state.get("session_state_before"),
+            raw_text=str(state.get("raw_text", "") or state.get("normalized_text", "") or ""),
+        ).model_dump()
     stage = {
         "stage_id": "stage_1",
         "description": f"deterministic call for {normalized_task}",
@@ -443,6 +478,10 @@ def _build_execution_plan(task_type: str, target_shop_id: str, tool_name: str, f
         {
             "plan_id": f"deterministic_{normalized_task}_{target_shop_id}",
             "task_type": normalized_task,
+            "facets": [facet.model_dump() if hasattr(facet, "model_dump") else facet for facet in (facet_set.facets or [])],
+            "target_resolution": target_resolution,
+            "conflicting_facets": [item.model_dump() if hasattr(item, "model_dump") else item for item in (facet_set.conflicting_facets or [])],
+            "ranking_policy": facet_set.ranking_policy.model_dump() if facet_set.ranking_policy else None,
             "tool_calls": [call],
             "stages": [stage],
             "target_shop_ids": [target_shop_id],
@@ -603,6 +642,20 @@ def _build_success_patch(
         "validated_plan": execution_plan,
         "tool_results": {tool_result.call_id: tool_result},
         "tool_result_set": {tool_result.call_id: tool_result},
+        "facets": list(getattr(execution_plan, "facets", []) or []),
+        "target_resolution": getattr(execution_plan, "target_resolution", None) or {
+            "resolved": True,
+            "target_shop": {"shop_id": target["shop_id"], "shop_name": target["shop_name"]},
+            "source": "target_resolution",
+            "confidence": 1.0,
+            "owner": "deterministic_tool_workflow",
+            "resolution_reason": "deterministic_target_resolved",
+            "reference_type": "current_shop",
+            "unresolved_reason": None,
+            "comparison_targets": [],
+        },
+        "conflicting_facets": list(getattr(execution_plan, "conflicting_facets", []) or []),
+        "ranking_policy": getattr(execution_plan, "ranking_policy", None),
         "resolved_target": resolved_target,
         "resolve_shop_result": resolved_target,
         "evidence_pack": evidence,
@@ -667,6 +720,17 @@ def _build_clarify_patch(state: dict[str, Any], decision: OrchestrationDecision,
         "next_action": "clarify",
         "pending_clarification": pending,
         "resolve_shop_result": ResolveShopResult.model_validate(resolve_kwargs),
+        "target_resolution": {
+            "resolved": False,
+            "target_shop": None,
+            "source": pending.get("source_node", "deterministic_tool_workflow"),
+            "confidence": 0.0,
+            "owner": "deterministic_tool_workflow",
+            "resolution_reason": reason,
+            "reference_type": "current_shop" if "current_shop" in reason else "ordinal_reference" if "ordinal" in reason else "comparison_targets",
+            "unresolved_reason": reason,
+            "comparison_targets": candidate_targets,
+        },
         "final_response": prompt,
         "draft_response": prompt,
         "answer_source": "clarify_message",

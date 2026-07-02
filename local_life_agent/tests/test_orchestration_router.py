@@ -111,7 +111,7 @@ def test_orchestration_shadow_patch_uses_serializable_model():
             "top_intent": "local_life",
             "task_type": "comparison",
             "semantic_frame": {"confidence": 0.91},
-            "comparison_targets": [{"shop_id": "shop_1"}],
+            "comparison_targets": [{"shop_id": "shop_1"}, {"shop_id": "shop_2"}],
             "raw_text": "比较这两家店",
         }
     )

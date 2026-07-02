@@ -21,7 +21,7 @@ from .._compat import (
 )
 from ...domain.enums import TaskType
 from ...domain.graph_state import GraphState
-from ...domain.state import SessionState, SessionWriteDirective
+from ...domain.state import SessionState, SessionValueMeta, SessionWriteDirective
 from ...observability.file_logger import get_python_service_logger, log_kv
 from ...core import StateCore
 from ...planning.plans.state_update_planner import plan_state_update
@@ -57,6 +57,7 @@ def _h_state_update_plan(state: GraphState) -> dict:
     task_type = state.get("task_type")
     task_type_value = task_type.value if hasattr(task_type, "value") else str(task_type or "")
     turn_context = {
+        "workflow_name": state.get("workflow_name"),
         "local_life_goal_draft": state.get("local_life_goal_draft"),
         "resolved_target": resolved,
         "resolved_shop": resolved,
@@ -70,6 +71,7 @@ def _h_state_update_plan(state: GraphState) -> dict:
         "last_recommendation_list": state.get("last_recommendation_list", []),
         "comparison_targets": state.get("comparison_targets", []),
         "resolution_stage": state.get("resolution_stage", ""),
+        "user_location": state.get("user_location"),
         "evidence_pack": state.get("evidence_pack"),
         "comparison_result": _to_dict(state.get("evidence_pack")).get("comparison_matrix") if state.get("evidence_pack") is not None else state.get("comparison_result"),
         "tool_result_set": state.get("tool_result_set") or state.get("tool_results", {}),
@@ -115,6 +117,8 @@ def _h_persist_session(state: GraphState) -> dict:
         for field_name, value in directive.set_fields.items():
             resolved = state.get(field_name) if value is None else value
             if resolved is not None:
+                if field_name.endswith("_meta") and isinstance(resolved, dict):
+                    resolved = SessionValueMeta.model_validate(resolved)
                 setattr(session_state, field_name,
                         _session_state_dict(resolved) if field_name in {"current_shop", "pending_clarification"} and not isinstance(resolved, dict) else resolved)
         for field_name in directive.clear_fields:

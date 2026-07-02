@@ -1,0 +1,38 @@
+{
+  "query": "推荐附近火锅，第一家远吗",
+  "initial_state": {
+    "last_recommendation_list": [
+      {"shop_id": "shop_sc_05", "shop_name": "川味轩(知春路店)"},
+      {"shop_id": "shop_007", "shop_name": "海底捞(牡丹园店)"}
+    ]
+  },
+  "expected": {
+    "workflow_name": "discovery_decision",
+    "facets": ["nearby", "hotpot", "ordinal_reference", "distance"],
+    "target_resolution": {
+      "resolved": true,
+      "source": "last_recommendation_list"
+    },
+    "evidence_status": {
+      "answerable": ["nearby", "hotpot", "ordinal_reference", "distance"],
+      "unknown": [],
+      "failed": []
+    },
+    "decision_expectations": {
+      "winner_shop_id": null,
+      "comparison_matrix": false,
+      "uncertainty_notes": []
+    },
+    "answer_expectations": {
+      "answer_type": "recommendation",
+      "allowed_claims": ["nearby", "hotpot", "ordinal_reference", "distance"],
+      "required_disclaimers": []
+    },
+    "state_update_expectations": {
+      "current_shop": false,
+      "last_recommendation_list": true,
+      "comparison_targets": false,
+      "pending_clarification": false
+    }
+  }
+}

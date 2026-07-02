@@ -8,6 +8,7 @@ from typing import Any
 from ... import config
 from ...config import TOOL_DEFAULT_TIMEOUT_MS
 from ...domain.enums import Facet, TaskType
+from ...domain.facets import build_target_resolution_result, normalize_query_facets
 from ..policies.ranking_policy import infer_recommendation_query
 
 _logger = logging.getLogger(__name__)
@@ -26,9 +27,12 @@ def _to_dict(value: Any) -> dict[str, Any]:
 
 
 def _facet_name(item: Any) -> str:
-    if hasattr(item, "name") and getattr(item, "name") in Facet.__members__.values():
-        facet = getattr(item, "name")
-        return facet.value if hasattr(facet, "value") else str(facet)
+    if hasattr(item, "name"):
+        raw_name = getattr(item, "name")
+        if isinstance(raw_name, str) and raw_name.strip():
+            return raw_name.strip()
+        if hasattr(raw_name, "value"):
+            return str(raw_name.value)
     if isinstance(item, dict):
         raw = item.get("name") or item.get("facet") or item.get("facet_name") or ""
         if hasattr(raw, "value"):
@@ -149,6 +153,19 @@ def build_execution_plan(task_type: str, target: dict, facets: list[str | dict[s
     return {
         "plan_id": f"plan_{shop_id}",
         "task_type": task_type,
+        "facets": normalized_facets,
+        "target_resolution": build_target_resolution_result(
+            {
+                "current_shop": resolved_shop,
+                "comparison_targets": [],
+                "reference_mentions": [],
+                "deictic_references": [],
+                "ordinal_references": [],
+            },
+            raw_text=str(target.get("source_text", "") or ""),
+        ),
+        "conflicting_facets": [],
+        "ranking_policy": None,
         "tool_calls": tool_calls,
         "stages": [
             {
@@ -173,6 +190,7 @@ def build_recommendation_execution_plan(
     frame = _to_dict(semantic_frame)
     query = infer_recommendation_query(frame) or str(fallback_query or "").strip()
     preferences = _recommendation_preferences(frame)
+    facet_set = normalize_query_facets(frame, raw_text=fallback_query or query)
     location = location or {}
     tool_calls: list[dict[str, Any]] = [
         {
@@ -249,6 +267,10 @@ def build_recommendation_execution_plan(
         "plan": {
             "plan_id": f"recommendation_plan_{task_type}",
             "task_type": TaskType.recommendation.value,
+            "facets": [facet.model_dump() if hasattr(facet, "model_dump") else facet for facet in (facet_set.facets or [])],
+            "target_resolution": facet_set.target_resolution.model_dump() if facet_set.target_resolution else None,
+            "conflicting_facets": [item.model_dump() if hasattr(item, "model_dump") else item for item in (facet_set.conflicting_facets or [])],
+            "ranking_policy": facet_set.ranking_policy.model_dump() if facet_set.ranking_policy else None,
             "tool_calls": tool_calls,
             "stages": [
                 {

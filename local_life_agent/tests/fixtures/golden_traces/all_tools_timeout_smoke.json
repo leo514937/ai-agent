@@ -1,0 +1,35 @@
+{
+  "query": "这家有券吗？现在开着吗？离我多远？",
+  "initial_state": {
+    "current_shop": {"shop_id": "shop_007", "shop_name": "海底捞(牡丹园店)"}
+  },
+  "expected": {
+    "workflow_name": "deterministic_tool",
+    "facets": ["current_shop", "coupon", "open_now", "distance"],
+    "target_resolution": {
+      "resolved": true,
+      "source": "current_shop"
+    },
+    "evidence_status": {
+      "answerable": [],
+      "unknown": [],
+      "failed": ["coupon", "open_now", "distance"]
+    },
+    "decision_expectations": {
+      "winner_shop_id": "shop_007",
+      "comparison_matrix": false,
+      "uncertainty_notes": ["coupon", "open_now", "distance"]
+    },
+    "answer_expectations": {
+      "answer_type": "single_shop_query",
+      "allowed_claims": [],
+      "required_disclaimers": ["coupon", "open_now", "distance"]
+    },
+    "state_update_expectations": {
+      "current_shop": true,
+      "last_recommendation_list": false,
+      "comparison_targets": false,
+      "pending_clarification": false
+    }
+  }
+}

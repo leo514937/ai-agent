@@ -22,6 +22,14 @@ from .workflow_registry import WORKFLOW_REGISTRY, WorkflowRegistryError
 _LOGGER = get_python_service_logger()
 
 
+def _coerce_single_workflow_name(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple, set)):
+        return ""
+    return str(value or "").strip()
+
+
 def _coerce_decision(state: GraphState) -> OrchestrationDecision | None:
     raw = state.get("orchestration_decision")
     if raw is None:
@@ -44,7 +52,7 @@ def _fallback_patch(
     workflow_reason: str,
     workflow_registered: bool,
 ) -> dict[str, Any]:
-    workflow_name = str((decision.workflow_name if decision is not None else state.get("workflow_name", "")) or "").strip()
+    workflow_name = _coerce_single_workflow_name(decision.workflow_name if decision is not None else state.get("workflow_name", ""))
     orchestration_pattern = str((decision.orchestration_pattern if decision is not None else state.get("orchestration_pattern", "")) or "").strip()
     timestamp = ""
     try:
@@ -76,7 +84,7 @@ def h_workflow_runner(state: GraphState) -> dict[str, Any]:
     before = dict(state)
     started = perf_counter()
     decision = _coerce_decision(state)
-    workflow_name = str((decision.workflow_name if decision is not None else state.get("workflow_name", "")) or "").strip()
+    workflow_name = _coerce_single_workflow_name(decision.workflow_name if decision is not None else state.get("workflow_name", ""))
     orchestration_pattern = str((decision.orchestration_pattern if decision is not None else state.get("orchestration_pattern", "")) or "")
     workflow_reason = str((decision.workflow_reason if decision is not None else state.get("workflow_reason", "")) or "")
     route_state = dict(state)

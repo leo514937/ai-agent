@@ -1,0 +1,33 @@
+{
+  "query": "这家有券吗",
+  "initial_state": {},
+  "expected": {
+    "workflow_name": "clarification_fallback",
+    "facets": ["current_shop", "coupon"],
+    "target_resolution": {
+      "resolved": false,
+      "unresolved_reason": "missing_current_shop"
+    },
+    "evidence_status": {
+      "answerable": [],
+      "unknown": ["current_shop", "coupon"],
+      "failed": []
+    },
+    "decision_expectations": {
+      "winner_shop_id": null,
+      "comparison_matrix": false,
+      "uncertainty_notes": ["missing_current_shop"]
+    },
+    "answer_expectations": {
+      "answer_type": "clarification",
+      "allowed_claims": [],
+      "required_disclaimers": ["需要先明确当前店铺"]
+    },
+    "state_update_expectations": {
+      "current_shop": false,
+      "last_recommendation_list": false,
+      "comparison_targets": false,
+      "pending_clarification": true
+    }
+  }
+}

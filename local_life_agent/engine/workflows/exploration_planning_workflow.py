@@ -15,12 +15,16 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-from ...answer.verifier import verify_answer
 from ...domain.graph_state import GraphState
 from ...domain.schemas import AnswerPlan, EvidencePack, ExplorationPlan, ExplorationSubgoal, ExecutionPlan, OrchestrationDecision, ToolResult
 from ...engine._compat import _log, _to_dict
 from ...observability.file_logger import get_python_service_logger, log_kv
-from ...planning.evidence.evidence_builder import build_evidence
+from ...planning.shared.evidence_adapter import (
+    apply_state_update_plan,
+    build_answer_plan_from_evidence,
+    build_evidence_pack_from_tool_results,
+    verify_answer_plan,
+)
 from ...tools.gateway import dispatch_tool_call as _default_dispatch_tool_call
 from .clarification_fallback_workflow import run_clarification_fallback_workflow
 
@@ -275,7 +279,11 @@ def _build_exploration_plan(
     expected_output = "按顺序给出最多三个子目标的探索安排，并标明每一步查到的商家选择。"
     if len(subgoals) == 2:
         expected_output = "按顺序给出两个子目标的探索安排，并标明每一步查到的商家选择。"
-    sanitized_subgoals = [{key: value for key, value in subgoal.items() if key != "location"} for subgoal in subgoals]
+    allowed_subgoal_keys = set(ExplorationSubgoal.model_fields)
+    sanitized_subgoals = [
+        {key: value for key, value in subgoal.items() if key in allowed_subgoal_keys}
+        for subgoal in subgoals
+    ]
     plan = ExplorationPlan.model_validate(
         {
             "plan_id": f"exploration_{task_type or 'unknown'}",
@@ -317,50 +325,52 @@ def _tool_round_search(
     subgoals: list[dict[str, Any]],
     location: dict[str, Any],
     dispatch_tool_call,
-) -> tuple[dict[str, list[dict[str, Any]]], list[str], bool]:
-    results: dict[str, list[dict[str, Any]]] = {}
+) -> list[str]:
     tool_names_used: list[str] = ["search_shops"]
-    any_failure = False
     for subgoal in subgoals:
         query = _search_query_for_subgoal(subgoal)
         raw = dispatch_tool_call("search_shops", {"query": query, "location": location, "limit": 3})
         raw_dict = _to_dict(raw)
-        if raw_dict.get("success") is False or str(raw_dict.get("result_status", "") or "").lower() in {"failed", "error", "unknown"} and not raw_dict.get("data"):
-            any_failure = True
+        result_status = str(raw_dict.get("result_status", "") or "").lower()
         items = raw_dict.get("data")
         if isinstance(items, dict):
             items = items.get("items", [])
         if not isinstance(items, list):
             items = []
         normalized = [_normalize_shop_item(item) for item in items if str(_to_dict(item).get("shop_id", "") or "").strip()]
-        results[str(subgoal.get("subgoal_id", ""))] = normalized
-        subgoal["tool_rounds"].append({"round": 1, "tool_name": "search_shops", "query": query, "result_count": len(normalized)})
+        subgoal["search_result"] = raw_dict
+        subgoal["search_result_status"] = result_status or ("ok" if normalized else "empty")
+        subgoal["tool_rounds"].append(
+            {
+                "round": 1,
+                "tool_name": "search_shops",
+                "query": query,
+                "result_count": len(normalized),
+                "result_status": subgoal["search_result_status"],
+            }
+        )
         subgoal["candidate_shops"] = normalized
-        if not normalized:
-            any_failure = True
-    return results, tool_names_used, any_failure
+        subgoal["selected_candidate"] = normalized[0] if normalized else None
+    return tool_names_used
 
 
 def _tool_round_expand(
     *,
     subgoals: list[dict[str, Any]],
     dispatch_tool_call,
-) -> tuple[dict[str, ToolResult], list[str], bool]:
-    tool_results: dict[str, ToolResult] = {}
+) -> list[str]:
     tool_names_used: list[str] = []
-    failure = False
     call_index = 0
     for subgoal in subgoals:
         candidates = list(subgoal.get("candidate_shops") or [])
         if not candidates:
-            failure = True
             continue
         chosen = candidates[0]
         shop_id = str(chosen.get("shop_id", "") or "").strip()
         if not shop_id:
-            failure = True
             continue
         subgoal["selected_candidate"] = chosen
+        subgoal.setdefault("tool_results", {})
         selected_tools: list[tuple[str, dict[str, Any]]] = [
             ("get_shop_detail", {"shop_id": shop_id}),
             ("check_open_status", {"shop_id": shop_id}),
@@ -374,37 +384,39 @@ def _tool_round_expand(
             call_id = f"{subgoal['subgoal_id']}_{call_index}"
             payload = dispatch_tool_call(tool_name, {**kwargs, "call_id": call_id})
             result = _to_dict(payload)
-            try:
-                tool_results[call_id] = ToolResult.model_validate(
-                    {
-                        "call_id": call_id,
-                        "shop_id": shop_id,
-                        "tool_name": tool_name,
-                        "success": bool(result.get("success", False)),
-                        "result_status": result.get("result_status", "unknown"),
-                        "data": result.get("data"),
-                        "error_code": result.get("error_code") or None,
-                        "error_message": str(result.get("error_message", "") or ""),
-                        "source": str(result.get("source", "") or result.get("backend_source", "") or ""),
-                        "degraded": bool(result.get("degraded", False)),
-                        "retriable": not bool(result.get("success", False)),
-                        "backend_source": str(result.get("backend_source", "") or result.get("source", "") or ""),
-                        "http_status": result.get("http_status"),
-                        "endpoint": result.get("endpoint"),
-                        "fallback_from": result.get("fallback_from"),
-                    }
-                )
-            except Exception:
-                failure = True
-                continue
-            if not bool(result.get("success", False)) and str(result.get("result_status", "") or "").lower() in {"failed", "error", "unsupported", "unknown"}:
-                failure = True
-        subgoal["tool_rounds"].append({"round": 2, "tool_names": [name for name, _ in selected_tools]})
-    return tool_results, tool_names_used, failure
+            subgoal["tool_results"][tool_name] = {
+                "call_id": call_id,
+                "shop_id": shop_id,
+                "tool_name": tool_name,
+                "success": bool(result.get("success", False)),
+                "result_status": result.get("result_status", "unknown"),
+                "data": result.get("data"),
+                "error_code": result.get("error_code") or None,
+                "error_message": str(result.get("error_message", "") or ""),
+                "source": str(result.get("source", "") or result.get("backend_source", "") or ""),
+                "degraded": bool(result.get("degraded", False)),
+                "retriable": not bool(result.get("success", False)),
+                "backend_source": str(result.get("backend_source", "") or result.get("source", "") or ""),
+                "http_status": result.get("http_status"),
+                "endpoint": result.get("endpoint"),
+                "fallback_from": result.get("fallback_from"),
+            }
+        subgoal["tool_rounds"].append(
+            {
+                "round": 2,
+                "tool_names": [name for name, _ in selected_tools],
+                "result_statuses": {
+                    name: str((subgoal.get("tool_results", {}).get(name) or {}).get("result_status", "unknown") or "unknown")
+                    for name, _ in selected_tools
+                },
+            }
+        )
+    return tool_names_used
 
 
-def _compose_final_response(plan: ExplorationPlan, evidence: dict[str, Any]) -> str:
+def _compose_final_response(plan: ExplorationPlan, evidence: dict[str, Any], answer_plan: dict[str, Any]) -> str:
     evidence_dict = _to_dict(evidence)
+    answer_plan_dict = _to_dict(answer_plan)
     items = evidence_dict.get("evidence_items") or []
     by_shop: dict[str, dict[str, Any]] = {}
     for item in items:
@@ -423,19 +435,21 @@ def _compose_final_response(plan: ExplorationPlan, evidence: dict[str, Any]) -> 
             },
         )
         facet = str(item_dict.get("facet", "") or "")
-        if facet == "open_status":
+        if facet in {"open_status", "open_now"}:
             value = _to_dict(item_dict.get("value"))
             if isinstance(value, dict):
                 bucket["open_status"] = str(value.get("open_status", value.get("status", "unknown")) or "unknown")
-        elif facet == "distance":
+        elif facet in {"distance", "travel_time"}:
             value = _to_dict(item_dict.get("value"))
             if isinstance(value, dict):
                 bucket["distance_km"] = value.get("distance_km")
                 bucket["eta_minutes"] = value.get("eta_minutes")
-        elif facet in {"review_summary", "deal", "coupon", "detail"}:
+        elif facet in {"review_summary", "review_tags", "deal", "group_buy", "coupon", "detail"}:
             value = item_dict.get("value")
             if isinstance(value, dict):
                 bucket["summary"].append(str(value.get("summary", "") or "").strip())
+            elif isinstance(value, list):
+                bucket["summary"].extend([str(v).strip() for v in value if str(v).strip()])
     subgoal_texts: list[str] = []
     for subgoal in plan.subgoals:
         chosen = subgoal.selected_candidate or {}
@@ -456,11 +470,27 @@ def _compose_final_response(plan: ExplorationPlan, evidence: dict[str, Any]) -> 
         if summary:
             parts.append(summary)
         subgoal_texts.append("，".join(parts))
+    response_parts: list[str] = []
     if subgoal_texts:
-        if plan.has_temporal_sequence:
-            return "按顺序安排如下：" + "；".join(f"{idx + 1}. {text}" for idx, text in enumerate(subgoal_texts))
-        return "可按下面的顺序探索：" + "；".join(f"{idx + 1}. {text}" for idx, text in enumerate(subgoal_texts))
-    return "我已经整理好了这次探索安排。"
+        prefix = "按顺序安排如下：" if plan.has_temporal_sequence else "可按下面的顺序探索："
+        response_parts.append(prefix + "；".join(f"{idx + 1}. {text}" for idx, text in enumerate(subgoal_texts)))
+    else:
+        response_parts.append("我已经整理好了这次探索安排。")
+
+    disclaimers = [str(item).strip() for item in answer_plan_dict.get("required_disclaimers", []) or [] if str(item).strip()]
+    unknown_facets = [str(item).strip() for item in answer_plan_dict.get("unknown_facets", []) or [] if str(item).strip()]
+    failed_facets = [str(item).strip() for item in answer_plan_dict.get("failed_facets", []) or [] if str(item).strip()]
+    if disclaimers:
+        response_parts.append("；".join(disclaimers))
+    elif unknown_facets or failed_facets:
+        extra_parts: list[str] = []
+        if unknown_facets:
+            extra_parts.append(f"部分信息暂无法确认: {', '.join(dict.fromkeys(unknown_facets))}")
+        if failed_facets:
+            extra_parts.append(f"部分工具结果失败: {', '.join(dict.fromkeys(failed_facets))}")
+        if extra_parts:
+            response_parts.append("；".join(extra_parts))
+    return "；".join(part for part in response_parts if part)
 
 
 def _build_success_patch(
@@ -595,30 +625,27 @@ def run_exploration_planning_workflow(
     for subgoal in subgoals:
         subgoal["location"] = location
 
-    search_results, tool_names_used, search_failure = _tool_round_search(
+    tool_names_used = _tool_round_search(
         subgoals=subgoals,
         location=location,
         dispatch_tool_call=dispatch_tool_call,
     )
-    if search_failure:
-        return run_clarification_fallback_workflow(
-            {
-                **state,
-                "task_type": task_type,
-                "workflow_name": "exploration_planning",
-                "workflow_reason": _FALLBACK_REASONS["no_result"],
-                "response_mode": "fallback",
-                "next_action": "fallback",
-            },
-            decision,
-        )
 
-    tool_results, expand_tool_names, expand_failure = _tool_round_expand(
+    expand_tool_names = _tool_round_expand(
         subgoals=subgoals,
         dispatch_tool_call=dispatch_tool_call,
     )
     tool_names_used.extend(expand_tool_names)
-    if expand_failure:
+
+    evidence = build_evidence_pack_from_tool_results(
+        workflow_name="exploration_planning",
+        owner="exploration_planning",
+        subgoals=subgoals,
+        semantic_facets=semantic_frame.get("facets") or [],
+        location_context=location,
+    )
+
+    if evidence.failed_facets:
         return run_clarification_fallback_workflow(
             {
                 **state,
@@ -631,60 +658,19 @@ def run_exploration_planning_workflow(
             decision,
         )
 
-    execution_plan = ExecutionPlan.model_validate(
-        {
-            "plan_id": f"exploration_{task_type or 'unknown'}",
-            "task_type": task_type,
-            "tool_calls": [],
-            "stages": [],
-            "target_shop_ids": [
-                str((subgoal.get("selected_candidate") or {}).get("shop_id", "")).strip()
-                for subgoal in subgoals
-                if str((subgoal.get("selected_candidate") or {}).get("shop_id", "")).strip()
-            ],
-            "query_terms": [str(subgoal.get("query", "") or "") for subgoal in subgoals if str(subgoal.get("query", "") or "").strip()],
-            "scene_terms": [str(subgoal.get("kind", "") or "") for subgoal in subgoals if str(subgoal.get("kind", "") or "").strip()],
-            "open_now_preferred": any("open" in str(subgoal.get("kind", "") or "").lower() for subgoal in subgoals),
-            "coupon_preferred": any("coupon" in str(subgoal.get("query", "") or "").lower() for subgoal in subgoals),
-            "nearby_preferred": True,
-            "plan_source": "exploration_planning_workflow",
-            "planning_notes": ["phase_8_exploration_planning"],
-            "assumptions_used": ["existing_tools_only", "max_two_tool_rounds"],
-        }
-    )
-
-    evidence = EvidencePack.model_validate(
-        build_evidence(
-            tool_results=tool_results,
-            resolved_target={},
-            execution_plan=execution_plan,
-            recommendation_candidates=[],
-            comparison_targets=[],
+    if not evidence.answerable_facets:
+        fallback_reason = _FALLBACK_REASONS["no_result"]
+        return run_clarification_fallback_workflow(
+            {
+                **state,
+                "task_type": task_type,
+                "workflow_name": "exploration_planning",
+                "workflow_reason": fallback_reason,
+                "response_mode": "fallback",
+                "next_action": "fallback",
+            },
+            decision,
         )
-    )
-
-    answer_plan = AnswerPlan.model_validate(
-        {
-            "answer_type": "exploration_plan",
-            "target_shop_ids": list(evidence.target_shop_ids or []),
-            "response_sections": [
-                {
-                    "section_id": "exploration_summary",
-                    "section_type": "exploration_plan",
-                    "status": "ok" if evidence.facet_results else "unknown",
-                    "required": False,
-                }
-            ],
-            "allowed_claims": [],
-            "required_claims": [],
-            "must_mention_unknowns": [],
-            "forbidden_claims": [],
-            "ranking_snapshot_id": "",
-            "comparison_matrix_id": "",
-            "tone": "neutral",
-            "fallback_template_type": "exploration_plan",
-        }
-    )
 
     plan = _build_exploration_plan(
         state=state,
@@ -692,13 +678,19 @@ def run_exploration_planning_workflow(
         subgoals=subgoals,
         location=location,
         tool_names_used=tool_names_used,
-        tool_rounds_used=2 if tool_results else 1,
+        tool_rounds_used=2 if any(subgoal.get("tool_results") for subgoal in subgoals) else 1,
     )
 
-    final_response = _compose_final_response(plan, evidence.model_dump())
-    verifier_result = verify_answer(final_response, evidence.model_dump(), "exploration_plan")
+    answer_plan = build_answer_plan_from_evidence(
+        task_type=task_type,
+        evidence_pack=evidence,
+        exploration_plan=plan,
+    )
+
+    final_response = _compose_final_response(plan, evidence.model_dump(), answer_plan.model_dump())
+    verifier_result = verify_answer_plan(final_response, evidence.model_dump(), "exploration_plan")
     if not verifier_result.get("passed", False):
-        return run_clarification_fallback_workflow(
+        fallback_patch = run_clarification_fallback_workflow(
             {
                 **state,
                 "task_type": task_type,
@@ -709,6 +701,13 @@ def run_exploration_planning_workflow(
             },
             decision,
         )
+        fallback_patch["answer_verify_passed"] = False
+        fallback_patch["answer_verify_violations"] = list(verifier_result.get("issues") or [])
+        fallback_patch["verification_errors"] = list(verifier_result.get("issues") or [])
+        fallback_patch["verifier_result"] = "fail"
+        fallback_patch["fallback_reason"] = "exploration_verifier_rejected"
+        fallback_patch["answer_fallback_reason"] = "exploration_verifier_rejected"
+        return fallback_patch
 
     patch = _build_success_patch(
         state=state,
@@ -718,6 +717,27 @@ def run_exploration_planning_workflow(
         answer_plan=answer_plan,
         final_response=final_response,
         verifier_result=verifier_result,
+    )
+    patch["tool_results"] = evidence.model_dump().get("tool_results", {})
+    patch["tool_result_set"] = patch["tool_results"]
+    patch["state_update_plan_preview"] = apply_state_update_plan(
+        {
+            "workflow_name": "exploration_planning",
+            "task_type": task_type,
+            "local_life_goal_draft": state.get("local_life_goal_draft"),
+            "resolved_target": None,
+            "resolved_shop": None,
+            "current_shop": state.get("current_shop"),
+            "pending_clarification": state.get("pending_clarification"),
+            "last_recommendation_list": evidence.last_recommendation_list,
+            "comparison_targets": state.get("comparison_targets", []),
+            "user_location": location,
+            "evidence_pack": evidence.model_dump(),
+            "tool_result_set": evidence.model_dump().get("tool_results", {}) or {},
+            "execution_plan": plan.model_dump(),
+        },
+        task_type,
+        "",
     )
     patch["subgoals"] = plan.subgoals
     patch["has_temporal_sequence"] = plan.has_temporal_sequence

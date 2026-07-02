@@ -347,6 +347,10 @@ def plan_decision(
     return DecisionPlan(
         decision_type=decision_type,
         goal_id=goal_id,
+        facets=(goal.facets if goal is not None and hasattr(goal, "facets") else evidence_dict.get("facets", [])),
+        target_resolution=(goal.target_resolution if goal is not None and hasattr(goal, "target_resolution") else evidence_dict.get("target_resolution")),
+        conflicting_facets=(goal.conflicting_facets if goal is not None and hasattr(goal, "conflicting_facets") else evidence_dict.get("conflicting_facets", [])),
+        ranking_policy=(goal.ranking_policy if goal is not None and hasattr(goal, "ranking_policy") else evidence_dict.get("ranking_policy")),
         candidates=candidates,
         answerable_facets=answerable_facets,
         unknown_facets=unknown_facets,

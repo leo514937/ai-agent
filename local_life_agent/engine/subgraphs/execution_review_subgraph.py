@@ -4,10 +4,13 @@ Executes the validated plan (tool calls), builds evidence from results,
 reviews evidence sufficiency, and runs decision planning/review to
 determine whether to proceed, retry, or fall back.
 
-The execution path is intentionally MapReduce-style at the workflow level:
-batch-concurrent tool execution is followed by business-layer evidence
-aggregation and decision planning. It is not implemented as a LangGraph-
-native Send/reducer fan-out graph.
+This workflow uses workflow-internal batch tool/evidence aggregation only:
+single-workflow batch execution is followed by single-owner evidence
+aggregation and decision planning. It is not workflow-level fan-out, does
+not produce multiple final responses, does not produce multiple
+state_update_plan values, and reduces back into one workflow-owned
+EvidencePack. It is not implemented as a LangGraph-native Send/reducer
+fan-out graph.
 """
 
 from __future__ import annotations

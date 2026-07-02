@@ -215,6 +215,75 @@ def _attach_backend_source(items: list[dict[str, Any]], tool_results: dict) -> l
     return enriched
 
 
+def _facet_protocol_metadata(execution_plan: Any, resolved_target: dict[str, Any]) -> dict[str, Any]:
+    plan_dict = _to_dict(execution_plan)
+    if "plan" in plan_dict and isinstance(plan_dict.get("plan"), (dict, object)):
+        nested_plan = _to_dict(plan_dict.get("plan"))
+        if nested_plan:
+            plan_dict = nested_plan
+    facet_set = _to_dict(plan_dict.get("facet_set"))
+    facets = plan_dict.get("facets") or facet_set.get("facets") or []
+    conflicting_facets = plan_dict.get("conflicting_facets") or facet_set.get("conflicting_facets") or []
+    ranking_policy = plan_dict.get("ranking_policy") or facet_set.get("ranking_policy")
+    target_resolution = plan_dict.get("target_resolution") or facet_set.get("target_resolution")
+    if not target_resolution:
+        resolved_dict = _to_dict(resolved_target)
+        if str(resolved_dict.get("resolved", "")).lower() == "true" or str(resolved_dict.get("status", "")).upper() == "RESOLVED":
+            target_shop = resolved_dict.get("target_shop") or resolved_dict.get("resolved_shop") or resolved_dict.get("shop")
+            target_resolution = {
+                "resolved": True,
+                "target_shop": _to_dict(target_shop),
+                "source": resolved_dict.get("source") or resolved_dict.get("reference_resolution_source") or "resolved_target",
+                "confidence": float(resolved_dict.get("confidence", 1.0) or 1.0),
+                "owner": resolved_dict.get("owner") or "execution_review_subgraph",
+                "resolution_reason": resolved_dict.get("resolution_reason") or resolved_dict.get("reason") or "resolved_target",
+                "reference_type": resolved_dict.get("reference_type") or resolved_dict.get("reference"),
+                "unresolved_reason": resolved_dict.get("unresolved_reason"),
+            }
+        elif resolved_dict:
+            target_resolution = {
+                "resolved": bool(resolved_dict.get("resolved", False)),
+                "target_shop": _to_dict(resolved_dict.get("target_shop")),
+                "source": resolved_dict.get("source"),
+                "confidence": float(resolved_dict.get("confidence", 0.0) or 0.0),
+                "owner": resolved_dict.get("owner") or "execution_review_subgraph",
+                "resolution_reason": resolved_dict.get("resolution_reason") or resolved_dict.get("reason") or "",
+                "reference_type": resolved_dict.get("reference_type"),
+                "unresolved_reason": resolved_dict.get("unresolved_reason"),
+            }
+    return {
+        "facets": [dict(item) if isinstance(item, dict) else _to_dict(item) for item in facets or []],
+        "target_resolution": _to_dict(target_resolution) if target_resolution else None,
+        "conflicting_facets": [dict(item) if isinstance(item, dict) else _to_dict(item) for item in conflicting_facets or []],
+        "ranking_policy": _to_dict(ranking_policy) if ranking_policy else None,
+    }
+
+
+def _facet_triage_from_results(facet_results: list[dict[str, Any]] | None) -> dict[str, list[str]]:
+    answerable: list[str] = []
+    unknown: list[str] = []
+    failed: list[str] = []
+    for item in facet_results or []:
+        facet = str((item or {}).get("facet", "") or "").strip()
+        if not facet:
+            continue
+        status = str((item or {}).get("status", (item or {}).get("result_status", "unknown")) or "unknown").lower()
+        if status in {"ok", "partial"}:
+            if facet not in answerable:
+                answerable.append(facet)
+        elif status in {"failed", "error", "circuit_open", "backend_unavailable"}:
+            if facet not in failed:
+                failed.append(facet)
+        else:
+            if facet not in unknown:
+                unknown.append(facet)
+    return {
+        "answerable_facets": answerable,
+        "unknown_facets": unknown,
+        "failed_facets": failed,
+    }
+
+
 def _comparison_dimension_score(row: dict[str, Any]) -> tuple[float, int]:
     known = 0
     score = 0.0
@@ -910,6 +979,8 @@ def build_evidence(
         )
 
     return {
+        **_facet_protocol_metadata(execution_plan, resolved_target),
+        **_facet_triage_from_results(facet_results),
         "target_shop_ids": [shop_id] if shop_id else [],
         "requested_facets": requested_facets,
         "facet_results": facet_results,
@@ -1304,6 +1375,8 @@ def _build_recommendation_evidence(
             print(f"  [DEBUG] first candidate: sid={list(candidates_by_shop_id.keys())[0]}, data={list(candidates_by_shop_id.values())[0]}")
     
     return {
+        **_facet_protocol_metadata(plan_dict, {"target_resolution": plan_dict.get("target_resolution")}),
+        **_facet_triage_from_results(facet_results),
         "target_shop_ids": [item["shop_id"] for item in ranked_snapshot],
         "requested_facets": ["rating", "distance", "open_status", "coupon"],
         "facet_results": facet_results,

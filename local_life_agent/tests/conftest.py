@@ -714,6 +714,21 @@ def _isolated_session_store() -> None:
         reset_session_store()
 
 
+def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
+    """Skip integration / e2e tests unless the caller explicitly enables them."""
+
+    run_integration = os.environ.get("RUN_INTEGRATION_TESTS") == "1"
+    run_e2e = os.environ.get("RUN_E2E_TESTS") == "1"
+    skip_integration = pytest.mark.skip(reason="integration tests are disabled unless RUN_INTEGRATION_TESTS=1")
+    skip_e2e = pytest.mark.skip(reason="e2e tests are disabled unless RUN_E2E_TESTS=1")
+
+    for item in items:
+        if item.get_closest_marker("integration") is not None and not run_integration:
+            item.add_marker(skip_integration)
+        if item.get_closest_marker("e2e") is not None and not run_e2e:
+            item.add_marker(skip_e2e)
+
+
 @pytest.fixture
 def poison_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     """Crash tests when a forbidden fallback path is touched."""

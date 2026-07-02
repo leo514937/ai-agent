@@ -132,6 +132,7 @@ def build_pending_clarification(
     expected_reply_type: str = "shop_selection",
     already_resolved_targets: list[dict[str, Any]] | None = None,
     ambiguous_target_slot: str = "",
+    resume_strategy: str = "resume_original_task",
 ) -> PendingClarification:
     """Construct a pending clarification payload with TTL metadata."""
     now = datetime.now(timezone.utc)
@@ -159,6 +160,7 @@ def build_pending_clarification(
         original_semantic_frame=frame or None,
         already_resolved_targets=[_as_dict(item) for item in (already_resolved_targets or []) if _as_dict(item)],
         ambiguous_target_slot=ambiguous_target_slot,
+        resume_strategy=resume_strategy,
         reason=reason,
         source_node=source_node,
     )

@@ -1,0 +1,33 @@
+{
+  "query": "附近推荐几家适合约会、现在营业、最好有券、人均50以内的高评分日料",
+  "initial_state": {},
+  "expected": {
+    "workflow_name": "discovery_decision",
+    "facets": ["nearby", "restaurant", "date_scene", "open_now", "coupon", "budget"],
+    "target_resolution": {
+      "resolved": false,
+      "source": null
+    },
+    "evidence_status": {
+      "answerable": [],
+      "unknown": ["nearby", "restaurant"],
+      "failed": []
+    },
+    "decision_expectations": {
+      "winner_shop_id": null,
+      "comparison_matrix": false,
+      "uncertainty_notes": ["empty_search"]
+    },
+    "answer_expectations": {
+      "answer_type": "recommendation",
+      "allowed_claims": [],
+      "required_disclaimers": ["未找到合适结果"]
+    },
+    "state_update_expectations": {
+      "current_shop": false,
+      "last_recommendation_list": false,
+      "comparison_targets": false,
+      "pending_clarification": false
+    }
+  }
+}

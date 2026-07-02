@@ -12,12 +12,84 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from ..planning.review_policy import NextAction
+from .facets import ConflictingFacet, FacetSet, QueryFacet, RankingPolicy, TargetResolutionResult
 
 # Re-export DomainGoalDraft for assignment in graph_builder
 try:
     from .schemas import DomainGoalDraft
 except ImportError:
     DomainGoalDraft = None  # type: ignore
+
+
+def _to_dict(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump()
+        return dumped if isinstance(dumped, dict) else {}
+    return dict(getattr(value, "__dict__", {}) or {})
+
+
+def _coerce_facets(value: Any) -> list[dict[str, Any]]:
+    from .facets import QueryFacet
+
+    raw = value
+    if hasattr(raw, "model_dump"):
+        raw = raw.model_dump()
+    if isinstance(raw, dict):
+        raw = raw.get("facets", [])
+    facets: list[dict[str, Any]] = []
+    for item in raw or []:
+        if isinstance(item, QueryFacet):
+            payload = item.model_dump()
+        elif hasattr(item, "model_dump"):
+            payload = item.model_dump()
+        elif isinstance(item, dict):
+            payload = dict(item)
+        else:
+            payload = {"name": str(item or ""), "group": ""}
+        if not str(payload.get("name", "") or "").strip():
+            continue
+        facets.append(payload)
+    return facets
+
+
+def _coerce_target_resolution(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if hasattr(value, "model_dump"):
+        value = value.model_dump()
+    if isinstance(value, dict):
+        return dict(value)
+    return _to_dict(value) or None
+
+
+def _coerce_conflicting_facets(value: Any) -> list[dict[str, Any]]:
+    raw = value
+    if hasattr(raw, "model_dump"):
+        raw = raw.model_dump()
+    if isinstance(raw, dict):
+        raw = raw.get("conflicting_facets", raw.get("items", []))
+    items: list[dict[str, Any]] = []
+    for item in raw or []:
+        if hasattr(item, "model_dump"):
+            item = item.model_dump()
+        if isinstance(item, dict):
+            items.append(dict(item))
+    return items
+
+
+def _coerce_ranking_policy(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if hasattr(value, "model_dump"):
+        value = value.model_dump()
+    if isinstance(value, dict):
+        return dict(value)
+    return _to_dict(value) or None
 
 
 def decision_to_answer_plan(decision_plan: DecisionPlan, evidence_pack: Any = None) -> dict:
@@ -89,6 +161,12 @@ def decision_to_answer_plan(decision_plan: DecisionPlan, evidence_pack: Any = No
             "verbalization_hint": claim.get("verbalization_hint", ""),
         })
 
+    required_disclaimers: list[str] = []
+    if decision_plan.unknown_facets:
+        required_disclaimers.append(f"部分信息暂无法确认: {', '.join(decision_plan.unknown_facets)}")
+    if decision_plan.failed_facets:
+        required_disclaimers.append(f"部分工具结果失败: {', '.join(decision_plan.failed_facets)}")
+
     # Normalize evidence_pack: accept both dict and Pydantic model
     evidence: dict[str, Any] = {}
     if evidence_pack is not None:
@@ -109,6 +187,14 @@ def decision_to_answer_plan(decision_plan: DecisionPlan, evidence_pack: Any = No
 
     return {
         "answer_type": _map_decision_type_to_answer_type(decision_type),
+        "facets": _coerce_facets(decision_plan.facets if hasattr(decision_plan, "facets") else evidence.get("facets", [])),
+        "target_resolution": _coerce_target_resolution(decision_plan.target_resolution if hasattr(decision_plan, "target_resolution") else evidence.get("target_resolution")),
+        "conflicting_facets": _coerce_conflicting_facets(decision_plan.conflicting_facets if hasattr(decision_plan, "conflicting_facets") else evidence.get("conflicting_facets", [])),
+        "ranking_policy": _coerce_ranking_policy(decision_plan.ranking_policy if hasattr(decision_plan, "ranking_policy") else evidence.get("ranking_policy")),
+        "answerable_facets": list(decision_plan.answerable_facets or []),
+        "unknown_facets": list(decision_plan.unknown_facets or []),
+        "failed_facets": list(decision_plan.failed_facets or []),
+        "required_disclaimers": required_disclaimers,
         "target_shop_ids": target_shop_ids,
         "response_sections": response_sections,
         "allowed_claims": allowed_claims,
@@ -173,6 +259,10 @@ class DecisionPlan(BaseModel):
     """
     decision_type: DecisionType = DecisionType.UNSUPPORTED
     goal_id: str = ""                    # Ties back to the goal that spawned this decision
+    facets: list[QueryFacet] = Field(default_factory=list)
+    target_resolution: TargetResolutionResult | None = None
+    conflicting_facets: list[ConflictingFacet] = Field(default_factory=list)
+    ranking_policy: RankingPolicy | None = None
     candidates: list[str] = Field(default_factory=list)  # shop_ids considered
     answerable_facets: list[str] = Field(default_factory=list)
     unknown_facets: list[str] = Field(default_factory=list)

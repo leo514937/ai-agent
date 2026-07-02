@@ -17,6 +17,40 @@ def _to_dict(value: Any) -> dict[str, Any]:
     return dict(getattr(value, "__dict__", {}) or {})
 
 
+def _facet_triage(facet_results: list[dict[str, Any]] | None) -> dict[str, list[str]]:
+    answerable: list[str] = []
+    unknown: list[str] = []
+    failed: list[str] = []
+    for item in facet_results or []:
+        facet = str((item or {}).get("facet", "") or "").strip()
+        if not facet:
+            continue
+        status = str((item or {}).get("status", (item or {}).get("result_status", "unknown")) or "unknown").lower()
+        if status in {"ok", "partial"}:
+            if facet not in answerable:
+                answerable.append(facet)
+        elif status in {"failed", "error", "circuit_open", "backend_unavailable"}:
+            if facet not in failed:
+                failed.append(facet)
+        else:
+            if facet not in unknown:
+                unknown.append(facet)
+    return {
+        "answerable_facets": answerable,
+        "unknown_facets": unknown,
+        "failed_facets": failed,
+    }
+
+
+def _required_disclaimers(unknown_facets: list[str], failed_facets: list[str]) -> list[str]:
+    disclaimers: list[str] = []
+    if unknown_facets:
+        disclaimers.append(f"部分信息暂无法确认: {', '.join(unknown_facets)}")
+    if failed_facets:
+        disclaimers.append(f"部分工具结果失败: {', '.join(failed_facets)}")
+    return disclaimers
+
+
 def build_answer_plan(task_type: str, evidence: dict, clarification: dict | None = None) -> dict:
     """Plan how the answer should be structured."""
     evidence = _to_dict(evidence)
@@ -31,6 +65,14 @@ def build_answer_plan(task_type: str, evidence: dict, clarification: dict | None
     comparison_matrix = evidence.get("comparison_matrix") or {}
     comparison_rows = comparison_matrix.get("rows") or []
     target_shop_ids = evidence.get("target_shop_ids") or ([shop_id] if shop_id else [])
+    triage = _facet_triage(facet_results)
+    if not any(triage.values()):
+        triage = {
+            "answerable_facets": list(evidence.get("answerable_facets") or []),
+            "unknown_facets": list(evidence.get("unknown_facets") or []),
+            "failed_facets": list(evidence.get("failed_facets") or []),
+        }
+    required_disclaimers = list(evidence.get("required_disclaimers") or _required_disclaimers(triage["unknown_facets"], triage["failed_facets"]))
 
     answer_type = "single_shop_query"
     fallback_template_type = "multi_facet_unknown"
@@ -122,6 +164,14 @@ def build_answer_plan(task_type: str, evidence: dict, clarification: dict | None
 
     return {
         "answer_type": answer_type,
+        "facets": evidence.get("facets", []),
+        "target_resolution": evidence.get("target_resolution"),
+        "conflicting_facets": evidence.get("conflicting_facets", []),
+        "ranking_policy": evidence.get("ranking_policy"),
+        "answerable_facets": triage["answerable_facets"],
+        "unknown_facets": triage["unknown_facets"],
+        "failed_facets": triage["failed_facets"],
+        "required_disclaimers": required_disclaimers,
         "target_shop_ids": target_shop_ids,
         "response_sections": response_sections,
         "allowed_claims": allowed_claims,

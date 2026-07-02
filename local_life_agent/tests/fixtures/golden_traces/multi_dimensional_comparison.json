@@ -1,0 +1,38 @@
+{
+  "query": "第一家和第二家哪家更适合带娃，哪家更便宜？",
+  "initial_state": {
+    "last_recommendation_list": [
+      {"shop_id": "shop_sc_05", "shop_name": "川味轩(知春路店)"},
+      {"shop_id": "shop_007", "shop_name": "海底捞(牡丹园店)"}
+    ]
+  },
+  "expected": {
+    "workflow_name": "discovery_decision",
+    "facets": ["ordinal_reference", "comparison_targets", "kid_friendly", "price_compare"],
+    "target_resolution": {
+      "resolved": true,
+      "source": "semantic_frame"
+    },
+    "evidence_status": {
+      "answerable": ["ordinal_reference", "comparison_targets", "kid_friendly", "price_compare"],
+      "unknown": [],
+      "failed": []
+    },
+    "decision_expectations": {
+      "winner_shop_id": null,
+      "comparison_matrix": true,
+      "uncertainty_notes": []
+    },
+    "answer_expectations": {
+      "answer_type": "comparison",
+      "allowed_claims": ["ordinal_reference", "comparison_targets", "kid_friendly", "price_compare"],
+      "required_disclaimers": []
+    },
+    "state_update_expectations": {
+      "current_shop": false,
+      "last_recommendation_list": true,
+      "comparison_targets": true,
+      "pending_clarification": false
+    }
+  }
+}

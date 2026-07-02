@@ -22,6 +22,15 @@ from .enums import (
     ToolResultStatus,
     ErrorCode,
 )
+from .facets import (
+    ConflictingFacet,
+    FacetSet,
+    QueryFacet,
+    RankingPolicy,
+    TargetResolutionResult,
+    build_target_resolution_result,
+    normalize_query_facets,
+)
 
 
 # ===================================================================
@@ -77,7 +86,11 @@ class SemanticFrame(BaseModel):
     top_intent: TopIntent | None = None
     task_type: TaskType | None = None
     primary_task: str = ""
-    facets: list["FacetSpec"] = Field(default_factory=list)
+    facets: list["QueryFacet"] = Field(default_factory=list)
+    facet_set: FacetSet | None = None
+    target_resolution: TargetResolutionResult | None = None
+    conflicting_facets: list[ConflictingFacet] = Field(default_factory=list)
+    ranking_policy: RankingPolicy | None = None
     merchant_mentions: list[str] = Field(default_factory=list)
     brand_mentions: list[str] = Field(default_factory=list)
     branch_mentions: list[str] = Field(default_factory=list)
@@ -117,19 +130,21 @@ class SemanticFrame(BaseModel):
             return value
         coerced: list[Any] = []
         for item in value:
-            if isinstance(item, FacetSpec):
+            if isinstance(item, QueryFacet):
                 coerced.append(item)
                 continue
             if isinstance(item, Facet):
-                coerced.append({"name": item, "required": False})
+                coerced.append({"name": item.value, "group": "", "required": False})
                 continue
             if isinstance(item, str):
-                coerced.append({"name": item, "required": False})
+                coerced.append({"name": item, "group": "", "required": False})
                 continue
             if isinstance(item, dict):
                 payload = dict(item)
                 if "name" not in payload and "facet" in payload:
                     payload["name"] = payload["facet"]
+                if "group" not in payload:
+                    payload["group"] = ""
                 coerced.append(payload)
                 continue
             coerced.append(item)
@@ -174,6 +189,7 @@ class PendingClarification(BaseModel):
     source_node: str = ""
     already_resolved_targets: list[dict[str, Any]] = Field(default_factory=list)
     ambiguous_target_slot: str = ""
+    resume_strategy: str = ""
 
 
 class ActiveTurnResult(BaseModel):
@@ -445,6 +461,10 @@ class ExecutionPlan(BaseModel):
     """
     plan_id: str = ""
     task_type: str = ""
+    facets: list[QueryFacet] = Field(default_factory=list)
+    target_resolution: TargetResolutionResult | None = None
+    conflicting_facets: list[ConflictingFacet] = Field(default_factory=list)
+    ranking_policy: RankingPolicy | None = None
     tool_calls: list[ToolCallSpec] = Field(default_factory=list)
     stages: list[ExecutionStage] = Field(default_factory=list)
     target_shop_ids: list[str] = Field(default_factory=list)
@@ -493,9 +513,12 @@ class EvidenceItem(BaseModel):
     shop_id: str = ""
     shop_name: str = ""
     facet: str = ""
+    subgoal_id: str = ""
+    route_step: str = ""
     tool_name: str = ""
     call_id: str = ""
     result_status: ToolResultStatus = ToolResultStatus.unknown
+    status: str = ""
     field_path: str = ""
     value: Any = None
     confidence: float = 1.0
@@ -509,11 +532,21 @@ class EvidencePack(BaseModel):
 
     Deepened per todo/04 §1 with ranking_snapshot and comparison_matrix.
     """
+    owner: str = ""
+    facets: list[QueryFacet] = Field(default_factory=list)
+    target_resolution: TargetResolutionResult | None = None
+    conflicting_facets: list[ConflictingFacet] = Field(default_factory=list)
+    ranking_policy: RankingPolicy | None = None
+    answerable_facets: list[str] = Field(default_factory=list)
+    unknown_facets: list[str] = Field(default_factory=list)
+    failed_facets: list[str] = Field(default_factory=list)
     target_shop_ids: list[str] = Field(default_factory=list)
     requested_facets: list[str] = Field(default_factory=list)
     facet_results: list[dict[str, Any]] = Field(default_factory=list)
     evidence_items: list[EvidenceItem] = Field(default_factory=list)
     unknown_items: list[EvidenceItem] = Field(default_factory=list)
+    route_steps: list[dict[str, Any]] = Field(default_factory=list)
+    last_recommendation_list: list[dict[str, Any]] = Field(default_factory=list)
     forbidden_claims: list[str] = Field(default_factory=list)
     ranking_snapshot: dict[str, Any] | None = None
     comparison_matrix: dict[str, Any] | None = None
@@ -607,6 +640,14 @@ class AnswerPlan(BaseModel):
     Deepened per todo/04 §3 with ranking/comparison references.
     """
     answer_type: str = ""  # single_shop | recommendation | comparison | clarification | error
+    facets: list[QueryFacet] = Field(default_factory=list)
+    target_resolution: TargetResolutionResult | None = None
+    conflicting_facets: list[ConflictingFacet] = Field(default_factory=list)
+    ranking_policy: RankingPolicy | None = None
+    answerable_facets: list[str] = Field(default_factory=list)
+    unknown_facets: list[str] = Field(default_factory=list)
+    failed_facets: list[str] = Field(default_factory=list)
+    required_disclaimers: list[str] = Field(default_factory=list)
     target_shop_ids: list[str] = Field(default_factory=list)
     response_sections: list[dict[str, Any]] = Field(default_factory=list)
     allowed_claims: list[AllowedClaim] = Field(default_factory=list)
@@ -718,6 +759,13 @@ class OrchestrationDecision(BaseModel):
     missing_fields: list[str] = Field(default_factory=list)
     next_action: str = "run_workflow"
 
+    @field_validator("workflow_name", mode="before")
+    @classmethod
+    def _reject_multi_value_workflow_name(cls, value: Any) -> Any:
+        if isinstance(value, (list, tuple, set)):
+            raise ValueError("workflow_name must be a single value")
+        return value
+
     @field_validator("orchestration_pattern", "workflow_name")
     @classmethod
     def _validate_pattern(cls, value: str) -> str:
@@ -778,6 +826,10 @@ class DecisionPlan(BaseModel):
     decision_context: dict[str, Any] = Field(default_factory=dict)
     candidate_summaries: list[dict[str, Any]] = Field(default_factory=list)
     must_mention_unknowns: list[str] = Field(default_factory=list)
+    answerable_facets: list[str] = Field(default_factory=list)
+    unknown_facets: list[str] = Field(default_factory=list)
+    failed_facets: list[str] = Field(default_factory=list)
+    required_disclaimers: list[str] = Field(default_factory=list)
     conversation_continuity: dict[str, Any] = Field(default_factory=dict)
 
 

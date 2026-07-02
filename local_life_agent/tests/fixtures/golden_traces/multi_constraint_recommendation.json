@@ -1,0 +1,33 @@
+{
+  "query": "附近推荐几家适合约会、现在营业、最好有券、人均100左右的餐厅",
+  "initial_state": {},
+  "expected": {
+    "workflow_name": "discovery_decision",
+    "facets": ["nearby", "restaurant", "date_scene", "open_now", "coupon", "budget_around_x"],
+    "target_resolution": {
+      "resolved": false,
+      "source": null
+    },
+    "evidence_status": {
+      "answerable": ["nearby", "restaurant", "date_scene", "open_now", "coupon", "budget_around_x"],
+      "unknown": [],
+      "failed": []
+    },
+    "decision_expectations": {
+      "winner_shop_id": null,
+      "comparison_matrix": false,
+      "uncertainty_notes": []
+    },
+    "answer_expectations": {
+      "answer_type": "recommendation",
+      "allowed_claims": ["nearby", "restaurant", "date_scene", "open_now", "coupon", "budget_around_x"],
+      "required_disclaimers": []
+    },
+    "state_update_expectations": {
+      "current_shop": false,
+      "last_recommendation_list": true,
+      "comparison_targets": false,
+      "pending_clarification": false
+    }
+  }
+}

@@ -12,6 +12,22 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class SessionValueMeta(BaseModel):
+    """Traceable metadata attached to a session slot.
+
+    P5 uses this as a minimal carrier for source / ttl / evidence / location
+    context without changing the primary session value shape.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    source: str = ""
+    ttl: int | None = None
+    evidence_ref: str = ""
+    location_context: dict[str, Any] = Field(default_factory=dict)
+    resume_strategy: str = ""
+
+
 class SessionState(BaseModel):
     """Persistent session context across turns.
     
@@ -21,10 +37,14 @@ class SessionState(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     current_shop: dict | None = None
+    current_shop_meta: SessionValueMeta = Field(default_factory=SessionValueMeta)
     last_recommendation_list: list[dict] = Field(default_factory=list)
+    last_recommendation_list_meta: SessionValueMeta = Field(default_factory=SessionValueMeta)
     active_constraints: dict[str, Any] = Field(default_factory=dict)
     pending_clarification: dict | None = None
+    pending_clarification_meta: SessionValueMeta = Field(default_factory=SessionValueMeta)
     comparison_targets: list[dict] = Field(default_factory=list)
+    comparison_targets_meta: SessionValueMeta = Field(default_factory=SessionValueMeta)
     comparison_result: Any = None
     suggested_shop: dict | None = None
 

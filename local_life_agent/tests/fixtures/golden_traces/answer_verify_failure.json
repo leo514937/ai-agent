@@ -1,0 +1,35 @@
+{
+  "query": "这家有券吗？现在开着吗？离我多远？",
+  "initial_state": {
+    "current_shop": {"shop_id": "shop_sc_05", "shop_name": "川味轩(知春路店)"}
+  },
+  "expected": {
+    "workflow_name": "deterministic_tool",
+    "facets": ["current_shop", "coupon", "open_now", "distance"],
+    "target_resolution": {
+      "resolved": true,
+      "source": "current_shop"
+    },
+    "evidence_status": {
+      "answerable": ["current_shop", "coupon", "open_now", "distance"],
+      "unknown": [],
+      "failed": []
+    },
+    "decision_expectations": {
+      "winner_shop_id": "shop_sc_05",
+      "comparison_matrix": false,
+      "uncertainty_notes": []
+    },
+    "answer_expectations": {
+      "answer_type": "single_shop_query",
+      "allowed_claims": ["coupon", "open_now", "distance"],
+      "required_disclaimers": []
+    },
+    "state_update_expectations": {
+      "current_shop": false,
+      "last_recommendation_list": false,
+      "comparison_targets": false,
+      "pending_clarification": false
+    }
+  }
+}

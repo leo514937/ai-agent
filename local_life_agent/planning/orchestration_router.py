@@ -13,7 +13,9 @@ from ..domain.candidate import GoalType
 from ..domain.enums import TaskType, TopIntent
 from ..domain.graph_state import GraphState
 from ..domain.schemas import OrchestrationDecision
+from ..domain.facets import build_target_resolution_result, normalize_query_facets
 from .goal.goal_planner import _infer_explicit_mentions_from_text
+from ..target.reference_resolver import resolve_comparison_targets, resolve_references
 
 _DIRECT_TOP_INTENTS = {
     TopIntent.chat.value,
@@ -435,7 +437,8 @@ def _session_value(state: GraphState, field: str) -> Any:
 
 def _extract_facets(state: GraphState) -> list[str]:
     semantic_frame = _to_dict(state.get("semantic_frame"))
-    raw_facets = semantic_frame.get("facets") or []
+    facet_set = _to_dict(semantic_frame.get("facet_set"))
+    raw_facets = facet_set.get("facets") or semantic_frame.get("facets") or state.get("facets") or []
     facets: list[str] = []
     for item in raw_facets:
         if isinstance(item, str):
@@ -446,6 +449,12 @@ def _extract_facets(state: GraphState) -> list[str]:
             name = _as_str(item.get("name") or item.get("facet"))
             if name:
                 facets.append(name)
+            elif item.get("group") and item.get("value"):
+                facets.append(_as_str(item.get("value")))
+            continue
+        name = _as_str(getattr(item, "name", "") or getattr(item, "facet", ""))
+        if name:
+            facets.append(name)
     return facets
 
 
@@ -546,6 +555,28 @@ def _has_reference_failure(state: GraphState) -> bool:
     return False
 
 
+def _has_comparison_signal(state: GraphState) -> bool:
+    semantic_frame = _to_dict(state.get("semantic_frame"))
+    raw_text = _extract_text(state)
+    return bool(
+        semantic_frame.get("comparison_targets")
+        or state.get("comparison_targets")
+        or semantic_frame.get("comparison_focus")
+        or any(token in raw_text for token in ("比", "对比"))
+    )
+
+
+def _has_reference_signal(state: GraphState) -> bool:
+    semantic_frame = _to_dict(state.get("semantic_frame"))
+    raw_text = _extract_text(state)
+    return bool(
+        semantic_frame.get("reference_mentions")
+        or semantic_frame.get("ordinal_references")
+        or semantic_frame.get("deictic_references")
+        or any(token in raw_text for token in ("这家", "那家", "它", "这间", "那间", "第一家", "第二家", "第三家"))
+    )
+
+
 def _route_task_from_single_shop(state: GraphState, facets: list[str]) -> str:
     if not facets:
         primary_task = _extract_primary_task(state).lower()
@@ -598,11 +629,23 @@ def normalize_route_task(state: GraphState) -> str:
     has_session_current_shop = bool(_to_dict(_session_value(state, "current_shop")).get("shop_id") or _to_dict(_session_value(state, "current_shop")).get("shop_name"))
     has_session_recommendations = bool(_session_value(state, "last_recommendation_list"))
 
-    if (task_type == TaskType.single_shop_query.value or goal_type == TaskType.single_shop_query.value) and not _has_verified_single_shop_anchor(state) and not _has_deterministic_target_hints(state):
-        return "missing_required_slot"
-
     if _has_pending_clarification(state):
         return "reference_failed"
+
+    comparison_requested = task_type in {"comparison", "deal_compare"} or goal_type in {"comparison", "deal_compare"} or _has_comparison_signal(state)
+    if comparison_requested:
+        semantic_comparison_targets = [item for item in (semantic_frame.get("comparison_targets") or []) if item]
+        state_comparison_targets = [item for item in (state.get("comparison_targets") or []) if item]
+        comparison_resolution = resolve_comparison_targets(raw_text_original, state, semantic_frame)
+        resolved_targets = list(comparison_resolution.get("targets") or [])
+        if len(semantic_comparison_targets) >= 2 or len(state_comparison_targets) >= 2 or len(resolved_targets) >= 2:
+            if task_type in {"comparison", "deal_compare"}:
+                return task_type
+            if goal_type in {"comparison", "deal_compare"}:
+                return goal_type
+            return "comparison"
+        if comparison_resolution.get("unresolved_targets") or comparison_resolution.get("ambiguous_target") or _has_comparison_signal(state):
+            return "missing_required_slot"
 
     if _count_single_shop_signal_groups(state) <= 1:
         has_raw_deictic = any(token in raw_text_original for token in ("这家", "那家", "它", "这间", "那间"))
@@ -659,6 +702,45 @@ def normalize_route_task(state: GraphState) -> str:
 
     if task_type == TaskType.coupon_query.value:
         return "shop_coupon"
+
+    reference_requested = task_type == TaskType.single_shop_query.value or goal_type == TaskType.single_shop_query.value or _has_reference_signal(state)
+    if reference_requested:
+        reference_resolution = resolve_references(raw_text_original, state, semantic_frame)
+        reference_status = str(reference_resolution.get("status", "") or "").lower()
+        if reference_status in {"resolved", "resolved_list"} or _has_verified_single_shop_anchor(state) or _has_deterministic_target_hints(state):
+            if len({facet for facet in facets if facet}) > 1:
+                return "recommendation"
+            route_task = _route_task_from_single_shop(state, facets)
+            if route_task != "unknown":
+                return route_task
+            if "有券" in raw_text or "优惠券" in raw_text or "coupon" in raw_text:
+                return "shop_coupon"
+            if "营业" in raw_text or "开门" in raw_text or "open" in raw_text:
+                return "shop_status"
+            if "距离" in raw_text or "多远" in raw_text or "eta" in raw_text:
+                return "shop_distance"
+            if "评价" in raw_text or "review" in raw_text:
+                return "shop_review_summary"
+            if "场景" in raw_text or "适合" in raw_text or "scene" in raw_text:
+                return "shop_scene_fit"
+            if "价格" in raw_text or "多少钱" in raw_text or "price" in raw_text:
+                return "shop_price"
+            if primary_task:
+                if any(token in primary_task for token in ("coupon", "券")):
+                    return "shop_coupon"
+                if any(token in primary_task for token in ("status", "open", "营业")):
+                    return "shop_status"
+                if any(token in primary_task for token in ("distance", "eta", "距离")):
+                    return "shop_distance"
+                if any(token in primary_task for token in ("review", "summary", "评价")):
+                    return "shop_review_summary"
+                if any(token in primary_task for token in ("scene", "fit", "场景")):
+                    return "shop_scene_fit"
+                if any(token in primary_task for token in ("price", "价格", "费用")):
+                    return "shop_price"
+            return "unknown"
+        if reference_status in {"ambiguous", "out_of_range", "unresolved"} or _has_reference_signal(state):
+            return "missing_required_slot"
 
     if task_type == TaskType.single_shop_query.value or goal_type == TaskType.single_shop_query.value:
         if not _has_verified_single_shop_anchor(state) and not _has_deterministic_target_hints(state):
@@ -1069,7 +1151,18 @@ def route_orchestration(state: GraphState) -> dict[str, Any]:
         if raw_decision.model_dump() != decision.model_dump():
             error_code = "ORCHESTRATION_VALIDATION_FALLBACK"
             error_message = decision.workflow_reason or "orchestration decision normalized by validator"
-        return _decision_patch(decision, error_code=error_code, error_message=error_message)
+        facet_set = normalize_query_facets(state.get("semantic_frame"), state.get("session_state_before") or state.get("session_state"), _extract_text(state))
+        patch = _decision_patch(decision, error_code=error_code, error_message=error_message)
+        patch.update(
+            {
+                "facet_set": facet_set,
+                "facets": facet_set.facets,
+                "target_resolution": facet_set.target_resolution or build_target_resolution_result(state.get("semantic_frame"), session_state=state.get("session_state_before") or state.get("session_state"), raw_text=_extract_text(state)),
+                "conflicting_facets": facet_set.conflicting_facets,
+                "ranking_policy": facet_set.ranking_policy,
+            }
+        )
+        return patch
     except Exception as exc:
         fallback = OrchestrationDecision(
             orchestration_pattern="clarification_fallback",
@@ -1083,11 +1176,13 @@ def route_orchestration(state: GraphState) -> dict[str, Any]:
             missing_fields=["semantic_frame"],
             next_action="clarify",
         )
-        return _decision_patch(
+        patch = _decision_patch(
             fallback,
             error_code="ORCHESTRATION_ROUTER_EXCEPTION",
             error_message=str(exc),
         )
+        patch.update({"facet_set": None, "facets": [], "target_resolution": None, "conflicting_facets": [], "ranking_policy": None})
+        return patch
 
 
 def build_orchestration_shadow_patch(state: GraphState) -> dict[str, Any]:
