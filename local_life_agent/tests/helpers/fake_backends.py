@@ -338,6 +338,32 @@ class FakeComplexQueryLLMBackend(SpyRealLLMBackend):
             )
             return payload
 
+        if "这家有券吗" in compact or "这家店有券吗" in compact:
+            payload.update(
+                {
+                    "task_type": "single_shop_query",
+                    "primary_task": "coupon_query",
+                    "facets": [
+                        _facet("current_shop", "reference", True),
+                        _facet("coupon", "deal", True),
+                    ],
+                    "merchant_mentions": [],
+                    "reference_mentions": ["这家"],
+                    "comparison_targets": [],
+                    "ordinal_references": [],
+                    "deictic_references": ["这家"],
+                    "focused_facets": ["current_shop", "coupon"],
+                    "comparison_focus": "",
+                    "hard_constraints": {},
+                    "soft_preferences": {},
+                    "ranking_signals": {"query_terms": ["这家"], "requested_facets": ["coupon"]},
+                    "follow_up": {"is_follow_up": True, "refine_action": "resolve_current_shop"},
+                    "confidence": 0.98,
+                    "need_context": True,
+                }
+            )
+            return payload
+
         if "海底捞人民广场店" in compact or "我说的是海底捞人民广场店" in compact:
             payload.update(
                 {
@@ -504,7 +530,25 @@ class FakeComplexQueryLLMBackend(SpyRealLLMBackend):
             return payload
 
         if "格式异常" in compact or "LLM返回格式异常" in compact:
-            return {"top_intent": "local_life", "task_type": "recommendation", "primary_task": "recommendation", "facets": [], "merchant_mentions": [], "reference_mentions": [], "comparison_targets": [], "ordinal_references": [], "deictic_references": [], "focused_facets": [], "comparison_focus": "", "hard_constraints": {}, "soft_preferences": {}, "ranking_signals": {}, "follow_up": None, "confidence": 0.75, "need_context": False}
+            return {
+                "top_intent": "local_life",
+                "task_type": "unknown",
+                "primary_task": "unknown",
+                "facets": [],
+                "merchant_mentions": [],
+                "reference_mentions": [],
+                "comparison_targets": [],
+                "ordinal_references": [],
+                "deictic_references": [],
+                "focused_facets": [],
+                "comparison_focus": "",
+                "hard_constraints": {},
+                "soft_preferences": {},
+                "ranking_signals": {},
+                "follow_up": None,
+                "confidence": 0.12,
+                "need_context": True,
+            }
 
         return payload
 

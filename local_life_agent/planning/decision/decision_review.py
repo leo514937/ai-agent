@@ -29,7 +29,7 @@ from __future__ import annotations
 from typing import Any
 
 from ...domain.decision import DecisionPlan, DecisionReviewResult
-from ...domain.evidence import EvidenceReviewResult
+from ...domain.evidence import EvidenceReviewAction, EvidenceReviewResult
 from ...domain.goal import GoalPlan
 from ..policies.review_policy import SufficiencyCheckResult
 
@@ -64,6 +64,22 @@ def _evidence_review_violations(
     if fae:
         return True, "failed_as_empty_detected_by_evidence_review"
     return False, ""
+
+
+def _evidence_review_action(
+    evidence_review: EvidenceReviewResult | dict[str, Any] | None,
+) -> str:
+    if evidence_review is None:
+        return ""
+    if isinstance(evidence_review, EvidenceReviewResult):
+        action = getattr(evidence_review, "action", "")
+        if isinstance(action, EvidenceReviewAction):
+            return action.value
+        return str(action or "").strip()
+    action = evidence_review.get("action", "") if isinstance(evidence_review, dict) else ""
+    if isinstance(action, EvidenceReviewAction):
+        return action.value
+    return str(action or "").strip()
 
 
 def _can_determine_winner(
@@ -166,6 +182,38 @@ def review_decision(
     missing_facets: list[str] = []
     unknown_facets: list[str] = []
     failed_facets: list[str] = []
+    evidence_action = _evidence_review_action(evidence_review)
+
+    if evidence_action in {
+        EvidenceReviewAction.CLARIFY.value,
+        EvidenceReviewAction.FALLBACK.value,
+        EvidenceReviewAction.DEGRADE.value,
+        EvidenceReviewAction.RETRY.value,
+        EvidenceReviewAction.REPLAN_MISSING_FACETS.value,
+        EvidenceReviewAction.EXPAND_SEARCH.value,
+    }:
+        action_map = {
+            EvidenceReviewAction.CLARIFY.value: "CLARIFY",
+            EvidenceReviewAction.FALLBACK.value: "FALLBACK",
+            EvidenceReviewAction.DEGRADE.value: "DEGRADE_ANSWER",
+            EvidenceReviewAction.RETRY.value: "REPLAN_EVIDENCE",
+            EvidenceReviewAction.REPLAN_MISSING_FACETS.value: "REPLAN_EVIDENCE",
+            EvidenceReviewAction.EXPAND_SEARCH.value: "EXPAND_SEARCH",
+        }
+        next_action = action_map[evidence_action]
+        status = "partial" if next_action == "DEGRADE_ANSWER" else "insufficient"
+        return DecisionReviewResult(
+            stage="decision_review",
+            status=status,
+            next_action=next_action,
+            reason=f"evidence_review_action:{evidence_action}",
+            trace_payload={
+                "evidence_review_action": evidence_action,
+                "retry_budget_remaining": _to_dict(evidence_review).get("retry_budget_remaining") if evidence_review is not None else None,
+                "expand_search_budget_remaining": _to_dict(evidence_review).get("expand_search_budget_remaining") if evidence_review is not None else None,
+                "replan_budget_remaining": _to_dict(evidence_review).get("replan_budget_remaining") if evidence_review is not None else None,
+            },
+        )
 
     # --- 1. No DecisionPlan at all → FALLBACK ---
     if decision_plan is None:

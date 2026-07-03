@@ -26,6 +26,12 @@ from local_life_agent.streaming.runtime import (
     bind_turn_control,
     get_turn_registry,
 )
+from local_life_agent.streaming.preview_policy import sanitize_preview_text
+from local_life_agent.streaming.status_events import (
+    make_preview_block,
+    make_status_block,
+    make_trace_block,
+)
 from local_life_agent.session.store import get_session_store
 
 app = FastAPI(title="Local Life Agent Service", version="1.0.0")
@@ -114,15 +120,13 @@ def _stream_chat_events(request: ChatRequest):
     def event_stream():
         disconnected = False
         try:
-            yield _event_block(
-                "trace_started",
-                {
-                    "event_type": "trace_started",
-                    "trace_id": trace_id,
-                    "session_id": session_id,
-                    "turn_id": turn_id,
-                    "payload": {"workflow_version": "hm-dianping-python/v1"},
-                },
+            yield make_trace_block(
+                trace_id,
+                session_id,
+                turn_id,
+                "hm-dianping-python/v1",
+                page=request.page,
+                user_id=request.user_id,
             )
             yield _event_block(
                 "input_normalized",
@@ -150,6 +154,16 @@ def _stream_chat_events(request: ChatRequest):
                         "payload": {"delta_text": delta},
                     },
                 )
+                preview_text = sanitize_preview_text(delta, verified=False)
+                if preview_text:
+                    yield make_preview_block(
+                        trace_id,
+                        session_id,
+                        turn_id,
+                        preview_text,
+                        verified=False,
+                        source="answer_delta",
+                    )
 
             response = result_box.get("response")
             answer_text = getattr(response, "answer_text", "") if response is not None else ""
@@ -179,11 +193,19 @@ def _stream_chat_events(request: ChatRequest):
                 "final",
                 {
                     "event_type": "final",
-                    "trace_id": trace_id,
-                    "session_id": session_id,
-                    "turn_id": turn_id,
-                    "payload": final_payload,
-                },
+                "trace_id": trace_id,
+                "session_id": session_id,
+                "turn_id": turn_id,
+                "payload": {**final_payload, "verified": True},
+            },
+            )
+            yield make_status_block(
+                trace_id,
+                session_id,
+                turn_id,
+                "completed",
+                stage="streaming",
+                detail={"verified": True, "card_count": len(cards or [])},
             )
         finally:
             if not finished.is_set():

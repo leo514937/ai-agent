@@ -529,6 +529,18 @@ def _resolved_shop_ids_from_state(state: GraphState) -> set[str]:
         sid = str(data.get("shop_id", "")).strip()
         if sid:
             resolved_ids.add(sid)
+    for source in (state.get("canonical_shop_entity"),):
+        if source is None:
+            continue
+        data = _to_dict(source)
+        sid = str(data.get("shop_id", "")).strip()
+        if sid:
+            resolved_ids.add(sid)
+    for item in state.get("canonical_shop_entities", []) or []:
+        data = _to_dict(item)
+        sid = str(data.get("shop_id", "")).strip()
+        if sid:
+            resolved_ids.add(sid)
     for item in state.get("comparison_targets", []) or []:
         data = _to_dict(item)
         resolved_shop = data.get("resolved_shop") or data.get("shop") or {}

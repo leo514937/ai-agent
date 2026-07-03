@@ -56,6 +56,29 @@ def _h_state_update_plan(state: GraphState) -> dict:
         resolved_status = getattr(resolved, "status", "") or _session_state_dict(resolved).get("status", "")
     task_type = state.get("task_type")
     task_type_value = task_type.value if hasattr(task_type, "value") else str(task_type or "")
+    comparison_target_resolution = _to_dict(state.get("comparison_target_resolution"))
+    semantic_frame = _to_dict(state.get("semantic_frame"))
+    state_comparison_targets = list(state.get("comparison_targets", []) or [])
+    semantic_comparison_targets = list(semantic_frame.get("comparison_targets", []) or [])
+    comparison_targets_source = ""
+    if state_comparison_targets:
+        comparison_targets_source = "comparison_targets"
+    elif comparison_target_resolution.get("targets"):
+        comparison_targets_source = "comparison_target_resolution"
+    elif semantic_comparison_targets:
+        comparison_targets_source = "semantic_frame.comparison_targets"
+    comparison_targets = (
+        comparison_target_resolution.get("targets")
+        or state_comparison_targets
+        or semantic_comparison_targets
+    )
+    if not comparison_target_resolution and task_type_value == TaskType.comparison.value and comparison_targets:
+        comparison_target_resolution = {
+            "status": "RESOLVED" if len(comparison_targets) >= 2 else "NEED_CLARIFICATION",
+            "targets": list(comparison_targets),
+            "unresolved_targets": [],
+            "reason": "comparison_targets_resolved" if len(comparison_targets) >= 2 else "comparison_targets_need_clarification",
+        }
     turn_context = {
         "workflow_name": state.get("workflow_name"),
         "local_life_goal_draft": state.get("local_life_goal_draft"),
@@ -69,7 +92,9 @@ def _h_state_update_plan(state: GraphState) -> dict:
         "task_type_source": state.get("task_type_source"),
         "active_turn_result": state.get("active_turn_result"),
         "last_recommendation_list": state.get("last_recommendation_list", []),
-        "comparison_targets": state.get("comparison_targets", []),
+        "comparison_targets": comparison_targets,
+        "comparison_targets_source": comparison_targets_source,
+        "comparison_target_resolution": comparison_target_resolution,
         "resolution_stage": state.get("resolution_stage", ""),
         "user_location": state.get("user_location"),
         "evidence_pack": state.get("evidence_pack"),
@@ -84,7 +109,7 @@ def _h_state_update_plan(state: GraphState) -> dict:
                     "shop_id": str(item.get("shop_id", "")).strip(),
                     "shop_name": str(item.get("shop_name", "")).strip(),
                 }
-                for item in (state.get("comparison_targets") or [])
+                for item in (comparison_targets or [])
                 if str(item.get("shop_id", "")).strip() or str(item.get("shop_name", "")).strip()
             ]
         }
@@ -128,6 +153,24 @@ def _h_persist_session(state: GraphState) -> dict:
             elif isinstance(default_value, (list, dict, set)):
                 default_value = type(default_value)(default_value)
             setattr(session_state, field_name, default_value)
+    comparison_resolution = _to_dict(state.get("comparison_target_resolution"))
+    if str(comparison_resolution.get("status", "") or "").upper() == "RESOLVED":
+        resolved_targets = [
+            _to_dict(item)
+            for item in (comparison_resolution.get("targets") or [])
+            if str(_to_dict(item).get("shop_id", "") or "").strip() or str(_to_dict(item).get("shop_name", "") or "").strip()
+        ]
+        if resolved_targets:
+            session_state.comparison_targets = resolved_targets
+    if not getattr(session_state, "comparison_targets", None):
+        comparison_result = _to_dict(state.get("comparison_result"))
+        comparison_rows = [
+            _to_dict(item)
+            for item in (comparison_result.get("rows") or [])
+            if str(_to_dict(item).get("shop_id", "") or "").strip() or str(_to_dict(item).get("shop_name", "") or "").strip()
+        ]
+        if comparison_rows and not state.get("pending_clarification"):
+            session_state.comparison_targets = comparison_rows
     store = get_session_store()
     store.save(str(state.get("session_id", "") or ""), session_state)
     return {

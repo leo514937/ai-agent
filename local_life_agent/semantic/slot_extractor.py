@@ -144,7 +144,7 @@ def _extract_merchant_mentions(text: str) -> list[str]:
     mentions: list[str] = []
     for token, canonical in _shop_tokens():
         if token and token in normalized:
-            mentions.append(canonical)
+            mentions.append(token)
     return _dedupe(mentions)
 
 
@@ -218,7 +218,7 @@ def _alias_hints(text: str) -> list[str]:
     hits: list[str] = []
     for token, canonical in _shop_tokens():
         if token and token in normalized:
-            hits.append(canonical)
+            hits.append(token)
     return _dedupe(hits)
 
 

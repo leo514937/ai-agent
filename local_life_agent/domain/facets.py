@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .enums import Facet
 
@@ -115,6 +115,17 @@ class TargetResolutionResult(BaseModel):
     reference_type: str | None = None
     unresolved_reason: str | None = None
     comparison_targets: list[dict[str, Any]] = Field(default_factory=list)
+
+    @field_validator("comparison_targets", mode="before")
+    @classmethod
+    def _coerce_comparison_targets(cls, value: Any) -> list[dict[str, Any]]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [item for item in value if item is not None]
+        if isinstance(value, (tuple, set)):
+            return [item for item in value if item is not None]
+        return [value]
 
 
 class FacetSet(BaseModel):

@@ -19,12 +19,16 @@ from ...domain.candidate import GoalType, LocalLifeGoalDraft
 from ...domain.evidence import (
     FAILURE_STATUSES,
     FINAL_STATUSES,
+    EvidenceReviewAction,
     EvidenceReviewResult,
     FacetEvidence,
+    ToolFailure,
+    ToolFailureType,
     ToolStatus,
 )
 from ...observability.file_logger import log_kv
 from ..policies.review_policy import NextAction
+from ..freshness.freshness_policy import FreshnessClass, freshness_policy_for_facet
 from ..llm_utils import invoke_structured_llm, model_validate_or_error
 
 _logger = logging.getLogger(__name__)
@@ -171,6 +175,47 @@ def _detect_failed_as_empty(
     return False
 
 
+def _tool_failure_type(status: ToolStatus, raw_status: str) -> ToolFailureType:
+    if status == ToolStatus.TIMEOUT or raw_status == "timeout":
+        return ToolFailureType.TIMEOUT
+    if raw_status in {"network_error", "network"}:
+        return ToolFailureType.NETWORK_ERROR
+    if raw_status in {"backend_error", "backend_unavailable", "circuit_open"}:
+        return ToolFailureType.BACKEND_ERROR
+    if raw_status in {"invalid_response", "invalid", "malformed"}:
+        return ToolFailureType.INVALID_RESPONSE
+    if status == ToolStatus.UNSUPPORTED or raw_status == "unsupported":
+        return ToolFailureType.UNSUPPORTED_FACET
+    if raw_status in {"missing_input", "missing", "invalid_argument"}:
+        return ToolFailureType.MISSING_INPUT
+    if raw_status == "empty":
+        return ToolFailureType.EMPTY_RESULT
+    return ToolFailureType.UNKNOWN
+
+
+def _is_retryable_failure(failure_type: ToolFailureType) -> bool:
+    return failure_type in {
+        ToolFailureType.TIMEOUT,
+        ToolFailureType.NETWORK_ERROR,
+        ToolFailureType.BACKEND_ERROR,
+    }
+
+
+def _normalise_str_list(values: Any) -> list[str]:
+    result: list[str] = []
+    if isinstance(values, (list, tuple, set)):
+        iterable = values
+    elif values is None:
+        iterable = []
+    else:
+        iterable = [values]
+    for item in iterable:
+        text = str(item or "").strip()
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
 def review_evidence(
     goal: LocalLifeGoalDraft,
     evidence_pack: dict[str, Any],
@@ -215,28 +260,93 @@ def review_evidence(
     )
 
     result = EvidenceReviewResult()
+    retry_budget_remaining = int(evidence_pack.get("retry_budget_remaining", 1) or 0)
+    expand_search_budget_remaining = int(evidence_pack.get("expand_search_budget_remaining", 1) or 0)
+    replan_budget_remaining = int(evidence_pack.get("replan_budget_remaining", 1) or 0)
+    rewrite_budget_remaining = int(evidence_pack.get("rewrite_budget_remaining", 1) or 0)
+    tool_round_budget_remaining = int(evidence_pack.get("tool_round_budget_remaining", 1) or 0)
+    facet_enrich_budget_remaining = int(evidence_pack.get("facet_enrich_budget_remaining", 1) or 0)
+    deadline_remaining_ms = evidence_pack.get("deadline_remaining_ms")
+    budget_context_snapshot = dict(evidence_pack.get("budget_context_snapshot") or {})
+    budget_exhausted_reasons = _normalise_str_list(evidence_pack.get("budget_exhausted_reasons"))
+    stale_facets = _normalise_str_list(evidence_pack.get("stale_facets"))
+    expired_facets = _normalise_str_list(evidence_pack.get("expired_facets"))
+    disclaimer_facets = _normalise_str_list(evidence_pack.get("disclaimer_facets"))
+    missing_input = [str(item).strip() for item in (evidence_pack.get("missing_input") or []) if str(item).strip()]
+    clarification_needed = bool(evidence_pack.get("clarification_needed", False))
 
     # Classify required facets
+    answerable_facets: list[str] = []
+    unknown_facets: list[str] = []
+    failed_facets: list[str] = []
+    retryable_facets: list[str] = []
+    tool_failures: list[ToolFailure] = []
     for fe in required_evidence:
         if fe.status == ToolStatus.OK:
             result.required_ok.append(fe.facet)
+            if fe.facet not in answerable_facets:
+                answerable_facets.append(fe.facet)
         elif fe.status == ToolStatus.EMPTY:
             result.required_empty.append(fe.facet)
+            if fe.facet not in unknown_facets:
+                unknown_facets.append(fe.facet)
         elif fe.status == ToolStatus.UNKNOWN:
             result.required_unknown.append(fe.facet)
+            if fe.facet not in unknown_facets:
+                unknown_facets.append(fe.facet)
         elif fe.status in (ToolStatus.FAILED, ToolStatus.TIMEOUT, ToolStatus.UNSUPPORTED):
             result.required_failed.append(fe.facet)
+            if fe.facet not in failed_facets:
+                failed_facets.append(fe.facet)
+            failure_type = _tool_failure_type(fe.status, str(fe.payload.get("result_status") or "unknown").lower())
+            retryable = _is_retryable_failure(failure_type)
+            if retryable and fe.facet not in retryable_facets:
+                retryable_facets.append(fe.facet)
+            tool_failures.append(
+                ToolFailure(
+                    tool_name=fe.tool_name or None,
+                    facet=fe.facet or None,
+                    target_shop_id=fe.shop_id or None,
+                    failure_type=failure_type,
+                    retryable=retryable,
+                    message=str(fe.payload.get("error_message", "") or "") or None,
+                    evidence_ref=str(fe.payload.get("evidence_id", "") or "") or None,
+                )
+            )
 
     # Classify optional facets
     for fe in optional_evidence:
         if fe.status == ToolStatus.OK:
             result.optional_ok.append(fe.facet)
+            if fe.facet not in answerable_facets:
+                answerable_facets.append(fe.facet)
         elif fe.status == ToolStatus.EMPTY:
             result.optional_empty.append(fe.facet)
+            if fe.facet not in unknown_facets:
+                unknown_facets.append(fe.facet)
         elif fe.status == ToolStatus.UNKNOWN:
             result.optional_unknown.append(fe.facet)
+            if fe.facet not in unknown_facets:
+                unknown_facets.append(fe.facet)
         elif fe.status in (ToolStatus.FAILED, ToolStatus.TIMEOUT, ToolStatus.UNSUPPORTED):
             result.optional_failed.append(fe.facet)
+            if fe.facet not in failed_facets:
+                failed_facets.append(fe.facet)
+            failure_type = _tool_failure_type(fe.status, str(fe.payload.get("result_status") or "unknown").lower())
+            retryable = _is_retryable_failure(failure_type)
+            if retryable and fe.facet not in retryable_facets:
+                retryable_facets.append(fe.facet)
+            tool_failures.append(
+                ToolFailure(
+                    tool_name=fe.tool_name or None,
+                    facet=fe.facet or None,
+                    target_shop_id=fe.shop_id or None,
+                    failure_type=failure_type,
+                    retryable=retryable,
+                    message=str(fe.payload.get("error_message", "") or "") or None,
+                    evidence_ref=str(fe.payload.get("evidence_id", "") or "") or None,
+                )
+            )
 
     # Detect unknown_as_false and failed_as_empty
     result.unknown_as_false_detected = _detect_unknown_as_false(
@@ -245,67 +355,170 @@ def review_evidence(
     if tool_results is not None:
         result.failed_as_empty_detected = _detect_failed_as_empty(tool_results)
 
-    # --- Decision logic ---
-    all_required_determinate = (
-        not result.required_unknown and not result.required_failed
-    )
-    all_optional_determinate = (
-        not result.optional_unknown and not result.optional_failed
-    )
-    has_required = bool(req)
-    total_required = len(req)
+    result.answerable_facets = list(dict.fromkeys(answerable_facets))
+    result.unknown_facets = list(dict.fromkeys(unknown_facets))
+    result.failed_facets = list(dict.fromkeys(failed_facets))
+    result.retryable_facets = list(dict.fromkeys(retryable_facets))
+    result.tool_failures = tool_failures
+    result.retry_budget_remaining = retry_budget_remaining
+    result.expand_search_budget_remaining = expand_search_budget_remaining
+    result.replan_budget_remaining = replan_budget_remaining
+    result.rewrite_budget_remaining = rewrite_budget_remaining
+    result.tool_round_budget_remaining = tool_round_budget_remaining
+    result.facet_enrich_budget_remaining = facet_enrich_budget_remaining
+    result.deadline_remaining_ms = int(deadline_remaining_ms) if isinstance(deadline_remaining_ms, (int, float)) else None
+    result.budget_context_snapshot = budget_context_snapshot
+    result.budget_exhausted_reasons = list(dict.fromkeys(budget_exhausted_reasons))
+    result.stale_facets = list(dict.fromkeys(stale_facets))
+    result.expired_facets = list(dict.fromkeys(expired_facets))
+    result.disclaimer_facets = list(dict.fromkeys(disclaimer_facets))
 
-    if not has_required or total_required == 0:
-        # No required facets → sufficient by default
+    strong_stale_facets: list[str] = []
+    weak_stale_facets: list[str] = []
+    location_stale_facets: list[str] = []
+    for facet in list(dict.fromkeys(stale_facets + expired_facets)):
+        policy = freshness_policy_for_facet(facet)
+        if policy.freshness_class == FreshnessClass.STRONG_DYNAMIC:
+            strong_stale_facets.append(facet)
+        elif policy.freshness_class == FreshnessClass.LOCATION_BOUND:
+            location_stale_facets.append(facet)
+        elif policy.freshness_class == FreshnessClass.WEAK_DYNAMIC:
+            weak_stale_facets.append(facet)
+        elif facet not in disclaimer_facets:
+            disclaimer_facets.append(facet)
+    result.disclaimer_facets = list(dict.fromkeys(result.disclaimer_facets + weak_stale_facets))
+
+    if tool_round_budget_remaining <= 0:
+        result.budget_exhausted_reasons.append("tool_round_budget")
+    if retry_budget_remaining <= 0:
+        result.budget_exhausted_reasons.append("retry_budget")
+    if expand_search_budget_remaining <= 0:
+        result.budget_exhausted_reasons.append("expand_search_budget")
+    if rewrite_budget_remaining <= 0:
+        result.budget_exhausted_reasons.append("rewrite_budget")
+    if facet_enrich_budget_remaining <= 0:
+        result.budget_exhausted_reasons.append("facet_enrich_budget")
+    if isinstance(result.deadline_remaining_ms, int) and result.deadline_remaining_ms <= 0:
+        result.budget_exhausted_reasons.append("deadline_remaining_ms")
+    result.budget_exhausted_reasons = list(dict.fromkeys(result.budget_exhausted_reasons))
+
+    if strong_stale_facets or location_stale_facets:
+        for facet in strong_stale_facets + location_stale_facets:
+            if facet not in result.unknown_facets:
+                result.unknown_facets.append(facet)
+            if facet not in result.failed_facets and facet in result.required_failed:
+                result.failed_facets.append(facet)
+        if result.required_ok and (strong_stale_facets or location_stale_facets):
+            if tool_round_budget_remaining <= 0 or result.budget_exhausted_reasons:
+                result.action = EvidenceReviewAction.DEGRADE if result.required_ok else EvidenceReviewAction.FALLBACK
+                result.next_action = NextAction.DEGRADE_ANSWER if result.required_ok else NextAction.FALLBACK
+                result.can_degrade = bool(result.required_ok)
+                result.status = "degraded_with_warnings" if result.required_ok else "insufficient"
+                missing = strong_stale_facets + location_stale_facets
+                result.degrade_reason = f"stale_or_location_bound: {missing}" if result.required_ok else ""
+                result.fallback_reason = "" if result.required_ok else f"stale_or_location_bound: {missing}"
+                result.reason = result.degrade_reason or result.fallback_reason
+                result.next_step = "degrade_answer" if result.required_ok else "fallback"
+            else:
+                result.action = EvidenceReviewAction.DEGRADE if result.required_ok else EvidenceReviewAction.FALLBACK
+                result.next_action = NextAction.DEGRADE_ANSWER if result.required_ok else NextAction.FALLBACK
+                result.can_degrade = bool(result.required_ok)
+                result.status = "degraded_with_warnings" if result.required_ok else "insufficient"
+                missing = strong_stale_facets + location_stale_facets
+                result.degrade_reason = f"stale_or_location_bound: {missing}" if result.required_ok else ""
+                result.fallback_reason = "" if result.required_ok else f"stale_or_location_bound: {missing}"
+                result.reason = result.degrade_reason or result.fallback_reason
+                result.next_step = "degrade_answer" if result.required_ok else "fallback"
+            result.trace_payload = {
+                "required": {},
+                "optional": {},
+                "stale_facets": result.stale_facets,
+                "expired_facets": result.expired_facets,
+                "disclaimer_facets": result.disclaimer_facets,
+                "budget_exhausted_reasons": result.budget_exhausted_reasons,
+                "deadline_remaining_ms": result.deadline_remaining_ms,
+            }
+            return result
+
+    all_required_answerable = not result.required_unknown and not result.required_failed and not result.required_empty
+    all_optional_answerable = not result.optional_unknown and not result.optional_failed and not result.optional_empty
+    has_missing_input = bool(missing_input)
+    has_required = bool(req)
+
+    if clarification_needed or has_missing_input:
+        result.action = EvidenceReviewAction.CLARIFY
+        result.next_action = NextAction.CLARIFY
+        result.status = "insufficient"
+        result.clarification_reason = ", ".join(missing_input) if missing_input else "clarification_needed"
+        result.reason = result.clarification_reason
+        result.next_step = "ask_user_for_missing_input"
+    elif result.required_failed and result.retryable_facets and retry_budget_remaining > 0:
+        result.action = EvidenceReviewAction.RETRY
+        result.next_action = NextAction.REPLAN_EVIDENCE
+        result.status = "retryable_failure"
+        result.reason = f"retryable_failure: {result.retryable_facets}"
+        result.next_step = "retry_failed_tool_calls"
+    elif not has_required:
+        result.action = EvidenceReviewAction.PROCEED
         result.next_action = NextAction.FINISH
         result.status = "sufficient"
         result.reason = "no_required_facets"
-    elif all_required_determinate:
-        if all_optional_determinate:
-            result.next_action = NextAction.FINISH
-            result.status = "sufficient"
-            result.reason = "all_facets_determinate"
+        result.next_step = "proceed"
+    elif result.required_ok and (result.required_unknown or result.required_failed or result.required_empty):
+        if replan_budget_remaining > 0 and tool_round_budget_remaining > 0 and not result.budget_exhausted_reasons:
+            result.action = EvidenceReviewAction.REPLAN_MISSING_FACETS
+            result.next_action = NextAction.REPLAN_EVIDENCE
+            result.status = "degraded_with_warnings"
+            unknown_or_failed = result.required_unknown + result.required_failed + result.required_empty
+            result.missing_facets = list(dict.fromkeys(unknown_or_failed))
+            result.reason = f"required_facets_indeterminate: {unknown_or_failed}"
+            result.next_step = "replan_missing_facets"
         else:
-            # Optional indeterminate → can degrade
+            result.action = EvidenceReviewAction.DEGRADE
             result.next_action = NextAction.DEGRADE_ANSWER
             result.can_degrade = True
-            result.status = "degraded_optional"
-            unknown_or_failed = result.optional_unknown + result.optional_failed
-            result.reason = f"optional_facets_indeterminate: {unknown_or_failed}"
+            result.status = "degraded_with_warnings"
+            unknown_or_failed = result.required_unknown + result.required_failed + result.required_empty
+            result.degrade_reason = f"partial_information: {unknown_or_failed}"
+            result.reason = result.degrade_reason
+            result.next_step = "degrade_answer"
+    elif result.required_unknown and replan_budget_remaining > 0 and not result.required_failed and tool_round_budget_remaining > 0:
+        result.action = EvidenceReviewAction.REPLAN_MISSING_FACETS
+        result.next_action = NextAction.REPLAN_EVIDENCE
+        result.status = "partial_insufficient"
+        result.missing_facets = list(dict.fromkeys(result.required_unknown))
+        result.reason = f"missing_facets: {result.missing_facets}"
+        result.next_step = "replan_missing_facets"
+    elif (result.required_empty or result.optional_empty) and expand_search_budget_remaining > 0 and tool_round_budget_remaining > 0:
+        result.action = EvidenceReviewAction.EXPAND_SEARCH
+        result.next_action = NextAction.FINISH
+        result.status = "sufficient"
+        result.unknown_facets = list(dict.fromkeys(result.unknown_facets + result.required_empty + result.optional_empty))
+        result.reason = "all_facets_determinate"
+        result.next_step = "expand_search"
+    elif all_required_answerable and all_optional_answerable:
+        result.action = EvidenceReviewAction.PROCEED
+        result.next_action = NextAction.FINISH
+        result.status = "sufficient"
+        result.reason = "all_facets_determinate"
+        result.next_step = "proceed"
+    elif result.required_ok:
+        result.action = EvidenceReviewAction.DEGRADE
+        result.next_action = NextAction.DEGRADE_ANSWER
+        result.can_degrade = True
+        result.status = "degraded_with_warnings"
+        unknown_or_failed = result.required_unknown + result.required_failed + result.required_empty + result.optional_unknown + result.optional_failed + result.optional_empty
+        result.degrade_reason = f"partial_information: {unknown_or_failed}"
+        result.reason = result.degrade_reason
+        result.next_step = "degrade_answer"
     else:
-        # Some required facets are indeterminate
-        unknown_or_failed = result.required_unknown + result.required_failed
-        all_required_indeterminate = len(unknown_or_failed) == total_required
-
-        if all_required_indeterminate:
-            # All required facets failed / unknown → FALLBACK
-            result.next_action = NextAction.FALLBACK
-            result.status = "insufficient"
-            result.reason = f"all_required_facets_indeterminate: {unknown_or_failed}"
-        elif unknown_or_failed and result.required_ok:
-            # Some required OK, some not → DEGRADE_ANSWER if retriable would be wasteful
-            # For P1, degrade rather than full replan (no expand_search loop)
-            if result.unknown_as_false_detected or result.failed_as_empty_detected:
-                result.next_action = NextAction.DEGRADE_ANSWER
-                result.can_degrade = True
-                result.status = "degraded_with_warnings"
-                result.reason = (
-                    f"required_facets_indeterminate: {unknown_or_failed}"
-                    f" (unknown_as_false={result.unknown_as_false_detected}"
-                    f", failed_as_empty={result.failed_as_empty_detected})"
-                )
-            else:
-                # P1: REPLAN_EVIDENCE degrades to DEGRADE_ANSWER (no expand_search loop)
-                result.next_action = NextAction.REPLAN_EVIDENCE
-                result.can_degrade = True
-                result.status = "partial_insufficient"
-                result.reason = f"required_facets_indeterminate: {unknown_or_failed}"
-        else:
-            # Some required unknown/failed but no OK results yet
-            # Check retriability heuristic
-            result.next_action = NextAction.REPLAN_EVIDENCE
-            result.status = "insufficient"
-            result.reason = f"required_facets_indeterminate_no_ok: {unknown_or_failed}"
+        result.action = EvidenceReviewAction.FALLBACK
+        result.next_action = NextAction.FALLBACK
+        result.status = "insufficient"
+        unknown_or_failed = result.required_unknown + result.required_failed + result.required_empty + result.optional_unknown + result.optional_failed + result.optional_empty
+        result.fallback_reason = f"no_answerable_facets: {unknown_or_failed}" if unknown_or_failed else "no_answerable_facets"
+        result.reason = result.fallback_reason
+        result.next_step = "fallback"
 
     tool_results_missing = not isinstance(tool_results, dict) or not bool(tool_results)
     result.evidence_incomplete = tool_results_missing or result.next_action in (
@@ -313,6 +526,8 @@ def review_evidence(
         NextAction.CLARIFY,
         NextAction.FALLBACK,
     )
+    if not result.required_unknown and not result.required_failed and not result.required_empty:
+        result.missing_facets = list(dict.fromkeys(result.missing_facets))
 
     # Build trace payload
     result.trace_payload = {
@@ -334,6 +549,18 @@ def review_evidence(
         "next_action": result.next_action,
         "status": result.status,
         "reason": result.reason,
+        "action": result.action,
+        "retry_budget_remaining": result.retry_budget_remaining,
+        "expand_search_budget_remaining": result.expand_search_budget_remaining,
+        "replan_budget_remaining": result.replan_budget_remaining,
+        "rewrite_budget_remaining": result.rewrite_budget_remaining,
+        "tool_round_budget_remaining": result.tool_round_budget_remaining,
+        "facet_enrich_budget_remaining": result.facet_enrich_budget_remaining,
+        "deadline_remaining_ms": result.deadline_remaining_ms,
+        "budget_exhausted_reasons": result.budget_exhausted_reasons,
+        "stale_facets": result.stale_facets,
+        "expired_facets": result.expired_facets,
+        "disclaimer_facets": result.disclaimer_facets,
     }
 
     _logger.debug(

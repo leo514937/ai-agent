@@ -32,7 +32,7 @@ from .schemas import (
     TargetResolutionResult,
     ToolResult,
 )
-from .state import SessionState, SessionWriteDirective
+from .state import SessionState, StateUpdatePlan
 
 
 class GraphState(TypedDict, total=False):
@@ -77,6 +77,9 @@ class GraphState(TypedDict, total=False):
 
     # === 会话记忆 (Session Memory) — write: state_update_planner, read: context_recovery/task_router ===
     current_shop: Optional[dict]
+    canonical_shop_entity: Optional[dict]
+    canonical_shop_entities: list[dict]
+    shop_resolution_trace: list[dict]
     last_recommendation_list: list
     active_constraints: dict
     comparison_targets: list
@@ -146,7 +149,7 @@ class GraphState(TypedDict, total=False):
     final_response: str
 
     # === 状态更新 (State Update) — write: state_update_planner, read: persist_session_state ===
-    state_update_plan: Optional[SessionWriteDirective]
+    state_update_plan: Optional[StateUpdatePlan]
 
     # === 观测字段 (Observability) — append: all nodes, read: emit_response/observability ===
     event_log: Annotated[list, add]
@@ -210,5 +213,12 @@ class GraphState(TypedDict, total=False):
     tool_availability: dict
     location_status: str
     user_location: dict
+    preview_text: str
+    preview_policy_result: dict
+    stream_status: str
+    evidence_cache_key: str
+    evidence_cache_scope: str
+    evidence_cache_hit: bool
+    budget_context: dict[str, object]
 
 

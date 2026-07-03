@@ -34,6 +34,8 @@ from ...domain.schemas import AnswerPlan
 from ...domain.decision import decision_to_answer_plan
 from ...answer.verifier import verify_answer
 from ...domain.state import SessionState
+from ...planning.budget.budget_context import budget_context_from_state
+from ...streaming.preview_policy import sanitize_preview_text
 from ...observability.file_logger import get_python_service_logger, log_kv
 
 _LOGGER = get_python_service_logger()
@@ -150,7 +152,9 @@ def h_response_subgraph(state: GraphState) -> dict:
         return _state_delta(before, after, always_include={"response_route"})
 
     working = _run_step(state, _h_answer_plan_build)
-    rewrite_limit = max(0, int(_GRAPH_REWRITE_LIMIT or 0))
+    budget = budget_context_from_state(state)
+    rewrite_budget = budget.remaining("rewrite_budget")
+    rewrite_limit = max(0, min(int(_GRAPH_REWRITE_LIMIT or 0), int(rewrite_budget)))
     while True:
         working = _run_step(working, _h_answer_generate)
         working = _run_step(working, _h_answer_verify)
@@ -218,9 +222,16 @@ def _h_answer_generate(state: GraphState) -> dict:
         )
         if not txt.strip() or any(marker in txt for marker in generic_markers):
             txt = _compose_single_shop_response(state.get("evidence_pack") or {}, txt)
+    preview_text = sanitize_preview_text(txt, verified=False)
     return {
         "answer_plan": answer_plan,
         "draft_response": txt,
+        "preview_text": preview_text,
+        "preview_policy_result": {
+            "verified": False,
+            "allowed": bool(preview_text.strip()),
+            "reason": "" if preview_text.strip() else "blocked_unverified_claim",
+        },
         "answer_source": metadata.get("answer_source", "llm_verbalizer"),
         "template_degraded": metadata.get("template_degraded", False),
         "fallback_used": metadata.get("fallback_used", False),
@@ -333,19 +344,41 @@ def _h_final_response(state: GraphState) -> dict:
     txt = state.get("draft_response", "")
     return {
         "final_response": txt,
+        "preview_text": txt,
+        "preview_policy_result": {
+            "verified": True,
+            "allowed": True,
+            "reason": "verified",
+        },
         **_log(state, "final_response_build", answer_source=state.get("answer_source", ""),
               final_safety_status=state.get("final_safety_status", "safe")),
     }
 
 
+def _clarify_answer_source(state: GraphState) -> str:
+    workflow_name = str(state.get("workflow_name", "") or "")
+    if workflow_name == "clarification_fallback":
+        return "clarification_fallback_workflow"
+    pending = state.get("pending_clarification")
+    pending_source = ""
+    if isinstance(pending, dict):
+        pending_source = str(pending.get("source_node", "") or "")
+    else:
+        pending_source = str(getattr(pending, "source_node", "") or "")
+    if pending_source == "deterministic_tool_workflow":
+        return "clarification_fallback_workflow"
+    return "clarify_message"
+
+
 def _h_clarify_response(state: GraphState) -> dict:
     from ...target.clarification import format_pending_prompt
 
+    answer_source = _clarify_answer_source(state)
     pending_result = str(state.get("pending_check_result", "") or "")
     if pending_result in {"expired", "invalid", "out_of_range"} and str(state.get("final_response", "") or "").strip():
         return {
             "final_response": state.get("final_response", ""),
-            "answer_source": "clarify_message", "template_degraded": True,
+            "answer_source": answer_source, "template_degraded": True,
             "fallback_used": True, "template_fallback_used": False,
             **_log(state, "clarify_response"),
         }
@@ -357,7 +390,7 @@ def _h_clarify_response(state: GraphState) -> dict:
             prompt = "店名有点模糊，请提供完整店名。"
         if prompt.strip():
             return {
-                "final_response": prompt, "answer_source": "clarify_message",
+                "final_response": prompt, "answer_source": answer_source,
                 "template_degraded": True, "fallback_used": True, "template_fallback_used": False,
                 **_log(state, "clarify_response"),
             }
@@ -365,20 +398,20 @@ def _h_clarify_response(state: GraphState) -> dict:
     if rs is not None and getattr(rs, "status", "") in ("AMBIGUOUS", "LOW_CONFIDENCE"):
         return {
             "final_response": "店名有点模糊，请提供完整店名。",
-            "answer_source": "clarify_message", "template_degraded": True,
+            "answer_source": answer_source, "template_degraded": True,
             "fallback_used": True, "template_fallback_used": False,
             **_log(state, "clarify_response"),
         }
     clarification = (state.get("error_message", "") or "").strip()
     if clarification:
         return {
-            "final_response": clarification, "answer_source": "clarify_message",
+            "final_response": clarification, "answer_source": answer_source,
             "template_degraded": True, "fallback_used": True, "template_fallback_used": False,
             **_log(state, "clarify_response"),
         }
     return {
         "final_response": "请提供完整店名。",
-        "answer_source": "clarify_message", "template_degraded": True,
+        "answer_source": answer_source, "template_degraded": True,
         "fallback_used": True, "template_fallback_used": False,
         **_log(state, "clarify_response"),
     }

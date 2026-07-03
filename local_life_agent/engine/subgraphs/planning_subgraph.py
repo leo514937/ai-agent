@@ -52,6 +52,7 @@ from ...domain.schemas import (
     ShopRef,
     ToolResult,
 )
+from ...domain.shop_entity import ShopResolutionStatus
 from ...domain.facets import build_target_resolution_result, normalize_query_facets
 from ...domain.state import SessionState
 from ...planning.plans.candidate_review import review_candidate_set
@@ -68,6 +69,7 @@ from ...planning.policies.replan_policy import increment_expand_search, incremen
 from ...planning.policies.review_policy import NextAction
 from ...target.candidate_resolver import CandidateResolver
 from ...target.clarification import build_pending_clarification, format_pending_prompt, handle_clarification_reply
+from ...target.shop_resolver import resolve_shop_entities, resolve_shop_entity
 from ... import config
 from ...observability.file_logger import get_python_service_logger, log_kv
 from ...core import CandidateCore, PlanningCore
@@ -100,6 +102,15 @@ def _pending_candidate_targets(candidate_set: CandidateSet) -> list[dict[str, An
     return pending_candidates
 
 
+def _looks_like_specific_shop_mention(mention: str) -> bool:
+    text = str(mention or "").strip()
+    if not text:
+        return False
+    if any(token in text for token in ("(", "（", ")", "）")):
+        return True
+    return any(token in text for token in ("店", "馆", "轩", "居", "坊", "楼", "城", "中心", "广场"))
+
+
 def h_planning_subgraph(state: GraphState) -> dict:
     """Outer wrapper: goal plan → review → target resolve → evidence → plan validate → route."""
     before = dict(state)
@@ -126,6 +137,11 @@ def h_planning_subgraph(state: GraphState) -> dict:
     task_type_value = str(getattr(state.get("task_type"), "value", state.get("task_type")) or _to_dict(working.get("semantic_frame")).get("task_type", "") or "")
     comparison_resolution = _to_dict(working.get("comparison_target_resolution"))
     comparison_status = str(comparison_resolution.get("status", "") or "").upper()
+    if task_type_value == TaskType.comparison.value and comparison_status == "RESOLVED":
+        working = {
+            **working,
+            "comparison_targets": list(comparison_resolution.get("targets") or working.get("comparison_targets") or []),
+        }
     comparison_needs_clarify = task_type_value == TaskType.comparison.value and comparison_status in {"NEED_CLARIFICATION", "NOT_FOUND", "TOO_MANY", "PARTIAL"}
 
     if comparison_needs_clarify:
@@ -201,6 +217,12 @@ def h_planning_subgraph(state: GraphState) -> dict:
                     source_node="planning_subgraph",
                     already_resolved_targets=[_to_dict(item) for item in already_resolved_targets],
                 )
+        if comparison_status == "RESOLVED":
+            working = {
+                **working,
+                "comparison_targets": list(comparison_resolution.get("targets") or working.get("comparison_targets") or []),
+                "pending_clarification": None,
+            }
         after = {
             **working,
             "pending_clarification": pending,
@@ -222,13 +244,19 @@ def h_planning_subgraph(state: GraphState) -> dict:
 
     if working.get("pending_clarification") is not None:
         working = _run_steps(working, [_h_clarify_decide])
-        after = {
-            **working,
-            "planning_route": _OUTER_ROUTE_CLARIFY,
-            "response_mode": _OUTER_ROUTE_CLARIFY,
-        }
-        log_kv(_LOGGER, logging.WARNING, "[ROUTE_DECISION]", tone="warn", subgraph="planning_subgraph", route=_OUTER_ROUTE_CLARIFY, response_mode=_OUTER_ROUTE_CLARIFY, resolve_status=resolve_dict.get("status", ""), reason="pending_clarification_from_target_resolve")
-        return _state_delta(before, after, always_include={"planning_route", "response_mode"}, exclude=_PLANNING_WRAPPER_EXCLUDE_FIELDS)
+        if task_type_value in {TaskType.recommendation.value, TaskType.comparison.value}:
+            working = {
+                **working,
+                "pending_clarification": None,
+            }
+        else:
+            after = {
+                **working,
+                "planning_route": _OUTER_ROUTE_CLARIFY,
+                "response_mode": _OUTER_ROUTE_CLARIFY,
+            }
+            log_kv(_LOGGER, logging.WARNING, "[ROUTE_DECISION]", tone="warn", subgraph="planning_subgraph", route=_OUTER_ROUTE_CLARIFY, response_mode=_OUTER_ROUTE_CLARIFY, resolve_status=resolve_dict.get("status", ""), reason="pending_clarification_from_target_resolve")
+            return _state_delta(before, after, always_include={"planning_route", "response_mode"}, exclude=_PLANNING_WRAPPER_EXCLUDE_FIELDS)
 
     # Build execution plan regardless of target_resolve outcome.
     # recommendation/discovery queries with 0 candidates still need
@@ -245,6 +273,32 @@ def h_planning_subgraph(state: GraphState) -> dict:
         after = {**working, "planning_route": _OUTER_ROUTE_EXECUTE, "response_mode": "answer"}
         log_kv(_LOGGER, logging.INFO, "[ROUTE_DECISION]", tone="route", subgraph="planning_subgraph", route=_OUTER_ROUTE_EXECUTE, response_mode="answer", resolve_status="RESOLVED")
         return _state_delta(before, after, always_include={"planning_route", "response_mode"}, exclude=_PLANNING_WRAPPER_EXCLUDE_FIELDS)
+
+    if task_type_value == TaskType.single_shop_query.value:
+        current_shop = _to_dict(working.get("current_shop") or state.get("current_shop"))
+        if not current_shop.get("shop_id") and not current_shop.get("shop_name"):
+            after = {
+                **working,
+                "planning_route": _OUTER_ROUTE_CLARIFY,
+                "response_mode": _OUTER_ROUTE_CLARIFY,
+            }
+            log_kv(
+                _LOGGER,
+                logging.WARNING,
+                "[ROUTE_DECISION]",
+                tone="warn",
+                subgraph="planning_subgraph",
+                route=_OUTER_ROUTE_CLARIFY,
+                response_mode=_OUTER_ROUTE_CLARIFY,
+                resolve_status=resolve_dict.get("status", ""),
+                reason="single_shop_query_missing_current_shop",
+            )
+            return _state_delta(
+                before,
+                after,
+                always_include={"planning_route", "response_mode"},
+                exclude=_PLANNING_WRAPPER_EXCLUDE_FIELDS,
+            )
 
     # Not RESOLVED — clear pending_clarification so response_subgraph
     # does NOT enter the clarify branch.  Let Execute → Evidence Review
@@ -403,6 +457,159 @@ def _h_target_resolve_candidate_set(state: GraphState, sf: Any) -> dict:
             }
             return result
 
+    task_type_value = str(getattr(state.get("task_type"), "value", state.get("task_type")) or sf_dict.get("task_type", "") or "")
+    current_shop = _to_dict(state.get("current_shop"))
+    user_location = _user_location(state)
+    canonical_shop_entity: dict[str, Any] | None = None
+    canonical_shop_entities: list[dict[str, Any]] = []
+    shop_resolution_trace: list[dict[str, Any]] = []
+    comparison_target_resolution: dict[str, Any] | None = None
+    canonical_specific_shop_hint = False
+
+    def _resolve_mentions_for_canonical() -> None:
+        nonlocal canonical_shop_entity, canonical_shop_entities, shop_resolution_trace, comparison_target_resolution, canonical_specific_shop_hint
+        if task_type_value == TaskType.comparison.value:
+            mentions = [
+                str(item).strip()
+                for item in (sf_dict.get("merchant_mentions", []) or [])
+                if str(item).strip()
+            ]
+            if not mentions:
+                for item in sf_dict.get("comparison_targets", []) or []:
+                    target = _to_dict(item)
+                    query = str(target.get("shop_name", "") or target.get("source_text", "") or "").strip()
+                    if query:
+                        mentions.append(query)
+            if mentions:
+                resolved_items = resolve_shop_entities(
+                    mentions,
+                    session_state=session_snapshot,
+                    current_shop=current_shop,
+                    user_location=user_location,
+                    semantic_frame=sf_dict,
+                )
+                canonical_shop_entities = [item.model_dump() for item in resolved_items]
+                shop_resolution_trace = [trace for item in resolved_items for trace in (item.trace or [])]
+                resolved_count = sum(
+                    1 for item in resolved_items
+                    if str(getattr(item.status, "value", item.status) or "").lower() == ShopResolutionStatus.resolved.value
+                )
+                comparison_target_resolution = {
+                    "status": "RESOLVED" if resolved_count >= 2 else "NEED_CLARIFICATION",
+                    "targets": [
+                        {"shop_id": item.shop_id, "shop_name": item.shop_name, "resolved_shop": {"shop_id": item.shop_id, "shop_name": item.shop_name}}
+                        for item in resolved_items
+                        if str(getattr(item.status, "value", item.status) or "").lower() == ShopResolutionStatus.resolved.value and item.shop_id and item.shop_name
+                    ],
+                    "unresolved_targets": [
+                        {"shop_name": item.mention, "reason": item.resolution_reason, "status": item.status.value if hasattr(item.status, "value") else str(item.status)}
+                        for item in resolved_items
+                        if str(getattr(item.status, "value", item.status) or "").lower() != ShopResolutionStatus.resolved.value
+                    ],
+                    "reason": "comparison_targets_resolved" if resolved_count >= 2 else "comparison_targets_need_clarification",
+                }
+                return
+            comparison_target_resolution = {
+                "status": "NOT_FOUND",
+                "targets": [],
+                "unresolved_targets": [],
+                "reason": "comparison_targets_missing",
+            }
+            return
+
+        merchant_mentions = [str(item).strip() for item in (sf_dict.get("merchant_mentions", []) or []) if str(item).strip()]
+        branch_mentions = [str(item).strip() for item in (sf_dict.get("branch_mentions", []) or []) if str(item).strip()]
+        reference_mentions = [str(item).strip() for item in (sf_dict.get("reference_mentions", []) or []) if str(item).strip()]
+        mention = ""
+        for item in merchant_mentions:
+            if _looks_like_specific_shop_mention(item):
+                mention = item
+                break
+        if not mention and merchant_mentions and branch_mentions:
+            for merchant in merchant_mentions:
+                merchant = str(merchant).strip()
+                if not merchant:
+                    continue
+                if _looks_like_specific_shop_mention(merchant):
+                    mention = merchant
+                    break
+                for branch in branch_mentions:
+                    branch = str(branch).strip()
+                    if branch:
+                        mention = f"{merchant}({branch})"
+                        break
+                if mention:
+                    break
+        if not mention:
+            for item in branch_mentions + reference_mentions + merchant_mentions:
+                if item:
+                    mention = item
+                    break
+        if not mention:
+            text = str(state.get("raw_text", "") or state.get("normalized_text", "") or "").strip()
+            mention = text[:40]
+        canonical_specific_shop_hint = _looks_like_specific_shop_mention(mention)
+        result = resolve_shop_entity(
+            mention,
+            session_state=session_snapshot,
+            current_shop=current_shop,
+            user_location=user_location,
+            semantic_frame=sf_dict,
+        )
+        canonical_shop_entity = result.model_dump()
+        shop_resolution_trace = list(result.trace or [])
+
+    _resolve_mentions_for_canonical()
+
+    if task_type_value in {TaskType.single_shop_query.value, TaskType.coupon_query.value}:
+        canonical_status = str((canonical_shop_entity or {}).get("status", "") or "").lower()
+        if canonical_status == "ambiguous" or (canonical_status in {"low_confidence", "not_found", "no_mention"} and not canonical_specific_shop_hint):
+            canonical_result = ShopResolutionResult.model_validate(canonical_shop_entity)
+            legacy_result = ResolveShopResult(
+                status=canonical_result.status.value.upper() if hasattr(canonical_result.status, "value") else str(canonical_result.status).upper(),
+                resolved_shop=ShopRef(shop_id=str(canonical_result.shop_id or ""), shop_name=str(canonical_result.shop_name or "")) if canonical_result.status == ShopResolutionStatus.resolved else None,
+                candidates=[
+                    ShopCandidate(
+                        shop=ShopRef(shop_id=item.shop_id, shop_name=item.shop_name),
+                        match_score=float(item.score or 0.0),
+                    )
+                    for item in (canonical_result.candidates or [])
+                    if item.shop_id or item.shop_name
+                ],
+                confidence=float(canonical_result.confidence or 0.0),
+                reason=str(canonical_result.resolution_reason or canonical_status or "shop_resolution_need_clarification"),
+            )
+            pending = build_pending_clarification(
+                original_text=str(state.get("raw_text", "") or ""),
+                original_semantic_frame=sf_dict,
+                original_task_type=task_type_value,
+                candidate_targets=[
+                    {
+                        "shop_id": item.shop_id,
+                        "shop_name": item.shop_name,
+                        "address": _to_dict(getattr(item, "raw", {})).get("address", ""),
+                    }
+                    for item in (canonical_result.candidates or [])
+                    if item.shop_id or item.shop_name
+                ],
+                reason=str(canonical_result.resolution_reason or canonical_status or "shop_resolution_need_clarification"),
+                source_node="target_resolve",
+            )
+            payload = {
+                "canonical_shop_entity": canonical_shop_entity,
+                "canonical_shop_entities": canonical_shop_entities,
+                "shop_resolution_trace": shop_resolution_trace,
+                "resolve_shop_result": legacy_result,
+                "pending_clarification": pending,
+                "resolved_target": legacy_result if canonical_result.status == ShopResolutionStatus.resolved else None,
+                "target_resolution_status": canonical_result.status.value if hasattr(canonical_result.status, "value") else str(canonical_result.status),
+                "final_response": format_pending_prompt(pending),
+                "session_state_after": session_snapshot,
+                "comparison_target_resolution": comparison_target_resolution,
+                **_log(state, "target_resolve", status=str(canonical_result.status).upper(), reason=canonical_result.resolution_reason or canonical_status),
+            }
+            return payload
+
     # 1. Get goal draft
     goal = state.get("local_life_goal_draft")
     if goal is None:
@@ -434,13 +641,24 @@ def _h_target_resolve_candidate_set(state: GraphState, sf: Any) -> dict:
         "candidate_spec": spec,
         "candidate_set": candidate_set,
         "effective_candidate_set": candidate_set,
+        "canonical_shop_entity": canonical_shop_entity,
+        "canonical_shop_entities": canonical_shop_entities,
+        "shop_resolution_trace": shop_resolution_trace,
+        "comparison_target_resolution": comparison_target_resolution,
         "recommendation_candidates": [
             c.model_dump() if hasattr(c, "model_dump") else _to_dict(c)
             for c in (candidate_set.candidates or [])
         ],
         "review_results": {"candidate_review": review},
         # Propagate comparison_targets from context_recovery through to evidence/state
-        "comparison_targets": state.get("comparison_targets", []),
+        "comparison_targets": [
+            _to_dict(item)
+            for item in (
+                (comparison_target_resolution or {}).get("targets")
+                or state.get("comparison_targets", [])
+                or []
+            )
+        ],
     }
 
     # P2: persist last_candidate_set/spec for multi-turn references
@@ -455,10 +673,12 @@ def _h_target_resolve_candidate_set(state: GraphState, sf: Any) -> dict:
     payload["session_state"] = ss
 
     candidate_count = len(candidate_set.candidates or [])
+    canonical_status = str((canonical_shop_entity or {}).get("status", "") or "").lower()
     if (
         goal.goal_type == GoalType.SINGLE_SHOP_QUERY
         and candidate_count > 1
         and candidate_set.source in {CandidateSource.EXPLICIT, CandidateSource.DISCOVERY, CandidateSource.MIXED}
+        and canonical_status != ShopResolutionStatus.resolved.value
     ):
         reason = review.reason or "single_shop_query_multiple_candidates"
         ambiguous_candidates = [
@@ -550,6 +770,25 @@ def _h_target_resolve_candidate_set(state: GraphState, sf: Any) -> dict:
         return payload
 
     if review.next_action == NextAction.CLARIFY:
+        if goal.goal_type == GoalType.RECOMMENDATION:
+            resolved = ResolveShopResult(status="NOT_FOUND", confidence=0.0, reason=review.reason or "candidate_set_need_search")
+            payload["resolve_shop_result"] = resolved
+            payload["target_resolution_status"] = "NOT_FOUND"
+            payload["resolution_stage"] = ResolutionStage.TARGET_NOT_FOUND.value
+            payload["reference_resolution_source"] = "candidate_set"
+            payload.update(_log(
+                state,
+                "target_resolve",
+                status="NOT_FOUND",
+                target_resolve_mode="candidate_set",
+                candidate_source=candidate_set.source.value,
+                candidate_count=len(candidate_set.candidates or []),
+                candidate_review_status=str(review.status),
+                candidate_review_next_action=str(review.next_action),
+                next_action="CONTINUE_SEARCH",
+                reason=review.reason or "candidate_set_need_search",
+            ))
+            return payload
         reason = review.reason or "candidate_set_need_clarification"
         resolved = ResolveShopResult(status="NOT_FOUND", confidence=0.0, reason=reason)
         pending = build_pending_clarification(

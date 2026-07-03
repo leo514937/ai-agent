@@ -105,6 +105,130 @@ def _normalize_shop_key(value: str) -> str:
     return text
 
 
+def _shop_name_fields(shop: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
+    """Return normalized name, branch, and alias fields for a shop row."""
+    shop_name_fields = [
+        str(shop.get("shop_name", "") or ""),
+        str(shop.get("name", "") or ""),
+    ]
+    branch_fields = [
+        str(shop.get("branch_name", "") or ""),
+        str(shop.get("branch", "") or ""),
+        str(shop.get("sub_name", "") or ""),
+        str(shop.get("store_name", "") or ""),
+        str(shop.get("branch_shop_name", "") or ""),
+    ]
+    alias_fields = [
+        str(shop.get("alias", "") or ""),
+        *[str(alias or "") for alias in (shop.get("aliases", []) or [])],
+    ]
+    return (
+        [_normalize_shop_key(item) for item in shop_name_fields if _normalize_shop_key(item)],
+        [_normalize_shop_key(item) for item in branch_fields if _normalize_shop_key(item)],
+        [_normalize_shop_key(item) for item in alias_fields if _normalize_shop_key(item)],
+    )
+
+
+def _explicit_mention_variants(mention: str) -> list[str]:
+    """Build conservative normalized variants for an explicit shop mention."""
+    query = _normalize_shop_key(mention)
+    if not query:
+        return []
+
+    variants = [query]
+    suffixes = (
+        "购物中心店",
+        "购物中心",
+        "商场店",
+        "商场",
+        "门店",
+        "分店",
+        "餐厅",
+        "店铺",
+        "店",
+    )
+    queue = [query]
+    while queue:
+        current = queue.pop(0)
+        for suffix in suffixes:
+            if current.endswith(suffix):
+                shortened = current[: -len(suffix)]
+                if shortened and shortened not in variants:
+                    variants.append(shortened)
+                    queue.append(shortened)
+    return variants
+
+
+def _local_explicit_match_groups(mention: str) -> dict[str, list[dict[str, Any]]]:
+    """Resolve one explicit mention against the local shop table with strict priority."""
+    query_variants = _explicit_mention_variants(mention)
+    if not query_variants:
+        return {"full_name": [], "branch_name": [], "alias_exact": [], "unique": [], "ambiguous": []}
+
+    try:
+        all_shops = db_client.query_all_shops()
+    except Exception:
+        all_shops = []
+
+    full_name: list[dict[str, Any]] = []
+    branch_name: list[dict[str, Any]] = []
+    alias_exact: list[dict[str, Any]] = []
+    fuzzy: list[dict[str, Any]] = []
+
+    for shop in all_shops:
+        shop_dict = _to_dict(shop)
+        shop_id = str(shop_dict.get("shop_id", "") or "").strip()
+        if not shop_id:
+            continue
+
+        name_fields, branch_fields, alias_fields = _shop_name_fields(shop_dict)
+        if not name_fields and not alias_fields:
+            continue
+
+        combined_fields = [
+            _normalize_shop_key(f"{name}{branch}")
+            for name in name_fields
+            for branch in branch_fields
+            if name and branch
+        ]
+
+        if any(query in name_fields for query in query_variants):
+            full_name.append(shop_dict)
+            continue
+        if any(query in combined_fields for query in query_variants):
+            branch_name.append(shop_dict)
+            continue
+        if any(query in alias_fields for query in query_variants):
+            alias_exact.append(shop_dict)
+            continue
+
+        candidate_texts = [*name_fields, *combined_fields, *alias_fields]
+        if any(
+            text and any(query in text or text in query for query in query_variants)
+            for text in candidate_texts
+        ):
+            fuzzy.append(shop_dict)
+
+    def _dedupe(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        deduped: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in rows:
+            shop_id = str(row.get("shop_id", "") or "").strip()
+            if not shop_id or shop_id in seen:
+                continue
+            seen.add(shop_id)
+            deduped.append(row)
+        return deduped
+
+    return {
+        "full_name": _dedupe(full_name),
+        "branch_name": _dedupe(branch_name),
+        "alias_exact": _dedupe(alias_exact),
+        "unique": _dedupe(fuzzy),
+        "ambiguous": _dedupe([*full_name, *branch_name, *alias_exact, *fuzzy]),
+    }
+
+
 def _filter_discovery_candidates_by_mentions(
     candidates: list[ResolvedCandidate],
     mentions: list[str],
@@ -134,30 +258,19 @@ def _filter_discovery_candidates_by_mentions(
 
 
 def _resolve_exact_shop_match(mention: str) -> list[dict[str, Any]]:
-    """Try an exact catalog lookup before falling back to gateway search.
-
-    This keeps explicit single-shop mentions narrow when the query already
-    names the exact shop, while preserving the normal tool path for fuzzy
-    recovery.
-    """
-    query = str(mention or "").strip()
-    if not query:
-        return []
-
-    try:
-        matches = db_client.query_shop_by_name(query)
-    except Exception:
-        return []
-
-    exact_matches: list[dict[str, Any]] = []
-    for shop in matches:
-        shop_dict = _to_dict(shop)
-        if _normalize_shop_key(str(shop_dict.get("shop_name", "") or "")) == _normalize_shop_key(query):
-            exact_matches.append(shop_dict)
-    if exact_matches:
-        return exact_matches
-    if len(matches) == 1:
-        return [_to_dict(matches[0])]
+    """Try exact and high-confidence local catalog matches before gateway fallback."""
+    groups = _local_explicit_match_groups(mention)
+    ordered: list[dict[str, Any]] = []
+    for bucket in ("full_name", "branch_name", "alias_exact", "unique"):
+        for shop in groups.get(bucket, []) or []:
+            shop_dict = _to_dict(shop)
+            shop_id = str(shop_dict.get("shop_id", "") or "").strip()
+            if shop_id and not any(str(existing.get("shop_id", "") or "").strip() == shop_id for existing in ordered):
+                ordered.append(shop_dict)
+    if len(ordered) == 1:
+        return ordered
+    if len(ordered) > 1 and any(bucket in {"full_name", "branch_name", "alias_exact"} for bucket in ("full_name", "branch_name", "alias_exact") if groups.get(bucket)):
+        return ordered
     return []
 
 
@@ -329,32 +442,74 @@ class CandidateResolver:
             kwargs: dict[str, Any] = {}
             if session_shop_id_list:
                 kwargs["session_shop_ids"] = session_shop_id_list
+            local_groups = _local_explicit_match_groups(mention)
+            ordered_local_matches = (
+                local_groups.get("full_name", [])
+                or local_groups.get("branch_name", [])
+                or local_groups.get("alias_exact", [])
+                or local_groups.get("unique", [])
+            )
+            if len(ordered_local_matches) == 1:
+                shop = ordered_local_matches[0]
+                sid = str(shop.get("shop_id", "")).strip()
+                if sid:
+                    candidates.append(
+                        ResolvedCandidate(
+                            shop_id=sid,
+                            shop_name=str(shop.get("shop_name", mention)),
+                            source=CandidateSource.EXPLICIT,
+                            rank=idx,
+                            confidence=0.99,
+                            raw=shop,
+                        )
+                    )
+                    continue
+            if len(ordered_local_matches) > 1:
+                for cand in ordered_local_matches:
+                    sid = str(cand.get("shop_id", "")).strip()
+                    if sid:
+                        ambiguous_candidates.append(
+                            ResolvedCandidate(
+                                shop_id=sid,
+                                shop_name=str(cand.get("shop_name", mention)),
+                                source=CandidateSource.EXPLICIT,
+                                rank=idx,
+                                confidence=0.6,
+                                raw=cand,
+                            )
+                        )
+                continue
+
             exact_matches = _resolve_exact_shop_match(mention)
             if len(exact_matches) == 1:
                 shop = exact_matches[0]
                 sid = str(shop.get("shop_id", "")).strip()
                 if sid:
-                    candidates.append(ResolvedCandidate(
-                        shop_id=sid,
-                        shop_name=str(shop.get("shop_name", mention)),
-                        source=CandidateSource.EXPLICIT,
-                        rank=idx,
-                        confidence=0.99,
-                        raw=shop,
-                    ))
+                    candidates.append(
+                        ResolvedCandidate(
+                            shop_id=sid,
+                            shop_name=str(shop.get("shop_name", mention)),
+                            source=CandidateSource.EXPLICIT,
+                            rank=idx,
+                            confidence=0.99,
+                            raw=shop,
+                        )
+                    )
                     continue
             if len(exact_matches) > 1:
                 for cand in exact_matches:
                     sid = str(cand.get("shop_id", "")).strip()
                     if sid:
-                        ambiguous_candidates.append(ResolvedCandidate(
-                            shop_id=sid,
-                            shop_name=str(cand.get("shop_name", mention)),
-                            source=CandidateSource.EXPLICIT,
-                            rank=idx,
-                            confidence=0.6,
-                            raw=cand,
-                        ))
+                        ambiguous_candidates.append(
+                            ResolvedCandidate(
+                                shop_id=sid,
+                                shop_name=str(cand.get("shop_name", mention)),
+                                source=CandidateSource.EXPLICIT,
+                                rank=idx,
+                                confidence=0.6,
+                                raw=cand,
+                            )
+                        )
                 continue
 
             result = _unwrap_resolve_shop_result(_to_dict(self._resolve_shop(mention, **kwargs)))

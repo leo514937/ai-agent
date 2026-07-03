@@ -19,6 +19,7 @@ from .executor import (
 )
 from .normalizer import (
     normalize_circuit_open_result,
+    normalize_timeout_result,
     normalize_tool_result,
     normalize_validation_error,
 )
@@ -178,24 +179,19 @@ class BatchToolExecutor:
         )
 
     def _timeout_payload(self, call: _BatchToolCall, message: str) -> dict[str, Any]:
-        status = "failed" if call.required else "unknown"
-        return {
-            "call_id": call.call_id,
-            "shop_id": str(call.kwargs.get("shop_id", "")),
-            "tool_name": call.tool_name,
-            "success": False,
-            "result_status": status,
-            "data": None,
-            "error_code": "TOOL_TIMEOUT",
-            "error_message": message,
-            "source": self._backend_source,
-            "tool_backend": self._backend_source,
-            "backend_source": self._backend_source,
-            "degraded": not call.required,
-            "fallback_from": None,
-            "http_status": None,
-            "endpoint": None,
-        }
+        payload = normalize_timeout_result(call.tool_name, {"call_id": call.call_id, "shop_id": call.kwargs.get("shop_id", ""), "required": call.required}, message)
+        payload.update(
+            {
+                "source": self._backend_source,
+                "tool_backend": self._backend_source,
+                "backend_source": self._backend_source,
+                "degraded": not call.required or bool(payload.get("degraded", False)),
+                "fallback_from": None,
+                "http_status": None,
+                "endpoint": None,
+            }
+        )
+        return payload
 
     async def _run_one(self, call: _BatchToolCall, semaphore: asyncio.Semaphore, deadline: float) -> tuple[str, dict[str, Any]]:
         remaining = max(0.0, deadline - time.monotonic())

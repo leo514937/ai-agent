@@ -9,7 +9,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..planning.review_policy import NextAction
 from .facets import ConflictingFacet, FacetSet, QueryFacet, RankingPolicy, TargetResolutionResult
@@ -31,6 +31,16 @@ def _to_dict(value: Any) -> dict[str, Any]:
         dumped = model_dump()
         return dumped if isinstance(dumped, dict) else {}
     return dict(getattr(value, "__dict__", {}) or {})
+
+
+def _coerce_list_value(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, (tuple, set)):
+        return list(value)
+    return [value]
 
 
 def _coerce_facets(value: Any) -> list[dict[str, Any]]:
@@ -298,6 +308,28 @@ class DecisionPlan(BaseModel):
     reason: str = ""
     decision_reason: str = ""
     insufficient_evidence: bool = False
+
+    @field_validator(
+        "facets",
+        "conflicting_facets",
+        "candidates",
+        "answerable_facets",
+        "unknown_facets",
+        "failed_facets",
+        "ranking",
+        "claims",
+        "caveats",
+        "style_hints",
+        "forbidden_claims",
+        "must_mention_unknowns",
+        "claim_bindings",
+        "winner_evidence_refs",
+        "missing_fields",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_list_fields(cls, value: Any) -> list[Any]:
+        return _coerce_list_value(value)
 
 
 class DecisionReviewResult(BaseModel):

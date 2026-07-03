@@ -8,6 +8,8 @@ from time import time
 from typing import Any
 from uuid import uuid4
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from .. import config
 
 
@@ -21,6 +23,7 @@ _SENSITIVE_KEYS = {
 }
 
 _STRING_LIMIT = 240
+_TRACE_ERROR_LIMIT = 8
 
 
 @dataclass
@@ -32,15 +35,45 @@ class TraceSpanRecord:
     session_id: str | None = None
     turn_id: str = ""
     stage: str = ""
-    status: str = "success"
+    status: str = "ok"
     duration_ms: int | None = None
     input_summary: dict[str, Any] = field(default_factory=dict)
     output_summary: dict[str, Any] = field(default_factory=dict)
     error_code: str | None = None
     error_message: str | None = None
+    span_id: str = ""
+    parent_span_id: str | None = None
+    name: str = ""
+    workflow_name: str | None = None
+    started_at_ms: int | None = None
+    ended_at_ms: int | None = None
+    latency_ms: int | None = None
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            self.name = self.span_name
+        if not self.span_name:
+            self.span_name = self.name
+        if self.started_at_ms is None:
+            self.started_at_ms = self.timestamp_ms
+        if self.latency_ms is None and self.duration_ms is not None:
+            self.latency_ms = self.duration_ms
+        if self.ended_at_ms is None and self.started_at_ms is not None and self.latency_ms is not None:
+            self.ended_at_ms = self.started_at_ms + self.latency_ms
+        if not self.span_id:
+            self.span_id = f"{self.trace_id}:{self.name}:{self.timestamp_ms}"
+        if self.workflow_name is None:
+            workflow_name = self.metadata.get("workflow_name")
+            self.workflow_name = str(workflow_name or "") or None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        payload.setdefault("name", self.name or self.span_name)
+        payload.setdefault("span_name", self.span_name or self.name)
+        payload.setdefault("latency_ms", self.latency_ms if self.latency_ms is not None else self.duration_ms)
+        payload.setdefault("started_at_ms", self.started_at_ms if self.started_at_ms is not None else self.timestamp_ms)
+        payload.setdefault("ended_at_ms", self.ended_at_ms if self.ended_at_ms is not None else payload.get("started_at_ms"))
+        return payload
 
 
 @dataclass
@@ -104,13 +137,88 @@ class TurnTrace:
     tool_duration_ms: int = 0
     verifier_duration_ms: int = 0
     events: list[TraceSpanRecord] = field(default_factory=list)
+    spans: list[TraceSpanRecord] = field(default_factory=list)
+    metrics: dict[str, Any] = field(default_factory=dict)
+    errors: list[dict[str, Any]] = field(default_factory=list)
     session_before_current_shop: Any | None = None
     session_before_last_recommendation_list_count: int = 0
+
+    def __post_init__(self) -> None:
+        if not self.spans and self.events:
+            self.spans = list(self.events)
+        elif not self.events and self.spans:
+            self.events = list(self.spans)
+        if self.metrics is None:
+            self.metrics = {}
+        if self.errors is None:
+            self.errors = []
+
+    @property
+    def workflow_name(self) -> str | None:
+        return self.selected_flow or self.task_type
+
+    @property
+    def route_task(self) -> str | None:
+        return self.task_type
+
+    @property
+    def response_mode(self) -> str | None:
+        return self.selected_flow
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["events"] = [event.to_dict() for event in self.events]
+        payload["spans"] = [span.to_dict() for span in self.spans]
+        payload["metrics"] = dict(self.metrics or {})
+        payload["errors"] = list(self.errors or [])
+        payload["workflow_name"] = self.workflow_name
+        payload["route_task"] = self.route_task
+        payload["response_mode"] = self.response_mode
         return payload
+
+
+TraceSpan = TraceSpanRecord
+
+
+class TurnTraceModel(BaseModel):
+    """Validated adapter for serialised turn traces.
+
+    The runtime trace object stays as a dataclass for observability
+    simplicity, while this model provides schema validation and
+    dict/BaseModel compatibility checks.
+    """
+
+    model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
+
+    trace_id: str
+    session_id: str | None = None
+    turn_id: str = ""
+    user_text: str = ""
+    selected_flow: str | None = None
+    task_type: str | None = None
+    tool_call_count: int = 0
+    answer_verify_passed: bool | None = None
+    fallback_reason: str | None = None
+    total_duration_ms: int | None = None
+    events: list[dict[str, Any]] = Field(default_factory=list)
+    spans: list[dict[str, Any]] = Field(default_factory=list)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    errors: list[dict[str, Any]] = Field(default_factory=list)
+    workflow_name: str | None = None
+    route_task: str | None = None
+    response_mode: str | None = None
+
+
+def validate_turn_trace(value: Any) -> TurnTraceModel:
+    """Validate a runtime trace or trace-shaped dict without mutating it."""
+
+    if isinstance(value, TurnTrace):
+        return TurnTraceModel.model_validate(value.to_dict())
+    if hasattr(value, "model_dump"):
+        return TurnTraceModel.model_validate(value.model_dump())
+    if isinstance(value, dict):
+        return TurnTraceModel.model_validate(value)
+    return TurnTraceModel.model_validate({})
 
 
 _TRACE_SPANS: dict[str, list[TraceSpanRecord]] = {}
@@ -156,11 +264,60 @@ def new_trace_id() -> str:
     return f"trace_{uuid4().hex}"
 
 
+def start_span(trace_id: str, span_name: str, metadata: dict | None = None) -> TraceSpanRecord:
+    """Record a span start marker and return the latest span."""
+    record_span(trace_id, span_name, {**dict(metadata or {}), "status": "ok"})
+    spans = get_trace_spans(trace_id)
+    return spans[-1] if spans else TraceSpanRecord(trace_id=trace_id, span_name=span_name)
+
+
+def end_span(trace_id: str, span_name: str, metadata: dict | None = None) -> TraceSpanRecord:
+    """Record a span end marker and return the latest span."""
+    record_span(trace_id, span_name, {**dict(metadata or {}), "status": "ok"})
+    spans = get_trace_spans(trace_id)
+    return spans[-1] if spans else TraceSpanRecord(trace_id=trace_id, span_name=span_name)
+
+
+def safe_trace_error(
+    trace_id: str,
+    *,
+    stage: str,
+    message: str,
+    code: str = "TRACE_ERROR",
+    span_id: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return a bounded error payload that never raises."""
+    payload = {
+        "trace_id": str(trace_id or ""),
+        "stage": str(stage or ""),
+        "message": _sanitize_string(str(message or "")),
+        "code": str(code or "TRACE_ERROR"),
+    }
+    if span_id:
+        payload["span_id"] = str(span_id)
+    if metadata:
+        payload["metadata"] = sanitize_payload(metadata)
+    return payload
+
+
 def record_span(trace_id: str, span_name: str, metadata: dict | None = None) -> None:
     """Record a span in the current trace."""
     if not trace_id or not span_name:
         return
     raw_metadata = dict(metadata or {})
+    started_at_ms = _coerce_int(raw_metadata.get("started_at_ms")) or _coerce_int(raw_metadata.get("timestamp_ms")) or int(time() * 1000)
+    duration_ms = _coerce_int(raw_metadata.get("duration_ms"))
+    latency_ms = _coerce_int(raw_metadata.get("latency_ms"))
+    if latency_ms is None:
+        latency_ms = duration_ms
+    status = str(raw_metadata.get("status", "ok") or "ok")
+    if status in {"success", "ok"}:
+        status = "ok"
+    elif status in {"failed", "error"}:
+        status = "error"
+    elif status in {"skipped", "skip"}:
+        status = "skipped"
     record = TraceSpanRecord(
         trace_id=trace_id,
         span_name=span_name,
@@ -168,12 +325,19 @@ def record_span(trace_id: str, span_name: str, metadata: dict | None = None) -> 
         session_id=raw_metadata.get("session_id"),
         turn_id=str(raw_metadata.get("turn_id", "") or ""),
         stage=str(raw_metadata.get("stage", span_name) or span_name),
-        status=str(raw_metadata.get("status", "success") or "success"),
-        duration_ms=_coerce_int(raw_metadata.get("duration_ms")),
+        status=status,
+        duration_ms=duration_ms,
         input_summary=_coerce_dict(raw_metadata.get("input_summary")),
         output_summary=_coerce_dict(raw_metadata.get("output_summary")),
         error_code=_coerce_optional_str(raw_metadata.get("error_code")),
         error_message=_coerce_optional_str(raw_metadata.get("error_message")),
+        span_id=_coerce_optional_str(raw_metadata.get("span_id")) or f"{trace_id}:{span_name}:{started_at_ms}",
+        parent_span_id=_coerce_optional_str(raw_metadata.get("parent_span_id")),
+        name=_coerce_optional_str(raw_metadata.get("name")) or span_name,
+        workflow_name=_coerce_optional_str(raw_metadata.get("workflow_name")),
+        started_at_ms=started_at_ms,
+        ended_at_ms=_coerce_int(raw_metadata.get("ended_at_ms")),
+        latency_ms=latency_ms,
     )
     with _TRACE_LOCK:
         _TRACE_SPANS.setdefault(trace_id, []).append(record)
@@ -249,6 +413,9 @@ def build_turn_trace(final_state: dict[str, Any], *, user_text: str = "", total_
     resolver_error_type, resolver_error_message = _infer_resolver_error(target_resolve_metadata, target_resolve_status)
     llm_backend = _coerce_optional_str(final_state.get("llm_backend")) or _coerce_optional_str(semantic_frame.get("llm_backend"))
     tool_call_count = _infer_tool_call_count(execution_plan, final_state)
+    normalized_spans = _normalize_trace_spans(events, final_state)
+    trace_errors = _collect_trace_errors(final_state, events)
+    turn_metrics = _build_turn_metrics_snapshot(final_state, total_duration_ms=total_duration_ms, trace=None)
     turn_trace = TurnTrace(
         trace_id=trace_id,
         session_id=_coerce_optional_str(final_state.get("session_id")),
@@ -311,10 +478,142 @@ def build_turn_trace(final_state: dict[str, Any], *, user_text: str = "", total_
         tool_duration_ms=sum(event.duration_ms or 0 for event in events if event.stage == "tool_call"),
         verifier_duration_ms=sum(event.duration_ms or 0 for event in events if event.stage == "answer_verify"),
         events=events,
+        spans=normalized_spans,
+        metrics=turn_metrics.to_dict() if hasattr(turn_metrics, "to_dict") else _coerce_dict(turn_metrics),
+        errors=trace_errors,
         session_before_current_shop=session_before.get("current_shop"),
         session_before_last_recommendation_list_count=len(session_before.get("last_recommendation_list") or []),
     )
     return turn_trace
+
+
+def _build_turn_metrics_snapshot(final_state: dict[str, Any], *, total_duration_ms: int | None = None, trace: TurnTrace | None = None):
+    from .metrics import build_turn_metrics
+
+    try:
+        return build_turn_metrics(final_state, total_duration_ms=total_duration_ms, trace=trace, stream_events=final_state.get("stream_events"))
+    except Exception as exc:
+        return {
+            "workflow_name": _coerce_optional_str(final_state.get("workflow_name")) or "",
+            "route_task": _coerce_optional_str(final_state.get("task_type")) or "",
+            "response_mode": _coerce_optional_str(final_state.get("response_mode")) or "",
+            "facet_count": 0,
+            "facets": [],
+            "tool_call_count": 0,
+            "evidence_count": 0,
+            "answerable_facets_count": 0,
+            "unknown_facets_count": 0,
+            "failed_facets_count": 0,
+            "verification_status": "",
+            "fallback_reason": _coerce_optional_str(final_state.get("fallback_reason")) or "",
+            "final_latency_ms": total_duration_ms,
+            "state_write_count": 0,
+            "blocked_state_write_count": 0,
+            "preview_event_count": 0,
+            "preview_block_count": 0,
+            "stream_event_count": len(final_state.get("event_log", []) or []),
+            "evidence_review_action": "",
+            "planner_selected_tool_call_count": 0,
+            "planner_blocked_tool_call_count": 0,
+            "planner_dropped_facet_count": 0,
+            "cache_hit_count": 0,
+            "cache_miss_count": 0,
+            "batch_size": 0,
+            "parallelism": 1,
+            "error": str(exc),
+        }
+
+
+def _normalize_trace_spans(events: list[TraceSpanRecord], final_state: dict[str, Any]) -> list[TraceSpanRecord]:
+    normalized: list[TraceSpanRecord] = []
+    workflow_name = _coerce_optional_str(final_state.get("workflow_name"))
+    for event in events:
+        normalized_name = _normalize_span_name(event.span_name, event.stage)
+        normalized.append(
+            TraceSpanRecord(
+                trace_id=event.trace_id,
+                span_name=normalized_name,
+                metadata=dict(event.metadata or {}, workflow_name=workflow_name or event.workflow_name or "", source_span_name=event.span_name),
+                timestamp_ms=event.timestamp_ms,
+                session_id=event.session_id,
+                turn_id=event.turn_id,
+                stage=normalized_name,
+                status=event.status,
+                duration_ms=event.duration_ms,
+                input_summary=dict(event.input_summary or {}),
+                output_summary=dict(event.output_summary or {}),
+                error_code=event.error_code,
+                error_message=event.error_message,
+                span_id=event.span_id,
+                parent_span_id=event.parent_span_id,
+                name=normalized_name,
+                workflow_name=workflow_name or event.workflow_name,
+                started_at_ms=event.started_at_ms,
+                ended_at_ms=event.ended_at_ms,
+                latency_ms=event.latency_ms,
+            )
+        )
+    return normalized
+
+
+def _normalize_span_name(span_name: str, stage: str) -> str:
+    key = str(span_name or stage or "").strip()
+    mapping = {
+        "orchestration_router_shadow": "router",
+        "workflow_runner": "router",
+        "intake_guard_router": "router",
+        "planning_subgraph": "planning",
+        "goal_planner": "planning",
+        "goal_review": "planning",
+        "target_resolve": "target_resolution",
+        "clarify_decide": "target_resolution",
+        "evidence_planner": "evidence_planning",
+        "plan_validator": "evidence_planning",
+        "tool_execute": "tool_execution",
+        "evidence_build": "evidence_build",
+        "evidence_review": "evidence_review",
+        "decision_planner": "decision_review",
+        "decision_review": "decision_review",
+        "answer_plan_build": "answer_plan",
+        "answer_generate": "answer_plan",
+        "answer_verify": "answer_verify",
+        "rewrite": "answer_verify",
+        "final_response_build": "state_update",
+        "clarify_response": "state_update",
+        "fallback_answer": "state_update",
+        "state_update_plan": "state_update",
+        "persist_session_state": "state_update",
+        "emit_response": "streaming",
+    }
+    if key in mapping:
+        return mapping[key]
+    if key in {"semantic_parse", "context_recovery", "slot_extractor", "frame_validator", "understanding_subgraph"}:
+        return "planning"
+    return key or "unknown"
+
+
+def _collect_trace_errors(final_state: dict[str, Any], events: list[TraceSpanRecord]) -> list[dict[str, Any]]:
+    errors: list[dict[str, Any]] = []
+    trace_errors = final_state.get("trace_errors") or []
+    if isinstance(trace_errors, list):
+        for item in trace_errors[:_TRACE_ERROR_LIMIT]:
+            if isinstance(item, dict):
+                errors.append(sanitize_payload(item))
+    for event in events:
+        if event.error_message or event.error_code or event.status == "error":
+            errors.append(
+                safe_trace_error(
+                    event.trace_id,
+                    stage=event.stage or event.span_name,
+                    message=event.error_message or event.error_code or event.stage or event.span_name,
+                    code=event.error_code or "TRACE_ERROR",
+                    span_id=event.span_id,
+                    metadata={"span_name": event.span_name, "status": event.status},
+                )
+            )
+        if len(errors) >= _TRACE_ERROR_LIMIT:
+            break
+    return errors
 
 
 def _events_from_event_log(final_state: dict[str, Any]) -> list[TraceSpanRecord]:

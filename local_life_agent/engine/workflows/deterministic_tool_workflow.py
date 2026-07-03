@@ -25,10 +25,14 @@ from ...domain.facets import build_target_resolution_result, normalize_query_fac
 from ...engine._compat import _log, _unwrap_resolve_shop_result
 from ...observability.file_logger import get_python_service_logger, log_kv
 from ...planning.evidence.evidence_builder import build_evidence
+from ...planning.budget.budget_context import budget_context_from_state
+from ...planning.evidence.evidence_cache import get_default_evidence_cache
+from ...planning.evidence.tool_batch_executor import ToolBatchExecutor
+from ...planning.evidence.tool_capabilities import build_tool_call_dict, preferred_tool_for_facet
 from ...planning.goal.goal_planner import _infer_explicit_mentions_from_text
 from ...target.clarification import build_pending_clarification, format_pending_prompt
 from ...target.reference_resolver import resolve_references
-from ...target.shop_resolver import resolve_shop
+from ...target.shop_resolver import resolve_shop, resolve_shop_entity
 from ...tools.gateway import dispatch_tool_call
 
 _LOGGER = get_python_service_logger()
@@ -194,6 +198,15 @@ def _semantic_mention_matches_raw_hint(semantic_mention: str, raw_hint: str) -> 
     return brand in semantic and tail in semantic
 
 
+def _looks_like_specific_shop_mention(mention: str) -> bool:
+    text = str(mention or "").strip()
+    if not text:
+        return False
+    if any(token in text for token in ("(", "（", ")", "）")):
+        return True
+    return any(token in text for token in ("店", "馆", "轩", "居", "坊", "楼", "城", "中心", "广场"))
+
+
 def _route_info_from_raw_text(raw_text: str) -> tuple[str, str] | None:
     text = str(raw_text or "")
     lowered = text.lower()
@@ -249,6 +262,111 @@ def _resolve_single_shop_target(state: dict[str, Any]) -> tuple[dict[str, Any] |
     semantic_frame = _to_dict(state.get("semantic_frame"))
     raw_text = str(state.get("raw_text", "") or state.get("normalized_text", "") or "")
     session_state = state.get("session_state") or state.get("session_state_before")
+    current_shop = _to_dict(_session_value(state, "current_shop"))
+    merchant_mentions = [str(item).strip() for item in (semantic_frame.get("merchant_mentions") or []) if str(item).strip()]
+    branch_mentions = [str(item).strip() for item in (semantic_frame.get("branch_mentions") or []) if str(item).strip()]
+    reference_mentions = [str(item).strip() for item in (semantic_frame.get("reference_mentions") or []) if str(item).strip()]
+    specific_shop_hint = any(_looks_like_specific_shop_mention(item) for item in merchant_mentions) or bool(branch_mentions)
+    canonical = _to_dict(state.get("canonical_shop_entity"))
+    if canonical:
+        canonical_status = str(canonical.get("status", "") or "").lower()
+        if canonical_status == "resolved":
+            resolved_shop = {
+                "shop_id": str(canonical.get("shop_id", "") or "").strip(),
+                "shop_name": str(canonical.get("shop_name", "") or "").strip(),
+                "address": "",
+                "alias": canonical.get("alias", []),
+                "reference": "canonical_shop_entity",
+                "source_text": raw_text,
+            }
+            if resolved_shop["shop_id"] and resolved_shop["shop_name"]:
+                return resolved_shop, None, str(canonical.get("resolution_reason", "") or "canonical_shop_entity_resolved")
+        if canonical_status == "ambiguous":
+            pending = build_pending_clarification(
+                original_text=raw_text,
+                original_semantic_frame=semantic_frame,
+                original_task_type=_enum_value(state.get("task_type")) or _enum_value(semantic_frame.get("task_type")),
+                candidate_targets=_sort_candidate_targets([
+                    {
+                        "shop_id": str(candidate.get("shop_id", "") or "").strip(),
+                        "shop_name": str(candidate.get("shop_name", "") or "").strip(),
+                        "address": str(candidate.get("raw", {}).get("address", "") if isinstance(candidate.get("raw"), dict) else "").strip(),
+                    }
+                    for candidate in (canonical.get("candidates") or [])
+                    if str(candidate.get("shop_id", "") or "").strip() and str(candidate.get("shop_name", "") or "").strip()
+                ]),
+                reason=str(canonical.get("resolution_reason", "") or canonical_status or "shop_resolution_need_clarification"),
+                source_node="deterministic_tool_workflow",
+                )
+            return None, pending.model_dump(), str(canonical.get("resolution_reason", "") or canonical_status or "shop_resolution_need_clarification")
+        if canonical_status in {"low_confidence", "not_found", "no_mention"} and not specific_shop_hint:
+            pending = build_pending_clarification(
+                original_text=raw_text,
+                original_semantic_frame=semantic_frame,
+                original_task_type=_enum_value(state.get("task_type")) or _enum_value(semantic_frame.get("task_type")),
+                candidate_targets=_sort_candidate_targets([
+                    {
+                        "shop_id": str(candidate.get("shop_id", "") or "").strip(),
+                        "shop_name": str(candidate.get("shop_name", "") or "").strip(),
+                        "address": str(candidate.get("raw", {}).get("address", "") if isinstance(candidate.get("raw"), dict) else "").strip(),
+                    }
+                    for candidate in (canonical.get("candidates") or [])
+                    if str(candidate.get("shop_id", "") or "").strip() and str(candidate.get("shop_name", "") or "").strip()
+                ]),
+                reason=str(canonical.get("resolution_reason", "") or canonical_status or "shop_resolution_need_clarification"),
+                source_node="deterministic_tool_workflow",
+            )
+            return None, pending.model_dump(), str(canonical.get("resolution_reason", "") or canonical_status or "shop_resolution_need_clarification")
+    mention = ""
+    for item in merchant_mentions:
+        if _looks_like_specific_shop_mention(item):
+            mention = item
+            break
+    if not mention and merchant_mentions and branch_mentions:
+        for merchant in merchant_mentions:
+            merchant = str(merchant).strip()
+            if not merchant:
+                continue
+            if _looks_like_specific_shop_mention(merchant):
+                mention = merchant
+                break
+            for branch in branch_mentions:
+                branch = str(branch).strip()
+                if branch:
+                    mention = f"{merchant}({branch})"
+                    break
+            if mention:
+                break
+    if not mention:
+        for item in branch_mentions + reference_mentions + merchant_mentions:
+            if item:
+                mention = item
+                break
+    if not mention:
+        inferred_mentions = _infer_explicit_mentions_from_text(raw_text)
+        if inferred_mentions:
+            mention = inferred_mentions[0]
+    facade_result = _to_dict(
+        resolve_shop_entity(
+            mention,
+            session_state=session_state,
+            current_shop=current_shop,
+            user_location=_extract_user_location(state),
+            semantic_frame=semantic_frame,
+        )
+    )
+    facade_status = str(facade_result.get("status", "") or "").lower()
+    if facade_status == "resolved" and not mention:
+        target = {
+            "shop_id": str(facade_result.get("shop_id", "") or "").strip(),
+            "shop_name": str(facade_result.get("shop_name", "") or "").strip(),
+            "address": str((_to_dict(facade_result.get("selected_candidate") or {}).get("raw", {}) or {}).get("address", "") or ""),
+            "alias": facade_result.get("alias", []),
+            "reference": "explicit_mention" if mention else "current_shop",
+            "source_text": mention or raw_text,
+        }
+        if target["shop_id"] and target["shop_name"]:
+            return target, None, str(facade_result.get("resolution_reason", "") or "explicit_reference_resolved")
     target_resolution = _to_dict(state.get("target_resolution"))
     if target_resolution:
         if bool(target_resolution.get("resolved", False)):
@@ -265,7 +383,7 @@ def _resolve_single_shop_target(state: dict[str, Any]) -> tuple[dict[str, Any] |
                     "source_text": str(raw_text or ""),
                 }, None, str(target_resolution.get("resolution_reason", "") or "target_resolution_resolved")
         unresolved_reason = str(target_resolution.get("unresolved_reason", "") or target_resolution.get("resolution_reason", "") or "")
-        if unresolved_reason:
+        if unresolved_reason and not specific_shop_hint:
             pending = build_pending_clarification(
                 original_text=raw_text,
                 original_semantic_frame=semantic_frame,
@@ -308,6 +426,25 @@ def _resolve_single_shop_target(state: dict[str, Any]) -> tuple[dict[str, Any] |
             shop_id = str(item_dict.get("shop_id", "") or "").strip()
             if shop_id and shop_id not in session_shop_ids:
                 session_shop_ids.append(shop_id)
+        fallback_queries: list[str] = []
+        if branch_mentions:
+            for branch in branch_mentions:
+                branch = str(branch).strip()
+                if branch and branch in raw_text and branch not in fallback_queries:
+                    fallback_queries.append(branch)
+        if trusted_mentions and branch_mentions and any(branch in raw_text for branch in branch_mentions):
+            for full in trusted_mentions:
+                for branch in branch_mentions:
+                    full = str(full).strip()
+                    branch = str(branch).strip()
+                    if not full or not branch:
+                        continue
+                    combo = f"{full}({branch})"
+                    if combo not in fallback_queries:
+                        fallback_queries.append(combo)
+        for query in fallback_queries:
+            if query not in explicit_queries:
+                explicit_queries.append(query)
         for query in explicit_queries:
             resolved = _unwrap_resolve_shop_result(_to_dict(resolve_shop(query, location={}, session_shop_ids=session_shop_ids)))
             status = str(resolved.get("status", "") or "").upper()
@@ -443,7 +580,16 @@ def _tool_args_for_task(task_type: str, target_shop_id: str, state: dict[str, An
     return args
 
 
-def _build_execution_plan(task_type: str, target_shop_id: str, tool_name: str, facet: str, args: dict[str, Any], state: dict[str, Any]) -> ExecutionPlan:
+def _build_execution_plan(
+    task_type: str,
+    target_shop_id: str,
+    tool_name: str,
+    facet: str,
+    args: dict[str, Any],
+    state: dict[str, Any],
+    *,
+    extra_facets: list[str] | None = None,
+) -> ExecutionPlan:
     normalized_task = _enum_value(task_type)
     facet_set = normalize_query_facets(state.get("semantic_frame"), session_state=state.get("session_state") or state.get("session_state_before"), raw_text=str(state.get("raw_text", "") or state.get("normalized_text", "") or ""))
     target_resolution = _to_dict(state.get("target_resolution"))
@@ -453,26 +599,58 @@ def _build_execution_plan(task_type: str, target_shop_id: str, tool_name: str, f
             session_state=state.get("session_state") or state.get("session_state_before"),
             raw_text=str(state.get("raw_text", "") or state.get("normalized_text", "") or ""),
         ).model_dump()
+    calls: list[dict[str, Any]] = [
+        {
+            "call_id": "call_1",
+            "tool_name": tool_name,
+            "args": args,
+            "target_shop_id": target_shop_id,
+            "required": True,
+            "facet": facet,
+            "depends_on": [],
+            "timeout_ms": 3000,
+            "retry_policy": {"max_attempts": 1, "backoff_ms": 200},
+            "fallback_policy": {"fallback_tool": "", "fallback_args": {}},
+        }
+    ]
+    for extra_index, extra_facet in enumerate(extra_facets or [], start=2):
+        extra_tool = preferred_tool_for_facet(extra_facet, task_type=normalized_task, has_target=True)
+        if not extra_tool:
+            continue
+        if any(str(item.get("facet", "") or "") == extra_facet and str(item.get("tool_name", "") or "") == extra_tool for item in calls):
+            continue
+        extra_args = build_tool_call_dict(
+            extra_tool,
+            extra_facet,
+            call_id=f"call_{extra_index}",
+            target_shop_id=target_shop_id,
+            required=True,
+            location=_extract_user_location(state),
+            group_id="deterministic_tool",
+        )["args"]
+        calls.append(
+            {
+                "call_id": f"call_{extra_index}",
+                "tool_name": extra_tool,
+                "args": extra_args,
+                "target_shop_id": target_shop_id,
+                "required": True,
+                "facet": extra_facet,
+                "depends_on": [],
+                "timeout_ms": 3000,
+                "retry_policy": {"max_attempts": 1, "backoff_ms": 200},
+                "fallback_policy": {"fallback_tool": "", "fallback_args": {}},
+                "group_id": "deterministic_tool",
+                "max_parallelism": 1,
+            }
+        )
     stage = {
+        "call_id": "call_1",
         "stage_id": "stage_1",
         "description": f"deterministic call for {normalized_task}",
-        "tool_names": [tool_name],
+        "tool_names": [call["tool_name"] for call in calls],
         "depends_on": [],
-        "max_parallelism": 1,
-    }
-    call = {
-        "call_id": "call_1",
-        "tool_name": tool_name,
-        "args": args,
-        "target_shop_id": target_shop_id,
-        "required": True,
-        "facet": facet,
-        "depends_on": [],
-        "timeout_ms": 3000,
-        "retry_policy": {"max_attempts": 1, "backoff_ms": 200},
-        "fallback_policy": {"fallback_tool": "", "fallback_args": {}},
-        "group_id": "deterministic_tool",
-        "max_parallelism": 1,
+        "max_parallelism": min(len(calls), 4) if calls else 1,
     }
     return ExecutionPlan.model_validate(
         {
@@ -482,7 +660,7 @@ def _build_execution_plan(task_type: str, target_shop_id: str, tool_name: str, f
             "target_resolution": target_resolution,
             "conflicting_facets": [item.model_dump() if hasattr(item, "model_dump") else item for item in (facet_set.conflicting_facets or [])],
             "ranking_policy": facet_set.ranking_policy.model_dump() if facet_set.ranking_policy else None,
-            "tool_calls": [call],
+            "tool_calls": calls,
             "stages": [stage],
             "target_shop_ids": [target_shop_id],
             "query_terms": [str(state.get("raw_text", "") or "")],
@@ -517,6 +695,31 @@ def _facet_from_task(task_type: str) -> str:
     if normalized_task in _DEAL_TASK_NAMES:
         return "deal"
     return "detail"
+
+
+def _batch_facets_for_task(task_type: str, semantic_frame: dict[str, Any], primary_facet: str) -> list[str]:
+    normalized_task = _enum_value(task_type)
+    facets: list[str] = []
+    for item in semantic_frame.get("facets", []) or []:
+        facet = str(item.get("name", "") or item.get("facet", "") or "").strip() if isinstance(item, dict) else str(item or "").strip()
+        if not facet or facet == primary_facet or facet in facets:
+            continue
+        tool_name = preferred_tool_for_facet(facet, task_type=normalized_task, has_target=True)
+        if tool_name:
+            facets.append(facet)
+    return facets
+
+
+def _budgeted_extra_facets(state: dict[str, Any], extra_facets: list[str]) -> list[str]:
+    budget = budget_context_from_state(state)
+    if budget.remaining("facet_enrich_budget") <= 0:
+        return []
+    deadline_remaining = budget.deadline_remaining_ms
+    if isinstance(deadline_remaining, int) and deadline_remaining <= 50:
+        return []
+    if budget.remaining("facet_enrich_budget") <= 1 and len(extra_facets) > 1:
+        return extra_facets[:1]
+    return list(extra_facets)
 
 
 def _tool_result_to_text(task_type: str, evidence: dict[str, Any], tool_result: ToolResult) -> str:
@@ -606,23 +809,42 @@ def _build_success_patch(
     task_type: str,
     target: dict[str, Any],
     execution_plan: ExecutionPlan,
-    tool_result: ToolResult,
+    tool_results: dict[str, ToolResult],
+    primary_tool_result: ToolResult,
     evidence: EvidencePack,
     answer_plan: AnswerPlan,
     facet: str,
 ) -> dict[str, Any]:
     state_task_type = _enum_value(state.get("task_type")) or _enum_value(_to_dict(state.get("semantic_frame")).get("task_type")) or _enum_value(task_type)
     presentation_task_type = _presentation_task_type(task_type, facet)
+    canonical_shop_entity = {
+        "status": "resolved",
+        "mention": str(target.get("shop_name", "") or ""),
+        "shop_id": str(target.get("shop_id", "") or "").strip(),
+        "shop_name": str(target.get("shop_name", "") or "").strip(),
+        "canonical_name": str(target.get("shop_name", "") or "").strip(),
+        "branch_name": "",
+        "alias": [],
+        "confidence": 1.0,
+        "source": "resolved",
+        "resolution_reason": "deterministic_target_resolved",
+        "needs_clarification": False,
+        "clarification_question": "",
+        "candidates": [],
+        "selected_candidate": None,
+        "candidate_count": 1,
+        "trace": [{"mention": str(target.get("shop_name", "") or ""), "result": "resolved"}],
+    }
     resolved_target = ResolveShopResult(
         status="RESOLVED",
         resolved_shop=ShopRef(shop_id=target["shop_id"], shop_name=target["shop_name"]),
         confidence=1.0,
         reason="deterministic_target_resolved",
     )
-    answer_text = _tool_result_to_text(presentation_task_type, evidence.model_dump(), tool_result)
+    answer_text = _tool_result_to_text(presentation_task_type, evidence.model_dump(), primary_tool_result)
     verify = verify_answer(answer_text, evidence.model_dump(), presentation_task_type)
     if not verify.get("passed", False):
-        answer_text = _tool_result_to_text(presentation_task_type, evidence.model_dump(), tool_result)
+        answer_text = _tool_result_to_text(presentation_task_type, evidence.model_dump(), primary_tool_result)
     timestamp = datetime.now(timezone.utc).isoformat()
     return {
         "workflow_name": "deterministic_tool",
@@ -640,8 +862,8 @@ def _build_success_patch(
         "next_action": "run_workflow",
         "execution_plan": execution_plan,
         "validated_plan": execution_plan,
-        "tool_results": {tool_result.call_id: tool_result},
-        "tool_result_set": {tool_result.call_id: tool_result},
+        "tool_results": tool_results,
+        "tool_result_set": tool_results,
         "facets": list(getattr(execution_plan, "facets", []) or []),
         "target_resolution": getattr(execution_plan, "target_resolution", None) or {
             "resolved": True,
@@ -658,11 +880,16 @@ def _build_success_patch(
         "ranking_policy": getattr(execution_plan, "ranking_policy", None),
         "resolved_target": resolved_target,
         "resolve_shop_result": resolved_target,
+        "canonical_shop_entity": canonical_shop_entity,
+        "canonical_shop_entities": [canonical_shop_entity],
+        "shop_resolution_trace": list(canonical_shop_entity.get("trace", []) or []),
         "evidence_pack": evidence,
         "answer_plan": answer_plan,
         "final_response": answer_text,
         "draft_response": answer_text,
         "answer_source": "deterministic_tool_workflow",
+        "preview_text": answer_text,
+        "preview_policy_result": {"verified": True, "allowed": True, "reason": "verified"},
         "answer_verify_passed": bool(verify.get("passed", False)),
         "answer_verify_violations": list(verify.get("issues") or []),
         "verify_result": "pass" if verify.get("passed", False) else "rewrite_needed",
@@ -679,6 +906,7 @@ def _build_success_patch(
         "comparison_targets": [],
         "last_recommendation_list": state.get("last_recommendation_list", []),
         "last_answer_order": state.get("last_answer_order", []),
+        "stream_status": "completed",
     }
 
 
@@ -720,6 +948,26 @@ def _build_clarify_patch(state: dict[str, Any], decision: OrchestrationDecision,
         "next_action": "clarify",
         "pending_clarification": pending,
         "resolve_shop_result": ResolveShopResult.model_validate(resolve_kwargs),
+        "canonical_shop_entity": {
+            "status": "ambiguous" if resolve_status == "AMBIGUOUS" else "not_found",
+            "mention": str(pending.get("original_text", "") or ""),
+            "shop_id": "",
+            "shop_name": "",
+            "canonical_name": "",
+            "branch_name": "",
+            "alias": [],
+            "confidence": 0.0,
+            "source": "reference",
+            "resolution_reason": reason,
+            "needs_clarification": True,
+            "clarification_question": prompt,
+            "candidates": candidate_targets,
+            "selected_candidate": None,
+            "candidate_count": len(candidate_targets),
+            "trace": [{"mention": str(pending.get("original_text", "") or ""), "result": "clarify", "reason": reason}],
+        },
+        "canonical_shop_entities": candidate_targets,
+        "shop_resolution_trace": [{"mention": str(pending.get("original_text", "") or ""), "result": "clarify", "reason": reason}],
         "target_resolution": {
             "resolved": False,
             "target_shop": None,
@@ -733,7 +981,7 @@ def _build_clarify_patch(state: dict[str, Any], decision: OrchestrationDecision,
         },
         "final_response": prompt,
         "draft_response": prompt,
-        "answer_source": "clarify_message",
+        "answer_source": "clarification_fallback_workflow",
         "answer_verify_passed": False,
         "answer_verify_violations": [],
         "verify_result": "pass",
@@ -828,31 +1076,76 @@ def run_deterministic_tool_workflow(
         patch.update(_log(state, "deterministic_tool_workflow", workflow_name="deterministic_tool", task_type=task_type, status="clarify", reason=reason))
         return patch
 
+    budget = budget_context_from_state(state)
+    if budget.remaining("tool_round_budget") <= 0:
+        pending = build_pending_clarification(
+            original_text=str(state.get("raw_text", "") or ""),
+            original_semantic_frame=semantic_frame,
+            original_task_type=task_type,
+            candidate_targets=[target],
+            reason="budget_exhausted:tool_round_budget",
+            source_node="deterministic_tool_workflow",
+        ).model_dump()
+        patch = _build_clarify_patch(state, decision, pending, "budget_exhausted:tool_round_budget")
+        patch["workflow_name"] = "clarification_fallback"
+        patch["workflow_run_status"] = "fallback"
+        patch["response_mode"] = "fallback"
+        patch.update(_log(state, "deterministic_tool_workflow", workflow_name="deterministic_tool", task_type=task_type, status="fallback", reason="budget_exhausted:tool_round_budget"))
+        return patch
+
     tool_name, facet = route_info
     args = _tool_args_for_task(task_type, target["shop_id"], state)
-    execution_plan = _build_execution_plan(task_type, target["shop_id"], tool_name, facet, args, state)
+    semantic_frame = _to_dict(state.get("semantic_frame"))
+    extra_facets = _budgeted_extra_facets(state, _batch_facets_for_task(task_type, semantic_frame, facet))
+    execution_plan = _build_execution_plan(
+        task_type,
+        target["shop_id"],
+        tool_name,
+        facet,
+        args,
+        state,
+        extra_facets=extra_facets,
+    )
 
-    raw_result = dispatch_tool_call(tool_name, args)
-    tool_result = _normalize_tool_result("call_1", tool_name, target["shop_id"], raw_result)
+    batch_executor = ToolBatchExecutor(call_fn=dispatch_tool_call, cache=get_default_evidence_cache())
+    raw_results = batch_executor.execute(execution_plan.tool_calls)
+    primary_call = raw_results.get("call_1") or {}
+    primary_tool_result = _normalize_tool_result("call_1", tool_name, target["shop_id"], primary_call)
+    tool_results = {
+        call_id: _normalize_tool_result(
+            call_id,
+            str((result or {}).get("tool_name", "") or tool_name),
+            str((result or {}).get("shop_id", "") or target["shop_id"]),
+            result,
+        )
+        for call_id, result in raw_results.items()
+    }
 
     evidence_dict = build_evidence(
-        tool_results={"call_1": tool_result.model_dump()},
+        tool_results={call_id: result.model_dump() for call_id, result in tool_results.items()},
         resolved_target={"status": "RESOLVED", "resolved_shop": {"shop_id": target["shop_id"], "shop_name": target["shop_name"]}},
         execution_plan=execution_plan.model_dump(),
         recommendation_candidates=[],
         comparison_targets=[],
+        cache=get_default_evidence_cache(),
+        cache_scope={
+            "workflow": "deterministic_tool_workflow",
+            "trace_id": state.get("trace_id", ""),
+            "session_id": state.get("session_id", ""),
+            "turn_id": state.get("turn_id", ""),
+        },
     )
 
     if facet == "price":
         snapshot = evidence_dict.get("ranking_snapshot") or {}
-        if isinstance(tool_result.data, dict):
-            snapshot["avg_price"] = tool_result.data.get("avg_price")
-            snapshot["price_level"] = tool_result.data.get("price_level")
+        if isinstance(primary_tool_result.data, dict):
+            snapshot["avg_price"] = primary_tool_result.data.get("avg_price")
+            snapshot["price_level"] = primary_tool_result.data.get("price_level")
             evidence_dict["ranking_snapshot"] = snapshot
             facet_results = list(evidence_dict.get("facet_results") or [])
             if facet_results:
-                facet_results[-1]["value"] = tool_result.data.get("avg_price")
-                facet_results[-1]["status"] = "ok" if tool_result.result_status.value in {"ok", "partial"} else tool_result.result_status.value
+                facet_results[-1]["value"] = primary_tool_result.data.get("avg_price")
+                facet_results[-1]["status"] = "ok" if primary_tool_result.result_status.value in {"ok", "partial"} else primary_tool_result.result_status.value
                 evidence_dict["facet_results"] = facet_results
 
     evidence = EvidencePack.model_validate(evidence_dict)
@@ -864,7 +1157,8 @@ def run_deterministic_tool_workflow(
         task_type=task_type,
         target=target,
         execution_plan=execution_plan,
-        tool_result=tool_result,
+        tool_results=tool_results,
+        primary_tool_result=primary_tool_result,
         evidence=evidence,
         answer_plan=answer_plan,
         facet=facet,
@@ -876,7 +1170,7 @@ def run_deterministic_tool_workflow(
         patch["response_mode"] = "fallback"
         patch["next_action"] = "fallback"
         patch["workflow_runner_error"] = "ANSWER_VERIFIER_FAILED"
-    patch.update(_log(state, "deterministic_tool_workflow", workflow_name="deterministic_tool", task_type=task_type, status=patch["workflow_run_status"], tool_name=tool_name, facet=facet, target_shop_id=target["shop_id"]))
+    patch.update(_log(state, "deterministic_tool_workflow", workflow_name="deterministic_tool", task_type=task_type, status=patch["workflow_run_status"], tool_name=tool_name, facet=facet, target_shop_id=target["shop_id"], extra_facets=extra_facets, batch_calls=len(tool_results)))
     log_kv(
         _LOGGER,
         20 if patch["workflow_run_status"] == "completed" else 30,

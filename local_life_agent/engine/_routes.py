@@ -219,9 +219,22 @@ def _route_evidence_review(state: GraphState) -> str:
 
     if evidence_review is None:
         return "decision_planner"
+    action = getattr(evidence_review, "action", "") or ""
+    if isinstance(action, Enum):
+        action = action.value
     next_action = getattr(evidence_review, "next_action", "FINISH") or "FINISH"
     if isinstance(next_action, Enum):
         next_action = next_action.value
+    route_action = str(action or "").strip().lower()
+    if route_action and route_action != "proceed":
+        next_action = {
+            "retry": "REPLAN_EVIDENCE",
+            "replan_missing_facets": "REPLAN_EVIDENCE",
+            "expand_search": "EXPAND_SEARCH",
+            "clarify": "CLARIFY",
+            "degrade": "DEGRADE_ANSWER",
+            "fallback": "FALLBACK",
+        }.get(route_action, next_action)
 
     if next_action in ("REPLAN_EVIDENCE",):
         session = state.get("session_state")

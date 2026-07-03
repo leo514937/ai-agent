@@ -13,6 +13,7 @@ from ...answer.verifier import verify_answer
 from ...core.state_core import StateCore
 from ...domain.schemas import AnswerPlan, EvidenceItem, EvidencePack, ExplorationPlan
 from ...domain.state import SessionWriteDirective as _SessionWriteDirective
+from ..evidence.evidence_cache import EvidenceCache, get_default_evidence_cache
 
 
 _FACET_ALIASES: dict[str, str] = {
@@ -273,6 +274,8 @@ def build_evidence_pack_from_tool_results(
     subgoals: list[dict[str, Any]],
     semantic_facets: Iterable[Any] | None = None,
     location_context: dict[str, Any] | None = None,
+    cache: EvidenceCache | None = None,
+    cache_scope: dict[str, Any] | str | None = None,
 ) -> EvidencePack:
     """Build a single EvidencePack for exploration_planning."""
 
@@ -405,8 +408,7 @@ def build_evidence_pack_from_tool_results(
         }
         for item in evidence_items
     ]
-    evidence = EvidencePack.model_validate(
-        {
+    payload = {
             "owner": owner,
             "facets": list(semantic_facets or []),
             "target_resolution": None,
@@ -426,8 +428,30 @@ def build_evidence_pack_from_tool_results(
             "ranking_snapshot": ranking_snapshot,
             "comparison_matrix": None,
             "tool_results": tool_results,
+            "evidence_cache_key": "",
+            "evidence_cache_scope": "",
+            "evidence_cache_hit": False,
+            "evidence_enrichment_top_k": len(last_recommendation_list),
         }
-    )
+    cache_store = cache or get_default_evidence_cache()
+    if cache_store is not None and cache_scope is not None:
+        cached_payload, cache_meta = cache_store.get_or_build(
+            cache_scope,
+            {
+                "workflow_name": workflow_name,
+                "owner": owner,
+                "subgoals": subgoals,
+                "semantic_facets": list(semantic_facets or []),
+                "location_context": location_context or {},
+                "tool_results": tool_results,
+            },
+            lambda: payload,
+        )
+        payload = dict(cached_payload)
+        payload["evidence_cache_key"] = cache_meta.get("cache_key", "")
+        payload["evidence_cache_scope"] = cache_meta.get("cache_scope", "")
+        payload["evidence_cache_hit"] = bool(cache_meta.get("cache_hit", False))
+    evidence = EvidencePack.model_validate(payload)
     return evidence
 
 

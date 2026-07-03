@@ -33,6 +33,16 @@ from .facets import (
 )
 
 
+def _coerce_list_value(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, (tuple, set)):
+        return list(value)
+    return [value]
+
+
 # ===================================================================
 # 0. Sub-enums for the deepened complex DTOs
 # ===================================================================
@@ -476,6 +486,37 @@ class ExecutionPlan(BaseModel):
     plan_source: str = ""
     planning_notes: list[str] = Field(default_factory=list)
     assumptions_used: list[str] = Field(default_factory=list)
+    facet_candidates: list[dict[str, Any]] = Field(default_factory=list)
+    facet_validation_result: dict[str, Any] | None = None
+    facet_budget_plan: dict[str, Any] | None = None
+    blocked_tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    unsupported_facets: list[str] = Field(default_factory=list)
+    missing_inputs: list[str] = Field(default_factory=list)
+    planning_warnings: list[str] = Field(default_factory=list)
+    evidence_enrichment_top_k: int = 0
+    evidence_planner_result: dict[str, Any] | None = None
+    budget_context_snapshot: dict[str, Any] | None = None
+
+    @field_validator(
+        "facets",
+        "conflicting_facets",
+        "tool_calls",
+        "stages",
+        "target_shop_ids",
+        "query_terms",
+        "scene_terms",
+        "planning_notes",
+        "assumptions_used",
+        "facet_candidates",
+        "blocked_tool_calls",
+        "unsupported_facets",
+        "missing_inputs",
+        "planning_warnings",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_list_fields(cls, value: Any) -> list[Any]:
+        return _coerce_list_value(value)
 
 
 class ToolIntentSpec(BaseModel):
@@ -523,6 +564,13 @@ class EvidenceItem(BaseModel):
     value: Any = None
     confidence: float = 1.0
     timestamp: str = ""
+    observed_at_ms: int | None = None
+    ttl_seconds: int | None = None
+    freshness_class: str | None = None
+    is_stale: bool = False
+    cache_hit: bool = False
+    location_fingerprint: str | None = None
+    budget_context_snapshot: dict[str, Any] | None = None
     source_type: SourceType = SourceType.TOOL
     backend_source: str = ""
 
@@ -551,6 +599,54 @@ class EvidencePack(BaseModel):
     ranking_snapshot: dict[str, Any] | None = None
     comparison_matrix: dict[str, Any] | None = None
     tool_results: dict[str, Any] = Field(default_factory=dict)
+    evidence_cache_key: str = ""
+    evidence_cache_scope: str = ""
+    evidence_cache_hit: bool = False
+    evidence_enrichment_top_k: int = 0
+    observed_at_ms: int | None = None
+    ttl_seconds: int | None = None
+    freshness_class: str | None = None
+    is_stale: bool = False
+    cache_hit: bool = False
+    location_fingerprint: str | None = None
+    budget_context_snapshot: dict[str, Any] | None = None
+
+    @field_validator(
+        "facets",
+        "conflicting_facets",
+        "answerable_facets",
+        "unknown_facets",
+        "failed_facets",
+        "target_shop_ids",
+        "requested_facets",
+        "facet_results",
+        "evidence_items",
+        "unknown_items",
+        "route_steps",
+        "last_recommendation_list",
+        "forbidden_claims",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_list_fields(cls, value: Any) -> list[Any]:
+        return _coerce_list_value(value)
+
+    @field_validator("tool_results", mode="before")
+    @classmethod
+    def _coerce_tool_results(cls, value: Any) -> dict[str, Any]:
+        if value is None:
+            return {}
+        if isinstance(value, dict):
+            return dict(value)
+        model_dump = getattr(value, "model_dump", None)
+        if callable(model_dump):
+            dumped = model_dump()
+            if isinstance(dumped, dict):
+                return dumped
+        try:
+            return dict(value)
+        except Exception:
+            return {}
 
 
 # ===================================================================
@@ -585,6 +681,11 @@ class ResolveShopResult(BaseModel):
     confidence: float = 0.0
     matched_by: MatchedBy = MatchedBy.FUZZY
     reason: str = ""
+
+    @field_validator("candidates", mode="before")
+    @classmethod
+    def _coerce_candidates(cls, value: Any) -> list[Any]:
+        return _coerce_list_value(value)
 
     @model_validator(mode="after")
     def _validate_status_consistency(self) -> ResolveShopResult:
@@ -659,6 +760,25 @@ class AnswerPlan(BaseModel):
     tone: str = "neutral"
     fallback_template_type: str = ""
 
+    @field_validator(
+        "facets",
+        "conflicting_facets",
+        "answerable_facets",
+        "unknown_facets",
+        "failed_facets",
+        "required_disclaimers",
+        "target_shop_ids",
+        "response_sections",
+        "allowed_claims",
+        "required_claims",
+        "must_mention_unknowns",
+        "forbidden_claims",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_list_fields(cls, value: Any) -> list[Any]:
+        return _coerce_list_value(value)
+
 
 class ComparisonTargetResolution(BaseModel):
     """Resolution details for multi-target comparison references."""
@@ -670,6 +790,11 @@ class ComparisonTargetResolution(BaseModel):
     ambiguous_target: dict[str, Any] | None = None
     reason: str = ""
     prompt: str | None = None
+
+    @field_validator("targets", "unresolved_targets", mode="before")
+    @classmethod
+    def _coerce_targets(cls, value: Any) -> list[dict[str, Any]]:
+        return [item for item in _coerce_list_value(value) if item is not None]
 
 
 class ComparisonTurnArtifact(BaseModel):
@@ -759,6 +884,11 @@ class OrchestrationDecision(BaseModel):
     missing_fields: list[str] = Field(default_factory=list)
     next_action: str = "run_workflow"
 
+    @field_validator("missing_fields", mode="before")
+    @classmethod
+    def _coerce_missing_fields(cls, value: Any) -> list[str]:
+        return [str(item) for item in _coerce_list_value(value) if str(item).strip()]
+
     @field_validator("workflow_name", mode="before")
     @classmethod
     def _reject_multi_value_workflow_name(cls, value: Any) -> Any:
@@ -831,6 +961,26 @@ class DecisionPlan(BaseModel):
     failed_facets: list[str] = Field(default_factory=list)
     required_disclaimers: list[str] = Field(default_factory=list)
     conversation_continuity: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator(
+        "selected_targets",
+        "omitted_targets",
+        "overall_ranking",
+        "factual_points",
+        "uncertainty_notes",
+        "forbidden_claims",
+        "style_hints",
+        "candidate_summaries",
+        "must_mention_unknowns",
+        "answerable_facets",
+        "unknown_facets",
+        "failed_facets",
+        "required_disclaimers",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_list_fields(cls, value: Any) -> list[Any]:
+        return _coerce_list_value(value)
 
 
 class ExplorationSubgoal(BaseModel):

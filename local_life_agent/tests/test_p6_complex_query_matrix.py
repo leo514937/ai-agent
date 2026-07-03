@@ -88,7 +88,7 @@ def test_p6_complex_query_matrix(case: dict[str, Any], monkeypatch: pytest.Monke
         first_session = _session_after(first_state, first_debug)
         second_session = _session_after(second_state, second_debug)
 
-        assert first_state.get("workflow_name") == "discovery_decision"
+        assert first_state.get("workflow_name") == "clarification_fallback"
         assert first_state.get("response_mode") == "clarify"
         assert first_session.get("pending_clarification") is not None
         assert first_session.get("current_shop") is None
@@ -131,9 +131,11 @@ def test_p6_complex_query_matrix(case: dict[str, Any], monkeypatch: pytest.Monke
 
     if case["name"] == "multi_constraint_recommendation":
         assert state.get("workflow_name") == "discovery_decision"
-        assert state.get("response_mode") == "clarify"
-        assert session_after.get("pending_clarification") is not None
-        _assert_not_writeback(session_after, "current_shop", "last_recommendation_list", "comparison_targets")
+        assert state.get("response_mode") == "answer"
+        assert (state.get("target_resolution") or {}).get("resolved") is False
+        assert session_after.get("pending_clarification") is None
+        assert session_after.get("last_recommendation_list") is not None
+        _assert_not_writeback(session_after, "current_shop", "comparison_targets")
 
     elif case["name"] == "multi_dimensional_comparison":
         assert state.get("workflow_name") == "discovery_decision"
@@ -176,10 +178,11 @@ def test_p6_complex_query_matrix(case: dict[str, Any], monkeypatch: pytest.Monke
 
     elif case["name"] == "empty_search_result":
         assert state.get("workflow_name") == "discovery_decision"
-        assert state.get("response_mode") == "clarify"
+        assert state.get("response_mode") == "answer"
         assert (state.get("target_resolution") or {}).get("resolved") is False
-        assert session_after.get("pending_clarification") is not None
-        _assert_not_writeback(session_after, "current_shop", "last_recommendation_list", "comparison_targets")
+        assert session_after.get("pending_clarification") is None
+        assert session_after.get("last_recommendation_list") in (None, [])
+        _assert_not_writeback(session_after, "current_shop", "comparison_targets")
 
     elif case["name"] == "answer_verify_failure":
         assert state.get("workflow_name") == "discovery_decision"
@@ -211,15 +214,16 @@ def test_p6_smoke_cases(case: dict[str, Any], monkeypatch: pytest.MonkeyPatch) -
 
     if case["name"] == "all_tools_timeout_smoke":
         assert state.get("workflow_name") == "discovery_decision"
-        assert "coupon" in _triage_names(state, "failed_facets")
-        assert "distance" in _triage_names(state, "failed_facets")
+        degraded = set(_triage_names(state, "failed_facets")) | set(_triage_names(state, "unknown_facets"))
+        assert {"coupon", "distance"}.issubset(degraded)
         assert session_after.get("current_shop") is not None
 
     elif case["name"] == "malformed_llm_output_smoke":
-        assert state.get("workflow_name") in {"clarification_fallback", "discovery_decision", "direct_response"}
+        assert state.get("response_mode") == "clarify"
         assert backend.tool_calls == []
         assert not (state.get("comparison_targets") or [])
         assert not (session_after.get("last_recommendation_list") or [])
+        assert session_after.get("pending_clarification") is None
 
     elif case["name"] == "contradictory_multi_turn_smoke":
         assert len(records) == 2

@@ -18,6 +18,12 @@ from typing import Any
 from .result_semantics import TOOL_FAILURE_STATUSES
 
 _VALID_STATUSES = {"ok", "partial", "empty", "failed", "error", "circuit_open", "unknown", "backend_unavailable", "unsupported"}
+def _timeout_result_status(tool_name: str, *, required: bool) -> str:
+    """Map timeout to the smallest safe status for the given tool."""
+    # Timeouts do not prove the tool returned an empty business result.
+    # Keep the semantic status conservative so retries / reviews treat it as
+    # an unresolved failure instead of a confirmed empty response.
+    return "unknown"
 
 
 def _infer_retriable(
@@ -146,14 +152,15 @@ def normalize_timeout_result(tool_name: str, kwargs: dict, error_message: str) -
         error_message: Timeout description.
 
     Returns:
-        Canonical ToolResult dict with result_status='unknown'.
+        Canonical ToolResult dict with result_status chosen by timeout policy.
     """
+    status = _timeout_result_status(tool_name, required=bool(kwargs.get("required", False)))
     return _canonical_tool_result(
         tool_name=tool_name,
         call_id=kwargs.get("call_id", ""),
         shop_id=kwargs.get("shop_id", ""),
         success=False,
-        result_status="unknown",
+        result_status=status,
         error_code="TOOL_TIMEOUT",
         error_message=error_message,
         source="unknown",
@@ -161,6 +168,7 @@ def normalize_timeout_result(tool_name: str, kwargs: dict, error_message: str) -
         backend_source="unknown",
         degraded=True,
         retriable=True,
+        data=[] if status == "empty" else None,
     )
 
 

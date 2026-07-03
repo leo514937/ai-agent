@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from importlib import import_module
 import re
 from typing import Any
 
 from .. import config
 from ..domain.schemas import ComparisonTargetResolution
 from ..domain.state import SessionState
+from .shop_resolver import resolve_shop_entity
 
 
 def _unwrap_resolve_shop_result(raw: dict[str, Any]) -> dict[str, Any]:
@@ -22,6 +24,7 @@ _SINGLE_DEICTIC_HINTS = ("这家", "它", "那家", "这间", "那间")
 _LIST_DEICTIC_HINTS = ("这三家", "这几家", "这几间", "这些", "上面这些", "刚才这几家", "这几个", "这三个")
 _ORDINAL_RE = re.compile(r"第\s*([1-9一二三四五六七八九十])\s*(个|家|间|店)?")
 _LIST_COUNT_RE = re.compile(r"(这|前)\s*([1-9]\d*|[一二两三四五六七八九十]+)\s*(家|个|间)")
+_COMPARISON_SPLIT_RE = re.compile(r"[和跟与及、]")
 
 _CHINESE_TO_INT = {
     "一": 1,
@@ -72,6 +75,47 @@ def _current_shop(session_state: dict | SessionState | None) -> dict[str, Any]:
 
 def _frame_dict(semantic_frame: dict | Any | None) -> dict[str, Any]:
     return _shop_dict(semantic_frame)
+
+
+def _infer_comparison_mentions_from_text(text: str) -> list[str]:
+    """从比较句里保守拆出可能的显式门店名。"""
+    compact = re.sub(r"\s+", "", str(text or ""))
+    if not compact:
+        return []
+
+    compare_markers = ("比较", "对比", "哪个好", "哪个更好", "谁更好", "比")
+    cut_index = len(compact)
+    for marker in compare_markers:
+        idx = compact.find(marker)
+        if 0 < idx < cut_index:
+            cut_index = idx
+    prefix = compact[:cut_index] if cut_index < len(compact) else compact
+    if not prefix:
+        return []
+
+    mentions: list[str] = []
+    for part in _COMPARISON_SPLIT_RE.split(prefix):
+        token = part.strip("，,。！？?!~呢吧嘛呀啊")
+        if not token:
+            continue
+        if _parse_ordinal(token) is not None:
+            continue
+        if token in _SINGLE_DEICTIC_HINTS or token in _LIST_DEICTIC_HINTS:
+            continue
+        if token.startswith(("这", "那", "它")):
+            continue
+        if len(token) < 2:
+            continue
+        mentions.append(token)
+
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for mention in mentions:
+        if mention in seen:
+            continue
+        seen.add(mention)
+        ordered.append(mention)
+    return ordered
 
 
 def _parse_number_token(raw: str) -> int | None:
@@ -203,13 +247,72 @@ def resolve_comparison_targets(
 
     def _resolve_explicit(query: str) -> dict[str, Any]:
         try:
-            from ..engine import graph_builder as _graph_builder
+            _graph_builder = import_module("local_life_agent.engine.graph_builder")
         except Exception:
-            return {"status": "NOT_FOUND", "error_code": "SHOP_RESOLVE_FAILED"}
+            _graph_builder = None
+
+        if _graph_builder is not None:
+            resolve_shop_fn = getattr(_graph_builder, "resolve_shop", None)
+            if callable(resolve_shop_fn):
+                try:
+                    legacy_raw = resolve_shop_fn(query, location={})
+                except Exception:
+                    legacy_raw = {}
+                if isinstance(legacy_raw, dict):
+                    legacy_status = str(legacy_raw.get("status", "") or "").upper()
+                    if legacy_status == "RESOLVED":
+                        shop = legacy_raw.get("shop") or legacy_raw.get("resolved_shop") or {}
+                        shop_dict = _shop_dict(shop)
+                        if shop_dict.get("shop_id") and shop_dict.get("shop_name"):
+                            return legacy_raw
+                    if legacy_status == "AMBIGUOUS":
+                        return legacy_raw
         try:
-            return _unwrap_resolve_shop_result(_graph_builder.resolve_shop(query, location={}))
+            resolved = resolve_shop_entity(query, session_state=session_state, semantic_frame=frame)
         except Exception:
             return {"status": "NOT_FOUND", "error_code": "SHOP_RESOLVE_FAILED"}
+        result = resolved.model_dump() if hasattr(resolved, "model_dump") else dict(resolved)
+        status = str(getattr(result.get("status", ""), "value", result.get("status", "")) or "").upper()
+        shop_id = str(result.get("shop_id", "") or "").strip()
+        shop_name = str(result.get("shop_name", "") or "").strip()
+        if status == "RESOLVED" and shop_id and shop_name:
+            return {
+                "status": "RESOLVED",
+                "shop": {"shop_id": shop_id, "shop_name": shop_name},
+                "resolved_shop": {"shop_id": shop_id, "shop_name": shop_name},
+                "candidates": [
+                    {
+                        "shop_id": cand.get("shop_id", ""),
+                        "shop_name": cand.get("shop_name", ""),
+                        "address": cand.get("raw", {}).get("address", "") if isinstance(cand.get("raw"), dict) else "",
+                    }
+                    for cand in (result.get("candidates", []) or [])
+                ],
+                "confidence": result.get("confidence", 0.0),
+                "reason": result.get("resolution_reason", ""),
+            }
+        legacy = {
+            "status": status,
+            "shop": {
+                "shop_id": result.get("shop_id", ""),
+                "shop_name": result.get("shop_name", ""),
+            },
+            "resolved_shop": {
+                "shop_id": result.get("shop_id", ""),
+                "shop_name": result.get("shop_name", ""),
+            },
+            "candidates": [
+                {
+                    "shop_id": cand.get("shop_id", ""),
+                    "shop_name": cand.get("shop_name", ""),
+                    "address": cand.get("raw", {}).get("address", "") if isinstance(cand.get("raw"), dict) else "",
+                }
+                for cand in (result.get("candidates", []) or [])
+            ],
+            "confidence": result.get("confidence", 0.0),
+            "reason": result.get("resolution_reason", ""),
+        }
+        return _unwrap_resolve_shop_result(legacy)
 
     if not comparison_targets:
         comparison_targets = []
@@ -223,19 +326,21 @@ def resolve_comparison_targets(
                 continue
             if token in _SINGLE_DEICTIC_HINTS or token in _LIST_DEICTIC_HINTS or token.startswith("这") or token.startswith("那"):
                 comparison_targets.append({"reference": "deictic", "source_text": token, "shop_name": token})
-        if not comparison_targets:
-            compact_text = str(text or "").replace(" ", "")
-            for match in _ORDINAL_RE.finditer(compact_text):
-                token = match.group(0).strip()
-                if token:
-                    comparison_targets.append({"reference": "ordinal", "source_text": token, "shop_name": token})
-            for token in _LIST_DEICTIC_HINTS + _SINGLE_DEICTIC_HINTS:
-                if token in compact_text:
-                    comparison_targets.append({
-                        "reference": "deictic",
-                        "source_text": token,
-                        "shop_name": token,
-                    })
+    if not ordinal_references and not deictic_references and not reference_mentions:
+        compact_text = str(text or "").replace(" ", "")
+        for match in _ORDINAL_RE.finditer(compact_text):
+            token = match.group(0).strip()
+            if token:
+                comparison_targets.append({"reference": "ordinal", "source_text": token, "shop_name": token})
+        for token in _LIST_DEICTIC_HINTS + _SINGLE_DEICTIC_HINTS:
+            if token in compact_text:
+                comparison_targets.append({
+                    "reference": "deictic",
+                    "source_text": token,
+                    "shop_name": token,
+                })
+    for token in _infer_comparison_mentions_from_text(text):
+        comparison_targets.append({"reference": "explicit", "source_text": token, "shop_name": token})
 
     for item in comparison_targets:
         target = _shop_dict(item)

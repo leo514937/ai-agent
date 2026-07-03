@@ -10,7 +10,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..planning.review_policy import NextAction
 
@@ -27,6 +27,51 @@ class ToolStatus(str, Enum):
 
 FINAL_STATUSES = frozenset({"ok", "empty"})
 FAILURE_STATUSES = frozenset({"unknown", "failed", "timeout", "unsupported"})
+
+
+class EvidenceReviewAction(str, Enum):
+    """P8 review action for evidence sufficiency and iteration."""
+
+    PROCEED = "proceed"
+    RETRY = "retry"
+    REPLAN_MISSING_FACETS = "replan_missing_facets"
+    EXPAND_SEARCH = "expand_search"
+    CLARIFY = "clarify"
+    DEGRADE = "degrade"
+    FALLBACK = "fallback"
+
+
+class ToolFailureType(str, Enum):
+    """Minimal P8 tool failure classification."""
+
+    TIMEOUT = "timeout"
+    NETWORK_ERROR = "network_error"
+    BACKEND_ERROR = "backend_error"
+    INVALID_RESPONSE = "invalid_response"
+    UNSUPPORTED_FACET = "unsupported_facet"
+    MISSING_INPUT = "missing_input"
+    EMPTY_RESULT = "empty_result"
+    UNKNOWN = "unknown"
+
+
+class ToolFailure(BaseModel):
+    tool_name: str | None = None
+    facet: str | None = None
+    target_shop_id: str | None = None
+    failure_type: ToolFailureType = ToolFailureType.UNKNOWN
+    retryable: bool = False
+    message: str | None = None
+    evidence_ref: str | None = None
+
+
+def _coerce_list_value(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, (tuple, set)):
+        return list(value)
+    return [value]
 
 
 class FacetEvidence(BaseModel):
@@ -48,10 +93,16 @@ class EvidenceReviewResult(BaseModel):
     Written to ``GraphState.review_results["evidence_review"]``.
     """
     stage: str = "evidence_review"
+    action: EvidenceReviewAction = EvidenceReviewAction.PROCEED
     next_action: NextAction = NextAction.FINISH
     can_degrade: bool = False
     status: str = "sufficient"
     reason: str = ""
+    retryable_facets: list[str] = Field(default_factory=list)
+    missing_facets: list[str] = Field(default_factory=list)
+    unknown_facets: list[str] = Field(default_factory=list)
+    failed_facets: list[str] = Field(default_factory=list)
+    answerable_facets: list[str] = Field(default_factory=list)
     required_ok: list[str] = Field(default_factory=list)
     required_empty: list[str] = Field(default_factory=list)
     required_unknown: list[str] = Field(default_factory=list)
@@ -69,7 +120,53 @@ class EvidenceReviewResult(BaseModel):
     missing_evidence: list[str] = Field(default_factory=list)
     unsafe_answer_risks: list[str] = Field(default_factory=list)
     recommended_next_action: str = ""
+    tool_failures: list[ToolFailure] = Field(default_factory=list)
+    retry_budget_remaining: int | None = None
+    expand_search_budget_remaining: int | None = None
+    replan_budget_remaining: int | None = None
+    rewrite_budget_remaining: int | None = None
+    tool_round_budget_remaining: int | None = None
+    facet_enrich_budget_remaining: int | None = None
+    deadline_remaining_ms: int | None = None
+    budget_context_snapshot: dict[str, Any] = Field(default_factory=dict)
+    budget_exhausted_reasons: list[str] = Field(default_factory=list)
+    stale_facets: list[str] = Field(default_factory=list)
+    expired_facets: list[str] = Field(default_factory=list)
+    disclaimer_facets: list[str] = Field(default_factory=list)
+    degrade_reason: str = ""
+    fallback_reason: str = ""
+    clarification_reason: str = ""
+    next_step: str = ""
+
+    @field_validator(
+        "retryable_facets",
+        "missing_facets",
+        "unknown_facets",
+        "failed_facets",
+        "answerable_facets",
+        "required_ok",
+        "required_empty",
+        "required_unknown",
+        "required_failed",
+        "optional_ok",
+        "optional_empty",
+        "optional_unknown",
+        "optional_failed",
+        "missing_evidence",
+        "unsafe_answer_risks",
+        "budget_exhausted_reasons",
+        "stale_facets",
+        "expired_facets",
+        "disclaimer_facets",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_list_fields(cls, value: Any) -> list[Any]:
+        return _coerce_list_value(value)
 
     @property
     def is_sufficient(self) -> bool:
-        return self.next_action in (NextAction.FINISH, NextAction.DEGRADE_ANSWER)
+        return self.action in (
+            EvidenceReviewAction.PROCEED,
+            EvidenceReviewAction.DEGRADE,
+        ) or self.next_action in (NextAction.FINISH, NextAction.DEGRADE_ANSWER)

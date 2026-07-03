@@ -30,6 +30,8 @@ class SessionScenario(StrEnum):
     NEARBY_RECOMMENDATION_OK = "nearby_recommendation_ok"
     COMPARISON_OK = "comparison_ok"
     RESOLVE_SHOP_AMBIGUOUS = "resolve_shop_ambiguous"
+    RESOLVE_SHOP_LOW_CONFIDENCE = "resolve_shop_low_confidence"
+    RESOLVE_SHOP_NOT_FOUND = "resolve_shop_not_found"
     CLARIFICATION_REPLY_OK = "clarification_reply_ok"
     TOPIC_SWITCH = "topic_switch"
     TOOL_UNKNOWN_FAILED = "tool_unknown_failed"
@@ -62,6 +64,16 @@ _SCENARIO_RULES: dict[SessionScenario, SessionWriteDirective] = {
     ),
     # resolve_shop AMBIGUOUS: write pending_clarification, do NOT clear
     SessionScenario.RESOLVE_SHOP_AMBIGUOUS: SessionWriteDirective(
+        set_fields={"pending_clarification": None},
+        clear_fields=[],
+    ),
+    # resolve_shop LOW_CONFIDENCE: keep pending_clarification and candidates
+    SessionScenario.RESOLVE_SHOP_LOW_CONFIDENCE: SessionWriteDirective(
+        set_fields={"pending_clarification": None},
+        clear_fields=[],
+    ),
+    # resolve_shop NOT_FOUND: keep pending_clarification and trace
+    SessionScenario.RESOLVE_SHOP_NOT_FOUND: SessionWriteDirective(
         set_fields={"pending_clarification": None},
         clear_fields=[],
     ),
@@ -118,6 +130,10 @@ def resolve_scenario(
 
     if resolve_status == "AMBIGUOUS":
         return SessionScenario.RESOLVE_SHOP_AMBIGUOUS
+    if resolve_status == "LOW_CONFIDENCE":
+        return SessionScenario.RESOLVE_SHOP_LOW_CONFIDENCE
+    if resolve_status == "NOT_FOUND":
+        return SessionScenario.RESOLVE_SHOP_NOT_FOUND
 
     if tool_failure_severity in ("required", "circuit_open"):
         return SessionScenario.TOOL_UNKNOWN_FAILED

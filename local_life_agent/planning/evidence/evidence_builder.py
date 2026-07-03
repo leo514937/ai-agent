@@ -7,6 +7,7 @@ from typing import Any
 
 from ... import config
 from ...domain.enums import ToolResultStatus
+from .evidence_cache import EvidenceCache, get_default_evidence_cache
 from ..policies.ranking_policy import rank_candidates
 
 
@@ -121,6 +122,12 @@ def _candidate_items_from_tool_data(data: Any) -> list[dict[str, Any]]:
     items = _items_from_tool_data(data)
     if items:
         return items
+    if isinstance(data, dict):
+        for key in ("data", "items", "shops", "results"):
+            nested = data.get(key)
+            nested_items = _candidate_items_from_tool_data(nested)
+            if nested_items:
+                return nested_items
     if isinstance(data, list):
         return [item for item in data if isinstance(item, dict) and str(item.get("shop_id", "")).strip()]
     return []
@@ -714,11 +721,57 @@ def build_evidence(
     execution_plan: Any | None = None,
     recommendation_candidates: list[Any] | None = None,
     comparison_targets: list[Any] | None = None,
+    *,
+    cache: EvidenceCache | None = None,
+    cache_scope: dict[str, Any] | str | None = None,
 ) -> dict:
     """Build an evidence pack from tool results."""
+    cache_store = cache or get_default_evidence_cache()
     resolved_target = _to_dict(resolved_target)
     shop_id, shop_name = _first_shop_name(resolved_target)
     plan_dict = _to_dict(execution_plan)
+    cache_payload = {
+        "tool_results": tool_results or {},
+        "resolved_target": resolved_target,
+        "execution_plan": plan_dict,
+        "recommendation_candidates": recommendation_candidates or [],
+        "comparison_targets": comparison_targets or [],
+    }
+
+    def _build() -> dict[str, Any]:
+        return _build_evidence_uncached(
+            tool_results=tool_results,
+            resolved_target=resolved_target,
+            execution_plan=execution_plan,
+            recommendation_candidates=recommendation_candidates,
+            comparison_targets=comparison_targets,
+            plan_dict=plan_dict,
+            shop_id=shop_id,
+            shop_name=shop_name,
+        )
+
+    if cache_store is not None and cache_scope is not None:
+        evidence_dict, cache_meta = cache_store.get_or_build(cache_scope, cache_payload, _build)
+        if isinstance(evidence_dict, dict):
+            evidence_dict["evidence_cache_key"] = cache_meta.get("cache_key", "")
+            evidence_dict["evidence_cache_scope"] = cache_meta.get("cache_scope", "")
+            evidence_dict["evidence_cache_hit"] = bool(cache_meta.get("cache_hit", False))
+        return evidence_dict
+
+    return _build()
+
+
+def _build_evidence_uncached(
+    *,
+    tool_results: dict,
+    resolved_target: dict,
+    execution_plan: Any | None,
+    recommendation_candidates: list[Any] | None,
+    comparison_targets: list[Any] | None,
+    plan_dict: dict[str, Any],
+    shop_id: str,
+    shop_name: str,
+) -> dict:
     plan_calls = {}
     if execution_plan is not None:
         for call in plan_dict.get("tool_calls", []) or []:
@@ -729,12 +782,17 @@ def build_evidence(
 
     task_type = str(plan_dict.get("task_type", ""))
     if task_type == "comparison":
-        return _build_comparison_evidence(
+        comparison_payload = _build_comparison_evidence(
             tool_results or {},
             plan_calls,
             plan_dict,
             comparison_targets or [],
         )
+        comparison_payload.setdefault("evidence_cache_key", "")
+        comparison_payload.setdefault("evidence_cache_scope", "")
+        comparison_payload.setdefault("evidence_cache_hit", False)
+        comparison_payload.setdefault("evidence_enrichment_top_k", config.RECOMMENDATION_CANDIDATE_TOP_K)
+        return comparison_payload
 
     evidence_items: list[dict[str, Any]] = []
     unknown_items: list[dict[str, Any]] = []
@@ -978,7 +1036,7 @@ def build_evidence(
             plan_dict,
         )
 
-    return {
+    evidence_payload = {
         **_facet_protocol_metadata(execution_plan, resolved_target),
         **_facet_triage_from_results(facet_results),
         "target_shop_ids": [shop_id] if shop_id else [],
@@ -990,7 +1048,12 @@ def build_evidence(
         "ranking_snapshot": ranking_snapshot,
         "comparison_matrix": comparison_matrix,
         "tool_results": tool_results or {},
+        "evidence_cache_key": "",
+        "evidence_cache_scope": "",
+        "evidence_cache_hit": False,
+        "evidence_enrichment_top_k": config.RECOMMENDATION_CANDIDATE_TOP_K,
     }
+    return evidence_payload
 
 
 def _build_recommendation_evidence(
@@ -1241,6 +1304,16 @@ def _build_recommendation_evidence(
             candidate["coupon_count"] = coupon_count_by_shop_id.get(shop_id)
         surviving_candidates.append(candidate)
 
+    if not surviving_candidates:
+        fallback_candidates = []
+        for candidate in search_result_candidates:
+            candidate_dict = _candidate_from_shop(candidate)
+            shop_id = str(candidate_dict.get("shop_id", "")).strip()
+            if shop_id and not any(str(item.get("shop_id", "")).strip() == shop_id for item in fallback_candidates):
+                fallback_candidates.append(candidate_dict)
+        if fallback_candidates:
+            surviving_candidates = fallback_candidates
+
     preferences = {
         "query_terms": _as_list(plan_dict.get("query_terms")),
         "scene_terms": _as_list(plan_dict.get("scene_terms")),
@@ -1272,13 +1345,13 @@ def _build_recommendation_evidence(
 
     ranking_snapshot = {
         "snapshot_id": f"recommendation_{plan_dict.get('plan_id', '') or 'snapshot'}",
-        "status": "ok" if ranked_snapshot else ("empty" if recommendation_candidates else "unknown"),
+        "status": "ok" if ranked_snapshot else ("empty" if (recommendation_candidates or search_result_candidates) else "unknown"),
         "strategy": "category_match*30 + open_status_score*25 + distance_score*20 + rating_score*15 + coupon_score*10 + tag_match_score*10 - risk_penalty",
         "ranked": ranked_snapshot,
         "ranked_shops": ranked_snapshot,
         "query_terms": plan_dict.get("query_terms", []),
         "scene_terms": plan_dict.get("scene_terms", []),
-        "candidate_count": len(recommendation_candidates),
+        "candidate_count": len(surviving_candidates or recommendation_candidates or search_result_candidates),
     }
 
     forbidden_claims = []

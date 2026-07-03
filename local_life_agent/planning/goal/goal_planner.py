@@ -156,7 +156,12 @@ def _infer_explicit_mentions_from_text(raw_text: str) -> list[str]:
     seen: set[str] = set()
     for mention in mentions:
         cleaned = str(mention).strip()
-        if cleaned and cleaned not in seen:
+        if not cleaned:
+            continue
+        if any(cleaned == existing or cleaned in existing for existing in ordered):
+            continue
+        ordered = [existing for existing in ordered if existing not in cleaned]
+        if cleaned not in seen:
             seen.add(cleaned)
             ordered.append(cleaned)
     return ordered
@@ -170,6 +175,7 @@ def _normalize_goal_plan_from_text(
 ) -> GoalPlan:
     """补齐明确店名信号，避免单店查询被误压成推荐。"""
     text = str(raw_text or "")
+    frame_task_type = _get_task_type(semantic_frame)
     mentions: list[str] = []
     if isinstance(semantic_frame, SemanticFrame):
         mentions = [str(item).strip() for item in (semantic_frame.merchant_mentions or []) if str(item).strip()]
@@ -177,6 +183,21 @@ def _normalize_goal_plan_from_text(
         mentions = [str(item).strip() for item in (semantic_frame.get("merchant_mentions", []) or []) if str(item).strip()]
     if not mentions and text:
         mentions = _infer_explicit_mentions_from_text(text)
+
+    comparison_targets: list[dict[str, Any]] = []
+    reference_mentions: list[str] = []
+    ordinal_references: list[str] = []
+    deictic_references: list[str] = []
+    if isinstance(semantic_frame, SemanticFrame):
+        comparison_targets = [dict(item) for item in (semantic_frame.comparison_targets or []) if str(getattr(item, "shop_name", "") or "").strip() or str(getattr(item, "shop_id", "") or "").strip()]  # type: ignore[arg-type]
+        reference_mentions = [str(item).strip() for item in (semantic_frame.reference_mentions or []) if str(item).strip()]
+        ordinal_references = [str(item).strip() for item in (semantic_frame.ordinal_references or []) if str(item).strip()]
+        deictic_references = [str(item).strip() for item in (semantic_frame.deictic_references or []) if str(item).strip()]
+    elif isinstance(semantic_frame, dict):
+        comparison_targets = [dict(item) for item in (semantic_frame.get("comparison_targets", []) or []) if str(_to_dict(item).get("shop_name", "") or "").strip() or str(_to_dict(item).get("shop_id", "") or "").strip()]
+        reference_mentions = [str(item).strip() for item in (semantic_frame.get("reference_mentions", []) or []) if str(item).strip()]
+        ordinal_references = [str(item).strip() for item in (semantic_frame.get("ordinal_references", []) or []) if str(item).strip()]
+        deictic_references = [str(item).strip() for item in (semantic_frame.get("deictic_references", []) or []) if str(item).strip()]
 
     facet_set = normalize_query_facets(semantic_frame, session_state=session_state, raw_text=raw_text)
     plan.facets = list(facet_set.facets or [])
@@ -189,7 +210,14 @@ def _normalize_goal_plan_from_text(
 
     comparison_hints = ("比", "比较", "对比", "哪个好", "哪个更好", "哪家更好", "谁更好")
     has_comparison_hint = any(hint in text for hint in comparison_hints)
-    if plan.goal_type == "recommendation" and has_comparison_hint and len(mentions) >= 2:
+    has_comparison_signal = bool(
+        comparison_targets
+        or reference_mentions
+        or ordinal_references
+        or deictic_references
+        or (frame_task_type == "comparison")
+    )
+    if plan.goal_type in {"recommendation", "single_shop_query"} and has_comparison_hint and (len(mentions) >= 2 or has_comparison_signal):
         plan.goal_type = "comparison"
     elif plan.goal_type == "recommendation" and len(mentions) == 1:
         plan.goal_type = "single_shop_query"
@@ -198,7 +226,10 @@ def _normalize_goal_plan_from_text(
         plan.goal_summary = text
 
     if plan.candidate_source in {"", "discovery", "recommendation"}:
-        plan.candidate_source = "explicit" if len(mentions) == 1 else "mixed"
+        if plan.goal_type == "comparison" and has_comparison_signal:
+            plan.candidate_source = "mixed" if len(mentions) > 1 else "explicit"
+        else:
+            plan.candidate_source = "explicit" if len(mentions) == 1 else "mixed"
 
     return plan
 

@@ -496,6 +496,17 @@ def _has_verified_single_shop_anchor(state: GraphState) -> bool:
     return False
 
 
+def _looks_like_specific_shop_mention(mention: str) -> bool:
+    text = str(mention or "").strip()
+    if not text:
+        return False
+    if text.startswith(("这家", "那家", "这间", "那间", "它", "第一家", "第二家", "第三家")):
+        return False
+    if any(token in text for token in ("(", "（", ")", "）")):
+        return True
+    return any(token in text for token in ("店", "馆", "轩", "居", "坊", "楼", "城", "中心", "广场"))
+
+
 def _has_deterministic_target_hints(state: GraphState) -> bool:
     semantic_frame = _to_dict(state.get("semantic_frame"))
     merchant_mentions = [str(item).strip() for item in (semantic_frame.get("merchant_mentions") or []) if str(item).strip()]
@@ -508,14 +519,13 @@ def _has_deterministic_target_hints(state: GraphState) -> bool:
     has_raw_deictic = any(token in raw_text for token in ("这家", "那家", "它", "这间", "那间"))
     has_current_shop = bool(_to_dict(state.get("current_shop") or _session_value(state, "current_shop")).get("shop_id") or _to_dict(state.get("current_shop") or _session_value(state, "current_shop")).get("shop_name"))
     has_last_recommendations = bool(state.get("last_recommendation_list") or _session_value(state, "last_recommendation_list"))
+    has_specific_merchant_mention = any(_looks_like_specific_shop_mention(mention) for mention in merchant_mentions)
     has_verified_explicit_mention = any(
-        mention
-        and not mention.startswith(("这家", "那家", "第一家", "第二家", "第三家"))
-        and not re.fullmatch(r"[这那它]\S*", mention)
+        _looks_like_specific_shop_mention(mention)
         for mention in inferred_mentions
     )
 
-    if merchant_mentions or comparison_targets or has_verified_explicit_mention:
+    if has_specific_merchant_mention or comparison_targets or has_verified_explicit_mention:
         return True
     if (ordinal_references or has_raw_ordinal) and has_last_recommendations:
         return True
@@ -743,11 +753,13 @@ def normalize_route_task(state: GraphState) -> str:
             return "missing_required_slot"
 
     if task_type == TaskType.single_shop_query.value or goal_type == TaskType.single_shop_query.value:
+        if _has_reference_signal(state) and not _has_single_shop_anchor(state):
+            return "missing_required_slot"
         if not _has_verified_single_shop_anchor(state) and not _has_deterministic_target_hints(state):
             return "missing_required_slot"
         if _has_reference_failure(state) and not _has_single_shop_anchor(state):
             return "reference_failed"
-        if not _has_verified_single_shop_anchor(state) and _count_single_shop_signal_groups(state) <= 1:
+        if not _has_verified_single_shop_anchor(state) and not _has_deterministic_target_hints(state) and _count_single_shop_signal_groups(state) <= 1:
             return "missing_required_slot"
         if len({facet for facet in facets if facet}) > 1:
             return "recommendation"

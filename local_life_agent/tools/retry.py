@@ -12,6 +12,8 @@ import asyncio
 import random
 from typing import Any
 
+from .normalizer import normalize_timeout_result
+
 _TRANSIENT_CODES = {"TOOL_TIMEOUT", "NETWORK_ERROR", "CIRCUIT_OPEN"}
 _PERMANENT_CODES = {
     "SHOP_NOT_FOUND", "INVALID_ARGUMENT", "TOOL_NOT_REGISTERED",
@@ -54,16 +56,7 @@ async def retry_with_backoff(
                 raw = call_fn(**kwargs)
             result: dict[str, Any] = raw if isinstance(raw, dict) else {"success": True, "data": raw}
         except TimeoutError as exc:
-            result = {
-                "success": False,
-                "result_status": "unknown",
-                "data": None,
-                "error_code": "TOOL_TIMEOUT",
-                "error_message": str(exc),
-                "source": "mock",
-                "backend_source": "mock",
-                "degraded": False,
-            }
+            result = normalize_timeout_result(tool_name, kwargs, str(exc))
         except Exception as exc:
             result = {
                 "success": False,

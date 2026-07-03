@@ -22,6 +22,7 @@ from ...domain.enums import Facet
 from ...domain.schemas import ExecutionPlan, ToolCallSpec
 from ...observability.file_logger import log_kv
 from ...tools.registry import get_registry
+from .facet_budget import plan_evidence_result_from_candidate_set
 from ..llm_utils import invoke_structured_llm, model_validate_or_error
 
 _logger = logging.getLogger(__name__)
@@ -163,6 +164,16 @@ def plan_evidence(
         planning_notes=planning_notes,
         assumptions_used=assumptions_used,
     )
+    planner_result = plan_evidence_result_from_candidate_set(goal=goal, candidate_set=candidate_set, location=location)
+    plan.facet_candidates = [item.model_dump() for item in planner_result.facet_candidates]
+    plan.facet_validation_result = planner_result.validation_result.model_dump() if planner_result.validation_result else None
+    plan.facet_budget_plan = planner_result.budget_plan.model_dump() if planner_result.budget_plan else None
+    plan.blocked_tool_calls = list(planner_result.blocked_tool_calls)
+    plan.unsupported_facets = list(planner_result.unsupported_facets)
+    plan.missing_inputs = list(planner_result.missing_inputs)
+    plan.planning_warnings = list(planner_result.planning_warnings)
+    plan.evidence_enrichment_top_k = int(planner_result.evidence_top_k)
+    plan.evidence_planner_result = planner_result.model_dump()
 
     _logger.debug(
         "EvidencePlanner: plan_id=%s tool_calls=%d required=%s optional=%s",

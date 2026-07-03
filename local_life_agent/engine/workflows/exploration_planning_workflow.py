@@ -25,6 +25,8 @@ from ...planning.shared.evidence_adapter import (
     build_evidence_pack_from_tool_results,
     verify_answer_plan,
 )
+from ...planning.budget.budget_context import budget_context_from_state
+from ...planning.evidence.evidence_cache import get_default_evidence_cache
 from ...tools.gateway import dispatch_tool_call as _default_dispatch_tool_call
 from .clarification_fallback_workflow import run_clarification_fallback_workflow
 
@@ -622,6 +624,7 @@ def run_exploration_planning_workflow(
             decision,
         )
 
+    budget = budget_context_from_state(state)
     for subgoal in subgoals:
         subgoal["location"] = location
 
@@ -631,11 +634,16 @@ def run_exploration_planning_workflow(
         dispatch_tool_call=dispatch_tool_call,
     )
 
-    expand_tool_names = _tool_round_expand(
-        subgoals=subgoals,
-        dispatch_tool_call=dispatch_tool_call,
-    )
-    tool_names_used.extend(expand_tool_names)
+    deadline_remaining = budget.deadline_remaining_ms
+    allow_expand = budget.remaining("tool_round_budget") > 0 and budget.remaining("facet_enrich_budget") > 0
+    if isinstance(deadline_remaining, int) and deadline_remaining <= 50:
+        allow_expand = False
+    if allow_expand:
+        expand_tool_names = _tool_round_expand(
+            subgoals=subgoals,
+            dispatch_tool_call=dispatch_tool_call,
+        )
+        tool_names_used.extend(expand_tool_names)
 
     evidence = build_evidence_pack_from_tool_results(
         workflow_name="exploration_planning",
@@ -643,6 +651,13 @@ def run_exploration_planning_workflow(
         subgoals=subgoals,
         semantic_facets=semantic_frame.get("facets") or [],
         location_context=location,
+        cache=get_default_evidence_cache(),
+        cache_scope={
+            "workflow": "exploration_planning_workflow",
+            "trace_id": state.get("trace_id", ""),
+            "session_id": state.get("session_id", ""),
+            "turn_id": state.get("turn_id", ""),
+        },
     )
 
     if evidence.failed_facets:
@@ -768,6 +783,8 @@ def run_exploration_planning_workflow(
     patch["final_response"] = final_response
     patch["draft_response"] = final_response
     patch["answer_source"] = "exploration_planning_workflow"
+    patch["preview_text"] = final_response
+    patch["preview_policy_result"] = {"verified": True, "allowed": True, "reason": "verified"}
     patch["verifier_result"] = "pass"
     patch["answer_verify_passed"] = True
     patch["answer_verify_violations"] = []
@@ -777,6 +794,7 @@ def run_exploration_planning_workflow(
     patch["llm_verbalizer_called"] = False
     patch["llm_called"] = False
     patch["llm_backend"] = "deterministic"
+    patch["stream_status"] = "completed"
     patch["state_keys_changed"] = list(patch.keys())
     patch.update(_log(state, "exploration_planning_workflow", workflow_name="exploration_planning", status="completed", tool_rounds_used=plan.tool_rounds_used, subgoal_count=len(plan.subgoals)))
     return patch

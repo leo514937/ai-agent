@@ -51,10 +51,16 @@ def _required_disclaimers(unknown_facets: list[str], failed_facets: list[str]) -
     return disclaimers
 
 
-def build_answer_plan(task_type: str, evidence: dict, clarification: dict | None = None) -> dict:
+def build_answer_plan(
+    task_type: str,
+    evidence: dict,
+    clarification: dict | None = None,
+    review_action: str | None = None,
+) -> dict:
     """Plan how the answer should be structured."""
     evidence = _to_dict(evidence)
     clarification = _to_dict(clarification)
+    review_action = str(review_action or evidence.get("review_action") or evidence.get("evidence_review_action") or "").strip().lower()
     snapshot = evidence.get("ranking_snapshot") or {}
     facet_results = evidence.get("facet_results") or snapshot.get("facet_results") or []
     requested_facets = evidence.get("requested_facets") or snapshot.get("requested_facets") or []
@@ -78,7 +84,7 @@ def build_answer_plan(task_type: str, evidence: dict, clarification: dict | None
     fallback_template_type = "multi_facet_unknown"
     must_mention_unknowns: list[str] = []
 
-    if clarification.get("clarification"):
+    if clarification.get("clarification") or review_action == "clarify":
         answer_type = "clarification"
         fallback_template_type = "clarification"
     elif task_type == "recommendation":
@@ -97,6 +103,10 @@ def build_answer_plan(task_type: str, evidence: dict, clarification: dict | None
         fallback_template_type = "multi_facet_circuit_open"
     else:
         must_mention_unknowns = [facet for facet in requested_facets if facet]
+    if review_action in {"degrade", "fallback"}:
+        fallback_template_type = f"evidence_{review_action}"
+    elif review_action in {"retry", "replan_missing_facets", "expand_search"}:
+        fallback_template_type = f"evidence_{review_action}"
 
     response_sections = [
         {

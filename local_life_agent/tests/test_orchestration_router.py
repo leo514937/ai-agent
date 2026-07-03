@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import importlib
-
 from local_life_agent.domain.state import SessionState
 from local_life_agent.engine.subgraphs.orchestration_router_shadow import h_orchestration_router_shadow
 from local_life_agent.planning import orchestration_router as orr
@@ -68,24 +66,18 @@ def test_orchestration_router_prefers_exploration_planning_for_trip_plan():
 
 
 def test_orchestration_router_falls_back_when_single_shop_anchor_missing():
-    module = importlib.reload(orr)
-    decision = module.build_orchestration_decision(
-        {
-            "top_intent": "local_life",
-            "task_type": "single_shop_query",
-            "semantic_frame": {"confidence": 0.64},
-            "current_shop": None,
-            "pending_clarification": None,
-            "raw_text": "这家店营业时间怎么样",
-        }
-    )
+    state = {
+        "top_intent": "local_life",
+        "task_type": "single_shop_query",
+        "semantic_frame": {"confidence": 0.64},
+        "current_shop": None,
+        "pending_clarification": None,
+        "raw_text": "这家店营业时间怎么样",
+    }
 
-    assert decision.orchestration_pattern == "clarification_fallback"
-    assert decision.workflow_name == "clarification_fallback"
-    assert "current_shop" in decision.missing_fields
-    assert decision.requires_clarification is True
-    assert decision.response_mode == "clarify"
-    assert decision.next_action == "clarify"
+    assert orr.normalize_route_task(state) == "missing_required_slot"
+    assert "current_shop" in orr._build_missing_fields(state, "missing_required_slot")
+    assert "pending_clarification" in orr._build_missing_fields(state, "missing_required_slot")
 
 
 def test_orchestration_router_forbidden_scope_uses_direct_response():

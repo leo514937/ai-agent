@@ -9,6 +9,7 @@ from ... import config
 from ...config import TOOL_DEFAULT_TIMEOUT_MS
 from ...domain.enums import Facet, TaskType
 from ...domain.facets import build_target_resolution_result, normalize_query_facets
+from ..evidence.facet_budget import build_evidence_planner_result
 from ..policies.ranking_policy import infer_recommendation_query
 
 _logger = logging.getLogger(__name__)
@@ -104,6 +105,8 @@ def build_execution_plan(task_type: str, target: dict, facets: list[str | dict[s
             "tool_calls": [],
             "stages": [],
             "target_shop_ids": [],
+            "missing_inputs": ["target", "current_shop"] if task_type == TaskType.single_shop_query.value else [],
+            "planning_warnings": ["missing_resolved_target"],
         }
 
     normalized_facets = _normalized_facets(facets)
@@ -150,6 +153,17 @@ def build_execution_plan(task_type: str, target: dict, facets: list[str | dict[s
             }
         )
 
+    planner_result = build_evidence_planner_result(
+        task_type=task_type,
+        proposed_facets=normalized_facets,
+        target_resolution=target,
+        target_shop_ids=[shop_id],
+        raw_text=str(target.get("source_text", "") or ""),
+        max_facets=8,
+        max_tool_calls=config.MAX_TOOL_CALLS,
+        total_cost_budget=10,
+    )
+
     return {
         "plan_id": f"plan_{shop_id}",
         "task_type": task_type,
@@ -177,6 +191,14 @@ def build_execution_plan(task_type: str, target: dict, facets: list[str | dict[s
             }
         ],
         "target_shop_ids": [shop_id],
+        "facet_candidates": [item.model_dump() for item in planner_result.facet_candidates],
+        "facet_validation_result": planner_result.validation_result.model_dump() if planner_result.validation_result else None,
+        "facet_budget_plan": planner_result.budget_plan.model_dump() if planner_result.budget_plan else None,
+        "blocked_tool_calls": planner_result.blocked_tool_calls,
+        "unsupported_facets": planner_result.unsupported_facets,
+        "missing_inputs": planner_result.missing_inputs,
+        "planning_warnings": planner_result.planning_warnings,
+        "evidence_planner_result": planner_result.model_dump(),
     }
 
 
@@ -191,6 +213,16 @@ def build_recommendation_execution_plan(
     query = infer_recommendation_query(frame) or str(fallback_query or "").strip()
     preferences = _recommendation_preferences(frame)
     facet_set = normalize_query_facets(frame, raw_text=fallback_query or query)
+    planner_result = build_evidence_planner_result(
+        task_type=TaskType.recommendation.value,
+        proposed_facets=[facet.model_dump() if hasattr(facet, "model_dump") else facet for facet in (facet_set.facets or [])],
+        semantic_frame=frame,
+        raw_text=fallback_query or query,
+        location=location or {},
+        max_facets=8,
+        max_tool_calls=6,
+        total_cost_budget=10,
+    )
     location = location or {}
     tool_calls: list[dict[str, Any]] = [
         {
@@ -294,6 +326,14 @@ def build_recommendation_execution_plan(
             "open_now_preferred": preferences["open_now_preferred"],
             "coupon_preferred": preferences["coupon_preferred"],
             "nearby_preferred": preferences["nearby_preferred"],
+            "facet_candidates": [item.model_dump() for item in planner_result.facet_candidates],
+            "facet_validation_result": planner_result.validation_result.model_dump() if planner_result.validation_result else None,
+            "facet_budget_plan": planner_result.budget_plan.model_dump() if planner_result.budget_plan else None,
+            "blocked_tool_calls": planner_result.blocked_tool_calls,
+            "unsupported_facets": planner_result.unsupported_facets,
+            "missing_inputs": planner_result.missing_inputs,
+            "planning_warnings": planner_result.planning_warnings,
+            "evidence_planner_result": planner_result.model_dump(),
         },
         "recommendation_query": query,
         "query_terms": preferences["query_terms"],

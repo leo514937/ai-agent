@@ -124,7 +124,11 @@ def plan_state_update(
         State update directive dict with set_fields, clear_fields, etc.
     """
     turn_context = turn_context or {}
+    task_type_value = str(task_type or "").strip()
     workflow_name = str(turn_context.get("workflow_name", "") or "").strip()
+    canonical_entity = _to_dict(turn_context.get("canonical_shop_entity"))
+    canonical_entities = list(turn_context.get("canonical_shop_entities") or [])
+    shop_resolution_trace = list(turn_context.get("shop_resolution_trace") or [])
     resolved_target = turn_context.get("resolved_target") or turn_context.get("resolved_shop")
     resolved_target_dict = _to_dict(resolved_target)
     resolved_shop = resolved_target_dict.get("resolved_shop") or resolved_target_dict.get("shop") or {}
@@ -149,11 +153,40 @@ def plan_state_update(
     comparison_targets = turn_context.get("comparison_targets")
     if comparison_targets is None:
         comparison_targets = []
-    resolution_stage = str(turn_context.get("resolution_stage", "") or "").strip()
+    comparison_targets_source = str(turn_context.get("comparison_targets_source", "") or "").strip()
+    comparison_resolution = _to_dict(turn_context.get("comparison_target_resolution"))
+    comparison_resolution_status = str(comparison_resolution.get("status", "") or "").upper()
+    comparison_resolution_targets = [
+        _to_dict(item)
+        for item in (comparison_resolution.get("targets") or [])
+        if str(_to_dict(item).get("shop_id", "") or "").strip() or str(_to_dict(item).get("shop_name", "") or "").strip()
+    ]
+    if comparison_resolution_status == "RESOLVED" and comparison_resolution_targets:
+        comparison_targets = comparison_resolution_targets
+    elif (
+        task_type_value == TaskType.comparison.value
+        and not pending_dict
+        and len([item for item in comparison_targets if str(_to_dict(item).get("shop_id", "") or "").strip() or str(_to_dict(item).get("shop_name", "") or "").strip()]) >= 2
+    ):
+        comparison_resolution_status = "RESOLVED"
+        if not comparison_resolution_targets:
+            comparison_resolution_targets = [
+                _to_dict(item)
+                for item in comparison_targets
+                if str(_to_dict(item).get("shop_id", "") or "").strip() or str(_to_dict(item).get("shop_name", "") or "").strip()
+            ]
     comparison_result = turn_context.get("comparison_result")
     evidence_pack = turn_context.get("evidence_pack")
     if comparison_result is None and evidence_pack is not None:
         comparison_result = _to_dict(evidence_pack).get("comparison_matrix")
+    if not comparison_targets_source:
+        if comparison_targets:
+            comparison_targets_source = "comparison_targets"
+        elif comparison_resolution_targets:
+            comparison_targets_source = "comparison_target_resolution"
+        elif comparison_result is not None:
+            comparison_targets_source = "comparison_result_fallback"
+    resolution_stage = str(turn_context.get("resolution_stage", "") or "").strip()
     tool_results = turn_context.get("tool_result_set") or turn_context.get("tool_results") or {}
     execution_plan_dict = _to_dict(turn_context.get("validated_plan") or turn_context.get("execution_plan"))
     has_tool_calls = bool(execution_plan_dict.get("tool_calls"))
@@ -181,7 +214,14 @@ def plan_state_update(
     set_fields: dict[str, Any] = {}
     clear_fields: list[str] = []
 
-    if tool_failed:
+    if canonical_entity:
+        set_fields["canonical_shop_entity"] = canonical_entity
+    if canonical_entities:
+        set_fields["canonical_shop_entities"] = canonical_entities
+    if shop_resolution_trace:
+        set_fields["shop_resolution_trace"] = shop_resolution_trace
+
+    if tool_failed and task_type_value != TaskType.comparison.value:
         return {
             "set_fields": {},
             "clear_fields": [],
@@ -248,6 +288,25 @@ def plan_state_update(
             "pending_check_result": pending_check_result,
         }
 
+    if resolve_shop_status in {"LOW_CONFIDENCE", "NOT_FOUND"}:
+        if pending_dict is not None:
+            set_fields["pending_clarification"] = pending_dict
+            set_fields["pending_clarification_meta"] = _session_value_meta(
+                turn_context,
+                source=_first_nonempty(pending_dict.get("source_node"), active_turn_route, task_type),
+                evidence_ref=_first_nonempty(pending_dict.get("pending_id"), pending_dict.get("source_node")),
+                ttl=_ttl_from_pending(pending_dict),
+                resume_strategy=_first_nonempty(pending_dict.get("resume_strategy"), "resume_original_task"),
+            )
+        clear_fields.extend(["current_shop", "current_shop_meta"])
+        return {
+            "set_fields": set_fields,
+            "clear_fields": clear_fields,
+            "task_type": task_type,
+            "resolve_shop_status": resolve_shop_status,
+            "pending_check_result": pending_check_result,
+        }
+
     if is_resolved:
         if task_type in (TaskType.single_shop_query.value, TaskType.coupon_query.value):
             # Only write current_shop for true RESOLVED (single target), never CANDIDATE_SET_RESOLVED
@@ -287,32 +346,58 @@ def plan_state_update(
                 clear_fields.extend(["pending_clarification", "current_shop"])
                 clear_fields.extend(["pending_clarification_meta", "current_shop_meta"])
         elif task_type == TaskType.comparison.value:
-            if comparison_targets:
+            if comparison_resolution_status == "RESOLVED":
+                if comparison_targets:
+                    set_fields["comparison_targets"] = comparison_targets
+                    set_fields["comparison_targets_meta"] = _session_value_meta(
+                        turn_context,
+                        source=_first_nonempty(comparison_targets_source, reference_resolution_source, active_turn_route, task_type),
+                        evidence_ref=_evidence_ref_from_pack(evidence_pack),
+                        ttl=None,
+                    )
+                if comparison_result is not None:
+                    set_fields["comparison_result"] = comparison_result
+                clear_fields.extend(["pending_clarification", "pending_clarification_meta"])
+                clear_fields.extend(["current_shop", "current_shop_meta"])
+            elif comparison_resolution_status in {"NEED_CLARIFICATION", "PARTIAL", "AMBIGUOUS", "NOT_FOUND", "TOO_MANY"}:
+                if pending_dict is not None:
+                    set_fields["pending_clarification"] = pending_dict
+                    set_fields["pending_clarification_meta"] = _session_value_meta(
+                        turn_context,
+                        source=_first_nonempty(pending_dict.get("source_node"), active_turn_route, task_type),
+                        evidence_ref=_first_nonempty(pending_dict.get("pending_id"), pending_dict.get("source_node")),
+                        ttl=_ttl_from_pending(pending_dict),
+                        resume_strategy=_first_nonempty(pending_dict.get("resume_strategy"), "resume_original_task"),
+                    )
+                else:
+                    clear_fields.append("pending_clarification")
+                    clear_fields.append("pending_clarification_meta")
+                clear_fields.append("current_shop")
+                clear_fields.append("current_shop_meta")
+            elif comparison_targets:
                 set_fields["comparison_targets"] = comparison_targets
                 set_fields["comparison_targets_meta"] = _session_value_meta(
                     turn_context,
-                    source=_first_nonempty(reference_resolution_source, active_turn_route, "comparison_targets", task_type),
+                    source=_first_nonempty(comparison_targets_source, reference_resolution_source, active_turn_route, task_type),
                     evidence_ref=_evidence_ref_from_pack(evidence_pack),
                     ttl=None,
                 )
-            if comparison_result is not None:
-                set_fields["comparison_result"] = comparison_result
-                clear_fields.append("pending_clarification")
-                clear_fields.append("pending_clarification_meta")
-            elif pending_dict is not None:
-                set_fields["pending_clarification"] = pending_dict
-                set_fields["pending_clarification_meta"] = _session_value_meta(
-                    turn_context,
-                    source=_first_nonempty(pending_dict.get("source_node"), active_turn_route, task_type),
-                    evidence_ref=_first_nonempty(pending_dict.get("pending_id"), pending_dict.get("source_node")),
-                    ttl=_ttl_from_pending(pending_dict),
-                    resume_strategy=_first_nonempty(pending_dict.get("resume_strategy"), "resume_original_task"),
-                )
-            else:
-                clear_fields.append("pending_clarification")
-                clear_fields.append("pending_clarification_meta")
-            clear_fields.append("current_shop")
-            clear_fields.append("current_shop_meta")
+                if comparison_result is not None:
+                    set_fields["comparison_result"] = comparison_result
+                if pending_dict is not None:
+                    set_fields["pending_clarification"] = pending_dict
+                    set_fields["pending_clarification_meta"] = _session_value_meta(
+                        turn_context,
+                        source=_first_nonempty(pending_dict.get("source_node"), active_turn_route, task_type),
+                        evidence_ref=_first_nonempty(pending_dict.get("pending_id"), pending_dict.get("source_node")),
+                        ttl=_ttl_from_pending(pending_dict),
+                        resume_strategy=_first_nonempty(pending_dict.get("resume_strategy"), "resume_original_task"),
+                    )
+                else:
+                    clear_fields.append("pending_clarification")
+                    clear_fields.append("pending_clarification_meta")
+                clear_fields.append("current_shop")
+                clear_fields.append("current_shop_meta")
         else:
             clear_fields.append("pending_clarification")
             clear_fields.append("pending_clarification_meta")

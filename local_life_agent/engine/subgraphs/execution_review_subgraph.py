@@ -37,6 +37,7 @@ from .._routes import (
 from ...domain.graph_state import GraphState
 from ...domain.schemas import EvidencePack, ExecutionPlan, ToolResult
 from ...domain.state import SessionState
+from ...core.execution_core import ExecutionCore
 from ...planning.decision.decision_planner import (
     plan_decision as p2_plan_decision,
     plan_decision_with_llm,
@@ -51,7 +52,6 @@ from ... import config
 from ...observability.file_logger import get_python_service_logger, log_kv
 
 _LOGGER = get_python_service_logger()
-from ...core import ExecutionCore
 
 
 def h_execution_review_subgraph(state: GraphState) -> dict:
@@ -109,7 +109,6 @@ def h_execution_review_subgraph(state: GraphState) -> dict:
 
 
 def _h_tool_execute(state: GraphState) -> dict:
-    from ...tools.gateway import BatchToolExecutor
     from .._compat import _resolve_recommendation_spec, _to_dict
     from ...domain.enums import TaskType
     from ..graph_builder import dispatch_tool_call as _dispatch_tool_call
@@ -122,7 +121,6 @@ def _h_tool_execute(state: GraphState) -> dict:
             str(call_id): _to_dict(result)
             for call_id, result in (state.get("precomputed_tool_results") or {}).items()
         }
-        execution_core = ExecutionCore(call_fn=_dispatch_tool_call)
         search_calls = []
         remaining_specs = []
         for spec in tool_calls:
@@ -132,10 +130,11 @@ def _h_tool_execute(state: GraphState) -> dict:
             else:
                 remaining_specs.append(spec)
 
+        batch_executor = ExecutionCore(call_fn=_dispatch_tool_call)
         if search_calls:
             # Batch-concurrent map stage: search calls are executed together
             # and then merged into the local raw_results dict.
-            raw_results.update(execution_core.execute_batch(search_calls))
+            raw_results.update(batch_executor.execute_batch(search_calls))
 
         resolved_batch: list[dict[str, Any]] = []
         error_results: dict[str, dict[str, Any]] = {}
@@ -169,7 +168,7 @@ def _h_tool_execute(state: GraphState) -> dict:
         if resolved_batch:
             # Second batch pass for resolved follow-up calls. The merge stays
             # in Python state, not in a LangGraph reducer.
-            raw_results.update(execution_core.execute_batch(resolved_batch))
+            raw_results.update(batch_executor.execute_batch(resolved_batch))
         raw_results.update(error_results)
 
         for spec in tool_calls:
@@ -210,6 +209,7 @@ def _h_tool_execute(state: GraphState) -> dict:
 
 def _h_evidence_build(state: GraphState) -> dict:
     from ...planning.evidence.evidence_builder import build_evidence
+    from ...planning.evidence.evidence_cache import get_default_evidence_cache
 
     resolved_target = _to_dict(state.get("resolved_target"))
     validated_plan = state.get("validated_plan") or state.get("execution_plan")
@@ -219,6 +219,13 @@ def _h_evidence_build(state: GraphState) -> dict:
         _to_dict(validated_plan),
         state.get("recommendation_candidates"),
         state.get("comparison_targets"),
+        cache=get_default_evidence_cache(),
+        cache_scope={
+            "workflow": "execution_review_subgraph",
+            "trace_id": state.get("trace_id", ""),
+            "session_id": state.get("session_id", ""),
+            "turn_id": state.get("turn_id", ""),
+        },
     )
     pack = EvidencePack.model_validate(evidence_payload)
     updates: dict[str, Any] = {}
