@@ -222,6 +222,7 @@ def run_clarification_fallback_workflow(
         "workflow_run_status": "clarify" if response_mode == "clarify" else "fallback",
         "workflow_runner_error": "",
         "workflow_runner_reason": str(decision.workflow_reason or f"clarification fallback for {policy_key}"),
+        "workflow_candidate_reason": str(decision.workflow_reason or f"clarification fallback for {policy_key}"),
         "workflow_started_at": timestamp,
         "workflow_finished_at": timestamp,
         "workflow_callable": "run_clarification_fallback_workflow",

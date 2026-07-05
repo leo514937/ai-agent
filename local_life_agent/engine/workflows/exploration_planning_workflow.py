@@ -5,7 +5,7 @@ Phase 8 keeps this workflow intentionally small:
 - run at most two tool rounds with existing tools only
 - build ExplorationPlan / EvidencePack / AnswerPlan
 - verify the generated answer before returning
-- fall back to the existing clarification / fallback workflow when the
+- emit the same clarification / fallback shape when the
   request is underspecified, over-constrained, or tool execution fails
 """
 
@@ -27,8 +27,8 @@ from ...planning.shared.evidence_adapter import (
 )
 from ...planning.budget.budget_context import budget_context_from_state
 from ...planning.evidence.evidence_cache import get_default_evidence_cache
+from ...target.clarification import build_pending_clarification, format_pending_prompt
 from ...tools.gateway import dispatch_tool_call as _default_dispatch_tool_call
-from .clarification_fallback_workflow import run_clarification_fallback_workflow
 
 _LOGGER = get_python_service_logger()
 dispatch_tool_call = _default_dispatch_tool_call
@@ -70,6 +70,220 @@ _FALLBACK_REASONS = {
     "no_result": "exploration_no_result",
     "unsupported": "exploration_unsupported",
 }
+
+_FALLBACK_POLICY: dict[str, dict[str, Any]] = {
+    "exploration_missing_location": {
+        "response_mode": "clarify",
+        "next_action": "clarify",
+        "answer_type": "clarification",
+        "response_text": "还缺少位置信息，请补充后我再继续帮你规划。",
+        "section_type": "clarification",
+    },
+    "exploration_too_many_subgoals": {
+        "response_mode": "clarify",
+        "next_action": "clarify",
+        "answer_type": "clarification",
+        "response_text": "你的需求里子目标有点多，请再收敛一点，我再继续帮你拆分。",
+        "section_type": "clarification",
+    },
+    "exploration_tool_failure": {
+        "response_mode": "fallback",
+        "next_action": "fallback",
+        "answer_type": "error",
+        "response_text": "相关服务暂时不可用，请稍后再试。",
+        "section_type": "fallback",
+    },
+    "exploration_no_result": {
+        "response_mode": "fallback",
+        "next_action": "fallback",
+        "answer_type": "error",
+        "response_text": "暂时没有查到结果，你可以换个说法或补充更多信息再试。",
+        "section_type": "fallback",
+    },
+    "exploration_unsupported": {
+        "response_mode": "fallback",
+        "next_action": "fallback",
+        "answer_type": "error",
+        "response_text": "这个能力暂时不支持，我可以继续帮你处理本地生活查询类问题。",
+        "section_type": "boundary",
+    },
+}
+
+
+def _collect_candidate_targets(state: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for source in (
+        state.get("pending_clarification"),
+        state.get("comparison_targets"),
+        _to_dict(state.get("semantic_frame")).get("comparison_targets"),
+    ):
+        if not source:
+            continue
+        if isinstance(source, dict):
+            source = source.get("candidate_targets") or source.get("targets") or []
+        if not isinstance(source, list):
+            continue
+        for item in source:
+            item_dict = _to_dict(item)
+            shop_id = str(item_dict.get("shop_id", "") or item_dict.get("resolved_shop", {}).get("shop_id", "") or "").strip()
+            shop_name = str(item_dict.get("shop_name", "") or item_dict.get("resolved_shop", {}).get("shop_name", "") or "").strip()
+            if shop_id or shop_name:
+                candidates.append(
+                    {
+                        "shop_id": shop_id,
+                        "shop_name": shop_name,
+                        "address": str(item_dict.get("address", "") or "").strip(),
+                    }
+                )
+    unique: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for item in candidates:
+        key = (str(item.get("shop_id", "")).strip(), str(item.get("shop_name", "")).strip())
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(item)
+    return unique
+
+
+def _build_fallback_answer_plan(policy_key: str, response_mode: str) -> AnswerPlan:
+    policy = _FALLBACK_POLICY.get(policy_key, _FALLBACK_POLICY["exploration_missing_location"])
+    return AnswerPlan.model_validate(
+        {
+            "answer_type": str(policy.get("answer_type", "clarification") or "clarification"),
+            "target_shop_ids": [],
+            "response_sections": [
+                {
+                    "section_id": f"exploration_{policy_key}",
+                    "section_type": str(policy.get("section_type", "clarification") or "clarification"),
+                    "status": "ok",
+                    "required": False,
+                },
+            ],
+            "allowed_claims": [],
+            "required_claims": [],
+            "must_mention_unknowns": [],
+            "forbidden_claims": [],
+            "ranking_snapshot_id": "",
+            "comparison_matrix_id": "",
+            "tone": "neutral",
+            "fallback_template_type": response_mode,
+        }
+    )
+
+
+def _build_fallback_clarification_request(
+    *,
+    state: dict[str, Any],
+    policy_key: str,
+    semantic_frame: dict[str, Any],
+) -> dict[str, Any]:
+    pending_clarification = _to_dict(state.get("pending_clarification"))
+    if pending_clarification:
+        return pending_clarification
+
+    pending = build_pending_clarification(
+        original_text=str(state.get("raw_text", "") or state.get("normalized_text", "") or ""),
+        original_semantic_frame=semantic_frame,
+        original_task_type=str(state.get("task_type", "") or semantic_frame.get("task_type", "") or ""),
+        candidate_targets=_collect_candidate_targets(state),
+        reason=policy_key,
+        source_node="exploration_planning_workflow",
+    )
+    return pending.model_dump()
+
+
+def _build_fallback_patch(
+    *,
+    state: dict[str, Any],
+    decision: OrchestrationDecision,
+    policy_key: str,
+    workflow_reason: str,
+) -> dict[str, Any]:
+    policy = _FALLBACK_POLICY.get(policy_key, _FALLBACK_POLICY["exploration_missing_location"])
+    response_mode = str(policy.get("response_mode", "clarify") or "clarify")
+    answer_plan = _build_fallback_answer_plan(policy_key, response_mode)
+    timestamp = _utc_now_iso()
+    semantic_frame = _to_dict(state.get("semantic_frame"))
+    final_response = str(policy.get("response_text", "") or "").strip()
+    pending_clarification = _build_fallback_clarification_request(state=state, policy_key=policy_key, semantic_frame=semantic_frame)
+
+    if response_mode == "clarify":
+        final_response = format_pending_prompt(pending_clarification)
+    elif not final_response:
+        final_response = str(policy.get("response_text", "") or "抱歉，暂时无法处理您的请求，请稍后再试。")
+
+    patch: dict[str, Any] = {
+        "workflow_name": "clarification_fallback",
+        "orchestration_pattern": "clarification_fallback",
+        "workflow_reason": str(workflow_reason or f"exploration fallback for {policy_key}"),
+        "workflow_run_status": "clarify" if response_mode == "clarify" else "fallback",
+        "workflow_runner_error": "",
+        "workflow_runner_reason": str(workflow_reason or f"exploration fallback for {policy_key}"),
+        "workflow_candidate_reason": str(workflow_reason or f"exploration fallback for {policy_key}"),
+        "workflow_started_at": timestamp,
+        "workflow_finished_at": timestamp,
+        "workflow_callable": "run_exploration_planning_workflow",
+        "workflow_registered": True,
+        "response_mode": response_mode,
+        "next_action": str(policy.get("next_action", "clarify") or "clarify"),
+        "workflow_result_status": "clarify" if response_mode == "clarify" else "fallback",
+        "workflow_clarification_request": pending_clarification,
+        "answer_plan": answer_plan,
+        "final_response": final_response,
+        "draft_response": final_response,
+        "answer_source": "clarification_fallback_workflow",
+        "verifier_result": "pass",
+        "answer_verify_passed": True,
+        "answer_verify_violations": [],
+        "fallback_reason": policy_key,
+        "answer_fallback_reason": policy_key,
+        "workflow_fallback_reason": policy_key,
+        "final_safety_status": "safe",
+        "llm_verbalizer_called": False,
+        "llm_called": False,
+        "llm_backend": "deterministic",
+        "state_keys_changed": [
+            "workflow_name",
+            "orchestration_pattern",
+            "workflow_run_status",
+            "workflow_runner_error",
+            "workflow_runner_reason",
+            "workflow_started_at",
+            "workflow_finished_at",
+            "workflow_callable",
+            "workflow_registered",
+            "response_mode",
+            "next_action",
+            "workflow_result_status",
+            "workflow_clarification_request",
+            "answer_plan",
+            "final_response",
+            "draft_response",
+            "answer_source",
+            "verifier_result",
+            "answer_verify_passed",
+            "answer_verify_violations",
+            "fallback_reason",
+            "answer_fallback_reason",
+            "workflow_fallback_reason",
+            "final_safety_status",
+        ],
+    }
+    patch["pending_clarification"] = pending_clarification
+    patch["state_keys_changed"].append("pending_clarification")
+    patch.update(_log(state, "exploration_planning_workflow", workflow_name="clarification_fallback", policy_key=policy_key, status=patch["workflow_run_status"]))
+    log_kv(
+        _LOGGER,
+        20 if response_mode == "clarify" else 30,
+        "[WORKFLOW_RUNNER]",
+        tone="route" if response_mode == "clarify" else "warn",
+        node_name="exploration_planning_workflow",
+        workflow_name="clarification_fallback",
+        policy_key=policy_key,
+        status=patch["workflow_run_status"],
+    )
+    return patch
 
 
 def _utc_now_iso() -> str:
@@ -147,6 +361,61 @@ def _extract_text_hints(state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _build_subgoal_from_stage(
+    *,
+    stage: dict[str, Any],
+    index: int,
+    semantic_frame: dict[str, Any],
+    location: dict[str, Any],
+) -> dict[str, Any]:
+    stage_dict = _to_dict(stage)
+    stage_id = str(stage_dict.get("stage_id", "") or f"stage_{index}").strip()
+    stage_type = str(stage_dict.get("stage_type", stage_dict.get("kind", stage_dict.get("category", "custom"))) or "custom").strip()
+    category = str(stage_dict.get("category", "") or stage_type or "custom").strip()
+    candidate_query = str(stage_dict.get("candidate_query", stage_dict.get("query", "") or category) or "").strip()
+    if not candidate_query:
+        candidate_query = category or stage_type or "探索安排"
+    location_value = _to_dict(stage_dict.get("location") or semantic_frame.get("location") or location)
+    time_value = str(stage_dict.get("time", "") or semantic_frame.get("time", "") or "").strip()
+    scene_value = str(stage_dict.get("scene", "") or semantic_frame.get("scene", "") or "").strip()
+    evidence_requirements = stage_dict.get("evidence_requirements") or []
+    if not isinstance(evidence_requirements, list):
+        evidence_requirements = [str(evidence_requirements)]
+    order_raw = stage_dict.get("order", stage_dict.get("sequence_order", index)) or index
+    try:
+        order = int(order_raw)
+    except Exception:
+        order = index
+    fallback_strategy = str(stage_dict.get("fallback_strategy", "") or ("search_then_select" if location_value else "ask_clarification_again")).strip()
+    note = str(stage_dict.get("notes", stage_dict.get("note", "")) or "semantic_stage").strip()
+    return {
+        "subgoal_id": stage_id.replace("stage_", "subgoal_"),
+        "stage_id": stage_id,
+        "stage_type": stage_type,
+        "kind": stage_type,
+        "category": category,
+        "location": location_value,
+        "time": time_value,
+        "scene": scene_value,
+        "constraints": _to_dict(stage_dict.get("constraints") or {}),
+        "order": order,
+        "sequence_order": order,
+        "required": bool(stage_dict.get("required", True)),
+        "candidate_query": candidate_query,
+        "query": candidate_query,
+        "evidence_requirements": [str(item).strip() for item in evidence_requirements if str(item).strip()],
+        "fallback_strategy": fallback_strategy,
+        "status": str(stage_dict.get("status", "planned") or "planned").strip() or "planned",
+        "temporal_relation": str(stage_dict.get("temporal_relation", "") or ("first" if order == 1 else "ordered")).strip(),
+        "require_location": not bool(location_value),
+        "max_candidates": int(stage_dict.get("max_candidates", 3) or 3),
+        "tool_rounds": [],
+        "selected_candidate": None,
+        "candidate_shops": [],
+        "note": note,
+    }
+
+
 def _template_subgoals(task_type: str, hints: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]:
     template = _TASK_TEMPLATES.get(task_type, [])
     if not template:
@@ -192,6 +461,20 @@ def _build_subgoals(state: dict[str, Any], decision: OrchestrationDecision) -> t
     task_type = _normalize_task_type(state, decision)
     hints = _extract_text_hints(state)
     raw_text = hints["raw_text"]
+    semantic_frame = _to_dict(state.get("semantic_frame"))
+    semantic_stages = [item for item in (semantic_frame.get("exploration_stages") or []) if item]
+    if semantic_stages:
+        location = _to_dict(semantic_frame.get("location") or _extract_user_location(state))
+        subgoals = [
+            _build_subgoal_from_stage(
+                stage=stage,
+                index=idx,
+                semantic_frame=semantic_frame,
+                location=location,
+            )
+            for idx, stage in enumerate(semantic_stages[:3], start=1)
+        ]
+        return subgoals, len(subgoals) > 1, None
     template_subgoals, has_temporal_sequence = _template_subgoals(task_type, hints)
     if template_subgoals:
         return template_subgoals, has_temporal_sequence, None
@@ -278,14 +561,21 @@ def _build_exploration_plan(
     fallback_reason: str = "",
 ) -> ExplorationPlan:
     task_type = _normalize_task_type(state, decision)
-    expected_output = "按顺序给出最多三个子目标的探索安排，并标明每一步查到的商家选择。"
+    semantic_frame = _to_dict(state.get("semantic_frame"))
+    expected_output = "按顺序给出最多三个子目标的探索安排，并标明每一步的候选查询与证据需求。"
     if len(subgoals) == 2:
-        expected_output = "按顺序给出两个子目标的探索安排，并标明每一步查到的商家选择。"
+        expected_output = "按顺序给出两个子目标的探索安排，并标明每一步的候选查询与证据需求。"
     allowed_subgoal_keys = set(ExplorationSubgoal.model_fields)
     sanitized_subgoals = [
         {key: value for key, value in subgoal.items() if key in allowed_subgoal_keys}
         for subgoal in subgoals
     ]
+    stage_queries = [str(subgoal.get("candidate_query") or subgoal.get("query") or "").strip() for subgoal in subgoals if str(subgoal.get("candidate_query") or subgoal.get("query") or "").strip()]
+    stage_evidence_requirements = [
+        [str(item).strip() for item in (subgoal.get("evidence_requirements") or []) if str(item).strip()]
+        for subgoal in subgoals
+    ]
+    stage_statuses = [str(subgoal.get("status", "planned") or "planned").strip() or "planned" for subgoal in subgoals]
     plan = ExplorationPlan.model_validate(
         {
             "plan_id": f"exploration_{task_type or 'unknown'}",
@@ -296,11 +586,18 @@ def _build_exploration_plan(
             "subgoal_limit": 3,
             "expansion_round_limit": 2,
             "subgoals": sanitized_subgoals,
+            "stage_queries": stage_queries,
+            "stage_evidence_requirements": stage_evidence_requirements,
+            "stage_statuses": stage_statuses,
             "tool_rounds_used": tool_rounds_used,
             "location_required": True,
             "location_available": bool(location),
             "tool_names_used": list(dict.fromkeys(tool_names_used)),
-            "notes": ["phase_8_exploration_planning"],
+            "notes": [
+                "phase_5_exploration_planning",
+                f"scene={str(semantic_frame.get('scene', '') or '').strip()}",
+                f"time={str(semantic_frame.get('time', '') or '').strip()}",
+            ],
             "fallback_reason": fallback_reason,
         }
     )
@@ -514,6 +811,7 @@ def _build_success_patch(
         "workflow_run_status": "completed" if passed else "fallback",
         "workflow_runner_error": "" if passed else "exploration_verifier_rejected",
         "workflow_runner_reason": str(decision.workflow_reason or "exploration planning workflow"),
+        "workflow_candidate_reason": str(decision.workflow_reason or "exploration planning workflow"),
         "workflow_started_at": timestamp,
         "workflow_finished_at": timestamp,
         "workflow_callable": "run_exploration_planning_workflow",
@@ -586,42 +884,39 @@ def run_exploration_planning_workflow(
 
     subgoals, has_temporal_sequence, fallback_reason = _build_subgoals(state, decision)
     if fallback_reason == _FALLBACK_REASONS["too_many_subgoals"] or len(subgoals) > 3:
-        return run_clarification_fallback_workflow(
-            {
+        return _build_fallback_patch(
+            state={
                 **state,
                 "task_type": task_type,
                 "workflow_name": "exploration_planning",
-                "workflow_reason": fallback_reason or _FALLBACK_REASONS["too_many_subgoals"],
-                "response_mode": "clarify",
-                "next_action": "clarify",
             },
-            decision,
+            decision=decision,
+            policy_key=_FALLBACK_REASONS["too_many_subgoals"],
+            workflow_reason=fallback_reason or _FALLBACK_REASONS["too_many_subgoals"],
         )
 
     if not location:
-        return run_clarification_fallback_workflow(
-            {
+        return _build_fallback_patch(
+            state={
                 **state,
                 "task_type": task_type,
                 "workflow_name": "exploration_planning",
-                "workflow_reason": _FALLBACK_REASONS["missing_location"],
-                "response_mode": "clarify",
-                "next_action": "clarify",
             },
-            decision,
+            decision=decision,
+            policy_key=_FALLBACK_REASONS["missing_location"],
+            workflow_reason=_FALLBACK_REASONS["missing_location"],
         )
 
     if not subgoals:
-        return run_clarification_fallback_workflow(
-            {
+        return _build_fallback_patch(
+            state={
                 **state,
                 "task_type": task_type,
                 "workflow_name": "exploration_planning",
-                "workflow_reason": _FALLBACK_REASONS["too_many_subgoals"],
-                "response_mode": "clarify",
-                "next_action": "clarify",
             },
-            decision,
+            decision=decision,
+            policy_key=_FALLBACK_REASONS["too_many_subgoals"],
+            workflow_reason=_FALLBACK_REASONS["too_many_subgoals"],
         )
 
     budget = budget_context_from_state(state)
@@ -651,6 +946,22 @@ def run_exploration_planning_workflow(
         subgoals=subgoals,
         semantic_facets=semantic_frame.get("facets") or [],
         location_context=location,
+        semantic_frame=semantic_frame,
+        semantic_parse_source=str(state.get("semantic_parse_source", "") or ""),
+        grounding_status=str(state.get("grounding_status", "") or ""),
+        missing_slot_type=str(state.get("missing_slot_type", "") or ""),
+        router_policy_decision=_to_dict(state.get("router_policy_decision")),
+        router_policy_conflicts=list(state.get("router_policy_conflicts") or []),
+        conversation_continuity=_to_dict(state.get("conversation_continuity")),
+        exploration_stages=list(semantic_frame.get("exploration_stages") or []),
+        stage_queries=[str(subgoal.get("candidate_query") or subgoal.get("query") or "").strip() for subgoal in subgoals if str(subgoal.get("candidate_query") or subgoal.get("query") or "").strip()],
+        stage_evidence_requirements=[
+            [str(item).strip() for item in (subgoal.get("evidence_requirements") or []) if str(item).strip()]
+            for subgoal in subgoals
+        ],
+        stage_statuses=[str(subgoal.get("status", "planned") or "planned").strip() or "planned" for subgoal in subgoals],
+        scene=str(semantic_frame.get("scene", "") or "").strip(),
+        time=str(semantic_frame.get("time", "") or "").strip(),
         cache=get_default_evidence_cache(),
         cache_scope={
             "workflow": "exploration_planning_workflow",
@@ -661,30 +972,28 @@ def run_exploration_planning_workflow(
     )
 
     if evidence.failed_facets:
-        return run_clarification_fallback_workflow(
-            {
+        return _build_fallback_patch(
+            state={
                 **state,
                 "task_type": task_type,
                 "workflow_name": "exploration_planning",
-                "workflow_reason": _FALLBACK_REASONS["tool_failure"],
-                "response_mode": "fallback",
-                "next_action": "fallback",
             },
-            decision,
+            decision=decision,
+            policy_key=_FALLBACK_REASONS["tool_failure"],
+            workflow_reason=_FALLBACK_REASONS["tool_failure"],
         )
 
     if not evidence.answerable_facets:
         fallback_reason = _FALLBACK_REASONS["no_result"]
-        return run_clarification_fallback_workflow(
-            {
+        return _build_fallback_patch(
+            state={
                 **state,
                 "task_type": task_type,
                 "workflow_name": "exploration_planning",
-                "workflow_reason": fallback_reason,
-                "response_mode": "fallback",
-                "next_action": "fallback",
             },
-            decision,
+            decision=decision,
+            policy_key=_FALLBACK_REASONS["no_result"],
+            workflow_reason=fallback_reason,
         )
 
     plan = _build_exploration_plan(
@@ -705,16 +1014,15 @@ def run_exploration_planning_workflow(
     final_response = _compose_final_response(plan, evidence.model_dump(), answer_plan.model_dump())
     verifier_result = verify_answer_plan(final_response, evidence.model_dump(), "exploration_plan")
     if not verifier_result.get("passed", False):
-        fallback_patch = run_clarification_fallback_workflow(
-            {
+        fallback_patch = _build_fallback_patch(
+            state={
                 **state,
                 "task_type": task_type,
                 "workflow_name": "exploration_planning",
-                "workflow_reason": "exploration_verifier_rejected",
-                "response_mode": "fallback",
-                "next_action": "fallback",
             },
-            decision,
+            decision=decision,
+            policy_key=_FALLBACK_REASONS["tool_failure"],
+            workflow_reason="exploration_verifier_rejected",
         )
         fallback_patch["answer_verify_passed"] = False
         fallback_patch["answer_verify_violations"] = list(verifier_result.get("issues") or [])
@@ -742,10 +1050,10 @@ def run_exploration_planning_workflow(
             "local_life_goal_draft": state.get("local_life_goal_draft"),
             "resolved_target": None,
             "resolved_shop": None,
-            "current_shop": state.get("current_shop"),
+            "current_shop": None,
             "pending_clarification": state.get("pending_clarification"),
-            "last_recommendation_list": evidence.last_recommendation_list,
-            "comparison_targets": state.get("comparison_targets", []),
+            "last_recommendation_list": [],
+            "comparison_targets": [],
             "user_location": location,
             "evidence_pack": evidence.model_dump(),
             "tool_result_set": evidence.model_dump().get("tool_results", {}) or {},
@@ -754,6 +1062,12 @@ def run_exploration_planning_workflow(
         task_type,
         "",
     )
+    patch["exploration_stages"] = semantic_frame.get("exploration_stages", [])
+    patch["stage_queries"] = list(plan.stage_queries)
+    patch["stage_evidence_requirements"] = list(plan.stage_evidence_requirements)
+    patch["stage_statuses"] = list(plan.stage_statuses)
+    patch["scene"] = str(semantic_frame.get("scene", "") or "").strip()
+    patch["time"] = str(semantic_frame.get("time", "") or "").strip()
     patch["subgoals"] = plan.subgoals
     patch["has_temporal_sequence"] = plan.has_temporal_sequence
     patch["expected_output"] = plan.expected_output

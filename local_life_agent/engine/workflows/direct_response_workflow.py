@@ -148,6 +148,7 @@ def run_direct_response_workflow(
         "workflow_run_status": "completed",
         "workflow_runner_error": "",
         "workflow_runner_reason": str(decision.workflow_reason or f"direct response for {policy_key}"),
+        "workflow_candidate_reason": str(decision.workflow_reason or f"direct response for {policy_key}"),
         "workflow_started_at": timestamp,
         "workflow_finished_at": timestamp,
         "workflow_callable": "run_direct_response_workflow",

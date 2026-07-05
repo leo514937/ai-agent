@@ -22,6 +22,7 @@ from ... import config
 from ...domain.schemas import ActiveTurnResult
 from ...domain.graph_state import GraphState
 from ...observability.file_logger import get_python_service_logger, log_kv
+from ...semantic.slot_extractor import extract_slots
 from .._compat import _run_step
 
 _LOGGER = get_python_service_logger()
@@ -213,6 +214,17 @@ def _rule_recognizer(text: str, pending: Any) -> ActiveTurnResult | None:
 def _strip_weak_words(text: str) -> str:
     """Remove weak / filler tokens like '那家', '这个', '吧', '帮我看'."""
     return _WEAK_WORDS_PATTERN.sub("", text).strip()
+
+
+def _semantic_reply_frame(text: str) -> dict[str, Any]:
+    try:
+        frame = extract_slots(text, "local_life")
+    except Exception:
+        return {}
+    if hasattr(frame, "model_dump"):
+        dumped = frame.model_dump()
+        return dumped if isinstance(dumped, dict) else {}
+    return frame if isinstance(frame, dict) else {}
 
 
 def _extract_short_names(shop_name: str) -> list[str]:
@@ -473,6 +485,22 @@ def resolve_active_turn(
             reason="pending_expired", confidence=1.0,
         )
 
+    reply_frame = _semantic_reply_frame(text)
+    if reply_frame.get("new_task_override"):
+        result = ActiveTurnResult(
+            route="topic_switch", source="semantic",
+            new_query=text, reason="semantic_new_task_override",
+            confidence=min(float(reply_frame.get("confidence", 0.7) or 0.7), 0.9),
+        )
+        return _validate_active_turn_result(result, pending)
+    if reply_frame.get("constraint_update"):
+        result = ActiveTurnResult(
+            route="topic_switch", source="semantic",
+            new_query=text, reason="semantic_constraint_update",
+            confidence=min(float(reply_frame.get("confidence", 0.7) or 0.7), 0.85),
+        )
+        return _validate_active_turn_result(result, pending)
+
     # Layer 1: Rules
     result = _rule_recognizer(text, pending)
     if result is not None:
@@ -508,11 +536,53 @@ _TOPIC_SWITCH_HINTS = (
 )
 
 
-def _should_treat_as_topic_switch(text: str) -> bool:
+def _should_treat_as_topic_switch(text: str, pending: Any = None, reply_frame: dict[str, Any] | None = None) -> bool:
     """Heuristic: does the input look like a new standalone query?"""
     compact = (text or "").strip()
     if not compact:
         return False
+    pending_data = _as_dict(pending)
+    pending_slot = str(pending_data.get("missing_slot_type", "") or "").strip()
+    reply = _as_dict(reply_frame)
+    if pending_slot in {
+        "missing_location",
+        "missing_shop",
+        "missing_shop_target",
+        "missing_comparison_targets",
+        "missing_exploration_location",
+        "missing_category",
+        "ambiguous_shop",
+        "ambiguous_comparison_targets",
+        "unresolved_deictic_reference",
+        "unresolved_ordinal_reference",
+    }:
+        if any(
+            reply.get(key)
+            for key in (
+                "location_reference",
+                "location",
+                "shop_reference",
+                "shop_target",
+                "ordinal_reference",
+                "deictic_reference",
+                "comparison_targets",
+                "merchant_mentions",
+                "preferences",
+                "soft_preferences",
+                "hard_constraints",
+                "ranking_signals",
+                "category",
+            )
+        ):
+            return False
+        if pending_slot in {"missing_location", "missing_exploration_location"} and any(token in compact for token in ("附近", "周边", "商圈", "北邮", "北京邮电大学")):
+            return False
+        if pending_slot in {"missing_shop", "missing_shop_target", "ambiguous_shop", "unresolved_deictic_reference", "unresolved_ordinal_reference"} and any(
+            token in compact for token in ("这家", "那家", "第一家", "第二家", "第三家", "第一个", "第二个", "第三个")
+        ):
+            return False
+        if pending_slot == "missing_comparison_targets" and any(token in compact for token in ("第一家", "第二家", "第三家", "这家", "这三家", "这几家")):
+            return False
     if any(hint in compact for hint in _TOPIC_SWITCH_HINTS):
         return True
     # 4+ chars with domain keywords → likely new topic
@@ -553,12 +623,13 @@ def _h_active_turn_resolver(state: GraphState) -> dict:
         )
 
     text = state.get("raw_text", "") or state.get("normalized_text", "") or ""
+    reply_frame = _semantic_reply_frame(text)
 
     result = resolve_active_turn(text, pending)
 
     # If the resolver produced pending_invalid, check topic-switch heuristic
     # as a final pass before giving up.
-    if result.route == "pending_invalid" and _should_treat_as_topic_switch(text):
+    if result.route == "pending_invalid" and _should_treat_as_topic_switch(text, pending=pending, reply_frame=reply_frame):
         result = ActiveTurnResult(
             route="topic_switch", source="rule",
             new_query=text, reason="topic_switch_heuristic",

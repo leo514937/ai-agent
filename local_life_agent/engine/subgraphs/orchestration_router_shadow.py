@@ -64,6 +64,7 @@ def h_orchestration_router_shadow(state: GraphState) -> dict[str, Any]:
             "orchestration_pattern",
             "workflow_name",
             "workflow_reason",
+            "workflow_candidate_reason",
             "task_complexity",
             "requires_tool",
             "requires_clarification",
@@ -71,5 +72,8 @@ def h_orchestration_router_shadow(state: GraphState) -> dict[str, Any]:
             "next_action",
             "orchestration_error_code",
             "orchestration_error_message",
+            "router_policy_decision",
+            "router_policy_conflicts",
+            "rule_pattern_signals",
         },
     )

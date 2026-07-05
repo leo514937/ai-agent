@@ -19,6 +19,7 @@ from typing import Any
 
 from ...answer.answer_plan_builder import build_answer_plan
 from ...answer.verifier import verify_answer
+from ... import config
 from ...domain.schemas import AnswerPlan, EvidencePack, ExecutionPlan, OrchestrationDecision, ResolveShopResult, ShopRef, ToolCallSpec, ToolResult
 from ...domain.state import SessionState
 from ...domain.facets import build_target_resolution_result, normalize_query_facets
@@ -39,7 +40,7 @@ _LOGGER = get_python_service_logger()
 
 _TASK_TOOL_MAP: dict[str, tuple[str, str]] = {
     "shop_status": ("check_open_status", "open_status"),
-    "shop_distance": ("get_distance_eta", "distance"),
+    "shop_distance": ("calculate_distance_km", "distance"),
     "shop_coupon": ("get_coupon_list", "coupon"),
     "shop_review_summary": ("get_shop_review_summary", "review_summary"),
     "shop_price": ("get_shop_detail", "price"),
@@ -104,6 +105,37 @@ def _extract_user_location(state: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _location_context(state: dict[str, Any]) -> dict[str, Any]:
+    semantic_frame = _to_dict(state.get("semantic_frame"))
+    for item in (
+        state.get("location"),
+        semantic_frame.get("location"),
+        state.get("user_location"),
+        _session_value(state, "user_context"),
+    ):
+        item_dict = _to_dict(item)
+        if item_dict:
+            return item_dict
+    return {}
+
+
+def _resolved_shop_location(state: dict[str, Any]) -> dict[str, Any]:
+    for item in (
+        state.get("resolved_target"),
+        state.get("current_shop"),
+        state.get("target_resolution"),
+    ):
+        item_dict = _to_dict(item)
+        shop = _to_dict(item_dict.get("resolved_shop") or item_dict.get("shop") or item_dict.get("current_shop") or item_dict)
+        if shop.get("lat") is not None and shop.get("lng") is not None:
+            return {
+                "lat": shop.get("lat"),
+                "lng": shop.get("lng"),
+                "label": str(shop.get("shop_name", "") or shop.get("name", "") or ""),
+            }
+    return {}
+
+
 def _task_to_tool(task_type: str, semantic_frame: dict[str, Any]) -> tuple[str, str] | None:
     normalized_task = _enum_value(task_type)
     if normalized_task in _TASK_TOOL_MAP:
@@ -122,7 +154,7 @@ def _task_to_tool(task_type: str, semantic_frame: dict[str, Any]) -> tuple[str, 
         if facet_name == "coupon":
             return "get_coupon_list", "coupon"
         if facet_name == "distance":
-            return "get_distance_eta", "distance"
+            return "calculate_distance_km", "distance"
         if facet_name in {"open_status", "open_now", "status"}:
             return "check_open_status", "open_status"
         if facet_name == "review_summary":
@@ -141,7 +173,7 @@ def _task_to_tool(task_type: str, semantic_frame: dict[str, Any]) -> tuple[str, 
     if any(token in primary_task for token in ("coupon", "券", "团购", "套餐", "deal")):
         return "get_coupon_list", "coupon"
     if any(token in primary_task for token in ("distance", "eta", "距离", "多远")):
-        return "get_distance_eta", "distance"
+        return "calculate_distance_km", "distance"
     if any(token in primary_task for token in ("status", "open", "营业", "开门")):
         return "check_open_status", "open_status"
     if any(token in primary_task for token in ("review", "summary", "评价", "口碑")):
@@ -215,7 +247,7 @@ def _route_info_from_raw_text(raw_text: str) -> tuple[str, str] | None:
     if "有券" in text or "优惠券" in text or "团购" in text or "coupon" in lowered:
         return "get_coupon_list", "coupon"
     if "距离" in text or "多远" in text or "多久" in text or "eta" in lowered:
-        return "get_distance_eta", "distance"
+        return "calculate_distance_km", "distance"
     if "评价" in text or "review" in lowered:
         return "get_shop_review_summary", "review_summary"
     if "价格" in text or "多少钱" in text or "price" in lowered:
@@ -568,9 +600,13 @@ def _tool_args_for_task(task_type: str, target_shop_id: str, state: dict[str, An
     args: dict[str, Any] = {"shop_id": target_shop_id}
     normalized_task = _enum_value(task_type)
     if normalized_task == "shop_distance":
-        user_location = _extract_user_location(state)
-        if user_location:
-            args["from_location"] = user_location
+        user_location = _location_context(state)
+        target_location = _resolved_shop_location(state)
+        args = {
+            "origin": user_location or {},
+            "destination": target_location or {},
+            "mode": "straight_line",
+        }
     elif normalized_task == "shop_review_summary":
         semantic_frame = _to_dict(state.get("semantic_frame"))
         facets = [str(item.get("name", "") or item.get("facet", "") or "").strip() for item in semantic_frame.get("facets", []) or [] if isinstance(item, dict)]
@@ -591,11 +627,12 @@ def _build_execution_plan(
     extra_facets: list[str] | None = None,
 ) -> ExecutionPlan:
     normalized_task = _enum_value(task_type)
-    facet_set = normalize_query_facets(state.get("semantic_frame"), session_state=state.get("session_state") or state.get("session_state_before"), raw_text=str(state.get("raw_text", "") or state.get("normalized_text", "") or ""))
+    semantic_frame = _to_dict(state.get("semantic_frame"))
+    facet_set = normalize_query_facets(semantic_frame, session_state=state.get("session_state") or state.get("session_state_before"), raw_text=str(state.get("raw_text", "") or state.get("normalized_text", "") or ""))
     target_resolution = _to_dict(state.get("target_resolution"))
     if not target_resolution:
         target_resolution = build_target_resolution_result(
-            state.get("semantic_frame"),
+            semantic_frame,
             session_state=state.get("session_state") or state.get("session_state_before"),
             raw_text=str(state.get("raw_text", "") or state.get("normalized_text", "") or ""),
         ).model_dump()
@@ -619,13 +656,17 @@ def _build_execution_plan(
             continue
         if any(str(item.get("facet", "") or "") == extra_facet and str(item.get("tool_name", "") or "") == extra_tool for item in calls):
             continue
+        extra_location = _location_context(state)
+        extra_destination = _resolved_shop_location(state)
         extra_args = build_tool_call_dict(
             extra_tool,
             extra_facet,
             call_id=f"call_{extra_index}",
             target_shop_id=target_shop_id,
             required=True,
-            location=_extract_user_location(state),
+            location=extra_location,
+            origin=extra_location,
+            destination=extra_destination,
             group_id="deterministic_tool",
         )["args"]
         calls.append(
@@ -657,9 +698,11 @@ def _build_execution_plan(
             "plan_id": f"deterministic_{normalized_task}_{target_shop_id}",
             "task_type": normalized_task,
             "facets": [facet.model_dump() if hasattr(facet, "model_dump") else facet for facet in (facet_set.facets or [])],
+            "optional_facets": [facet.name for facet in (facet_set.facets or []) if not getattr(facet, "required", False)],
             "target_resolution": target_resolution,
             "conflicting_facets": [item.model_dump() if hasattr(item, "model_dump") else item for item in (facet_set.conflicting_facets or [])],
             "ranking_policy": facet_set.ranking_policy.model_dump() if facet_set.ranking_policy else None,
+            "dependencies": [call.get("call_id", "") for call in calls[1:]],
             "tool_calls": calls,
             "stages": [stage],
             "target_shop_ids": [target_shop_id],
@@ -671,6 +714,8 @@ def _build_execution_plan(
             "plan_source": "deterministic_tool_workflow",
             "planning_notes": ["phase_6_deterministic_tool"],
             "assumptions_used": [],
+            "timeout_policy": {"default_timeout_ms": config.TOOL_DEFAULT_TIMEOUT_MS, "max_parallelism": 4},
+            "degradation_policy": {"empty_results": "degrade_answer", "partial_results": "partial_answer", "tool_failure": "retry_or_degrade"},
         }
     )
 
@@ -699,6 +744,7 @@ def _facet_from_task(task_type: str) -> str:
 
 def _batch_facets_for_task(task_type: str, semantic_frame: dict[str, Any], primary_facet: str) -> list[str]:
     normalized_task = _enum_value(task_type)
+    semantic_frame = _to_dict(semantic_frame)
     facets: list[str] = []
     for item in semantic_frame.get("facets", []) or []:
         facet = str(item.get("name", "") or item.get("facet", "") or "").strip() if isinstance(item, dict) else str(item or "").strip()
@@ -745,12 +791,10 @@ def _tool_result_to_text(task_type: str, evidence: dict[str, Any], tool_result: 
     if task_type == "shop_distance":
         if status == "ok" and isinstance(data, dict):
             distance_km = data.get("distance_km")
-            eta_minutes = data.get("eta_minutes")
-            parts = [f"{shop_name}距离你约 {distance_km} 公里" if distance_km is not None else f"{shop_name}的距离暂时无法确认"]
-            if eta_minutes is not None:
-                parts.append(f"预计 {eta_minutes} 分钟到达")
-            return "，".join(parts) + "。"
-        return f"{shop_name}的距离暂时无法确认。"
+            if distance_km is not None:
+                return f"{shop_name}的直线距离约 {distance_km} 公里。"
+            return f"{shop_name}的直线距离暂时无法确认。"
+        return f"{shop_name}的直线距离暂时无法确认。"
 
     if task_type == "shop_coupon":
         if status == "ok" and isinstance(data, list):
@@ -854,6 +898,7 @@ def _build_success_patch(
         "workflow_run_status": "completed",
         "workflow_runner_error": "",
         "workflow_runner_reason": str(decision.workflow_reason or f"deterministic tool for {presentation_task_type}"),
+        "workflow_candidate_reason": str(decision.workflow_reason or f"deterministic tool for {presentation_task_type}"),
         "workflow_started_at": timestamp,
         "workflow_finished_at": timestamp,
         "workflow_callable": "run_deterministic_tool_workflow",
@@ -940,6 +985,7 @@ def _build_clarify_patch(state: dict[str, Any], decision: OrchestrationDecision,
         "workflow_run_status": "fallback",
         "workflow_runner_error": "",
         "workflow_runner_reason": reason,
+        "workflow_candidate_reason": reason,
         "workflow_started_at": timestamp,
         "workflow_finished_at": timestamp,
         "workflow_callable": "run_deterministic_tool_workflow",
@@ -1165,6 +1211,7 @@ def run_deterministic_tool_workflow(
     )
     patch["workflow_reason"] = str(decision.workflow_reason or f"deterministic tool for {task_type}")
     patch["workflow_runner_reason"] = patch["workflow_reason"]
+    patch["workflow_candidate_reason"] = patch["workflow_reason"]
     patch["workflow_run_status"] = "completed" if patch.get("answer_verify_passed", False) else "fallback"
     if not patch.get("answer_verify_passed", False):
         patch["response_mode"] = "fallback"

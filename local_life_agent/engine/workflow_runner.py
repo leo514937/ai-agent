@@ -30,6 +30,21 @@ def _coerce_single_workflow_name(value: Any) -> str:
     return str(value or "").strip()
 
 
+def _registry_workflow_name(workflow_name: str) -> str:
+    """Map visible flow aliases back to the registry entry name.
+
+    The orchestration layer may expose user-facing flow names such as
+    ``recommendation_flow`` or ``comparison_flow`` for observability, but the
+    workflow registry only registers the executable main-chain entry
+    ``discovery_decision``. Keep the public flow name in state, and only use
+    this alias for registry lookup / dispatch.
+    """
+
+    if workflow_name in {"recommendation_flow", "comparison_flow"}:
+        return "discovery_decision"
+    return workflow_name
+
+
 def _coerce_decision(state: GraphState) -> OrchestrationDecision | None:
     raw = state.get("orchestration_decision")
     if raw is None:
@@ -67,6 +82,7 @@ def _fallback_patch(
         "workflow_run_status": status,
         "workflow_runner_error": error_code,
         "workflow_runner_reason": workflow_reason,
+        "workflow_candidate_reason": workflow_reason,
         "workflow_started_at": timestamp,
         "workflow_finished_at": timestamp,
         "workflow_callable": "",
@@ -85,6 +101,7 @@ def h_workflow_runner(state: GraphState) -> dict[str, Any]:
     started = perf_counter()
     decision = _coerce_decision(state)
     workflow_name = _coerce_single_workflow_name(decision.workflow_name if decision is not None else state.get("workflow_name", ""))
+    registry_workflow_name = _registry_workflow_name(workflow_name)
     orchestration_pattern = str((decision.orchestration_pattern if decision is not None else state.get("orchestration_pattern", "")) or "")
     workflow_reason = str((decision.workflow_reason if decision is not None else state.get("workflow_reason", "")) or "")
     route_state = dict(state)
@@ -136,10 +153,10 @@ def h_workflow_runner(state: GraphState) -> dict[str, Any]:
             error_message=patch["orchestration_error_message"],
             workflow_registered=False,
         )
-        return _state_delta(before, after, always_include={"workflow_run_status", "workflow_runner_error", "workflow_runner_reason", "workflow_started_at", "workflow_finished_at", "workflow_callable", "workflow_registered", "response_mode", "next_action", "orchestration_error_code", "orchestration_error_message"})
+        return _state_delta(before, after, always_include={"workflow_name", "orchestration_pattern", "workflow_run_status", "workflow_runner_error", "workflow_runner_reason", "workflow_started_at", "workflow_finished_at", "workflow_callable", "workflow_registered", "response_mode", "next_action", "orchestration_error_code", "orchestration_error_message"})
 
     try:
-        registration = WORKFLOW_REGISTRY.lookup(workflow_name)
+        registration = WORKFLOW_REGISTRY.lookup(registry_workflow_name)
     except WorkflowRegistryError as exc:
         error_text = str(exc)
         error_code = "WORKFLOW_NAME_MISSING" if "WORKFLOW_NAME_MISSING" in error_text else "WORKFLOW_NOT_REGISTERED"
@@ -174,7 +191,7 @@ def h_workflow_runner(state: GraphState) -> dict[str, Any]:
             error_message=error_text,
             workflow_registered=False,
         )
-        return _state_delta(before, after, always_include={"workflow_run_status", "workflow_runner_error", "workflow_runner_reason", "workflow_started_at", "workflow_finished_at", "workflow_callable", "workflow_registered", "response_mode", "next_action", "orchestration_error_code", "orchestration_error_message"})
+        return _state_delta(before, after, always_include={"workflow_name", "orchestration_pattern", "workflow_run_status", "workflow_runner_error", "workflow_runner_reason", "workflow_started_at", "workflow_finished_at", "workflow_callable", "workflow_registered", "response_mode", "next_action", "orchestration_error_code", "orchestration_error_message"})
 
     try:
         patch = registration.handler(route_state, decision)
@@ -184,6 +201,7 @@ def h_workflow_runner(state: GraphState) -> dict[str, Any]:
         patch.setdefault("workflow_callable", registration.callable_name)
         patch.setdefault("workflow_runner_error", "")
         patch.setdefault("workflow_runner_reason", decision.workflow_reason)
+        patch.setdefault("workflow_candidate_reason", decision.workflow_reason)
         patch.setdefault("workflow_run_status", "dispatched" if registration.is_real else registration.status)
         patch.setdefault("workflow_name", workflow_name)
         patch.setdefault("orchestration_pattern", orchestration_pattern)
@@ -223,6 +241,8 @@ def h_workflow_runner(state: GraphState) -> dict[str, Any]:
             before,
             after,
             always_include={
+                "workflow_name",
+                "orchestration_pattern",
                 "workflow_run_status",
                 "workflow_runner_error",
                 "workflow_runner_reason",
@@ -268,4 +288,4 @@ def h_workflow_runner(state: GraphState) -> dict[str, Any]:
             error_message=patch["orchestration_error_message"],
             workflow_registered=True,
         )
-        return _state_delta(before, after, always_include={"workflow_run_status", "workflow_runner_error", "workflow_runner_reason", "workflow_started_at", "workflow_finished_at", "workflow_callable", "workflow_registered", "response_mode", "next_action", "orchestration_error_code", "orchestration_error_message"})
+        return _state_delta(before, after, always_include={"workflow_name", "orchestration_pattern", "workflow_run_status", "workflow_runner_error", "workflow_runner_reason", "workflow_started_at", "workflow_finished_at", "workflow_callable", "workflow_registered", "response_mode", "next_action", "orchestration_error_code", "orchestration_error_message"})

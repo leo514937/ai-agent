@@ -24,6 +24,15 @@ from ...target.clarification import handle_clarification_reply
 _LOGGER = get_python_service_logger()
 
 
+def _pending_resume_strategy(pending: Any) -> str:
+    if pending is None:
+        return ""
+    data = pending if isinstance(pending, dict) else getattr(pending, "model_dump", lambda: {})()
+    if not isinstance(data, dict):
+        data = {}
+    return str(data.get("resume_strategy", "") or "").strip()
+
+
 def h_merge_clarification(state: GraphState) -> dict:
     """Outer wrapper: check pending → route."""
     before = dict(state)
@@ -59,11 +68,16 @@ def _h_check_pending(state: GraphState) -> dict:
     reply = str(state.get("raw_text", "") or state.get("normalized_text", "") or "")
     result = handle_clarification_reply(reply, pending, state.get("session_state"))
     action = str(result.get("status", "invalid"))
+    pending_resume_strategy = _pending_resume_strategy(pending)
 
     updates: dict[str, Any] = {
         "pending_check_result": action,
         "merge_clarification_result": action,
         "clarification_result": action,
+        "clarification_resolution": result.get("clarification_resolution") or {"status": action},
+        "resume_strategy": str(result.get("resume_strategy", "") or pending_resume_strategy or ""),
+        "missing_slot_type": str(result.get("missing_slot_type", "") or ""),
+        "task_type_source": str(result.get("task_type_source", "") or ""),
     }
 
     if action == "restore":
@@ -83,7 +97,7 @@ def _h_check_pending(state: GraphState) -> dict:
         if result.get("task_type"):
             task_type_value = result.get("task_type")
             updates["task_type"] = str(task_type_value)
-            updates["task_type_source"] = "pending_clarification_restore"
+            updates["task_type_source"] = str(result.get("task_type_source") or "clarification_resume")
         if result.get("resolved_target") is not None:
             updates["resolved_target"] = result.get("resolved_target")
             updates["resolve_shop_result"] = result.get("resolved_target")
@@ -91,12 +105,15 @@ def _h_check_pending(state: GraphState) -> dict:
             updates["comparison_targets"] = result.get("comparison_targets")
         if result.get("selected_candidate") is not None:
             updates["selected_candidate"] = result.get("selected_candidate")
+            updates["current_shop"] = result.get("selected_candidate")
         else:
             updates["selected_candidate"] = None
         if result.get("selected_index") is not None:
             updates["selected_index"] = result.get("selected_index")
         else:
             updates["selected_index"] = 0
+        if result.get("comparison_target_resolution") is not None:
+            updates["comparison_target_resolution"] = result.get("comparison_target_resolution")
         updates["clarification_request"] = None
         updates["final_response"] = ""
         return {
@@ -114,6 +131,9 @@ def _h_check_pending(state: GraphState) -> dict:
         updates["active_goal"] = None
         updates["resolved_target"] = None
         updates["resolve_shop_result"] = None
+        updates["clarification_resolution"] = result.get("clarification_resolution") or {"status": action}
+        updates["resume_strategy"] = str(result.get("resume_strategy", "") or "start_new_task")
+        updates["task_type_source"] = str(result.get("task_type_source") or "clarification_resume")
         session_snapshot = state.get("session_state_before") or state.get("session_state")
         if session_snapshot is not None:
             try:
@@ -134,6 +154,9 @@ def _h_check_pending(state: GraphState) -> dict:
         updates["selected_candidate"] = None
         updates["selected_index"] = 0
         updates["final_response"] = ""
+        updates["clarification_resolution"] = result.get("clarification_resolution") or {"status": action}
+        updates["resume_strategy"] = str(result.get("resume_strategy", "") or "cancel_pending_task")
+        updates["task_type_source"] = str(result.get("task_type_source") or "clarification_resume")
         return {
             **updates,
             **_log(state, "check_pending_clarification", has_pending=True, action=action),
@@ -145,6 +168,9 @@ def _h_check_pending(state: GraphState) -> dict:
         updates["selected_candidate"] = None
         updates["selected_index"] = 0
         updates["final_response"] = result.get("final_response", "")
+        updates["clarification_resolution"] = result.get("clarification_resolution") or {"status": action}
+        updates["resume_strategy"] = str(result.get("resume_strategy", "") or "ask_clarification_again")
+        updates["task_type_source"] = str(result.get("task_type_source") or "clarification_resume")
         return {
             **updates,
             **_log(state, "check_pending_clarification", has_pending=True, action=action),
@@ -154,6 +180,9 @@ def _h_check_pending(state: GraphState) -> dict:
         updates["selected_candidate"] = result.get("selected_candidate")
         updates["selected_index"] = result.get("selected_index", 0) or 0
         updates["final_response"] = result.get("final_response", "")
+        updates["clarification_resolution"] = result.get("clarification_resolution") or {"status": action}
+        updates["resume_strategy"] = str(result.get("resume_strategy", "") or "ask_clarification_again")
+        updates["task_type_source"] = str(result.get("task_type_source") or "clarification_resume")
         return {
             **updates,
             **_log(state, "check_pending_clarification", has_pending=True, action=action),

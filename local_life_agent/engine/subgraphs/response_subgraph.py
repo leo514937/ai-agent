@@ -223,6 +223,8 @@ def _h_answer_generate(state: GraphState) -> dict:
         if not txt.strip() or any(marker in txt for marker in generic_markers):
             txt = _compose_single_shop_response(state.get("evidence_pack") or {}, txt)
     preview_text = sanitize_preview_text(txt, verified=False)
+    fallback_reason = str(state.get("fallback_reason", "") or metadata.get("fallback_reason", "") or "")
+    answer_fallback_reason = str(state.get("answer_fallback_reason", "") or metadata.get("answer_fallback_reason", "") or "")
     return {
         "answer_plan": answer_plan,
         "draft_response": txt,
@@ -236,7 +238,7 @@ def _h_answer_generate(state: GraphState) -> dict:
         "template_degraded": metadata.get("template_degraded", False),
         "fallback_used": metadata.get("fallback_used", False),
         "template_fallback_used": metadata.get("template_fallback_used", False),
-        "answer_fallback_reason": metadata.get("answer_fallback_reason", ""),
+        "answer_fallback_reason": answer_fallback_reason,
         "llm_verbalizer_error": metadata.get("llm_verbalizer_error"),
         "generated_llm_answer_before_fallback": metadata.get("generated_llm_answer_before_fallback", ""),
         "llm_verbalizer_violation": metadata.get("violation"),
@@ -253,11 +255,11 @@ def _h_answer_generate(state: GraphState) -> dict:
         "answer_verify_violations": metadata.get("answer_verify_violations") or [],
         "rewrite_needed": metadata.get("rewrite_needed", False),
         "rewrite_reason": metadata.get("rewrite_reason", ""),
-        "fallback_reason": metadata.get("fallback_reason", ""),
-        "raw_text_fallback_source": metadata.get("raw_text_fallback_source", metadata.get("answer_fallback_reason", "")),
+        "fallback_reason": fallback_reason,
+        "raw_text_fallback_source": metadata.get("raw_text_fallback_source", answer_fallback_reason or fallback_reason),
         "final_safety_status": metadata.get("final_safety_status", "safe"),
         **_log(state, "answer_generate", answer_source=metadata.get("answer_source", "template_fallback"),
-              rewrite_count=rc, fallback_reason=metadata.get("fallback_reason", ""),
+              rewrite_count=rc, fallback_reason=fallback_reason,
               template_degraded=metadata.get("template_degraded", False),
               fallback_used=metadata.get("fallback_used", False)),
     }

@@ -123,6 +123,7 @@ def _build_dispatch_patch(
         "workflow_run_status": workflow_run_status,
         "workflow_runner_error": workflow_runner_error,
         "workflow_runner_reason": workflow_runner_reason or decision.workflow_reason,
+        "workflow_candidate_reason": workflow_runner_reason or decision.workflow_reason,
         "workflow_started_at": timestamp,
         "workflow_finished_at": timestamp,
         "workflow_callable": workflow_callable,
