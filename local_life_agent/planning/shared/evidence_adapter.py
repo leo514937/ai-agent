@@ -19,7 +19,7 @@ from ..evidence.evidence_cache import EvidenceCache, get_default_evidence_cache
 _FACET_ALIASES: dict[str, str] = {
     "open_status": "open_now",
     "open_now": "open_now",
-    "distance": "travel_time",
+    "distance": "distance",
     "travel_time": "travel_time",
     "coupon": "coupon",
     "discount": "discount",
@@ -155,6 +155,15 @@ def _value_for_tool(tool_name: str, tool_result: Any, *, target_shop_id: str = "
                 "eta_minutes": data.get("eta_minutes"),
             }, field_path
         return {}, field_path
+    if tool_name == "calculate_distance_km":
+        if isinstance(data, dict):
+            return {
+                "distance_km": data.get("distance_km"),
+                "eta_minutes": data.get("eta_minutes"),
+                "method": data.get("method", "haversine"),
+                "blocked_reason": data.get("blocked_reason"),
+            }, field_path
+        return {}, field_path
     if tool_name == "get_shop_review_summary":
         if isinstance(data, dict):
             items = [item for item in data.get("items", []) or [] if isinstance(item, dict)]
@@ -168,6 +177,18 @@ def _value_for_tool(tool_name: str, tool_result: Any, *, target_shop_id: str = "
             return [str(item.get("title", "") or "").strip() for item in items if str(item.get("title", "") or "").strip()], field_path
         return [], field_path
     return data, field_path
+
+
+def _tool_value_has_signal(tool_name: str, value: Any) -> bool:
+    if tool_name == "calculate_distance_km" and isinstance(value, dict):
+        return value.get("distance_km") is not None
+    if tool_name == "get_distance_eta" and isinstance(value, dict):
+        return value.get("distance_km") is not None or value.get("eta_minutes") is not None
+    if isinstance(value, dict):
+        return any(item is not None and item != "" for item in value.values())
+    if isinstance(value, list):
+        return bool(value)
+    return bool(value or value == 0)
 
 
 def normalize_tool_result_to_evidence(
@@ -190,7 +211,7 @@ def normalize_tool_result_to_evidence(
     raw = _to_dict(tool_result)
     result_status = _tool_result_status(raw)
     value, field_path = _value_for_tool(tool_name, tool_result, target_shop_id=target_shop_id)
-    has_value = bool(value or value == 0)
+    has_value = _tool_value_has_signal(tool_name, value)
     status = _facet_status(result_status, has_value=has_value)
     item_shop_id = str(raw.get("shop_id", "") or target_shop_id or "").strip()
     item_shop_name = str(raw.get("shop_name", target_shop_name) or target_shop_name or "").strip()
@@ -274,6 +295,19 @@ def build_evidence_pack_from_tool_results(
     subgoals: list[dict[str, Any]],
     semantic_facets: Iterable[Any] | None = None,
     location_context: dict[str, Any] | None = None,
+    semantic_frame: dict[str, Any] | None = None,
+    semantic_parse_source: str = "",
+    grounding_status: str = "",
+    missing_slot_type: str = "",
+    router_policy_decision: dict[str, Any] | None = None,
+    router_policy_conflicts: list[str] | None = None,
+    conversation_continuity: dict[str, Any] | None = None,
+    exploration_stages: list[dict[str, Any]] | None = None,
+    stage_queries: list[str] | None = None,
+    stage_evidence_requirements: list[list[str]] | None = None,
+    stage_statuses: list[str] | None = None,
+    scene: str = "",
+    time: str = "",
     cache: EvidenceCache | None = None,
     cache_scope: dict[str, Any] | str | None = None,
 ) -> EvidencePack:
@@ -428,6 +462,29 @@ def build_evidence_pack_from_tool_results(
             "ranking_snapshot": ranking_snapshot,
             "comparison_matrix": None,
             "tool_results": tool_results,
+            "semantic_frame": semantic_frame or {},
+            "semantic_parse_source": semantic_parse_source,
+            "grounding_status": grounding_status,
+            "missing_slot_type": missing_slot_type,
+            "router_policy_decision": router_policy_decision or {},
+            "router_policy_conflicts": list(router_policy_conflicts or []),
+            "conversation_continuity": conversation_continuity or {},
+            "exploration_stages": list(exploration_stages or []),
+            "stage_queries": list(stage_queries or []),
+            "stage_evidence_requirements": list(stage_evidence_requirements or []),
+            "stage_statuses": list(stage_statuses or []),
+            "scene": scene,
+            "time": time,
+            "location": location_context or {},
+            "evidence_status": "unknown",
+            "comparison_support_status": "",
+            "ranking_preserved": True,
+            "unsupported_reasons": [],
+            "unknown_fields": triage["unknown_facets"],
+            "failed_tools": [],
+            "partial_fields": [],
+            "evidence_review_result": {},
+            "answer_verify_result": {},
             "evidence_cache_key": "",
             "evidence_cache_scope": "",
             "evidence_cache_hit": False,
@@ -535,6 +592,29 @@ def build_answer_plan_from_evidence(
             "comparison_matrix_id": str((evidence.get("comparison_matrix") or {}).get("matrix_id", "") or ""),
             "tone": "neutral",
             "fallback_template_type": fallback_template_type,
+            "semantic_frame": dict(evidence.get("semantic_frame") or {}),
+            "semantic_parse_source": str(evidence.get("semantic_parse_source", "") or ""),
+            "grounding_status": str(evidence.get("grounding_status", "") or ""),
+            "missing_slot_type": str(evidence.get("missing_slot_type", "") or ""),
+            "router_policy_decision": dict(evidence.get("router_policy_decision") or {}),
+            "router_policy_conflicts": list(evidence.get("router_policy_conflicts", []) or []),
+            "conversation_continuity": dict(evidence.get("conversation_continuity") or {}),
+            "exploration_stages": list(exploration.get("subgoals") or evidence.get("exploration_stages") or []),
+            "stage_queries": list(exploration.get("stage_queries") or evidence.get("stage_queries") or []),
+            "stage_evidence_requirements": list(exploration.get("stage_evidence_requirements") or evidence.get("stage_evidence_requirements") or []),
+            "stage_statuses": list(exploration.get("stage_statuses") or evidence.get("stage_statuses") or []),
+            "scene": str(evidence.get("scene", "") or ""),
+            "time": str(evidence.get("time", "") or ""),
+            "location": dict(evidence.get("location") or {}),
+            "evidence_status": str(evidence.get("evidence_status", "") or ""),
+            "comparison_support_status": str(evidence.get("comparison_support_status", "") or ""),
+            "ranking_preserved": bool(evidence.get("ranking_preserved", True)),
+            "unsupported_reasons": list(evidence.get("unsupported_reasons", []) or []),
+            "unknown_fields": list(evidence.get("unknown_fields", []) or []),
+            "failed_tools": list(evidence.get("failed_tools", []) or []),
+            "partial_fields": list(evidence.get("partial_fields", []) or []),
+            "evidence_review_result": dict(evidence.get("evidence_review_result") or {}),
+            "answer_verify_result": dict(evidence.get("answer_verify_result") or {}),
         }
     )
     return answer_plan

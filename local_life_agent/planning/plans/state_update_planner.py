@@ -57,6 +57,22 @@ def _location_context(turn_context: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _merged_active_constraints(turn_context: dict[str, Any]) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    current = _to_dict(turn_context.get("active_constraints"))
+    if current:
+        merged.update(current)
+    semantic_frame = _to_dict(turn_context.get("semantic_frame"))
+    for key in ("hard_constraints", "soft_preferences"):
+        value = semantic_frame.get(key)
+        if isinstance(value, dict) and value:
+            merged.update({str(k): v for k, v in value.items() if v not in (None, "", [], {}, False)})
+    location = _to_dict(semantic_frame.get("location"))
+    if location and "location" not in merged:
+        merged["location"] = location
+    return merged
+
+
 def _ttl_from_pending(pending_dict: dict[str, Any] | None) -> int | None:
     if not pending_dict:
         return None
@@ -85,6 +101,50 @@ def _evidence_ref_from_pack(evidence_pack: Any, *, target_shop_id: str = "") -> 
     if ranking_snapshot.get("snapshot_id"):
         return str(ranking_snapshot.get("snapshot_id", "")).strip()
     return ""
+
+
+def _should_promote_recommendation_reference(
+    turn_context: dict[str, Any],
+    *,
+    task_type_value: str,
+    resolved_shop: dict[str, Any],
+    resolve_shop_status: str,
+    active_turn_route: str,
+    reference_resolution_source: str,
+    comparison_targets: list[dict[str, Any]],
+) -> bool:
+    if resolve_shop_status != "RESOLVED" or not resolved_shop:
+        return False
+    if str(task_type_value or "").strip() != TaskType.recommendation.value:
+        return False
+
+    target_resolution = _to_dict(
+        turn_context.get("target_resolution") or turn_context.get("resolved_target") or turn_context.get("resolve_shop_result")
+    )
+    target_source = _first_nonempty(target_resolution.get("source"), reference_resolution_source)
+    reference_type = _first_nonempty(target_resolution.get("reference_type"), target_resolution.get("resolution_reason"))
+
+    if active_turn_route in {
+        "shop_coupon",
+        "shop_status",
+        "shop_distance",
+        "shop_review_summary",
+        "shop_scene_fit",
+        "shop_price",
+    }:
+        return True
+
+    if comparison_targets:
+        return True
+
+    if target_source == "last_recommendation_list" and reference_type in {
+        "ordinal_reference",
+        "reference_dependency",
+        "ordinal",
+    }:
+        return True
+
+    return False
 
 
 def _session_value_meta(
@@ -150,6 +210,7 @@ def plan_state_update(
     active_turn_result = _to_dict(turn_context.get("active_turn_result"))
     active_turn_route = str(active_turn_result.get("route", "") or "").strip()
     reference_resolution_source = str(turn_context.get("reference_resolution_source", "") or "").strip()
+    target_resolution = _to_dict(turn_context.get("target_resolution"))
     comparison_targets = turn_context.get("comparison_targets")
     if comparison_targets is None:
         comparison_targets = []
@@ -220,15 +281,19 @@ def plan_state_update(
         set_fields["canonical_shop_entities"] = canonical_entities
     if shop_resolution_trace:
         set_fields["shop_resolution_trace"] = shop_resolution_trace
+    merged_active_constraints = _merged_active_constraints(turn_context)
+    if merged_active_constraints:
+        set_fields["active_constraints"] = merged_active_constraints
 
     if tool_failed and task_type_value != TaskType.comparison.value:
-        return {
-            "set_fields": {},
-            "clear_fields": [],
-            "task_type": task_type,
-            "resolve_shop_status": resolve_shop_status,
-            "pending_check_result": pending_check_result,
-        }
+        if not (resolve_shop_status == "RESOLVED" and resolved_shop):
+            return {
+                "set_fields": {},
+                "clear_fields": [],
+                "task_type": task_type,
+                "resolve_shop_status": resolve_shop_status,
+                "pending_check_result": pending_check_result,
+            }
 
     if pending_check_result in {"invalid", "out_of_range"}:
         return {
@@ -271,6 +336,8 @@ def plan_state_update(
     # It follows the same RESOLVED paths for comparison/recommendation, but
     # single_shop_query must NEVER reach CANDIDATE_SET_RESOLVED (it would be AMBIGUOUS).
     is_resolved = resolve_shop_status in ("RESOLVED", "CANDIDATE_SET_RESOLVED")
+    if not is_resolved:
+        is_resolved = bool(target_resolution.get("resolved")) or str(_to_dict(turn_context.get("resolved_target")).get("status", "") or "").upper() == "RESOLVED"
     if resolve_shop_status == "AMBIGUOUS":
         set_fields["pending_clarification"] = pending_dict
         set_fields["pending_clarification_meta"] = _session_value_meta(
@@ -310,7 +377,7 @@ def plan_state_update(
     if is_resolved:
         if task_type in (TaskType.single_shop_query.value, TaskType.coupon_query.value):
             # Only write current_shop for true RESOLVED (single target), never CANDIDATE_SET_RESOLVED
-            if resolve_shop_status == "RESOLVED":
+            if resolve_shop_status == "RESOLVED" or (resolved_shop and is_resolved):
                 should_set_current_shop = not tool_failed
                 if resolved_shop and should_set_current_shop:
                     set_fields["current_shop"] = resolved_shop
@@ -330,9 +397,19 @@ def plan_state_update(
                 evidence_ref=_evidence_ref_from_pack(evidence_pack),
                 ttl=None,
             )
-            # CANDIDATE_SET_RESOLVED (multi-candidate): NEVER write current_shop
-            # RESOLVED (single target): write current_shop only with reference_resolution_source
-            if resolve_shop_status == "RESOLVED" and resolution_stage != "candidate_set_resolved" and resolved_shop and reference_resolution_source:
+            # Pure discovery turns only persist the ranked list. If the router
+            # has already narrowed this to a deterministic single-shop route
+            # (for example, "第二家有券吗"), then the resolved target should
+            # still become the current anchor.
+            if _should_promote_recommendation_reference(
+                turn_context,
+                task_type_value=task_type_value,
+                resolved_shop=resolved_shop,
+                resolve_shop_status=resolve_shop_status,
+                active_turn_route=active_turn_route,
+                reference_resolution_source=reference_resolution_source,
+                comparison_targets=[item for item in comparison_targets if _to_dict(item)],
+            ):
                 set_fields["current_shop"] = resolved_shop
                 set_fields["current_shop_meta"] = _session_value_meta(
                     turn_context,
@@ -340,11 +417,9 @@ def plan_state_update(
                     evidence_ref=_evidence_ref_from_pack(evidence_pack, target_shop_id=str(resolved_shop.get("shop_id", "") or "")),
                     ttl=None,
                 )
-                clear_fields.append("pending_clarification")
-                clear_fields.append("pending_clarification_meta")
             else:
-                clear_fields.extend(["pending_clarification", "current_shop"])
-                clear_fields.extend(["pending_clarification_meta", "current_shop_meta"])
+                clear_fields.extend(["current_shop", "current_shop_meta"])
+            clear_fields.extend(["pending_clarification", "pending_clarification_meta"])
         elif task_type == TaskType.comparison.value:
             if comparison_resolution_status == "RESOLVED":
                 if comparison_targets:
@@ -420,24 +495,8 @@ def plan_state_update(
         }
 
     if workflow_name == "exploration_planning":
-        if recommendation_list:
-            set_fields["last_recommendation_list"] = recommendation_list
-            set_fields["last_recommendation_list_meta"] = _session_value_meta(
-                turn_context,
-                source=_first_nonempty(candidate_source, active_turn_route, workflow_name, task_type, "exploration_planning"),
-                evidence_ref=_evidence_ref_from_pack(evidence_pack),
-                ttl=None,
-            )
-        if resolved_shop and len(recommendation_list) == 1:
-            set_fields["current_shop"] = resolved_shop
-            set_fields["current_shop_meta"] = _session_value_meta(
-                turn_context,
-                source=_first_nonempty(reference_resolution_source, active_turn_route, workflow_name, task_type, "target_resolve"),
-                evidence_ref=_evidence_ref_from_pack(evidence_pack, target_shop_id=str(resolved_shop.get("shop_id", "") or "")),
-                ttl=None,
-            )
-        else:
-            clear_fields.extend(["current_shop", "current_shop_meta"])
+        clear_fields.extend(["current_shop", "current_shop_meta"])
+        clear_fields.extend(["last_recommendation_list", "last_recommendation_list_meta"])
         clear_fields.extend(["pending_clarification", "pending_clarification_meta"])
         return {
             "set_fields": set_fields,

@@ -27,6 +27,35 @@ def _to_dict(value: Any) -> dict[str, Any]:
     return dict(getattr(value, "__dict__", {}) or {})
 
 
+def _coords_or_none(value: Any) -> dict[str, float] | None:
+    payload = _to_dict(value)
+    lat = payload.get("lat")
+    lng = payload.get("lng")
+    if lat is None or lng is None:
+        return None
+    try:
+        lat_f = float(lat)
+        lng_f = float(lng)
+    except Exception:
+        return None
+    if isinstance(lat, bool) or isinstance(lng, bool):
+        return None
+    if lat_f < -90 or lat_f > 90 or lng_f < -180 or lng_f > 180:
+        return None
+    return {"lat": lat_f, "lng": lng_f}
+
+
+def _distance_blocked_reason(location: dict[str, Any] | None, resolved_shop: dict[str, Any]) -> str:
+    location_dict = _to_dict(location)
+    if location_dict.get("raw") or str(location_dict.get("status", "")).lower() in {"unresolved", "missing"}:
+        return "location_geocode_missing"
+    if _coords_or_none(location_dict) is None:
+        return "missing_origin_coordinates"
+    if _coords_or_none(resolved_shop) is None:
+        return "missing_destination_coordinates"
+    return "distance_tool_missing_or_unavailable"
+
+
 def _facet_name(item: Any) -> str:
     if hasattr(item, "name"):
         raw_name = getattr(item, "name")
@@ -82,7 +111,7 @@ def _recommendation_preferences(frame: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_execution_plan(task_type: str, target: dict, facets: list[str | dict[str, Any]]) -> dict:
+def build_execution_plan(task_type: str, target: dict, facets: list[str | dict[str, Any]], *, location: dict[str, Any] | None = None) -> dict:
     """Build an execution plan dict with ordered tool calls."""
     resolved_shop: dict[str, Any] = {}
     status = ""
@@ -111,7 +140,10 @@ def build_execution_plan(task_type: str, target: dict, facets: list[str | dict[s
 
     normalized_facets = _normalized_facets(facets)
     tool_calls: list[dict[str, Any]] = []
+    blocked_tool_calls: list[dict[str, Any]] = []
     tool_names: list[str] = []
+    origin_coords = _coords_or_none(location)
+    destination_coords = _coords_or_none(resolved_shop)
 
     for idx, facet in enumerate(normalized_facets, start=1):
         facet_name = facet["name"]
@@ -124,8 +156,24 @@ def build_execution_plan(task_type: str, target: dict, facets: list[str | dict[s
             tool_name = "check_open_status"
             args = {"shop_id": shop_id}
         elif facet_name == Facet.distance.value:
-            tool_name = "get_distance_eta"
-            args = {"shop_id": shop_id}
+            if origin_coords and destination_coords:
+                tool_name = "calculate_distance_km"
+                args = {
+                    "origin": dict(origin_coords),
+                    "destination": dict(destination_coords),
+                    "mode": "straight_line",
+                }
+            else:
+                blocked_tool_calls.append(
+                    {
+                        "facet": facet_name,
+                        "tool_name": "calculate_distance_km",
+                        "required": required,
+                        "blocked_reason": _distance_blocked_reason(location, resolved_shop),
+                        "target_shop_id": shop_id,
+                    }
+                )
+                continue
         elif facet_name in (Facet.environment.value, Facet.taste.value, Facet.service.value,
                             Facet.review_summary.value, Facet.scene_fit.value):
             tool_name = "get_shop_detail"
@@ -168,6 +216,7 @@ def build_execution_plan(task_type: str, target: dict, facets: list[str | dict[s
         "plan_id": f"plan_{shop_id}",
         "task_type": task_type,
         "facets": normalized_facets,
+        "optional_facets": [facet["name"] for facet in normalized_facets if not facet["required"]],
         "target_resolution": build_target_resolution_result(
             {
                 "current_shop": resolved_shop,
@@ -180,6 +229,7 @@ def build_execution_plan(task_type: str, target: dict, facets: list[str | dict[s
         ),
         "conflicting_facets": [],
         "ranking_policy": None,
+        "dependencies": [],
         "tool_calls": tool_calls,
         "stages": [
             {
@@ -194,11 +244,13 @@ def build_execution_plan(task_type: str, target: dict, facets: list[str | dict[s
         "facet_candidates": [item.model_dump() for item in planner_result.facet_candidates],
         "facet_validation_result": planner_result.validation_result.model_dump() if planner_result.validation_result else None,
         "facet_budget_plan": planner_result.budget_plan.model_dump() if planner_result.budget_plan else None,
-        "blocked_tool_calls": planner_result.blocked_tool_calls,
+        "blocked_tool_calls": list(planner_result.blocked_tool_calls) + blocked_tool_calls,
         "unsupported_facets": planner_result.unsupported_facets,
         "missing_inputs": planner_result.missing_inputs,
         "planning_warnings": planner_result.planning_warnings,
         "evidence_planner_result": planner_result.model_dump(),
+        "timeout_policy": {"default_timeout_ms": TOOL_DEFAULT_TIMEOUT_MS, "max_parallelism": config.MAX_CONCURRENCY},
+        "degradation_policy": {"empty_results": "degrade_answer", "partial_results": "partial_answer", "tool_failure": "retry_or_degrade"},
     }
 
 
@@ -300,9 +352,11 @@ def build_recommendation_execution_plan(
             "plan_id": f"recommendation_plan_{task_type}",
             "task_type": TaskType.recommendation.value,
             "facets": [facet.model_dump() if hasattr(facet, "model_dump") else facet for facet in (facet_set.facets or [])],
+            "optional_facets": [facet.name for facet in (facet_set.facets or []) if not getattr(facet, "required", False)],
             "target_resolution": facet_set.target_resolution.model_dump() if facet_set.target_resolution else None,
             "conflicting_facets": [item.model_dump() if hasattr(item, "model_dump") else item for item in (facet_set.conflicting_facets or [])],
             "ranking_policy": facet_set.ranking_policy.model_dump() if facet_set.ranking_policy else None,
+            "dependencies": ["call_search_shops"],
             "tool_calls": tool_calls,
             "stages": [
                 {
@@ -334,6 +388,8 @@ def build_recommendation_execution_plan(
             "missing_inputs": planner_result.missing_inputs,
             "planning_warnings": planner_result.planning_warnings,
             "evidence_planner_result": planner_result.model_dump(),
+            "timeout_policy": {"default_timeout_ms": TOOL_DEFAULT_TIMEOUT_MS, "max_parallelism": config.MAX_CONCURRENCY},
+            "degradation_policy": {"empty_results": "degrade_answer", "partial_results": "partial_answer", "tool_failure": "retry_or_degrade"},
         },
         "recommendation_query": query,
         "query_terms": preferences["query_terms"],

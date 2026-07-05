@@ -35,6 +35,33 @@ def _dedup_key(shop_id: str, facet: str) -> str:
     return f"{shop_id}:{facet}"
 
 
+def _coords_or_none(value: Any) -> dict[str, float] | None:
+    payload = value if isinstance(value, dict) else {}
+    lat = payload.get("lat")
+    lng = payload.get("lng")
+    if lat is None or lng is None:
+        return None
+    try:
+        lat_f = float(lat)
+        lng_f = float(lng)
+    except Exception:
+        return None
+    if isinstance(lat, bool) or isinstance(lng, bool):
+        return None
+    if lat_f < -90 or lat_f > 90 or lng_f < -180 or lng_f > 180:
+        return None
+    return {"lat": lat_f, "lng": lng_f}
+
+
+def _distance_block_reason(location: dict[str, Any] | None) -> str:
+    location_dict = location or {}
+    if str(location_dict.get("status", "")).lower() in {"missing", "unresolved"} or location_dict.get("raw"):
+        return "location_geocode_missing"
+    if _coords_or_none(location_dict) is None:
+        return "missing_origin_coordinates"
+    return "distance_tool_missing_or_unavailable"
+
+
 def _facet_to_tool(facet: str) -> str:
     return _FACET_TOOL.get(facet, "get_shop_detail")
 
@@ -46,6 +73,7 @@ def _build_tool_call(
     required: bool,
     index: int,
     location: dict[str, Any] | None = None,
+    candidate: dict[str, Any] | None = None,
 ) -> ToolCallSpec:
     """Build a single ToolCallSpec for a shop facet."""
     tool_name = _facet_to_tool(facet)
@@ -54,7 +82,14 @@ def _build_tool_call(
         args = {"shop_ids": [shop_id]}
     else:
         args = {"shop_id": shop_id}
-    if tool_name == "get_distance_eta":
+    if tool_name == "calculate_distance_km":
+        origin = _coords_or_none(location)
+        destination = _coords_or_none(candidate)
+        if origin and destination:
+            args = {"origin": origin, "destination": destination, "mode": "straight_line"}
+        else:
+            args = {"origin": location or {}, "destination": candidate or {}, "mode": "straight_line"}
+    elif tool_name == "get_distance_eta":
         if location is not None:
             args["from_location"] = location
     if tool_name == "get_shop_cards":
@@ -112,7 +147,8 @@ def plan_evidence(
     all_facets = required_facets + [f for f in optional_facets if f not in required_facets]
 
     candidates = list(candidate_set.candidates or [])
-    has_location = location is not None
+    has_location = _coords_or_none(location) is not None
+    blocked_tool_calls: list[dict[str, Any]] = []
 
     # Deduplicate by shop_id + facet
     seen: set[str] = set()
@@ -127,6 +163,8 @@ def plan_evidence(
             continue
 
         for facet in all_facets:
+            if facet == "distance" and getattr(candidate, "distance_km", None) is not None:
+                continue
             if facet == "distance" and not has_location:
                 continue
             dk = _dedup_key(shop_id, facet)
@@ -135,8 +173,10 @@ def plan_evidence(
             seen.add(dk)
             index += 1
             required = facet in required_facets
+            candidate_payload = candidate.model_dump() if hasattr(candidate, "model_dump") else getattr(candidate, "raw", {})
+            candidate_raw = candidate_payload.get("raw") if isinstance(candidate_payload, dict) else {}
             tool_calls.append(
-                _build_tool_call(shop_id, shop_name, facet, required, index, location)
+                _build_tool_call(shop_id, shop_name, facet, required, index, location, candidate_raw if isinstance(candidate_raw, dict) else {})
             )
 
     planning_notes: list[str] = []
@@ -144,6 +184,14 @@ def plan_evidence(
     if not has_location and "distance" in all_facets:
         planning_notes.append("缺少用户位置，已跳过 distance 工具调用")
         assumptions_used.append("distance_requires_user_location")
+        blocked_tool_calls.append(
+            {
+                "facet": "distance",
+                "tool_name": "calculate_distance_km",
+                "required": "distance" in required_facets,
+                "blocked_reason": _distance_block_reason(location),
+            }
+        )
 
     task_type = _goal_type_to_task_type(goal.goal_type)
 
@@ -151,6 +199,8 @@ def plan_evidence(
         plan_id=f"evidence_plan_{candidate_set.source.value}_{task_type}",
         task_type=task_type,
         tool_calls=tool_calls,
+        optional_facets=list(optional_facets),
+        dependencies=[],
         stages=[
             {
                 "stage_id": "stage_1",
@@ -163,12 +213,14 @@ def plan_evidence(
         target_shop_ids=[c.shop_id for c in candidates if c.shop_id],
         planning_notes=planning_notes,
         assumptions_used=assumptions_used,
+        timeout_policy={"default_timeout_ms": config.TOOL_DEFAULT_TIMEOUT_MS, "max_parallelism": config.MAX_CONCURRENCY},
+        degradation_policy={"empty_results": "degrade_answer", "partial_results": "partial_answer", "tool_failure": "retry_or_degrade"},
     )
     planner_result = plan_evidence_result_from_candidate_set(goal=goal, candidate_set=candidate_set, location=location)
     plan.facet_candidates = [item.model_dump() for item in planner_result.facet_candidates]
     plan.facet_validation_result = planner_result.validation_result.model_dump() if planner_result.validation_result else None
     plan.facet_budget_plan = planner_result.budget_plan.model_dump() if planner_result.budget_plan else None
-    plan.blocked_tool_calls = list(planner_result.blocked_tool_calls)
+    plan.blocked_tool_calls = list(planner_result.blocked_tool_calls) + blocked_tool_calls
     plan.unsupported_facets = list(planner_result.unsupported_facets)
     plan.missing_inputs = list(planner_result.missing_inputs)
     plan.planning_warnings = list(planner_result.planning_warnings)
@@ -313,7 +365,7 @@ def _goal_type_to_task_type(goal_type: GoalType) -> str:
 _FACET_TOOL: dict[str, str] = {
     "coupon": "get_coupon_list",
     "open_status": "check_open_status",
-    "distance": "get_distance_eta",
+    "distance": "calculate_distance_km",
     "detail": "get_shop_detail",
     "deal": "get_deal_list",
     "review_summary": "get_shop_review_summary",

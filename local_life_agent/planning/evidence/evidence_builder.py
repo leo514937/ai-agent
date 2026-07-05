@@ -23,6 +23,16 @@ def _to_dict(value: Any) -> dict[str, Any]:
     return dict(getattr(value, "__dict__", {}) or {})
 
 
+def _coerce_list_value(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, (tuple, set)):
+        return list(value)
+    return [value]
+
+
 def _status_value(value: Any) -> str:
     if isinstance(value, ToolResultStatus):
         return value.value
@@ -47,6 +57,7 @@ def _facet_name_from_tool(tool_name: str) -> str:
         "get_coupon_list": "coupon",
         "check_open_status": "open_status",
         "get_distance_eta": "distance",
+        "calculate_distance_km": "distance",
         "get_shop_cards": "shop_cards",
         "get_shop_review_summary": "review_summary",
         "get_deal_list": "deal",
@@ -96,6 +107,8 @@ def _facet_result_payload(facet: str, result_status: str, data: Any) -> dict[str
             payload["value"] = {
                 "distance_km": data.get("distance_km"),
                 "eta_minutes": data.get("eta_minutes"),
+                "method": data.get("method", "haversine"),
+                "blocked_reason": data.get("blocked_reason"),
             }
     elif facet == "shop_cards":
         if result_status in {"ok", "partial"} and isinstance(data, dict):
@@ -289,6 +302,148 @@ def _facet_triage_from_results(facet_results: list[dict[str, Any]] | None) -> di
         "unknown_facets": unknown,
         "failed_facets": failed,
     }
+
+
+def _facet_status_label(raw_status: Any) -> str:
+    status = str(raw_status or "unknown").strip().lower()
+    if status in {"ok", "grounded", "supported"}:
+        return "grounded"
+    if status == "empty":
+        return "empty"
+    if status == "partial":
+        return "partial"
+    if status in {"failed", "error", "timeout", "circuit_open", "backend_unavailable"}:
+        return "failed"
+    if status == "unsupported":
+        return "unsupported"
+    return "unknown"
+
+
+def _distance_blocked_reason(location: dict[str, Any] | None) -> str:
+    location_dict = _to_dict(location)
+    if location_dict.get("lat") is None or location_dict.get("lng") is None:
+        return "distance_tool_missing_or_location_unresolved"
+    return "distance_tool_missing_or_unavailable"
+
+
+def _facet_contract_from_target(
+    target: dict[str, Any] | None,
+    *,
+    location: dict[str, Any] | None = None,
+) -> tuple[dict[str, str], dict[str, Any], dict[str, str]]:
+    item = _to_dict(target)
+    facet_statuses: dict[str, str] = {}
+    grounded_facts: dict[str, Any] = {}
+    facet_reasons: dict[str, str] = {}
+
+    open_status = str(item.get("open_status", "unknown") or "unknown").lower()
+    if open_status in {"open", "closed"}:
+        facet_statuses["open_status"] = "grounded"
+        grounded_facts["open_status"] = open_status
+    elif open_status == "empty":
+        facet_statuses["open_status"] = "empty"
+    elif open_status in {"failed", "circuit_open", "error", "backend_unavailable", "timeout"}:
+        facet_statuses["open_status"] = "failed"
+        facet_reasons["open_status"] = str(item.get("open_reason") or item.get("open_status_reason") or "open_status_tool_failed")
+    elif open_status in {"partial"}:
+        facet_statuses["open_status"] = "partial"
+    else:
+        facet_statuses["open_status"] = "unknown"
+        grounded_facts["open_status"] = open_status
+        facet_reasons["open_status"] = str(item.get("open_status_reason") or "open_status_unknown")
+
+    coupon_status = str(item.get("coupon_status", "unknown") or "unknown").lower()
+    coupon_titles = [str(title) for title in _coerce_list_value(item.get("coupon_titles")) if str(title).strip()]
+    coupon_count = item.get("coupon_count")
+    if coupon_status == "has_coupon" or coupon_titles:
+        facet_statuses["coupon"] = "grounded"
+        grounded_facts["coupon_count"] = int(coupon_count if coupon_count is not None else len(coupon_titles))
+        grounded_facts["coupon_titles"] = coupon_titles
+    elif coupon_status == "empty":
+        facet_statuses["coupon"] = "empty"
+        grounded_facts["coupon_count"] = 0
+        grounded_facts["coupon_titles"] = []
+    elif coupon_status in {"failed", "circuit_open", "error", "backend_unavailable", "timeout"}:
+        facet_statuses["coupon"] = "failed"
+        facet_reasons["coupon"] = str(item.get("coupon_reason") or item.get("coupon_status_reason") or "coupon_tool_failed")
+    elif coupon_status == "partial":
+        facet_statuses["coupon"] = "partial"
+        facet_reasons["coupon"] = str(item.get("coupon_reason") or item.get("coupon_status_reason") or "coupon_partial")
+    else:
+        facet_statuses["coupon"] = "unknown"
+        facet_reasons["coupon"] = str(item.get("coupon_reason") or item.get("coupon_status_reason") or "coupon_unknown")
+
+    distance_km = item.get("distance_km")
+    eta_minutes = item.get("eta_minutes")
+    if distance_km is not None:
+        facet_statuses["distance"] = "grounded"
+        grounded_facts["distance_km"] = distance_km
+        if eta_minutes is not None:
+            grounded_facts["eta_minutes"] = eta_minutes
+    else:
+        distance_status = str(item.get("distance_status", "") or "").lower()
+        blocked_reason = (
+            item.get("distance_reason")
+            or item.get("distance_blocked_reason")
+            or _to_dict(item.get("distance")).get("blocked_reason")
+        )
+        if distance_status in {"failed", "circuit_open", "error", "backend_unavailable", "timeout"}:
+            facet_statuses["distance"] = "failed"
+            facet_reasons["distance"] = str(blocked_reason or _distance_blocked_reason(location))
+        elif distance_status == "empty":
+            facet_statuses["distance"] = "empty"
+            facet_reasons["distance"] = str(blocked_reason or _distance_blocked_reason(location))
+        elif distance_status == "partial":
+            facet_statuses["distance"] = "partial"
+            facet_reasons["distance"] = str(blocked_reason or _distance_blocked_reason(location))
+        else:
+            facet_statuses["distance"] = "unknown"
+            facet_reasons["distance"] = str(blocked_reason or _distance_blocked_reason(location))
+
+    rating = item.get("rating")
+    if rating is not None:
+        facet_statuses["rating"] = "grounded"
+        grounded_facts["rating"] = rating
+    elif "rating" not in facet_statuses:
+        facet_statuses["rating"] = "unknown"
+
+    avg_price = item.get("avg_price")
+    if avg_price is not None:
+        facet_statuses["avg_price"] = "grounded"
+        grounded_facts["avg_price"] = avg_price
+    elif "avg_price" not in facet_statuses:
+        facet_statuses["avg_price"] = "unknown"
+
+    return facet_statuses, grounded_facts, facet_reasons
+
+
+def _merge_facet_contract_with_results(
+    facet_statuses: dict[str, str],
+    grounded_facts: dict[str, Any],
+    facet_reasons: dict[str, str],
+    facet_results: list[dict[str, Any]],
+    *,
+    location: dict[str, Any] | None = None,
+) -> tuple[dict[str, str], dict[str, Any], dict[str, str]]:
+    merged_statuses = dict(facet_statuses)
+    merged_grounded = dict(grounded_facts)
+    merged_reasons = dict(facet_reasons)
+
+    for result in facet_results or []:
+        if not isinstance(result, dict):
+            continue
+        facet = str(result.get("facet") or "").strip()
+        if not facet:
+            continue
+        status = _facet_status_label(result.get("status") or result.get("result_status"))
+        if status in {"failed", "unknown", "partial", "empty"}:
+            merged_statuses[facet] = status
+        if status == "failed":
+            merged_reasons.setdefault(facet, str(result.get("error_message") or result.get("error_code") or result.get("blocked_reason") or _distance_blocked_reason(location)))
+        elif status in {"unknown", "partial", "empty"}:
+            merged_reasons.setdefault(facet, str(result.get("error_message") or result.get("error_code") or result.get("blocked_reason") or _distance_blocked_reason(location)))
+
+    return merged_statuses, merged_grounded, merged_reasons
 
 
 def _comparison_dimension_score(row: dict[str, Any]) -> tuple[float, int]:
@@ -492,10 +647,13 @@ def _build_comparison_evidence(
                 row["coupon_status"] = "empty"
             else:
                 row["coupon_status"] = "unknown"
-        elif tool_name == "get_distance_eta":
+        elif tool_name in {"get_distance_eta", "calculate_distance_km"}:
             if result_status == "ok" and isinstance(data, dict):
                 row["distance_km"] = data.get("distance_km", row.get("distance_km"))
                 row["eta_minutes"] = data.get("eta_minutes", row.get("eta_minutes"))
+                row["distance_method"] = data.get("method", row.get("distance_method", "haversine" if tool_name == "calculate_distance_km" else ""))
+                if data.get("blocked_reason") is not None:
+                    row["distance_blocked_reason"] = data.get("blocked_reason")
 
     rows: list[dict[str, Any]] = []
     for idx, shop_id in enumerate(target_ids or list(rows_by_shop_id.keys()), start=1):
@@ -722,6 +880,20 @@ def build_evidence(
     recommendation_candidates: list[Any] | None = None,
     comparison_targets: list[Any] | None = None,
     *,
+    semantic_frame: dict[str, Any] | None = None,
+    semantic_parse_source: str = "",
+    grounding_status: str = "",
+    missing_slot_type: str = "",
+    router_policy_decision: dict[str, Any] | None = None,
+    router_policy_conflicts: list[str] | None = None,
+    conversation_continuity: dict[str, Any] | None = None,
+    exploration_stages: list[dict[str, Any]] | None = None,
+    stage_queries: list[str] | None = None,
+    stage_evidence_requirements: list[list[str]] | None = None,
+    stage_statuses: list[str] | None = None,
+    scene: str = "",
+    time: str = "",
+    location: dict[str, Any] | None = None,
     cache: EvidenceCache | None = None,
     cache_scope: dict[str, Any] | str | None = None,
 ) -> dict:
@@ -736,6 +908,20 @@ def build_evidence(
         "execution_plan": plan_dict,
         "recommendation_candidates": recommendation_candidates or [],
         "comparison_targets": comparison_targets or [],
+        "semantic_frame": semantic_frame or {},
+        "semantic_parse_source": semantic_parse_source,
+        "grounding_status": grounding_status,
+        "missing_slot_type": missing_slot_type,
+        "router_policy_decision": router_policy_decision or {},
+        "router_policy_conflicts": router_policy_conflicts or [],
+        "conversation_continuity": conversation_continuity or {},
+        "exploration_stages": exploration_stages or [],
+        "stage_queries": stage_queries or [],
+        "stage_evidence_requirements": stage_evidence_requirements or [],
+        "stage_statuses": stage_statuses or [],
+        "scene": scene,
+        "time": time,
+        "location": location or {},
     }
 
     def _build() -> dict[str, Any]:
@@ -748,6 +934,20 @@ def build_evidence(
             plan_dict=plan_dict,
             shop_id=shop_id,
             shop_name=shop_name,
+            semantic_frame=semantic_frame,
+            semantic_parse_source=semantic_parse_source,
+            grounding_status=grounding_status,
+            missing_slot_type=missing_slot_type,
+            router_policy_decision=router_policy_decision,
+            router_policy_conflicts=router_policy_conflicts,
+            conversation_continuity=conversation_continuity,
+            exploration_stages=exploration_stages,
+            stage_queries=stage_queries,
+            stage_evidence_requirements=stage_evidence_requirements,
+            stage_statuses=stage_statuses,
+            scene=scene,
+            time=time,
+            location=location,
         )
 
     if cache_store is not None and cache_scope is not None:
@@ -771,6 +971,20 @@ def _build_evidence_uncached(
     plan_dict: dict[str, Any],
     shop_id: str,
     shop_name: str,
+    semantic_frame: dict[str, Any] | None = None,
+    semantic_parse_source: str = "",
+    grounding_status: str = "",
+    missing_slot_type: str = "",
+    router_policy_decision: dict[str, Any] | None = None,
+    router_policy_conflicts: list[str] | None = None,
+    conversation_continuity: dict[str, Any] | None = None,
+    exploration_stages: list[dict[str, Any]] | None = None,
+    stage_queries: list[str] | None = None,
+    stage_evidence_requirements: list[list[str]] | None = None,
+    stage_statuses: list[str] | None = None,
+    scene: str = "",
+    time: str = "",
+    location: dict[str, Any] | None = None,
 ) -> dict:
     plan_calls = {}
     if execution_plan is not None:
@@ -937,11 +1151,16 @@ def _build_evidence_uncached(
                         "shop_id": data.get("shop_id", shop_id),
                         "shop_name": data.get("shop_name", shop_name),
                         "facet": "distance",
-                        "tool_name": "get_distance_eta",
+                        "tool_name": tool_name,
                         "call_id": call_id,
                         "result_status": "ok",
                         "field_path": "data.distance_km",
-                        "value": distance_km,
+                        "value": {
+                            "distance_km": distance_km,
+                            "eta_minutes": eta_minutes,
+                            "method": data.get("method", "haversine"),
+                            "blocked_reason": data.get("blocked_reason"),
+                        },
                         "confidence": 1.0,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                         "source_type": "tool",
@@ -954,11 +1173,16 @@ def _build_evidence_uncached(
                         "shop_id": shop_id,
                         "shop_name": shop_name,
                         "facet": "distance",
-                        "tool_name": "get_distance_eta",
+                        "tool_name": tool_name,
                         "call_id": call_id,
                         "result_status": result_status,
                         "field_path": "",
-                        "value": None,
+                        "value": {
+                            "distance_km": None,
+                            "eta_minutes": None,
+                            "method": data.get("method", "haversine") if isinstance(data, dict) else "haversine",
+                            "blocked_reason": data.get("blocked_reason") if isinstance(data, dict) else None,
+                        },
                         "confidence": 0.0,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                         "source_type": "tool",
@@ -1034,8 +1258,33 @@ def _build_evidence_uncached(
             tool_results or {},
             plan_calls,
             plan_dict,
+            semantic_frame=semantic_frame,
+            semantic_parse_source=semantic_parse_source,
+            grounding_status=grounding_status,
+            missing_slot_type=missing_slot_type,
+            router_policy_decision=router_policy_decision,
+            router_policy_conflicts=router_policy_conflicts,
+            conversation_continuity=conversation_continuity,
+            exploration_stages=exploration_stages,
+            stage_queries=stage_queries,
+            stage_evidence_requirements=stage_evidence_requirements,
+            stage_statuses=stage_statuses,
+            scene=scene,
+            time=time,
+            location=location,
         )
 
+    facet_status_contract, grounded_facts_contract, facet_reason_contract = _facet_contract_from_target(
+        ranking_snapshot,
+        location=location,
+    )
+    facet_status_contract, grounded_facts_contract, facet_reason_contract = _merge_facet_contract_with_results(
+        facet_status_contract,
+        grounded_facts_contract,
+        facet_reason_contract,
+        facet_results,
+        location=location,
+    )
     evidence_payload = {
         **_facet_protocol_metadata(execution_plan, resolved_target),
         **_facet_triage_from_results(facet_results),
@@ -1048,6 +1297,32 @@ def _build_evidence_uncached(
         "ranking_snapshot": ranking_snapshot,
         "comparison_matrix": comparison_matrix,
         "tool_results": tool_results or {},
+        "semantic_frame": semantic_frame or {},
+        "semantic_parse_source": semantic_parse_source,
+        "grounding_status": grounding_status,
+        "missing_slot_type": missing_slot_type,
+        "router_policy_decision": router_policy_decision or {},
+        "router_policy_conflicts": list(router_policy_conflicts or []),
+        "conversation_continuity": conversation_continuity or {},
+        "exploration_stages": list(exploration_stages or []),
+        "stage_queries": list(stage_queries or []),
+        "stage_evidence_requirements": list(stage_evidence_requirements or []),
+        "stage_statuses": list(stage_statuses or []),
+        "scene": scene,
+        "time": time,
+        "location": location or {},
+        "facet_statuses": facet_status_contract,
+        "grounded_facts": grounded_facts_contract,
+        "facet_reasons": facet_reason_contract,
+        "evidence_status": "grounded" if facet_results and not comparison_matrix.get("status") in {"unknown", "failed"} else "unknown",
+        "comparison_support_status": "grounded" if comparison_matrix.get("status") == "ok" else str(comparison_matrix.get("status", "") or ""),
+        "ranking_preserved": True,
+        "unsupported_reasons": [],
+        "unknown_fields": _facet_triage_from_results(facet_results)["unknown_facets"],
+        "failed_tools": [],
+        "partial_fields": [],
+        "evidence_review_result": {},
+        "answer_verify_result": {},
         "evidence_cache_key": "",
         "evidence_cache_scope": "",
         "evidence_cache_hit": False,
@@ -1061,6 +1336,21 @@ def _build_recommendation_evidence(
     tool_results: dict,
     plan_calls: dict[str, dict[str, Any]],
     plan_dict: dict[str, Any],
+    *,
+    semantic_frame: dict[str, Any] | None = None,
+    semantic_parse_source: str = "",
+    grounding_status: str = "",
+    missing_slot_type: str = "",
+    router_policy_decision: dict[str, Any] | None = None,
+    router_policy_conflicts: list[str] | None = None,
+    conversation_continuity: dict[str, Any] | None = None,
+    exploration_stages: list[dict[str, Any]] | None = None,
+    stage_queries: list[str] | None = None,
+    stage_evidence_requirements: list[list[str]] | None = None,
+    stage_statuses: list[str] | None = None,
+    scene: str = "",
+    time: str = "",
+    location: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     search_result_candidates = _search_result_candidates(tool_results, plan_calls)
     merged_candidates: list[Any] = []
@@ -1446,7 +1736,20 @@ def _build_recommendation_evidence(
             print(f"  [DEBUG] first ranked item: {ranked_snapshot[0]}")
         if candidates_by_shop_id:
             print(f"  [DEBUG] first candidate: sid={list(candidates_by_shop_id.keys())[0]}, data={list(candidates_by_shop_id.values())[0]}")
-    
+
+    facet_contract_source = ranked_snapshot[0] if ranked_snapshot else {}
+    facet_status_contract, grounded_facts_contract, facet_reason_contract = _facet_contract_from_target(
+        facet_contract_source,
+        location=location,
+    )
+    facet_status_contract, grounded_facts_contract, facet_reason_contract = _merge_facet_contract_with_results(
+        facet_status_contract,
+        grounded_facts_contract,
+        facet_reason_contract,
+        facet_results,
+        location=location,
+    )
+
     return {
         **_facet_protocol_metadata(plan_dict, {"target_resolution": plan_dict.get("target_resolution")}),
         **_facet_triage_from_results(facet_results),
@@ -1465,4 +1768,30 @@ def _build_recommendation_evidence(
         },
         "last_recommendation_list": ranked_snapshot,
         "tool_results": tool_results or {},
+        "semantic_frame": semantic_frame or {},
+        "semantic_parse_source": semantic_parse_source,
+        "grounding_status": grounding_status,
+        "missing_slot_type": missing_slot_type,
+        "router_policy_decision": router_policy_decision or {},
+        "router_policy_conflicts": list(router_policy_conflicts or []),
+        "conversation_continuity": conversation_continuity or {},
+        "exploration_stages": list(exploration_stages or []),
+        "stage_queries": list(stage_queries or []),
+        "stage_evidence_requirements": list(stage_evidence_requirements or []),
+        "stage_statuses": list(stage_statuses or []),
+        "scene": scene,
+        "time": time,
+        "location": location or {},
+        "facet_statuses": facet_status_contract,
+        "grounded_facts": grounded_facts_contract,
+        "facet_reasons": facet_reason_contract,
+        "evidence_status": "grounded" if ranking_snapshot.get("status") == "ok" else ranking_snapshot.get("status", "unknown"),
+        "comparison_support_status": "grounded" if ranking_snapshot.get("status") == "ok" else ranking_snapshot.get("status", "unknown"),
+        "ranking_preserved": True,
+        "unsupported_reasons": [],
+        "unknown_fields": _facet_triage_from_results(facet_results)["unknown_facets"],
+        "failed_tools": [],
+        "partial_fields": [],
+        "evidence_review_result": {},
+        "answer_verify_result": {},
     }

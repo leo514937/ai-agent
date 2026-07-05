@@ -216,6 +216,69 @@ def _normalise_str_list(values: Any) -> list[str]:
     return result
 
 
+def _semantic_snapshot_from_pack(evidence_pack: dict[str, Any]) -> dict[str, Any]:
+    semantic_frame = dict(evidence_pack.get("semantic_frame") or {})
+    exploration_stages = [
+        item if isinstance(item, dict) else {}
+        for item in (evidence_pack.get("exploration_stages") or semantic_frame.get("exploration_stages") or [])
+    ]
+    stage_queries = _normalise_str_list(evidence_pack.get("stage_queries") or semantic_frame.get("stage_queries"))
+    stage_evidence_requirements = [
+        _normalise_str_list(item)
+        for item in (evidence_pack.get("stage_evidence_requirements") or semantic_frame.get("stage_evidence_requirements") or [])
+    ]
+    stage_statuses = _normalise_str_list(evidence_pack.get("stage_statuses") or semantic_frame.get("stage_statuses"))
+    unknown_fields = _normalise_str_list(evidence_pack.get("unknown_fields") or semantic_frame.get("unknown_fields"))
+    failed_tools = _normalise_str_list(evidence_pack.get("failed_tools") or semantic_frame.get("failed_tools"))
+    partial_fields = _normalise_str_list(evidence_pack.get("partial_fields") or semantic_frame.get("partial_fields"))
+    unsupported_reasons = _normalise_str_list(evidence_pack.get("unsupported_reasons") or semantic_frame.get("unsupported_reasons"))
+    router_policy_conflicts = _normalise_str_list(evidence_pack.get("router_policy_conflicts") or semantic_frame.get("router_policy_conflicts"))
+    grounding_status = str(evidence_pack.get("grounding_status") or semantic_frame.get("grounding_status") or "").strip().lower()
+    missing_slot_type = str(evidence_pack.get("missing_slot_type") or semantic_frame.get("missing_slot_type") or "").strip().lower()
+    comparison_support_status = str(evidence_pack.get("comparison_support_status") or semantic_frame.get("comparison_support_status") or "").strip().lower()
+    facet_statuses = dict(evidence_pack.get("facet_statuses") or semantic_frame.get("facet_statuses") or {})
+    grounded_facts = dict(evidence_pack.get("grounded_facts") or semantic_frame.get("grounded_facts") or {})
+    facet_reasons = dict(evidence_pack.get("facet_reasons") or semantic_frame.get("facet_reasons") or {})
+    evidence_status = str(evidence_pack.get("evidence_status") or "").strip().lower()
+    if not evidence_status:
+        if any(status in {"failed", "timeout", "unsupported"} for status in stage_statuses) or failed_tools:
+            evidence_status = "failed"
+        elif any(status in {"partial"} for status in stage_statuses) or partial_fields:
+            evidence_status = "partial"
+        elif any(status in {"unknown"} for status in stage_statuses) or unknown_fields:
+            evidence_status = "unknown"
+        elif any(status in {"empty"} for status in stage_statuses):
+            evidence_status = "empty"
+        else:
+            evidence_status = "grounded" if semantic_frame or evidence_pack.get("facet_results") else "unknown"
+    return {
+        "semantic_frame": semantic_frame,
+        "semantic_parse_source": str(evidence_pack.get("semantic_parse_source") or semantic_frame.get("semantic_parse_source") or "").strip(),
+        "grounding_status": grounding_status,
+        "missing_slot_type": missing_slot_type,
+        "router_policy_decision": dict(evidence_pack.get("router_policy_decision") or semantic_frame.get("router_policy_decision") or {}),
+        "router_policy_conflicts": router_policy_conflicts,
+        "conversation_continuity": dict(evidence_pack.get("conversation_continuity") or semantic_frame.get("conversation_continuity") or {}),
+        "exploration_stages": exploration_stages,
+        "stage_queries": stage_queries,
+        "stage_evidence_requirements": stage_evidence_requirements,
+        "stage_statuses": stage_statuses,
+        "scene": str(evidence_pack.get("scene") or semantic_frame.get("scene") or "").strip(),
+        "time": str(evidence_pack.get("time") or semantic_frame.get("time") or "").strip(),
+        "location": dict(evidence_pack.get("location") or semantic_frame.get("location") or {}),
+        "facet_statuses": facet_statuses,
+        "grounded_facts": grounded_facts,
+        "facet_reasons": facet_reasons,
+        "evidence_status": evidence_status,
+        "comparison_support_status": comparison_support_status,
+        "ranking_preserved": bool(evidence_pack.get("ranking_preserved", semantic_frame.get("ranking_preserved", True))),
+        "unsupported_reasons": unsupported_reasons,
+        "unknown_fields": unknown_fields,
+        "failed_tools": failed_tools,
+        "partial_fields": partial_fields,
+    }
+
+
 def review_evidence(
     goal: LocalLifeGoalDraft,
     evidence_pack: dict[str, Any],
@@ -260,6 +323,31 @@ def review_evidence(
     )
 
     result = EvidenceReviewResult()
+    semantic_snapshot = _semantic_snapshot_from_pack(evidence_pack)
+    result.semantic_frame = semantic_snapshot["semantic_frame"]
+    result.semantic_parse_source = semantic_snapshot["semantic_parse_source"]
+    result.grounding_status = semantic_snapshot["grounding_status"]
+    result.missing_slot_type = semantic_snapshot["missing_slot_type"]
+    result.router_policy_decision = semantic_snapshot["router_policy_decision"]
+    result.router_policy_conflicts = list(semantic_snapshot["router_policy_conflicts"])
+    result.conversation_continuity = semantic_snapshot["conversation_continuity"]
+    result.exploration_stages = list(semantic_snapshot["exploration_stages"])
+    result.stage_queries = list(semantic_snapshot["stage_queries"])
+    result.stage_evidence_requirements = list(semantic_snapshot["stage_evidence_requirements"])
+    result.stage_statuses = list(semantic_snapshot["stage_statuses"])
+    result.scene = semantic_snapshot["scene"]
+    result.time = semantic_snapshot["time"]
+    result.location = semantic_snapshot["location"]
+    result.facet_statuses = dict(semantic_snapshot["facet_statuses"])
+    result.grounded_facts = dict(semantic_snapshot["grounded_facts"])
+    result.facet_reasons = dict(semantic_snapshot["facet_reasons"])
+    result.evidence_status = semantic_snapshot["evidence_status"]
+    result.comparison_support_status = semantic_snapshot["comparison_support_status"]
+    result.ranking_preserved = bool(semantic_snapshot["ranking_preserved"])
+    result.unsupported_reasons = list(semantic_snapshot["unsupported_reasons"])
+    result.unknown_fields = list(semantic_snapshot["unknown_fields"])
+    result.failed_tools = list(semantic_snapshot["failed_tools"])
+    result.partial_fields = list(semantic_snapshot["partial_fields"])
     retry_budget_remaining = int(evidence_pack.get("retry_budget_remaining", 1) or 0)
     expand_search_budget_remaining = int(evidence_pack.get("expand_search_budget_remaining", 1) or 0)
     replan_budget_remaining = int(evidence_pack.get("replan_budget_remaining", 1) or 0)
@@ -347,6 +435,48 @@ def review_evidence(
                     evidence_ref=str(fe.payload.get("evidence_id", "") or "") or None,
                 )
             )
+
+    semantic_missing = list(dict.fromkeys([
+        *(semantic_snapshot["unknown_fields"] or []),
+        *(semantic_snapshot["failed_tools"] or []),
+        *(semantic_snapshot["partial_fields"] or []),
+        *(semantic_snapshot["unsupported_reasons"] or []),
+        *(semantic_snapshot["router_policy_conflicts"] or []),
+    ]))
+    if semantic_missing:
+        result.missing_evidence = list(dict.fromkeys(result.missing_evidence + semantic_missing))
+    if semantic_snapshot["exploration_stages"]:
+        incomplete_stage_statuses = [
+            status for status in semantic_snapshot["stage_statuses"]
+            if status in {"unknown", "failed", "empty", "partial"}
+        ]
+        if incomplete_stage_statuses:
+            result.unsafe_answer_risks = list(dict.fromkeys(result.unsafe_answer_risks + [
+                f"exploration_stage:{status}" for status in incomplete_stage_statuses
+            ]))
+            result.evidence_incomplete = True
+    if semantic_snapshot["missing_slot_type"] in {
+        "missing_location",
+        "missing_shop",
+        "missing_comparison_targets",
+        "missing_exploration_location",
+        "missing_category",
+    }:
+        result.clarification_reason = result.clarification_reason or semantic_snapshot["missing_slot_type"]
+        result.action = EvidenceReviewAction.CLARIFY
+        result.next_action = NextAction.CLARIFY
+        result.status = "insufficient"
+        result.reason = result.clarification_reason
+        result.next_step = "ask_user_for_missing_input"
+    elif semantic_snapshot["grounding_status"] in {"unknown", "partial", "unresolved"}:
+        result.unsafe_answer_risks = list(dict.fromkeys(result.unsafe_answer_risks + [f"grounding_status:{semantic_snapshot['grounding_status']}"]))
+        if not result.reason:
+            result.reason = f"grounding_status:{semantic_snapshot['grounding_status']}"
+        result.evidence_incomplete = True
+    if semantic_snapshot["comparison_support_status"] and semantic_snapshot["comparison_support_status"] not in {"grounded", "supported", "ok", "sufficient"}:
+        result.unsafe_answer_risks = list(dict.fromkeys(result.unsafe_answer_risks + [f"comparison_support_status:{semantic_snapshot['comparison_support_status']}"]))
+        if not result.failed_facets and not result.required_failed:
+            result.missing_evidence = list(dict.fromkeys(result.missing_evidence + ["comparison_support"]))
 
     # Detect unknown_as_false and failed_as_empty
     result.unknown_as_false_detected = _detect_unknown_as_false(
@@ -464,12 +594,23 @@ def review_evidence(
         result.status = "sufficient"
         result.reason = "no_required_facets"
         result.next_step = "proceed"
-    elif result.required_ok and (result.required_unknown or result.required_failed or result.required_empty):
+    elif result.required_ok and not result.required_unknown and not result.required_failed and result.required_empty:
+        # Required facets are answerable except for empty results. Treat this as
+        # a safe, already-determinate answer path rather than an iterative replan.
+        # This avoids turning "coupon ok + distance empty" into a replan loop.
+        result.action = EvidenceReviewAction.DEGRADE
+        result.next_action = NextAction.FINISH
+        result.can_degrade = True
+        result.status = "degraded_with_warnings"
+        result.degrade_reason = f"partial_information: {result.required_empty}"
+        result.reason = result.degrade_reason
+        result.next_step = "proceed"
+    elif result.required_ok and (result.required_unknown or result.required_failed):
         if replan_budget_remaining > 0 and tool_round_budget_remaining > 0 and not result.budget_exhausted_reasons:
             result.action = EvidenceReviewAction.REPLAN_MISSING_FACETS
             result.next_action = NextAction.REPLAN_EVIDENCE
             result.status = "degraded_with_warnings"
-            unknown_or_failed = result.required_unknown + result.required_failed + result.required_empty
+            unknown_or_failed = result.required_unknown + result.required_failed
             result.missing_facets = list(dict.fromkeys(unknown_or_failed))
             result.reason = f"required_facets_indeterminate: {unknown_or_failed}"
             result.next_step = "replan_missing_facets"
@@ -478,7 +619,7 @@ def review_evidence(
             result.next_action = NextAction.DEGRADE_ANSWER
             result.can_degrade = True
             result.status = "degraded_with_warnings"
-            unknown_or_failed = result.required_unknown + result.required_failed + result.required_empty
+            unknown_or_failed = result.required_unknown + result.required_failed
             result.degrade_reason = f"partial_information: {unknown_or_failed}"
             result.reason = result.degrade_reason
             result.next_step = "degrade_answer"
@@ -561,6 +702,27 @@ def review_evidence(
         "stale_facets": result.stale_facets,
         "expired_facets": result.expired_facets,
         "disclaimer_facets": result.disclaimer_facets,
+        "semantic_frame": result.semantic_frame,
+        "semantic_parse_source": result.semantic_parse_source,
+        "grounding_status": result.grounding_status,
+        "missing_slot_type": result.missing_slot_type,
+        "router_policy_decision": result.router_policy_decision,
+        "router_policy_conflicts": result.router_policy_conflicts,
+        "conversation_continuity": result.conversation_continuity,
+        "exploration_stages": result.exploration_stages,
+        "stage_queries": result.stage_queries,
+        "stage_evidence_requirements": result.stage_evidence_requirements,
+        "stage_statuses": result.stage_statuses,
+        "scene": result.scene,
+        "time": result.time,
+        "location": result.location,
+        "evidence_status": result.evidence_status,
+        "comparison_support_status": result.comparison_support_status,
+        "ranking_preserved": result.ranking_preserved,
+        "unsupported_reasons": result.unsupported_reasons,
+        "unknown_fields": result.unknown_fields,
+        "failed_tools": result.failed_tools,
+        "partial_fields": result.partial_fields,
     }
 
     _logger.debug(

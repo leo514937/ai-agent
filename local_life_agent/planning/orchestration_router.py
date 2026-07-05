@@ -6,11 +6,12 @@ changing the active LangGraph execution path.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import re
 from typing import Any
 
 from ..domain.candidate import GoalType
-from ..domain.enums import TaskType, TopIntent
+from ..domain.enums import ComparisonStructure, GroundingStatus, MissingSlotType, SemanticParseSource, TaskType, TopIntent
 from ..domain.graph_state import GraphState
 from ..domain.schemas import OrchestrationDecision
 from ..domain.facets import build_target_resolution_result, normalize_query_facets
@@ -348,6 +349,263 @@ _CLARIFICATION_TASKS = {
 }
 
 _LOW_CONFIDENCE_FLOOR = 0.5
+_SEMANTIC_LOW_CONFIDENCE_FLOOR = 0.5
+_STRUCTURED_COMPARISON_STRUCTURES = {
+    ComparisonStructure.pairwise.value,
+    ComparisonStructure.multi_target.value,
+    ComparisonStructure.ordinal.value,
+    ComparisonStructure.deictic.value,
+    ComparisonStructure.explicit.value,
+    ComparisonStructure.mixed.value,
+}
+_CLARIFICATION_SLOT_TYPES = {
+    MissingSlotType.missing_location.value,
+    MissingSlotType.missing_shop.value,
+    MissingSlotType.missing_shop_target.value,
+    MissingSlotType.missing_comparison_targets.value,
+    MissingSlotType.missing_exploration_location.value,
+    MissingSlotType.missing_category.value,
+    MissingSlotType.unresolved_reference.value,
+}
+_GROUNDING_CLARIFICATION_STATUSES = {
+    GroundingStatus.ungrounded.value,
+    GroundingStatus.partially_grounded.value,
+}
+
+
+@dataclass(frozen=True)
+class RouterRuleSignal:
+    """Weak rule-layer signal emitted for router policy evaluation."""
+
+    name: str
+    category: str
+    confidence: float
+    source: str
+    evidence: str
+    positive: bool = True
+
+
+def _semantic_frame(state: GraphState) -> dict[str, Any]:
+    return _to_dict(state.get("semantic_frame"))
+
+
+def _semantic_text_field(semantic_frame: dict[str, Any], *names: str) -> str:
+    for name in names:
+        value = _as_str(semantic_frame.get(name))
+        if value:
+            return value
+    return ""
+
+
+def _semantic_cancel_intent(state: GraphState) -> bool:
+    semantic_frame = _semantic_frame(state)
+    return bool(semantic_frame.get("cancel_intent"))
+
+
+def _semantic_new_task_override(state: GraphState) -> bool:
+    semantic_frame = _semantic_frame(state)
+    return bool(semantic_frame.get("new_task_override"))
+
+
+def _semantic_route_confidence(state: GraphState) -> float:
+    return _extract_confidence(state)
+
+
+def _semantic_parse_source_value(state: GraphState) -> str:
+    semantic_frame = _semantic_frame(state)
+    return _as_str(
+        semantic_frame.get("semantic_parse_source")
+        or semantic_frame.get("parse_source")
+        or semantic_frame.get("semantic_source")
+    )
+
+
+def _semantic_grounding_status(state: GraphState) -> str:
+    semantic_frame = _semantic_frame(state)
+    return _as_str(semantic_frame.get("grounding_status"))
+
+
+def _semantic_missing_slot_type(state: GraphState) -> str:
+    semantic_frame = _semantic_frame(state)
+    return _as_str(semantic_frame.get("missing_slot_type"))
+
+
+def _semantic_exploration_count(state: GraphState) -> int:
+    semantic_frame = _semantic_frame(state)
+    stages = semantic_frame.get("exploration_stages") or []
+    return len([item for item in stages if item])
+
+
+def _semantic_comparison_count(state: GraphState) -> int:
+    semantic_frame = _semantic_frame(state)
+    comparison_targets = [item for item in (semantic_frame.get("comparison_targets") or []) if item]
+    ordinal_references = [item for item in (semantic_frame.get("ordinal_references") or []) if str(item).strip()]
+    deictic_references = [item for item in (semantic_frame.get("deictic_references") or []) if str(item).strip()]
+    merchant_mentions = [item for item in (semantic_frame.get("merchant_mentions") or []) if str(item).strip()]
+    return max(len(comparison_targets), len(ordinal_references), len(deictic_references), len(merchant_mentions))
+
+
+def _make_rule_signal(
+    name: str,
+    category: str,
+    confidence: float,
+    source: str,
+    evidence: str,
+    *,
+    positive: bool = True,
+) -> RouterRuleSignal:
+    return RouterRuleSignal(
+        name=name,
+        category=category,
+        confidence=max(0.0, min(1.0, confidence)),
+        source=source,
+        evidence=evidence,
+        positive=positive,
+    )
+
+
+def _collect_router_rule_signals(state: GraphState) -> list[RouterRuleSignal]:
+    """Collect weak rule signals without letting them own workflow selection."""
+
+    text = _extract_text(state)
+    semantic_frame = _to_dict(state.get("semantic_frame"))
+    signals: list[RouterRuleSignal] = []
+
+    if any(token in text for token in ("推荐", "附近", "找", "搜", "探店")):
+        signals.append(_make_rule_signal("discovery_keyword", "discovery", 0.7, "text", text))
+    semantic_exploration_count = _semantic_exploration_count(state)
+    semantic_workflow_hint = _semantic_text_field(semantic_frame, "workflow_hint")
+    if semantic_exploration_count > 0:
+        signals.append(
+            _make_rule_signal(
+                "exploration_structured",
+                "exploration",
+                0.9,
+                "semantic_frame",
+                f"exploration_stages={semantic_exploration_count};workflow_hint={semantic_workflow_hint}",
+            )
+        )
+
+    comparison_targets = list(semantic_frame.get("comparison_targets") or [])
+    if len(comparison_targets) >= 2 or semantic_frame.get("comparison_intent") is True:
+        signals.append(
+            _make_rule_signal(
+                "comparison_targets",
+                "comparison",
+                0.95 if len(comparison_targets) >= 2 else 0.85,
+                "semantic_frame",
+                "comparison_targets" if comparison_targets else "comparison_intent",
+            )
+        )
+
+    structural_comparison_hints = (
+        "对比",
+        "比较一下",
+        "比一下",
+        "哪个更",
+        "哪家更",
+        "哪一个更",
+        "哪间更",
+        "A vs B",
+        "vs",
+        "二选一",
+        "两家里",
+        "两个里",
+        "这两家",
+        "这两个",
+        "第一家和第二家",
+        "第一家第二家",
+    )
+    if any(token in text for token in structural_comparison_hints):
+        signals.append(_make_rule_signal("comparison_keyword", "comparison", 0.9, "text", text))
+
+    if any(token in text for token in ("这家", "那家", "它", "这间", "那间", "第一家", "第二家", "第三家")):
+        signals.append(_make_rule_signal("clarification_reference_keyword", "clarification", 0.6, "text", text))
+
+    return signals
+
+
+def _find_rule_signal(signals: list[RouterRuleSignal], *, category: str, min_confidence: float = 0.0) -> RouterRuleSignal | None:
+    for signal in signals:
+        if signal.category == category and signal.confidence >= min_confidence:
+            return signal
+    return None
+
+
+def _has_strong_comparison_context(state: GraphState) -> bool:
+    semantic_frame = _to_dict(state.get("semantic_frame"))
+    merchant_mentions = [item for item in (semantic_frame.get("merchant_mentions") or []) if str(item).strip()]
+    comparison_targets = [item for item in (semantic_frame.get("comparison_targets") or []) if item]
+    ordinal_references = [item for item in (semantic_frame.get("ordinal_references") or []) if str(item).strip()]
+    deictic_references = [item for item in (semantic_frame.get("deictic_references") or []) if str(item).strip()]
+    if len(comparison_targets) >= 2 or len(merchant_mentions) >= 2 or len(ordinal_references) >= 2 or len(deictic_references) >= 2:
+        return True
+    if len(comparison_targets) >= 2:
+        return True
+    text = _extract_text(state)
+    if re.search(r"[A-Za-z0-9一二三四五六七八九十]+\s*(vs|VS|和|与)\s*[A-Za-z0-9一二三四五六七八九十]+", text):
+        return True
+    if re.search(r"第\s*[1-9一二三四五六七八九十]\s*(个|家|间|店)?\s*和\s*第\s*[1-9一二三四五六七八九十]\s*(个|家|间|店)?", text):
+        return True
+    if any(
+        token in text
+        for token in (
+            "这两家",
+            "这两个",
+            "两家里",
+            "两个里",
+            "第一家和第二家",
+            "第一家第二家",
+            "对比",
+            "比较一下",
+            "比一下",
+            "哪家更",
+            "哪个更",
+            "哪间更",
+            "哪个",
+            "哪家",
+            "哪一个",
+            "哪间",
+        )
+    ):
+        return bool(
+            comparison_targets
+            or merchant_mentions
+            or ordinal_references
+            or deictic_references
+            or _session_value(state, "last_recommendation_list")
+            or _session_value(state, "current_shop")
+        )
+    return False
+
+
+def _comparison_signal_is_strong(state: GraphState, signals: list[RouterRuleSignal]) -> bool:
+    signal = _find_rule_signal(signals, category="comparison", min_confidence=0.8)
+    return signal is not None and _has_strong_comparison_context(state)
+
+
+def _comparison_signal_conflict_note(state: GraphState, signals: list[RouterRuleSignal], route_task: str) -> str:
+    semantic_task = _extract_task_type(state) or _extract_goal_type(state)
+    comparison_signal = _find_rule_signal(signals, category="comparison", min_confidence=0.0)
+    if comparison_signal is None:
+        return ""
+    if semantic_task in {"recommendation", "shop_search"} and comparison_signal.confidence < 0.8:
+        return (
+            "router_policy_conflict:"
+            f"semantic_intent={semantic_task or 'unknown'};"
+            f"rule_signal={comparison_signal.name};"
+            "resolution=semantic_intent_wins;"
+            "reason=weak_keyword_without_targets"
+        )
+    if route_task in {"recommendation", "shop_search"} and comparison_signal.confidence < 0.8:
+        return (
+            "router_policy_conflict:"
+            f"semantic_intent={semantic_task or 'unknown'};"
+            f"rule_signal={comparison_signal.name};"
+            "resolution=semantic_intent_wins;"
+            "reason=weak_keyword_without_targets"
+        )
+    return ""
 
 
 def _to_dict(value: Any) -> dict[str, Any]:
@@ -567,12 +825,18 @@ def _has_reference_failure(state: GraphState) -> bool:
 
 def _has_comparison_signal(state: GraphState) -> bool:
     semantic_frame = _to_dict(state.get("semantic_frame"))
-    raw_text = _extract_text(state)
+    comparison_targets = [item for item in (semantic_frame.get("comparison_targets") or []) if item]
+    ordinal_references = [item for item in (semantic_frame.get("ordinal_references") or []) if str(item).strip()]
+    deictic_references = [item for item in (semantic_frame.get("deictic_references") or []) if str(item).strip()]
+    comparison_structure = _as_str(semantic_frame.get("comparison_structure"))
     return bool(
-        semantic_frame.get("comparison_targets")
-        or state.get("comparison_targets")
-        or semantic_frame.get("comparison_focus")
-        or any(token in raw_text for token in ("比", "对比"))
+        semantic_frame.get("comparison_intent")
+        and (
+            len(comparison_targets) >= 2
+            or comparison_structure in _STRUCTURED_COMPARISON_STRUCTURES
+            or len(ordinal_references) >= 2
+            or len(deictic_references) >= 2
+        )
     )
 
 
@@ -628,6 +892,7 @@ def normalize_route_task(state: GraphState) -> str:
     if _is_forbidden_scope(state):
         return "forbidden"
 
+    rule_signals = _collect_router_rule_signals(state)
     task_type = _extract_task_type(state)
     goal_type = _extract_goal_type(state)
     facets = _extract_facets(state)
@@ -638,24 +903,132 @@ def normalize_route_task(state: GraphState) -> str:
     raw_explicit_mentions = _infer_explicit_mentions_from_text(raw_text_original)
     has_session_current_shop = bool(_to_dict(_session_value(state, "current_shop")).get("shop_id") or _to_dict(_session_value(state, "current_shop")).get("shop_name"))
     has_session_recommendations = bool(_session_value(state, "last_recommendation_list"))
+    semantic_confidence = _semantic_route_confidence(state)
+    semantic_parse_source = _semantic_parse_source_value(state)
+    semantic_grounding_status = _semantic_grounding_status(state)
+    semantic_missing_slot_type = _semantic_missing_slot_type(state)
+    semantic_category = _semantic_text_field(semantic_frame, "category")
+    semantic_comparison_targets = [item for item in (semantic_frame.get("comparison_targets") or []) if item]
+    semantic_ordinal_references = [item for item in (semantic_frame.get("ordinal_references") or []) if str(item).strip()]
+    semantic_deictic_references = [item for item in (semantic_frame.get("deictic_references") or []) if str(item).strip()]
+    semantic_comparison_structure = _as_str(semantic_frame.get("comparison_structure"))
+    semantic_exploration_count = _semantic_exploration_count(state)
+    semantic_workflow_hint = _semantic_text_field(semantic_frame, "workflow_hint")
+    semantic_has_cancel = _semantic_cancel_intent(state)
+    semantic_has_new_task_override = _semantic_new_task_override(state)
+    state_comparison_targets = [item for item in (state.get("comparison_targets") or []) if item]
+    session_last_recommendations = list(_session_value(state, "last_recommendation_list") or [])
+    comparison_resolution = resolve_comparison_targets(raw_text_original, state, semantic_frame)
+    resolved_targets = list(comparison_resolution.get("targets") or [])
+    recommendation_has_anchor = bool(
+        task_type == "recommendation"
+        and (
+            semantic_category
+            or semantic_frame.get("filters")
+            or semantic_frame.get("soft_preferences")
+            or semantic_frame.get("ranking_signals")
+            or facets
+        )
+    )
+    comparison_has_context_anchor = bool(
+        len(session_last_recommendations) >= 2
+        or len(state_comparison_targets) >= 2
+    )
+    comparison_has_multi_target_signal = bool(
+        len(semantic_comparison_targets) >= 2
+        or len(semantic_ordinal_references) >= 2
+        or len(semantic_deictic_references) >= 2
+        or semantic_comparison_structure in _STRUCTURED_COMPARISON_STRUCTURES
+        or any(token in raw_text_original for token in ("这三家", "这几家", "这两家", "第一家和第二家", "第一家第二家"))
+    )
 
-    if _has_pending_clarification(state):
+    if semantic_has_cancel:
+        return "invalid"
+
+    typed_missing_slots = {
+        MissingSlotType.missing_location.value,
+        MissingSlotType.missing_shop.value,
+        MissingSlotType.missing_shop_target.value,
+        MissingSlotType.missing_comparison_targets.value,
+        MissingSlotType.missing_exploration_location.value,
+        MissingSlotType.missing_category.value,
+        MissingSlotType.unresolved_reference.value,
+    }
+    comparison_requested = bool(
+        semantic_frame.get("comparison_intent")
+        or len(semantic_comparison_targets) >= 2
+        or semantic_comparison_structure in _STRUCTURED_COMPARISON_STRUCTURES
+        or len(semantic_ordinal_references) >= 2
+        or len(semantic_deictic_references) >= 2
+        or len(resolved_targets) >= 2
+        or (comparison_resolution.get("status") == "RESOLVED" and len(resolved_targets) >= 1 and len(state_comparison_targets) >= 2)
+    )
+    recommendation_has_anchor = bool(
+        task_type == "recommendation"
+        and (
+            semantic_category
+            or semantic_frame.get("filters")
+            or semantic_frame.get("soft_preferences")
+            or semantic_frame.get("ranking_signals")
+            or facets
+        )
+    )
+    if (
+        semantic_confidence < _SEMANTIC_LOW_CONFIDENCE_FLOOR
+        and semantic_parse_source in {SemanticParseSource.fallback_rules.value, SemanticParseSource.diagnostic_rules.value, ""}
+        and not semantic_has_new_task_override
+        and not comparison_requested
+        and not recommendation_has_anchor
+    ):
+        return "low_confidence"
+
+    if (
+        semantic_missing_slot_type in typed_missing_slots
+        or (semantic_grounding_status in _GROUNDING_CLARIFICATION_STATUSES and semantic_confidence < 0.85)
+    ) and not semantic_has_new_task_override and not recommendation_has_anchor:
+        return "missing_required_slot"
+
+    if _has_pending_clarification(state) and not semantic_has_new_task_override:
         return "reference_failed"
 
-    comparison_requested = task_type in {"comparison", "deal_compare"} or goal_type in {"comparison", "deal_compare"} or _has_comparison_signal(state)
     if comparison_requested:
-        semantic_comparison_targets = [item for item in (semantic_frame.get("comparison_targets") or []) if item]
-        state_comparison_targets = [item for item in (state.get("comparison_targets") or []) if item]
-        comparison_resolution = resolve_comparison_targets(raw_text_original, state, semantic_frame)
-        resolved_targets = list(comparison_resolution.get("targets") or [])
         if len(semantic_comparison_targets) >= 2 or len(state_comparison_targets) >= 2 or len(resolved_targets) >= 2:
             if task_type in {"comparison", "deal_compare"}:
                 return task_type
             if goal_type in {"comparison", "deal_compare"}:
                 return goal_type
             return "comparison"
-        if comparison_resolution.get("unresolved_targets") or comparison_resolution.get("ambiguous_target") or _has_comparison_signal(state):
+        if comparison_has_context_anchor and comparison_has_multi_target_signal and comparison_resolution.get("status") in {"NEED_CLARIFICATION", "NOT_FOUND", "TOO_MANY", "PARTIAL"}:
+            if task_type in {"comparison", "deal_compare"}:
+                return task_type
+            if goal_type in {"comparison", "deal_compare"}:
+                return goal_type
+            return "comparison"
+        if comparison_resolution.get("unresolved_targets") or comparison_resolution.get("ambiguous_target"):
             return "missing_required_slot"
+    elif task_type in {"comparison", "deal_compare"} or goal_type in {"comparison", "deal_compare"}:
+        if comparison_resolution.get("status") == "RESOLVED" and len(resolved_targets) >= 2:
+            if task_type in {"comparison", "deal_compare"}:
+                return task_type
+            if goal_type in {"comparison", "deal_compare"}:
+                return goal_type
+            return "comparison"
+        return "missing_required_slot"
+
+    if semantic_exploration_count > 0 or goal_type in _EXPLORATION_TASKS or task_type in _EXPLORATION_TASKS or semantic_workflow_hint in _EXPLORATION_TASKS:
+        if semantic_exploration_count > 0:
+            if goal_type in _EXPLORATION_TASKS:
+                return goal_type
+            if task_type in _EXPLORATION_TASKS:
+                return task_type
+            if semantic_workflow_hint in _EXPLORATION_TASKS:
+                return semantic_workflow_hint
+            return "local_trip_plan"
+        if goal_type in _EXPLORATION_TASKS:
+            return goal_type
+        if task_type in _EXPLORATION_TASKS:
+            return task_type
+        return "missing_required_slot"
 
     if _count_single_shop_signal_groups(state) <= 1:
         has_raw_deictic = any(token in raw_text_original for token in ("这家", "那家", "它", "这间", "那间"))
@@ -666,7 +1039,7 @@ def normalize_route_task(state: GraphState) -> str:
             and not re.fullmatch(r"[这那它]\S*", mention)
             for mention in raw_explicit_mentions
         )
-        if (has_verified_explicit_mention or (has_raw_deictic and has_session_current_shop) or (has_raw_ordinal and has_session_recommendations)) and "比" not in raw_text and "对比" not in raw_text:
+        if (has_verified_explicit_mention or (has_raw_deictic and has_session_current_shop) or (has_raw_ordinal and has_session_recommendations)) and not _has_strong_comparison_context(state):
             if "营业" in raw_text or "开门" in raw_text or "open" in raw_text:
                 return "shop_status"
             if "有券" in raw_text or "优惠券" in raw_text or "coupon" in raw_text or "团购" in raw_text:
@@ -678,9 +1051,6 @@ def normalize_route_task(state: GraphState) -> str:
             if "价格" in raw_text or "多少钱" in raw_text or "price" in raw_text:
                 return "shop_price"
 
-    if goal_type in _EXPLORATION_TASKS or task_type in _EXPLORATION_TASKS:
-        return goal_type or task_type
-
     if task_type in _DETERMINISTIC_TASKS:
         if task_type == "shop_coupon":
             return "shop_coupon"
@@ -691,7 +1061,11 @@ def normalize_route_task(state: GraphState) -> str:
         return task_type
 
     if task_type in {"comparison", "recommendation"}:
-        if task_type == "recommendation" and _has_deterministic_target_hints(state) and _count_single_shop_signal_groups(state) <= 1:
+        # 纯推荐请求里出现“有券/营业/距离”等修饰词时，不能直接把整句收敛成单店确定性任务。
+        # 只有已经存在单店锚点时，才允许这类修饰词把路由收回到单店工具流。
+        if task_type == "comparison":
+            return "comparison" if comparison_requested else "missing_required_slot"
+        if task_type == "recommendation" and _has_deterministic_target_hints(state) and _count_single_shop_signal_groups(state) <= 1 and _has_single_shop_anchor(state):
             if "营业" in raw_text or "开门" in raw_text or "open" in raw_text:
                 return "shop_status"
             if "有券" in raw_text or "优惠券" in raw_text or "coupon" in raw_text or "团购" in raw_text:
@@ -800,7 +1174,7 @@ def normalize_route_task(state: GraphState) -> str:
         return "shop_search"
 
     if "推荐" in raw_text or "附近" in raw_text or "找" in raw_text:
-        if "比" in raw_text or "对比" in raw_text:
+        if _has_strong_comparison_context(state):
             return "comparison"
         return "recommendation"
 
@@ -815,10 +1189,13 @@ def normalize_route_task(state: GraphState) -> str:
 
 def _build_missing_fields(state: GraphState, route_task: str) -> list[str]:
     missing_fields: list[str] = []
+    semantic_frame = _to_dict(state.get("semantic_frame"))
     if not _extract_text(state):
         missing_fields.append("semantic_frame")
     task_type = _extract_task_type(state)
     goal_type = _extract_goal_type(state)
+    semantic_missing_slot_type = _as_str(semantic_frame.get("missing_slot_type"))
+    semantic_grounding_status = _as_str(semantic_frame.get("grounding_status"))
     if route_task in {"missing_required_slot", "reference_failed"} and (task_type == TaskType.single_shop_query.value or goal_type == TaskType.single_shop_query.value):
         if not _has_verified_single_shop_anchor(state) and "current_shop" not in missing_fields:
             missing_fields.append("current_shop")
@@ -830,6 +1207,12 @@ def _build_missing_fields(state: GraphState, route_task: str) -> list[str]:
         missing_fields.append("semantic_frame")
     if route_task in _CLARIFICATION_TASKS and not _has_pending_clarification(state) and not _has_reference_failure(state):
         missing_fields.append("pending_clarification")
+    if route_task in {"missing_required_slot", "low_confidence"}:
+        missing_fields.append("semantic_frame")
+    if semantic_missing_slot_type in _CLARIFICATION_SLOT_TYPES:
+        missing_fields.append(semantic_missing_slot_type)
+    if semantic_grounding_status in _GROUNDING_CLARIFICATION_STATUSES and route_task in {"missing_required_slot", "low_confidence"}:
+        missing_fields.append("grounding_status")
     seen: set[str] = set()
     deduped: list[str] = []
     for field in missing_fields:
@@ -898,17 +1281,29 @@ def _workflow_reason(
     policy: dict[str, Any],
     requires_tool: bool,
     requires_clarification: bool,
+    rule_signals: list[RouterRuleSignal] | None = None,
 ) -> str:
     parts: list[str] = []
     top_intent = _extract_top_intent(state)
     task_type = _extract_task_type(state)
     goal_type = _extract_goal_type(state)
+    semantic_frame = _semantic_frame(state)
+    semantic_parse_source = _semantic_parse_source_value(state)
+    grounding_status = _semantic_grounding_status(state)
     if top_intent:
         parts.append(f"top_intent={top_intent}")
     if task_type:
         parts.append(f"task_type={task_type}")
     if goal_type:
         parts.append(f"goal_type={goal_type}")
+    if semantic_frame.get("comparison_intent") is not None:
+        parts.append(f"comparison_intent={bool(semantic_frame.get('comparison_intent'))}")
+    if semantic_frame.get("comparison_structure"):
+        parts.append(f"comparison_structure={semantic_frame.get('comparison_structure')}")
+    if semantic_parse_source:
+        parts.append(f"semantic_parse_source={semantic_parse_source}")
+    if grounding_status:
+        parts.append(f"grounding_status={grounding_status}")
     if route_task:
         parts.append(f"route_task={route_task}")
     if missing_fields:
@@ -920,12 +1315,16 @@ def _workflow_reason(
     reason = str(policy.get("workflow_reason", "") or "").strip()
     if reason:
         parts.append(reason)
+    conflict_note = _comparison_signal_conflict_note(state, rule_signals or [], route_task)
+    if conflict_note:
+        parts.append(conflict_note)
     if route_task == "forbidden":
         parts.append("unsupported/forbidden scope")
     return "; ".join(parts)
 
 
 def _build_decision_from_policy(state: GraphState, route_task: str, policy: dict[str, Any]) -> OrchestrationDecision:
+    rule_signals = _collect_router_rule_signals(state)
     missing_fields = _build_missing_fields(state, route_task)
     requires_tool = bool(policy.get("requires_tool", False))
     requires_clarification = bool(policy.get("requires_clarification", False))
@@ -937,6 +1336,7 @@ def _build_decision_from_policy(state: GraphState, route_task: str, policy: dict
         policy=policy,
         requires_tool=requires_tool,
         requires_clarification=requires_clarification,
+        rule_signals=rule_signals,
     )
     return OrchestrationDecision(
         orchestration_pattern=str(policy.get("orchestration_pattern", "clarification_fallback") or "clarification_fallback"),
@@ -999,7 +1399,7 @@ def validate_orchestration_decision(decision: OrchestrationDecision, state: Grap
                     "task_complexity": "medium",
                 }
             )
-        elif normalized.confidence < _LOW_CONFIDENCE_FLOOR:
+        elif normalized.confidence < _LOW_CONFIDENCE_FLOOR and route_task != "comparison":
             normalized = normalized.model_copy(
                 update={
                     "workflow_name": "clarification_fallback",
@@ -1067,19 +1467,48 @@ def validate_orchestration_decision(decision: OrchestrationDecision, state: Grap
     return normalized
 
 
-def build_orchestration_decision(state: GraphState) -> OrchestrationDecision:
-    """Build a shadow routing decision without changing execution."""
+def resolve_workflow_with_policy(
+    semantic_frame: dict[str, Any] | Any | None,
+    rule_signals: list[RouterRuleSignal] | None,
+    session_context: dict[str, Any] | Any | None,
+    state: GraphState,
+) -> OrchestrationDecision:
+    """Central policy guard for workflow selection."""
 
-    route_task = normalize_route_task(state)
+    working_state: dict[str, Any] = dict(state)
+    if semantic_frame is not None:
+        working_state["semantic_frame"] = semantic_frame
+    if session_context is not None:
+        working_state["session_state"] = session_context
+        working_state["session_state_before"] = session_context
+    route_task = normalize_route_task(working_state)
     policy = _policy_for_route_task(route_task)
     if policy is None:
         return OrchestrationDecision(
             **_fallback_policy(f"policy table missing route_task={route_task or 'unknown'}"),
             confidence=0.35,
-            missing_fields=["semantic_frame"] if not _extract_text(state) else [],
+            missing_fields=["semantic_frame"] if not _extract_text(working_state) else [],
         )
 
-    decision = _build_decision_from_policy(state, route_task, policy)
+    decision = _build_decision_from_policy(working_state, route_task, policy)
+    if rule_signals:
+        conflict_note = _comparison_signal_conflict_note(working_state, rule_signals, route_task)
+        if conflict_note and conflict_note not in decision.workflow_reason:
+            decision = decision.model_copy(update={"workflow_reason": f"{decision.workflow_reason}; {conflict_note}"})
+    return validate_orchestration_decision(decision, working_state)
+
+
+def build_orchestration_decision(state: GraphState) -> OrchestrationDecision:
+    """Build a shadow routing decision without changing execution."""
+
+    rule_signals = _collect_router_rule_signals(state)
+    decision = resolve_workflow_with_policy(
+        state.get("semantic_frame"),
+        rule_signals,
+        state.get("session_state_before") or state.get("session_state"),
+        state,
+    )
+    route_task = normalize_route_task(state)
 
     # Route-specific fallbacks and guard rails before the validator runs.
     if route_task == "forbidden":
@@ -1156,14 +1585,90 @@ def route_orchestration(state: GraphState) -> dict[str, Any]:
     """Safe public entry point for Phase 4 shadow routing."""
 
     try:
+        rule_signals = _collect_router_rule_signals(state)
         raw_decision = build_orchestration_decision(state)
         decision = validate_orchestration_decision(raw_decision, state)
         error_code = ""
         error_message = ""
+        semantic_frame = _to_dict(state.get("semantic_frame"))
+        raw_text_original = _extract_text(state)
+        session_last_recommendations = list(_session_value(state, "last_recommendation_list") or [])
+        state_comparison_targets = [item for item in (state.get("comparison_targets") or []) if item]
+        semantic_comparison_targets = [item for item in (semantic_frame.get("comparison_targets") or []) if item]
+        semantic_ordinal_references = [item for item in (semantic_frame.get("ordinal_references") or []) if str(item).strip()]
+        semantic_deictic_references = [item for item in (semantic_frame.get("deictic_references") or []) if str(item).strip()]
+        semantic_comparison_structure = _as_str(semantic_frame.get("comparison_structure"))
+        comparison_resolution = resolve_comparison_targets(raw_text_original, state, semantic_frame)
+        resolved_targets = list(comparison_resolution.get("targets") or [])
+        comparison_requested = bool(
+            semantic_frame.get("comparison_intent")
+            or len(semantic_comparison_targets) >= 2
+            or semantic_comparison_structure in _STRUCTURED_COMPARISON_STRUCTURES
+            or len(semantic_ordinal_references) >= 2
+            or len(semantic_deictic_references) >= 2
+            or len(resolved_targets) >= 2
+            or (comparison_resolution.get("status") == "RESOLVED" and len(resolved_targets) >= 1 and len(state_comparison_targets) >= 2)
+        )
+        comparison_context_anchor = bool(len(session_last_recommendations) >= 2 or len(state_comparison_targets) >= 2)
+        comparison_multi_target_signal = bool(
+            len(semantic_comparison_targets) >= 2
+            or len(semantic_ordinal_references) >= 2
+            or len(semantic_deictic_references) >= 2
+            or semantic_comparison_structure in _STRUCTURED_COMPARISON_STRUCTURES
+            or any(token in raw_text_original for token in ("这三家", "这几家", "这两家", "第一家和第二家", "第一家第二家"))
+        )
+        comparison_resolution_status = str(comparison_resolution.get("status", "") or "").upper()
+        if comparison_requested:
+            if len(semantic_comparison_targets) >= 2 or len(state_comparison_targets) >= 2 or len(resolved_targets) >= 2:
+                comparison_route_reason = (
+                    f"comparison_requested; comparison_targets={len(semantic_comparison_targets)};"
+                    f"state_targets={len(state_comparison_targets)}; resolved_targets={len(resolved_targets)}"
+                )
+            elif comparison_context_anchor and comparison_multi_target_signal and comparison_resolution_status in {"NEED_CLARIFICATION", "NOT_FOUND", "TOO_MANY", "PARTIAL"}:
+                comparison_route_reason = (
+                    f"comparison_recovered_from_context; context_anchor={comparison_context_anchor};"
+                    f"multi_target_signal={comparison_multi_target_signal}; resolution_status={comparison_resolution_status}"
+                )
+            elif comparison_resolution.get("unresolved_targets") or comparison_resolution.get("ambiguous_target"):
+                comparison_route_reason = (
+                    f"comparison_needs_clarification; resolution_status={comparison_resolution_status};"
+                    f"unresolved_targets={len(comparison_resolution.get('unresolved_targets') or [])}"
+                )
+            else:
+                comparison_route_reason = (
+                    f"comparison_requested_but_insufficient; resolution_status={comparison_resolution_status};"
+                    f"context_anchor={comparison_context_anchor}; multi_target_signal={comparison_multi_target_signal}"
+                )
+        else:
+            comparison_route_reason = (
+                f"comparison_not_selected; resolution_status={comparison_resolution_status};"
+                f"context_anchor={comparison_context_anchor}; multi_target_signal={comparison_multi_target_signal}"
+            )
         if raw_decision.model_dump() != decision.model_dump():
             error_code = "ORCHESTRATION_VALIDATION_FALLBACK"
             error_message = decision.workflow_reason or "orchestration decision normalized by validator"
         facet_set = normalize_query_facets(state.get("semantic_frame"), state.get("session_state_before") or state.get("session_state"), _extract_text(state))
+        router_policy_conflicts = [
+            note
+            for note in (
+                _comparison_signal_conflict_note(state, rule_signals, normalize_route_task(state)),
+            )
+            if note
+        ]
+        router_policy_decision = {
+            "route_task": normalize_route_task(state),
+            "workflow_name": decision.workflow_name,
+            "orchestration_pattern": decision.orchestration_pattern,
+            "response_mode": decision.response_mode,
+            "confidence": decision.confidence,
+            "semantic_parse_source": _semantic_parse_source_value(state),
+            "grounding_status": _semantic_grounding_status(state),
+            "comparison_requested": comparison_requested,
+            "comparison_context_anchor": comparison_context_anchor,
+            "comparison_multi_target_signal": comparison_multi_target_signal,
+            "comparison_resolution_status": comparison_resolution_status,
+            "comparison_route_reason": comparison_route_reason,
+        }
         patch = _decision_patch(decision, error_code=error_code, error_message=error_message)
         patch.update(
             {
@@ -1172,6 +1677,15 @@ def route_orchestration(state: GraphState) -> dict[str, Any]:
                 "target_resolution": facet_set.target_resolution or build_target_resolution_result(state.get("semantic_frame"), session_state=state.get("session_state_before") or state.get("session_state"), raw_text=_extract_text(state)),
                 "conflicting_facets": facet_set.conflicting_facets,
                 "ranking_policy": facet_set.ranking_policy,
+                "router_policy_decision": router_policy_decision,
+                "router_policy_conflicts": router_policy_conflicts,
+                "rule_pattern_signals": [signal.__dict__ for signal in rule_signals],
+                "workflow_candidate_reason": decision.workflow_reason,
+                "comparison_requested": comparison_requested,
+                "comparison_context_anchor": comparison_context_anchor,
+                "comparison_multi_target_signal": comparison_multi_target_signal,
+                "comparison_resolution_status": comparison_resolution_status,
+                "comparison_route_reason": comparison_route_reason,
             }
         )
         return patch
@@ -1193,7 +1707,7 @@ def route_orchestration(state: GraphState) -> dict[str, Any]:
             error_code="ORCHESTRATION_ROUTER_EXCEPTION",
             error_message=str(exc),
         )
-        patch.update({"facet_set": None, "facets": [], "target_resolution": None, "conflicting_facets": [], "ranking_policy": None})
+        patch.update({"facet_set": None, "facets": [], "target_resolution": None, "conflicting_facets": [], "ranking_policy": None, "router_policy_decision": {}, "router_policy_conflicts": [f"router exception: {exc}"], "rule_pattern_signals": [], "workflow_candidate_reason": fallback.workflow_reason})
         return patch
 
 

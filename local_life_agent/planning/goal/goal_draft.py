@@ -21,7 +21,7 @@ from ...domain.candidate import (
     GoalType,
     LocalLifeGoalDraft,
 )
-from ...domain.enums import TaskType
+from ...domain.enums import Facet, TaskType
 from ...domain.schemas import SemanticFrame
 
 
@@ -222,11 +222,12 @@ def build_local_life_goal_draft(
     # Extract evidence needs (required facets + focused facets)
     required_facets: list[str] = []
     optional_facets: list[str] = []
+    valid_facets = {facet.value for facet in Facet}
     for facet_spec in frame.facets or []:
         spec_dict = _to_dict(facet_spec)
         name_raw = spec_dict.get("name", "") or ""
         name = str(name_raw.value) if isinstance(name_raw, Enum) else str(name_raw)
-        if not name:
+        if not name or name not in valid_facets:
             continue
         if spec_dict.get("required"):
             required_facets.append(name)

@@ -231,6 +231,18 @@ def plan_decision(
         A ``DecisionPlan`` ready for DecisionReview and AnswerGenerator.
     """
     evidence_dict = _get_evidence_dict(evidence_pack)
+    facet_statuses = dict(evidence_dict.get("facet_statuses") or {})
+    grounded_facts = dict(evidence_dict.get("grounded_facts") or {})
+    facet_reasons = dict(evidence_dict.get("facet_reasons") or {})
+    evidence_status = str(evidence_dict.get("evidence_status") or "").strip()
+    comparison_support_status = str(evidence_dict.get("comparison_support_status") or "").strip()
+    ranking_preserved = bool(evidence_dict.get("ranking_preserved", True))
+    unsupported_reasons = list(evidence_dict.get("unsupported_reasons", []) or [])
+    unknown_fields = list(evidence_dict.get("unknown_fields", []) or [])
+    failed_tools = list(evidence_dict.get("failed_tools", []) or [])
+    partial_fields = list(evidence_dict.get("partial_fields", []) or [])
+    evidence_review_result = _to_dict(evidence_review) if evidence_review is not None else _to_dict(evidence_dict.get("evidence_review_result"))
+    answer_verify_result = _to_dict(evidence_dict.get("answer_verify_result"))
 
     # --- 1. Extract candidates ---
     candidates: list[str] = []
@@ -363,6 +375,18 @@ def plan_decision(
         forbidden_claims=forbidden_claims,
         must_mention_unknowns=must_mention_unknowns,
         decision_context=decision_context,
+        facet_statuses=facet_statuses,
+        grounded_facts=grounded_facts,
+        facet_reasons=facet_reasons,
+        evidence_status=evidence_status,
+        comparison_support_status=comparison_support_status,
+        ranking_preserved=ranking_preserved,
+        unsupported_reasons=unsupported_reasons,
+        unknown_fields=unknown_fields,
+        failed_tools=failed_tools,
+        partial_fields=partial_fields,
+        evidence_review_result=evidence_review_result,
+        answer_verify_result=answer_verify_result,
         decision_source="deterministic_decision_planner",
         decision_confidence=1.0 if winner_shop_id is not None else 0.0,
         claim_bindings=[

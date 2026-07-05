@@ -132,6 +132,19 @@ TOOL_CAPABILITY_REGISTRY: dict[str, ToolCapabilitySpec] = {
         owner="location",
         notes="distance and ETA facts",
     ),
+    "calculate_distance_km": ToolCapabilitySpec(
+        tool_name="calculate_distance_km",
+        supported_facets=["distance"],
+        required_inputs=["origin", "destination"],
+        optional_inputs=["mode"],
+        output_facets=["distance"],
+        retryable_failure_types=["timeout", "network_error", "backend_error"],
+        non_retryable_failure_types=["invalid_response", "unsupported_facet", "missing_input"],
+        cost_weight=2,
+        priority=24,
+        owner="location",
+        notes="straight-line distance facts",
+    ),
     "get_shop_cards": ToolCapabilitySpec(
         tool_name="get_shop_cards",
         supported_facets=[
@@ -197,7 +210,7 @@ _FACET_TO_PRIMARY_TOOL: dict[str, str] = {
     "open_late": "check_open_status",
     "reservation_available": "check_open_status",
     "queue_status": "check_open_status",
-    "distance": "get_distance_eta",
+    "distance": "calculate_distance_km",
     "travel_time": "get_distance_eta",
     "price": "get_shop_detail",
     "avg_price": "get_shop_detail",
@@ -287,6 +300,8 @@ def build_tool_call_dict(
     target_shop_id: str = "",
     required: bool = True,
     location: dict[str, Any] | None = None,
+    origin: dict[str, Any] | None = None,
+    destination: dict[str, Any] | None = None,
     shop_ids: list[str] | None = None,
     query: str = "",
     limit: int | None = None,
@@ -309,6 +324,12 @@ def build_tool_call_dict(
             "need_coupon_brief": True,
             "need_open_status": True,
             "need_distance_eta": True,
+        }
+    elif tool_name == "calculate_distance_km":
+        args = {
+            "origin": origin or location or {},
+            "destination": destination or {},
+            "mode": "straight_line",
         }
     elif tool_name == "get_distance_eta":
         args = {"shop_id": target_shop_id}

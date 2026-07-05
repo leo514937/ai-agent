@@ -146,6 +146,7 @@ class ExecutionPlanValidator:
             "get_coupon_list",
             "check_open_status",
             "get_distance_eta",
+            "calculate_distance_km",
             "get_shop_cards",
             "get_shop_review_summary",
             "get_deal_list",
