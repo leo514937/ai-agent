@@ -89,6 +89,11 @@ class TurnTrace:
     top_intent_router_error_type: str | None = None
     top_intent_router_error_message: str | None = None
     semantic_source: str | None = None
+    semantic_frame: dict[str, Any] = field(default_factory=dict)
+    schema_validation_result: dict[str, Any] = field(default_factory=dict)
+    router_policy_decision: dict[str, Any] = field(default_factory=dict)
+    router_policy_conflicts: list[str] = field(default_factory=list)
+    rule_pattern_signals: list[dict[str, Any]] = field(default_factory=list)
     llm_backend: str | None = None
     llm_backend_kind: str | None = None
     llm_backend_family: str | None = None
@@ -99,7 +104,15 @@ class TurnTrace:
     selected_flow: str | None = None
     target_status: str | None = None
     target_resolve_status: str | None = None
+    target_resolution_status: str | None = None
+    target_resolution: dict[str, Any] = field(default_factory=dict)
+    resolved_target: dict[str, Any] = field(default_factory=dict)
+    comparison_target_resolution: dict[str, Any] = field(default_factory=dict)
+    grounding_result: dict[str, Any] = field(default_factory=dict)
     reference_resolution_source: str | None = None
+    grounding_status: str | None = None
+    missing_slot_type: str | None = None
+    pending_clarification: dict[str, Any] = field(default_factory=dict)
     candidate_count: int = 0
     candidate_status: str | None = None
     candidate_source: str | None = None
@@ -116,6 +129,9 @@ class TurnTrace:
     resolver_error_type: str | None = None
     resolver_error_message: str | None = None
     answer_source: str | None = None
+    evidence_status: str | None = None
+    evidence_review_result: dict[str, Any] = field(default_factory=dict)
+    answer_verify_result: dict[str, Any] = field(default_factory=dict)
     answer_verify_passed: bool | None = None
     answer_verify_violations: list[str] = field(default_factory=list)
     verifier_result: str | None = None
@@ -131,6 +147,20 @@ class TurnTrace:
     raw_text_fallback_source: str | None = None
     legacy_used: bool = False
     evidence_incomplete: bool = False
+    unsupported_reasons: list[str] = field(default_factory=list)
+    unknown_fields: list[str] = field(default_factory=list)
+    failed_tools: list[str] = field(default_factory=list)
+    partial_fields: list[str] = field(default_factory=list)
+    comparison_support_status: str | None = None
+    ranking_preserved: bool | None = None
+    comparison_requested: bool | None = None
+    comparison_context_anchor: bool | None = None
+    comparison_multi_target_signal: bool | None = None
+    comparison_resolution_status: str | None = None
+    comparison_route_reason: str | None = None
+    state_update_plan: dict[str, Any] = field(default_factory=dict)
+    conversation_continuity: dict[str, Any] = field(default_factory=dict)
+    workflow_candidate_reason: str | None = None
     final_safety_status: str | None = None
     total_duration_ms: int | None = None
     llm_duration_ms: int = 0
@@ -376,10 +406,16 @@ def build_turn_trace(final_state: dict[str, Any], *, user_text: str = "", total_
     else:
         events = event_log_events
     semantic_frame = _coerce_dict(final_state.get("semantic_frame"))
+    schema_validation_result = _coerce_dict(final_state.get("schema_validation_result"))
+    router_policy_decision = _coerce_dict(final_state.get("router_policy_decision") or final_state.get("orchestration_decision"))
+    router_policy_conflicts = _coerce_str_list(final_state.get("router_policy_conflicts"))
+    rule_pattern_signals = [item for item in (_coerce_dict(item) for item in (final_state.get("rule_pattern_signals") or [])) if item]
     execution_plan = _coerce_dict(final_state.get("execution_plan"))
     evidence_pack = _coerce_dict(final_state.get("evidence_pack"))
     resolved_target = _coerce_dict(final_state.get("resolved_target") or final_state.get("resolve_shop_result"))
     comparison_result = _coerce_dict(final_state.get("comparison_result"))
+    target_resolution = _coerce_dict(final_state.get("target_resolution"))
+    comparison_target_resolution = _coerce_dict(final_state.get("comparison_target_resolution"))
     target_resolve_event = _find_event(events, "target_resolve")
     target_resolve_metadata = _coerce_dict(target_resolve_event.metadata if target_resolve_event else {})
     session_before = _coerce_dict(final_state.get("session_state_before"))
@@ -403,6 +439,7 @@ def build_turn_trace(final_state: dict[str, Any], *, user_text: str = "", total_
         elif _coerce_dict(semantic_frame.get("follow_up")):
             candidate_source = "mixed"
     target_resolve_status = _coerce_optional_str(target_resolve_metadata.get("status")) or _coerce_optional_str(target_resolve_event.status if target_resolve_event else None) or _coerce_optional_str(final_state.get("target_status"))
+    target_resolution_status = _coerce_optional_str(final_state.get("target_resolution_status")) or target_resolve_status
     candidate_query = _infer_candidate_query(semantic_frame, final_state, candidate_source)
     ambiguous_candidate_count = _infer_ambiguous_candidate_count(target_resolve_metadata, candidate_count, target_resolve_status)
     ambiguous_candidates = _infer_ambiguous_candidates(final_state, target_resolve_metadata)
@@ -412,6 +449,34 @@ def build_turn_trace(final_state: dict[str, Any], *, user_text: str = "", total_
     resolver_tool_result_count = candidate_count if resolver_tool_called else 0
     resolver_error_type, resolver_error_message = _infer_resolver_error(target_resolve_metadata, target_resolve_status)
     llm_backend = _coerce_optional_str(final_state.get("llm_backend")) or _coerce_optional_str(semantic_frame.get("llm_backend"))
+    grounding_status = _coerce_optional_str(final_state.get("grounding_status")) or _coerce_optional_str(semantic_frame.get("grounding_status"))
+    missing_slot_type = _coerce_optional_str(final_state.get("missing_slot_type")) or _coerce_optional_str(semantic_frame.get("missing_slot_type"))
+    pending_clarification = _coerce_dict(final_state.get("pending_clarification"))
+    evidence_status = _coerce_optional_str(final_state.get("evidence_status")) or _coerce_optional_str(_coerce_dict(final_state.get("review_results")).get("evidence_status"))
+    evidence_review_result = _coerce_dict(final_state.get("evidence_review_result") or _coerce_dict(final_state.get("review_results")).get("evidence_review"))
+    answer_verify_result = _coerce_dict(final_state.get("answer_verify_result"))
+    unsupported_reasons = _coerce_str_list(final_state.get("unsupported_reasons")) or _coerce_str_list(evidence_review_result.get("unsupported_reasons"))
+    unknown_fields = _coerce_str_list(final_state.get("unknown_fields")) or _coerce_str_list(final_state.get("verifier_unknown_fields"))
+    failed_tools = _infer_failed_tools(final_state, events)
+    partial_fields = _coerce_str_list(final_state.get("partial_fields"))
+    comparison_support_status = _coerce_optional_str(final_state.get("comparison_support_status"))
+    ranking_preserved = _coerce_optional_bool(final_state.get("ranking_preserved"))
+    comparison_requested = _coerce_optional_bool(final_state.get("comparison_requested"))
+    comparison_context_anchor = _coerce_optional_bool(final_state.get("comparison_context_anchor"))
+    comparison_multi_target_signal = _coerce_optional_bool(final_state.get("comparison_multi_target_signal"))
+    comparison_resolution_status = _coerce_optional_str(final_state.get("comparison_resolution_status"))
+    comparison_route_reason = _coerce_optional_str(final_state.get("comparison_route_reason"))
+    state_update_plan = _coerce_dict(final_state.get("state_update_plan"))
+    workflow_candidate_reason = _coerce_optional_str(final_state.get("workflow_candidate_reason"))
+    from ..engine._compat import _build_conversation_continuity
+
+    conversation_continuity = _coerce_dict(_build_conversation_continuity(final_state))
+    grounding_result = _coerce_dict(final_state.get("grounding_result")) or {
+        "status": target_resolution_status or target_resolve_status or grounding_status or "",
+        "target_resolution": target_resolution,
+        "resolved_target": resolved_target,
+        "comparison_target_resolution": comparison_target_resolution,
+    }
     tool_call_count = _infer_tool_call_count(execution_plan, final_state)
     normalized_spans = _normalize_trace_spans(events, final_state)
     trace_errors = _collect_trace_errors(final_state, events)
@@ -428,6 +493,11 @@ def build_turn_trace(final_state: dict[str, Any], *, user_text: str = "", total_
         top_intent_router_error_type=_coerce_optional_str(final_state.get("top_intent_router_error_type")),
         top_intent_router_error_message=_coerce_optional_str(final_state.get("top_intent_router_error_message")),
         semantic_source=_coerce_optional_str(final_state.get("semantic_source")) or _coerce_optional_str(semantic_frame.get("semantic_source")),
+        semantic_frame=semantic_frame,
+        schema_validation_result=schema_validation_result,
+        router_policy_decision=router_policy_decision,
+        router_policy_conflicts=router_policy_conflicts,
+        rule_pattern_signals=rule_pattern_signals,
         llm_backend=llm_backend,
         llm_backend_kind=_infer_llm_backend_kind(llm_backend),
         llm_backend_family=_infer_llm_backend_family(llm_backend),
@@ -438,7 +508,15 @@ def build_turn_trace(final_state: dict[str, Any], *, user_text: str = "", total_
         selected_flow=selected_flow,
         target_status=_coerce_optional_str(resolved_target.get("status")),
         target_resolve_status=target_resolve_status,
+        target_resolution_status=target_resolution_status,
+        target_resolution=target_resolution,
+        resolved_target=resolved_target,
+        comparison_target_resolution=comparison_target_resolution,
+        grounding_result=grounding_result,
         reference_resolution_source=_infer_reference_resolution_source(final_state, semantic_frame),
+        grounding_status=grounding_status,
+        missing_slot_type=missing_slot_type,
+        pending_clarification=pending_clarification,
         candidate_count=candidate_count,
         candidate_status=_coerce_optional_str(final_state.get("candidate_status")) or target_resolve_status,
         candidate_source=candidate_source,
@@ -455,6 +533,9 @@ def build_turn_trace(final_state: dict[str, Any], *, user_text: str = "", total_
         resolver_error_type=resolver_error_type,
         resolver_error_message=resolver_error_message,
         answer_source=_coerce_optional_str(final_state.get("answer_source")),
+        evidence_status=evidence_status,
+        evidence_review_result=evidence_review_result,
+        answer_verify_result=answer_verify_result,
         answer_verify_passed=_coerce_optional_bool(final_state.get("answer_verify_passed")),
         answer_verify_violations=[str(item) for item in (final_state.get("answer_verify_violations") or []) if str(item).strip()],
         verifier_result=_coerce_optional_str(final_state.get("verifier_result")) or (
@@ -466,12 +547,26 @@ def build_turn_trace(final_state: dict[str, Any], *, user_text: str = "", total_
         verifier_false_fields=[str(item) for item in (final_state.get("verifier_false_fields") or []) if str(item).strip()],
         verifier_recoverable=_coerce_optional_bool(final_state.get("verifier_recoverable")),
         rewrite_count=int(final_state.get("rewrite_count", 0) or 0),
-        fallback_reason=_coerce_optional_str(final_state.get("fallback_reason")) or _coerce_optional_str(semantic_frame.get("fallback_reason")),
+        fallback_reason=_preferred_fallback_reason(final_state, semantic_frame),
         fallback_used=_infer_fallback_used(final_state, semantic_frame),
         template_fallback_used=_coerce_optional_bool(final_state.get("template_fallback_used")),
         raw_text_fallback_source=_coerce_optional_str(final_state.get("raw_text_fallback_source")),
         legacy_used=_infer_legacy_used(final_state, events),
         evidence_incomplete=_infer_evidence_incomplete(final_state),
+        unsupported_reasons=unsupported_reasons,
+        unknown_fields=unknown_fields,
+        failed_tools=failed_tools,
+        partial_fields=partial_fields,
+        comparison_support_status=comparison_support_status,
+        ranking_preserved=ranking_preserved,
+        comparison_requested=comparison_requested,
+        comparison_context_anchor=comparison_context_anchor,
+        comparison_multi_target_signal=comparison_multi_target_signal,
+        comparison_resolution_status=comparison_resolution_status,
+        comparison_route_reason=comparison_route_reason,
+        state_update_plan=state_update_plan,
+        conversation_continuity=conversation_continuity,
+        workflow_candidate_reason=workflow_candidate_reason,
         final_safety_status=_coerce_optional_str(final_state.get("final_safety_status")),
         total_duration_ms=total_duration_ms,
         llm_duration_ms=sum(event.duration_ms or 0 for event in events if event.stage in {"semantic_parse", "top_intent_router", "llm_verbalizer", "answer_generate"}),
@@ -928,6 +1023,47 @@ def _coerce_optional_bool(value: Any) -> bool | None:
     if value is None:
         return None
     return bool(value)
+
+
+def _coerce_str_list(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, tuple):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, set):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = str(value).strip()
+    return [text] if text else []
+
+
+def _infer_failed_tools(final_state: dict[str, Any], events: list[TraceSpanRecord]) -> list[str]:
+    direct = _coerce_str_list(final_state.get("failed_tools"))
+    if direct:
+        return direct
+    tool_results = _coerce_dict(final_state.get("tool_result_set") or final_state.get("tool_results"))
+    failed: list[str] = []
+    for call_id, result in tool_results.items():
+        if not isinstance(result, dict):
+            continue
+        status = _coerce_optional_str(result.get("result_status") or result.get("status"))
+        if status and status.lower() in {"failed", "unknown", "circuit_open", "unsupported"}:
+            failed.append(str(call_id))
+    if failed:
+        return failed
+    for event in events:
+        if event.stage == "tool_call" and event.status == "error":
+            failed.append(event.span_name)
+    return failed
+
+
+def _preferred_fallback_reason(final_state: dict[str, Any], semantic_frame: dict[str, Any]) -> str | None:
+    state_reason = _coerce_optional_str(final_state.get("fallback_reason"))
+    semantic_reason = _coerce_optional_str(semantic_frame.get("fallback_reason"))
+    if state_reason in {"low_confidence", "missing_required_slot"} and semantic_reason and semantic_reason not in {"low_confidence", "missing_required_slot"}:
+        return semantic_reason
+    return state_reason or semantic_reason
 
 
 def _coerce_int(value: Any) -> int | None:

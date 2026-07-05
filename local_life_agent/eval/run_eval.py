@@ -5,6 +5,7 @@ import json
 import os
 import re
 from contextlib import contextmanager
+from dataclasses import fields as dataclass_fields
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -221,7 +222,9 @@ def _turn_trace_from_response(response: AgentResponse, user_text: str) -> TurnTr
         events = merged.get("events") or []
         if isinstance(events, list):
             merged["events"] = [TraceSpanRecord(**event) if isinstance(event, dict) else event for event in events]
-        return TurnTrace(**merged)
+        allowed_fields = {field.name for field in dataclass_fields(TurnTrace)}
+        filtered = {key: value for key, value in merged.items() if key in allowed_fields}
+        return TurnTrace(**filtered)
     return built_trace
 
 

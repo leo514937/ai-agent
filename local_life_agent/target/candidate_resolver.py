@@ -11,6 +11,9 @@ appropriate resolution strategy based on the candidate source:
 from __future__ import annotations
 
 import re
+import json
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Callable
 
 from ..config import SEARCH_LIMIT
@@ -66,6 +69,90 @@ def _to_dict(value: Any) -> dict[str, Any]:
     return dict(getattr(value, "__dict__", {}) or {})
 
 
+@lru_cache(maxsize=1)
+def _seed_shop_id_mapping() -> dict[str, str]:
+    """Load the canonical shop-id mapping used by the local seed data."""
+    mapping_path = Path(__file__).resolve().parents[2] / "db" / "seed" / "local_life" / "normalized_shop_id_mapping.json"
+    try:
+        raw = json.loads(mapping_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    mapping: dict[str, str] = {}
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            key_text = str(key or "").strip()
+            value_text = str(value or "").strip()
+            if key_text and value_text:
+                mapping[key_text] = value_text
+    return mapping
+
+
+def _canonical_shop_record(shop: Any) -> dict[str, Any]:
+    """Prefer canonical fixture/shop-table IDs for a resolved shop record."""
+
+    shop_dict = _to_dict(shop)
+    shop_name = str(shop_dict.get("shop_name", "") or "").strip()
+    if not shop_name:
+        return shop_dict
+
+    shop_id = str(shop_dict.get("shop_id", "") or "").strip()
+    seed_mapping = _seed_shop_id_mapping()
+    mapped_id = seed_mapping.get(shop_id)
+    if mapped_id:
+        shop_dict = {**shop_dict, "shop_id": mapped_id}
+
+    try:
+        matches = db_client.query_all_shops()
+    except Exception:
+        matches = []
+    if not matches:
+        return shop_dict
+
+    normalized_name = _normalize_shop_key(shop_name)
+    exact_matches = [
+        _to_dict(item)
+        for item in matches
+        if _normalize_shop_key(str(_to_dict(item).get("shop_name", "") or "")) == normalized_name
+    ]
+    if not exact_matches:
+        return shop_dict
+
+    def _rank(row: dict[str, Any]) -> tuple[int, int, str]:
+        sid = str(row.get("shop_id", "") or "").strip()
+        is_numeric = sid.isdigit()
+        # Prefer canonical numeric ids over synthetic ids like shop_007.
+        group = 0 if is_numeric and len(sid) >= 6 else 1 if is_numeric else 2 if sid.startswith("shop_") else 3
+        numeric = int(sid) if is_numeric else 0
+        return (group, numeric, sid)
+
+    chosen = min(exact_matches, key=_rank)
+    chosen_id = str(chosen.get("shop_id", "") or "").strip()
+    if chosen_id:
+        return chosen
+    return shop_dict
+
+
+def _canonicalize_candidates(candidates: list[ResolvedCandidate]) -> list[ResolvedCandidate]:
+    """Normalize candidate shop ids/names to canonical catalog rows when possible."""
+
+    normalized: list[ResolvedCandidate] = []
+    for candidate in candidates:
+        raw = _canonical_shop_record(candidate.raw or {"shop_id": candidate.shop_id, "shop_name": candidate.shop_name})
+        sid = str(raw.get("shop_id", "") or candidate.shop_id).strip()
+        shop_name = str(raw.get("shop_name", "") or candidate.shop_name).strip()
+        normalized.append(
+            ResolvedCandidate(
+                shop_id=sid,
+                shop_name=shop_name,
+                source=candidate.source,
+                rank=candidate.rank,
+                confidence=candidate.confidence,
+                raw=raw if raw else candidate.raw,
+            )
+        )
+    return normalized
+
+
 def _session_shop_ids(state: dict[str, Any] | None) -> list[str]:
     """Collect shop IDs from session context for follow-up resolution."""
     if not state:
@@ -103,6 +190,15 @@ def _normalize_shop_key(value: str) -> str:
         return ""
     text = re.sub(r"[()\[\]{}（）【】\s、,，.。·\-_/]", "", text)
     return text
+
+
+def _looks_like_specific_shop_mention(mention: str) -> bool:
+    text = str(mention or "").strip()
+    if not text:
+        return False
+    if any(token in text for token in ("(", "（", ")", "）")):
+        return True
+    return any(token in text for token in ("店", "馆", "轩", "居", "坊", "楼", "城", "中心", "广场"))
 
 
 def _shop_name_fields(shop: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
@@ -443,14 +539,49 @@ class CandidateResolver:
             if session_shop_id_list:
                 kwargs["session_shop_ids"] = session_shop_id_list
             local_groups = _local_explicit_match_groups(mention)
+            if not _looks_like_specific_shop_mention(mention):
+                ambiguous_local_matches = local_groups.get("ambiguous", []) or local_groups.get("unique", [])
+                if len(ambiguous_local_matches) > 1:
+                    for cand in ambiguous_local_matches:
+                        sid = str(cand.get("shop_id", "")).strip()
+                        if sid:
+                            ambiguous_candidates.append(
+                                ResolvedCandidate(
+                                    shop_id=sid,
+                                    shop_name=str(cand.get("shop_name", mention)),
+                                    source=CandidateSource.EXPLICIT,
+                                    rank=idx,
+                                    confidence=0.6,
+                                    raw=cand,
+                                )
+                            )
+                    continue
             ordered_local_matches = (
                 local_groups.get("full_name", [])
                 or local_groups.get("branch_name", [])
                 or local_groups.get("alias_exact", [])
                 or local_groups.get("unique", [])
             )
+            mention_key = _normalize_shop_key(mention)
+            if len(ordered_local_matches) > 1:
+                canonical_local_match = _canonical_shop_record(ordered_local_matches[0])
+                canonical_key = _normalize_shop_key(str(canonical_local_match.get("shop_name", "") or ""))
+                if canonical_key and canonical_key == mention_key:
+                    sid = str(canonical_local_match.get("shop_id", "")).strip()
+                    if sid:
+                        candidates.append(
+                            ResolvedCandidate(
+                                shop_id=sid,
+                                shop_name=str(canonical_local_match.get("shop_name", mention)),
+                                source=CandidateSource.EXPLICIT,
+                                rank=idx,
+                                confidence=0.99,
+                                raw=canonical_local_match,
+                            )
+                        )
+                        continue
             if len(ordered_local_matches) == 1:
-                shop = ordered_local_matches[0]
+                shop = _canonical_shop_record(ordered_local_matches[0])
                 sid = str(shop.get("shop_id", "")).strip()
                 if sid:
                     candidates.append(
@@ -482,7 +613,7 @@ class CandidateResolver:
 
             exact_matches = _resolve_exact_shop_match(mention)
             if len(exact_matches) == 1:
-                shop = exact_matches[0]
+                shop = _canonical_shop_record(exact_matches[0])
                 sid = str(shop.get("shop_id", "")).strip()
                 if sid:
                     candidates.append(
@@ -516,7 +647,7 @@ class CandidateResolver:
             status = str(result.get("status", "NOT_FOUND") or "NOT_FOUND")
 
             if status == "RESOLVED":
-                shop = _to_dict(result.get("shop") or result.get("data") or {})
+                shop = _canonical_shop_record(result.get("shop") or result.get("data") or {})
                 sid = str(shop.get("shop_id", "")).strip()
                 if sid:
                     candidates.append(ResolvedCandidate(
@@ -530,7 +661,7 @@ class CandidateResolver:
             elif status == "AMBIGUOUS":
                 cand_list = result.get("candidates") or []
                 for cand in cand_list:
-                    cand_dict = _to_dict(cand)
+                    cand_dict = _canonical_shop_record(cand)
                     sid = str(cand_dict.get("shop_id", "")).strip()
                     if sid:
                         ambiguous_candidates.append(ResolvedCandidate(
@@ -547,6 +678,7 @@ class CandidateResolver:
             for item in [*candidates, *ambiguous_candidates]:
                 if not any(existing.shop_id == item.shop_id for existing in merged):
                     merged.append(item)
+            merged = _canonicalize_candidates(merged)
             if len(mentions) >= 2:
                 return CandidateSet(
                     status=CandidateStatus.RESOLVED,
@@ -567,47 +699,6 @@ class CandidateResolver:
             )
 
         if not candidates:
-            fallback_query = spec.query or spec.category or " ".join(mentions)
-            if fallback_query.strip():
-                fallback_spec = CandidateSpec(
-                    source=CandidateSource.DISCOVERY,
-                    category=spec.category,
-                    query=fallback_query,
-                    location_scope=spec.location_scope,
-                    sort_by=list(spec.sort_by or []),
-                    limit=spec.limit,
-                    explicit_mentions=[],
-                    context_ref=spec.context_ref,
-                    filters=dict(spec.filters or {}),
-                    ranking_signals=dict(spec.ranking_signals or {}),
-                )
-                discovery_set = self.resolve_discovery(goal, fallback_spec)
-                if discovery_set.status == CandidateStatus.RESOLVED and discovery_set.candidates:
-                    matched_candidates = _filter_discovery_candidates_by_mentions(
-                        list(discovery_set.candidates or []),
-                        list(mentions),
-                    )
-                    if matched_candidates:
-                        return CandidateSet(
-                            status=CandidateStatus.RESOLVED,
-                            source=CandidateSource.MIXED,
-                            candidates=matched_candidates,
-                            warnings=["explicit_not_found_fallback_to_discovery"],
-                            original_spec=spec,
-                            requested_count=spec.limit or len(matched_candidates),
-                            min_required=1,
-                            max_allowed=spec.limit or 5,
-                        )
-                    return CandidateSet(
-                        status=CandidateStatus.RESOLVED,
-                        source=CandidateSource.MIXED,
-                        candidates=discovery_set.candidates,
-                        warnings=["explicit_not_found_fallback_to_discovery"],
-                        original_spec=spec,
-                        requested_count=spec.limit or len(discovery_set.candidates),
-                        min_required=1,
-                        max_allowed=spec.limit or 5,
-                    )
             return CandidateSet(
                 status=CandidateStatus.NOT_FOUND,
                 source=CandidateSource.EXPLICIT,
@@ -617,6 +708,7 @@ class CandidateResolver:
                 max_allowed=spec.limit or 5,
             )
 
+        candidates = _canonicalize_candidates(candidates)
         return CandidateSet(
             status=CandidateStatus.RESOLVED,
             source=CandidateSource.EXPLICIT,

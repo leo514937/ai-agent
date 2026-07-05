@@ -6,6 +6,7 @@ from typing import Any
 
 from ..domain.schemas import ComparisonTargetResolution, ComparisonTurnArtifact
 from ..target.candidate_resolver import CandidateResolver
+from ..planning.goal.goal_draft import build_candidate_spec
 
 
 def _unwrap_resolve_shop_result(raw: dict[str, Any]) -> dict[str, Any]:
@@ -21,8 +22,16 @@ class CandidateCore:
     def __init__(self, resolver: CandidateResolver | None = None) -> None:
         self._resolver: Any = resolver
 
-    def resolve(self, *args: Any, **kwargs: Any) -> Any:
+    def build_candidate_retrieval_spec(self, *args: Any, **kwargs: Any) -> Any:
+        """Build a candidate retrieval spec without executing any DB/tool call."""
+        return build_candidate_spec(*args, **kwargs)
+
+    def execute_candidate_retrieval_spec(self, *args: Any, **kwargs: Any) -> Any:
+        """Execute a previously built candidate retrieval spec."""
         return self._get_resolver().resolve(*args, **kwargs)
+
+    def resolve(self, *args: Any, **kwargs: Any) -> Any:
+        return self.execute_candidate_retrieval_spec(*args, **kwargs)
 
     def resolve_explicit(self, *args: Any, **kwargs: Any) -> Any:
         return self._get_resolver().resolve_explicit(*args, **kwargs)

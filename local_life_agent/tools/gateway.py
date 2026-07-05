@@ -103,9 +103,17 @@ class ToolCallGateway:
     async def _run_tool(self, tool_def: dict, kwargs: dict) -> dict:
         raw = await self._executor.execute(tool_def, kwargs)
         if raw.success:
-            if raw.data is None:
+            if isinstance(raw.data, dict):
+                nested_status = str(raw.data.get("status", "") or "").strip().lower()
+                if nested_status in {"unknown", "failed", "empty", "partial"}:
+                    status = nested_status
+                elif not raw.data:
+                    status = "empty"
+                else:
+                    status = "ok"
+            elif raw.data is None:
                 status = "empty"
-            elif isinstance(raw.data, (list, dict)) and not raw.data:
+            elif isinstance(raw.data, list) and not raw.data:
                 status = "empty"
             else:
                 status = "ok"

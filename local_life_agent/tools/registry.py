@@ -9,6 +9,8 @@ Registered tools (6):
   - get_coupon_list     Get available coupons for a shop
   - check_open_status   Check whether a shop is currently open
   - get_distance_eta    Calculate distance and ETA from user location
+  - calculate_distance_km
+                        Calculate straight-line distance between two coordinates
   - get_shop_cards      Batch shop card facts for recommendation / compare
   - get_shop_review_summary
                         Structured review summary for a shop or shops
@@ -35,6 +37,18 @@ _LOCATION_SCHEMA = {
         "lat": {"type": "number", "description": "Latitude"},
         "lng": {"type": "number", "description": "Longitude"},
         "label": {"type": "string", "description": "Human readable location label"},
+        "raw": {"type": "string", "description": "Unresolved location text"},
+        "status": {"type": "string", "description": "Location resolution status"},
+    },
+}
+_DISTANCE_POINT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "lat": {"type": "number", "description": "Latitude"},
+        "lng": {"type": "number", "description": "Longitude"},
+        "label": {"type": "string", "description": "Human readable location label"},
+        "raw": {"type": "string", "description": "Unresolved location text"},
+        "status": {"type": "string", "description": "Location resolution status"},
     },
 }
 _SHOP_RESULT_SCHEMA = {
@@ -102,6 +116,17 @@ _DISTANCE_ETA_SCHEMA = {
         "distance_km": {"type": "number"},
         "eta_minutes": {"type": "integer"},
         "traffic_level": {"type": "string", "enum": ["low", "medium", "high"]},
+    },
+}
+_DISTANCE_KM_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "status": {"type": "string", "enum": ["success", "unknown", "failed"]},
+        "distance_km": {"type": ["number", "null"]},
+        "eta_minutes": {"type": ["integer", "null"]},
+        "method": {"type": "string"},
+        "blocked_reason": {"type": ["string", "null"]},
+        "error_code": {"type": ["string", "null"]},
     },
 }
 _SHOP_CARDS_ITEM_SCHEMA = {
@@ -332,9 +357,9 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "circuit_breaker_enabled": False,
         "output_status_enum": _OUTPUT_STATUS_ENUM,
     },
-    {
-        "name": "get_distance_eta",
-        "description": "Calculate distance and ETA from user location to a shop",
+      {
+          "name": "get_distance_eta",
+          "description": "Calculate distance and ETA from user location to a shop",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -346,12 +371,29 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "output_schema": _DISTANCE_ETA_SCHEMA,
         "timeout_ms": 5000,
         "max_retries": 2,
-        "circuit_breaker_enabled": True,
-        "output_status_enum": _OUTPUT_STATUS_ENUM,
-    },
-    {
-        "name": "get_shop_cards",
-        "description": "Batch fetch lightweight shop card facts for recommendation and comparison",
+          "circuit_breaker_enabled": True,
+          "output_status_enum": _OUTPUT_STATUS_ENUM,
+      },
+      {
+          "name": "calculate_distance_km",
+          "description": "Calculate straight-line distance between an origin and destination using the Haversine formula",
+          "input_schema": {
+              "type": "object",
+              "properties": {
+                  "origin": _DISTANCE_POINT_SCHEMA,
+                  "destination": _DISTANCE_POINT_SCHEMA,
+                  "mode": {"type": "string", "enum": ["straight_line"]},
+              },
+          },
+          "output_schema": _DISTANCE_KM_SCHEMA,
+          "timeout_ms": 2000,
+          "max_retries": 1,
+          "circuit_breaker_enabled": False,
+          "output_status_enum": _OUTPUT_STATUS_ENUM,
+      },
+      {
+          "name": "get_shop_cards",
+          "description": "Batch fetch lightweight shop card facts for recommendation and comparison",
         "input_schema": {
             "type": "object",
             "properties": {

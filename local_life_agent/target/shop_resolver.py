@@ -31,6 +31,10 @@ def _to_dict(value: Any) -> dict[str, Any]:
     return dict(getattr(value, "__dict__", {}) or {})
 
 
+def _enum_value(value: Any) -> str:
+    return str(getattr(value, "value", value) or "").strip()
+
+
 def _shop_identity(shop: dict[str, Any]) -> dict[str, Any]:
     normalized = normalize_shop_record(shop)
     components = normalized.get("components") or {}
@@ -281,7 +285,7 @@ def _resolve_with_backend(
 
     resolver = candidate_resolver or _build_candidate_resolver()
     frame = _to_dict(semantic_frame)
-    task_type = str(frame.get("task_type", "") or "single_shop_query").strip()
+    task_type = _enum_value(frame.get("task_type")) or "single_shop_query"
     goal = LocalLifeGoalDraft(
         goal_type=GoalType.SINGLE_SHOP_QUERY,
         candidate_source=CandidateSource.EXPLICIT,
@@ -301,19 +305,34 @@ def _resolve_with_backend(
         ),
     )
     candidate_set = resolver.resolve(goal, spec, _to_dict(session_state))
-    legacy_data = _legacy_candidate_data(candidate_set)
-    candidate_shops = list(legacy_data.get("candidates", []))
+    candidate_data = _legacy_candidate_data(candidate_set)
+    candidate_shops = list(candidate_data.get("candidates", []))
+    candidate_result = _results_from_candidate_set(
+        candidate_set,
+        mention=mention,
+        session_state=session_state,
+        current_shop=current,
+        user_location=user_location,
+    )
+    if candidate_result.status in {
+        ShopResolutionStatus.resolved,
+        ShopResolutionStatus.ambiguous,
+        ShopResolutionStatus.low_confidence,
+    }:
+        return candidate_result
+
+    legacy_probe = _adapt_legacy_result(
+        _legacy_resolve_shop(mention, location=user_location, session_shop_ids=_session_shop_ids(session_state, current)),
+        mention=mention,
+        session_state=session_state,
+        current_shop=current,
+        user_location=user_location,
+    )
+    if legacy_probe.status in {ShopResolutionStatus.resolved, ShopResolutionStatus.ambiguous, ShopResolutionStatus.low_confidence}:
+        return legacy_probe
     if not candidate_shops:
-        fallback_result = _legacy_resolve_shop(mention, location=user_location, session_shop_ids=_session_shop_ids(session_state, current))
-        legacy_result = _adapt_legacy_result(
-            fallback_result,
-            mention=mention,
-            session_state=session_state,
-            current_shop=current,
-            user_location=user_location,
-        )
-        legacy_result.trace.append({"mention": mention, "result": "legacy_fallback"})
-        return legacy_result
+        legacy_probe.trace.append({"mention": mention, "result": "candidate_resolution_not_found"})
+        return legacy_probe
 
     result = decide_shop_resolution(
         mention=mention,
@@ -348,7 +367,7 @@ def _resolve_with_backend(
 
 def _legacy_resolve_shop(query: str, **kw: Any) -> dict[str, Any]:
     params = dict(kw or {})
-    params.setdefault("location", {})
+    params["location"] = _to_dict(params.get("location"))
     return dispatch_tool_call("resolve_shop", {"query": query, **params})
 
 

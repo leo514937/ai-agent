@@ -26,7 +26,7 @@
   "confidence": 0.0,
   "tool_intents": [
     {
-      "tool_name": "search_shops | get_shop_cards | get_shop_review_summary | get_coupon_list | check_open_status | get_distance_eta | get_deal_list | get_shop_detail",
+"tool_name": "search_shops | get_shop_cards | get_shop_review_summary | get_coupon_list | check_open_status | calculate_distance_km | get_distance_eta | get_deal_list | get_shop_detail",
       "purpose": "为什么建议这个工具",
       "required": true,
       "facet": "coupon | open_status | distance | review_summary | scene_fit | deal | shop_cards | null",

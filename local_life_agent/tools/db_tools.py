@@ -42,6 +42,144 @@ def _haversine_km(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
     return round(R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a)), 2)
 
 
+def _normalize_coord_payload(value: Any, *, field_name: str) -> tuple[dict[str, float] | None, str | None]:
+    """Validate and coerce a coordinate payload.
+
+    Returns:
+        (coords, None) on success
+        (None, blocked_reason / error_code) on failure
+    """
+    if value is None:
+        return None, f"missing_{field_name}_coordinates"
+    if not isinstance(value, dict):
+        return None, "INVALID_COORDINATES"
+
+    lat = value.get("lat")
+    lng = value.get("lng")
+    if lat is None or lng is None:
+        if field_name == "origin":
+            return None, "missing_origin_coordinates"
+        return None, "missing_destination_coordinates"
+
+    try:
+        lat_f = float(lat)
+        lng_f = float(lng)
+    except Exception:
+        return None, "INVALID_COORDINATES"
+
+    if isinstance(lat, bool) or isinstance(lng, bool):
+        return None, "INVALID_COORDINATES"
+    if lat_f < -90 or lat_f > 90 or lng_f < -180 or lng_f > 180:
+        return None, "INVALID_COORDINATES"
+
+    return {"lat": lat_f, "lng": lng_f}, None
+
+
+def calculate_distance_km(
+    origin: dict[str, Any] | None = None,
+    destination: dict[str, Any] | None = None,
+    mode: str = "straight_line",
+) -> dict:
+    """Calculate straight-line distance between two coordinates.
+
+    This tool intentionally does not call any external map service and
+    never returns walking/driving ETA. The method is always haversine.
+    """
+    origin_coords, origin_error = _normalize_coord_payload(origin, field_name="origin")
+    if origin_error == "INVALID_COORDINATES":
+        return {
+            "success": False,
+            "result_status": "failed",
+            "error_code": "INVALID_COORDINATES",
+            "error_message": "Invalid origin coordinates",
+            "data": {
+                "status": "failed",
+                "distance_km": None,
+                "eta_minutes": None,
+                "method": "haversine",
+                "error_code": "INVALID_COORDINATES",
+            },
+        }
+    if origin_error:
+        return {
+            "success": True,
+            "result_status": "unknown",
+            "error_code": None,
+            "error_message": "",
+            "data": {
+                "status": "unknown",
+                "distance_km": None,
+                "eta_minutes": None,
+                "method": "haversine",
+                "blocked_reason": origin_error,
+            },
+        }
+
+    destination_coords, destination_error = _normalize_coord_payload(destination, field_name="destination")
+    if destination_error == "INVALID_COORDINATES":
+        return {
+            "success": False,
+            "result_status": "failed",
+            "error_code": "INVALID_COORDINATES",
+            "error_message": "Invalid destination coordinates",
+            "data": {
+                "status": "failed",
+                "distance_km": None,
+                "eta_minutes": None,
+                "method": "haversine",
+                "error_code": "INVALID_COORDINATES",
+            },
+        }
+    if destination_error:
+        return {
+            "success": True,
+            "result_status": "unknown",
+            "error_code": None,
+            "error_message": "",
+            "data": {
+                "status": "unknown",
+                "distance_km": None,
+                "eta_minutes": None,
+                "method": "haversine",
+                "blocked_reason": destination_error,
+            },
+        }
+
+    if str(mode or "straight_line").strip() not in {"straight_line", "haversine"}:
+        return {
+            "success": False,
+            "result_status": "failed",
+            "error_code": "INVALID_COORDINATES",
+            "error_message": "Unsupported distance mode",
+            "data": {
+                "status": "failed",
+                "distance_km": None,
+                "eta_minutes": None,
+                "method": "haversine",
+                "error_code": "INVALID_COORDINATES",
+            },
+        }
+
+    distance_km = _haversine_km(
+        float(origin_coords["lat"]),
+        float(origin_coords["lng"]),
+        float(destination_coords["lat"]),
+        float(destination_coords["lng"]),
+    )
+    return {
+        "success": True,
+        "result_status": "ok",
+        "error_code": None,
+        "error_message": "",
+        "data": {
+            "status": "success",
+            "distance_km": distance_km,
+            "eta_minutes": None,
+            "method": "haversine",
+        },
+    }
+
+
 def _lookup_shop(shop_id: str) -> dict[str, Any] | None:
     """Query a single shop by numeric ID string."""
     mock = _mock_lookup_shop(shop_id)

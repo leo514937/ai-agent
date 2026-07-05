@@ -45,10 +45,25 @@ def _session_get(session_state: dict | SessionState | None, field: str) -> Any:
     if session_state is None:
         return None
     if isinstance(session_state, SessionState):
-        return getattr(session_state, field, None)
+        value = getattr(session_state, field, None)
+        if value is not None:
+            return value
+        return None
     if isinstance(session_state, dict):
-        return session_state.get(field)
-    return getattr(session_state, field, None)
+        if field in session_state:
+            return session_state.get(field)
+        for nested_key in ("session_state_before", "session_state"):
+            nested_state = session_state.get(nested_key)
+            if nested_state is None:
+                continue
+            nested_value = _session_get(nested_state, field)
+            if nested_value is not None:
+                return nested_value
+        return None
+    value = getattr(session_state, field, None)
+    if value is not None:
+        return value
+    return None
 
 
 def _shop_dict(value: Any) -> dict[str, Any]:
