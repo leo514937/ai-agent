@@ -40,11 +40,11 @@ _FILE_LOGGER = get_python_service_logger()
 
 class ChatRequest(BaseModel):
     user_id: str = Field(default="guest")
-    session_id: str = Field(default="")
+    session_id: str = Field(min_length=1)
     trace_id: str = Field(default="")
     turn_id: str = Field(default="")
     page: str = Field(default="assistant")
-    message: str = Field(default="")
+    message: str = Field(min_length=1, max_length=4000)
     response_mode: str = Field(default="default")
     topic_hint: str = Field(default="")
     history_summary: str = Field(default="")
@@ -166,6 +166,31 @@ def _stream_chat_events(request: ChatRequest):
                     )
 
             response = result_box.get("response")
+            error = result_box.get("error")
+            if error is not None:
+                yield _event_block(
+                    "error",
+                    {
+                        "event_type": "error",
+                        "trace_id": trace_id,
+                        "session_id": session_id,
+                        "turn_id": turn_id,
+                        "payload": {
+                            "code": "GRAPH_EXECUTION_ERROR",
+                            "message": str(error),
+                            "stage": "graph_execution",
+                        },
+                    },
+                )
+                yield make_status_block(
+                    trace_id,
+                    session_id,
+                    turn_id,
+                    "failed",
+                    stage="graph_execution",
+                    detail={"error": str(error)},
+                )
+                return
             answer_text = getattr(response, "answer_text", "") if response is not None else ""
             cards = getattr(response, "cards", []) if response is not None else []
             final_payload = {

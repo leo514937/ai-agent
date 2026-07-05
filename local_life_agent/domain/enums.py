@@ -126,6 +126,99 @@ class RefineAction(str, Enum):
     other = "other"
 
 
+class SemanticParseSource(str, Enum):
+    """Stable semantic parse source taxonomy."""
+
+    llm = "llm"
+    diagnostic_rules = "diagnostic_rules"
+    fallback_rules = "fallback_rules"
+    rule_based = "rule_based"
+    fake_llm = "fake_llm"
+    real_llm = "real_llm"
+    spy_real_llm = "spy_real_llm"
+    test = "test"
+    unknown = "unknown"
+
+
+class GroundingStatus(str, Enum):
+    """Grounding provenance for a semantic frame."""
+
+    grounded = "grounded"
+    partially_grounded = "partially_grounded"
+    ungrounded = "ungrounded"
+    unknown = "unknown"
+
+
+class PreferenceType(str, Enum):
+    """Typed preference categories used by SemanticFrame."""
+
+    value_for_money = "value_for_money"
+    relative_price_preference = "relative_price_preference"
+    scene_preference = "scene_preference"
+    quality_preference = "quality_preference"
+    distance_preference = "distance_preference"
+
+
+class FilterType(str, Enum):
+    """Typed filter categories used by SemanticFrame."""
+
+    coupon_filter = "coupon_filter"
+    open_now_filter = "open_now_filter"
+    price_filter = "price_filter"
+    distance_filter = "distance_filter"
+
+
+class ReferenceType(str, Enum):
+    """Typed discourse reference categories used by SemanticFrame."""
+
+    location_reference = "location_reference"
+    shop_reference = "shop_reference"
+    ordinal_reference = "ordinal_reference"
+    deictic_reference = "deictic_reference"
+
+
+class MultiTurnSignalType(str, Enum):
+    """Typed multi-turn semantic signals used by SemanticFrame."""
+
+    constraint_update = "constraint_update"
+    new_task_override = "new_task_override"
+    cancel_intent = "cancel_intent"
+    discourse_marker = "discourse_marker"
+
+
+class ComparisonStructure(str, Enum):
+    """Canonical comparison structures used by SemanticFrame."""
+
+    pairwise = "pairwise"
+    multi_target = "multi_target"
+    ordinal = "ordinal"
+    deictic = "deictic"
+    explicit = "explicit"
+    mixed = "mixed"
+    unknown = "unknown"
+
+
+class MissingSlotType(str, Enum):
+    """Canonical clarification slot categories."""
+
+    missing_location = "missing_location"
+    missing_shop = "missing_shop"
+    missing_shop_target = "missing_shop_target"
+    missing_comparison_targets = "missing_comparison_targets"
+    missing_exploration_location = "missing_exploration_location"
+    missing_category = "missing_category"
+    ambiguous_shop = "ambiguous_shop"
+    ambiguous_comparison_targets = "ambiguous_comparison_targets"
+    unresolved_deictic_reference = "unresolved_deictic_reference"
+    unresolved_ordinal_reference = "unresolved_ordinal_reference"
+    low_confidence_semantic_parse = "low_confidence_semantic_parse"
+    cancel = "cancel"
+    new_task_override = "new_task_override"
+    constraint_update = "constraint_update"
+    unresolved_reference = "unresolved_reference"
+    other = "other"
+
+
 class ErrorCode(str, Enum):
     TOOL_TIMEOUT = "TOOL_TIMEOUT"
     NETWORK_ERROR = "NETWORK_ERROR"

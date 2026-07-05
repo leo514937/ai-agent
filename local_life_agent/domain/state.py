@@ -107,6 +107,9 @@ class SessionState(BaseModel):
     
     P2 adds multi-turn tracking fields: last_candidate_spec, last_candidate_set,
     active_goal, review_results, last_decision_plan, replan_counters.
+    
+    Semantic observability such as parse source / grounding status stays in
+    GraphState and GraphStateModel so session writeback remains bounded.
     """
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

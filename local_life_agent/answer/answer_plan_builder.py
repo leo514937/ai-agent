@@ -71,6 +71,31 @@ def build_answer_plan(
     comparison_matrix = evidence.get("comparison_matrix") or {}
     comparison_rows = comparison_matrix.get("rows") or []
     target_shop_ids = evidence.get("target_shop_ids") or ([shop_id] if shop_id else [])
+    semantic_frame = _to_dict(evidence.get("semantic_frame"))
+    semantic_parse_source = str(evidence.get("semantic_parse_source") or semantic_frame.get("semantic_parse_source") or "").strip()
+    grounding_status = str(evidence.get("grounding_status") or semantic_frame.get("grounding_status") or "").strip()
+    missing_slot_type = str(evidence.get("missing_slot_type") or semantic_frame.get("missing_slot_type") or "").strip()
+    router_policy_decision = _to_dict(evidence.get("router_policy_decision") or semantic_frame.get("router_policy_decision"))
+    router_policy_conflicts = list(evidence.get("router_policy_conflicts") or semantic_frame.get("router_policy_conflicts") or [])
+    exploration_stages = list(evidence.get("exploration_stages") or semantic_frame.get("exploration_stages") or [])
+    stage_queries = list(evidence.get("stage_queries") or semantic_frame.get("stage_queries") or [])
+    stage_evidence_requirements = list(evidence.get("stage_evidence_requirements") or semantic_frame.get("stage_evidence_requirements") or [])
+    stage_statuses = list(evidence.get("stage_statuses") or semantic_frame.get("stage_statuses") or [])
+    scene = str(evidence.get("scene") or semantic_frame.get("scene") or "").strip()
+    time = str(evidence.get("time") or semantic_frame.get("time") or "").strip()
+    location = _to_dict(evidence.get("location") or semantic_frame.get("location"))
+    facet_statuses = _to_dict(evidence.get("facet_statuses") or semantic_frame.get("facet_statuses"))
+    grounded_facts = _to_dict(evidence.get("grounded_facts") or semantic_frame.get("grounded_facts"))
+    facet_reasons = _to_dict(evidence.get("facet_reasons") or semantic_frame.get("facet_reasons"))
+    evidence_status = str(evidence.get("evidence_status") or semantic_frame.get("evidence_status") or status or "").strip()
+    comparison_support_status = str(evidence.get("comparison_support_status") or semantic_frame.get("comparison_support_status") or "").strip()
+    ranking_preserved = bool(evidence.get("ranking_preserved", semantic_frame.get("ranking_preserved", True)))
+    unsupported_reasons = list(evidence.get("unsupported_reasons") or semantic_frame.get("unsupported_reasons") or [])
+    unknown_fields = list(evidence.get("unknown_fields") or semantic_frame.get("unknown_fields") or [])
+    failed_tools = list(evidence.get("failed_tools") or semantic_frame.get("failed_tools") or [])
+    partial_fields = list(evidence.get("partial_fields") or semantic_frame.get("partial_fields") or [])
+    evidence_review_result = _to_dict(evidence.get("evidence_review_result") or semantic_frame.get("evidence_review_result"))
+    answer_verify_result = _to_dict(evidence.get("answer_verify_result") or semantic_frame.get("answer_verify_result"))
     triage = _facet_triage(facet_results)
     if not any(triage.values()):
         triage = {
@@ -192,4 +217,29 @@ def build_answer_plan(
         "comparison_matrix_id": comparison_matrix.get("matrix_id", ""),
         "tone": "neutral",
         "fallback_template_type": fallback_template_type,
+        "semantic_frame": semantic_frame,
+        "semantic_parse_source": semantic_parse_source,
+        "grounding_status": grounding_status,
+        "missing_slot_type": missing_slot_type,
+        "router_policy_decision": router_policy_decision,
+        "router_policy_conflicts": router_policy_conflicts,
+        "exploration_stages": exploration_stages,
+        "stage_queries": stage_queries,
+        "stage_evidence_requirements": stage_evidence_requirements,
+        "stage_statuses": stage_statuses,
+        "scene": scene,
+        "time": time,
+        "location": location,
+        "facet_statuses": facet_statuses,
+        "grounded_facts": grounded_facts,
+        "facet_reasons": facet_reasons,
+        "evidence_status": evidence_status,
+        "comparison_support_status": comparison_support_status,
+        "ranking_preserved": ranking_preserved,
+        "unsupported_reasons": unsupported_reasons,
+        "unknown_fields": unknown_fields,
+        "failed_tools": failed_tools,
+        "partial_fields": partial_fields,
+        "evidence_review_result": evidence_review_result,
+        "answer_verify_result": answer_verify_result,
     }

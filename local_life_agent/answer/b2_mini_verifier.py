@@ -36,6 +36,13 @@ class VerifierResponse(BaseModel):
     false_fields: list[str] = Field(default_factory=list)
     unsupported_claims: list[str] = Field(default_factory=list)
     recoverable: bool = Field(default=False)
+    evidence_status: str = Field(default="")
+    unsupported_reasons: list[str] = Field(default_factory=list)
+    failed_tools: list[str] = Field(default_factory=list)
+    partial_fields: list[str] = Field(default_factory=list)
+    stage_statuses: list[str] = Field(default_factory=list)
+    comparison_support_status: str = Field(default="")
+    ranking_preserved: bool = Field(default=True)
 
 
 def _to_dict(value: Any) -> dict[str, Any]:
@@ -100,6 +107,31 @@ def _render_user_prompt(plan: DecisionPlan, response_text: str) -> str:
         "{{RESPONSE_TEXT}}": response_text,
         "{{DECISION_CONTEXT}}": json.dumps(plan.decision_context, ensure_ascii=False),
         "{{CONVERSATION_CONTINUITY}}": json.dumps(plan.conversation_continuity, ensure_ascii=False),
+        "{{SEMANTIC_FRAME}}": json.dumps(plan.semantic_frame, ensure_ascii=False),
+        "{{SEMANTIC_PARSE_SOURCE}}": plan.semantic_parse_source,
+        "{{GROUNDING_STATUS}}": plan.grounding_status,
+        "{{MISSING_SLOT_TYPE}}": plan.missing_slot_type,
+        "{{ROUTER_POLICY_DECISION}}": json.dumps(plan.router_policy_decision, ensure_ascii=False),
+        "{{ROUTER_POLICY_CONFLICTS}}": json.dumps(plan.router_policy_conflicts, ensure_ascii=False),
+        "{{EXPLORATION_STAGES}}": json.dumps(plan.exploration_stages, ensure_ascii=False),
+        "{{STAGE_QUERIES}}": json.dumps(plan.stage_queries, ensure_ascii=False),
+        "{{STAGE_EVIDENCE_REQUIREMENTS}}": json.dumps(plan.stage_evidence_requirements, ensure_ascii=False),
+        "{{STAGE_STATUSES}}": json.dumps(plan.stage_statuses, ensure_ascii=False),
+        "{{SCENE}}": plan.scene,
+        "{{TIME}}": plan.time,
+        "{{LOCATION}}": json.dumps(plan.location, ensure_ascii=False),
+        "{{FACET_STATUSES}}": json.dumps(getattr(plan, "facet_statuses", {}) or {}, ensure_ascii=False),
+        "{{GROUNDED_FACTS}}": json.dumps(getattr(plan, "grounded_facts", {}) or {}, ensure_ascii=False),
+        "{{FACET_REASONS}}": json.dumps(getattr(plan, "facet_reasons", {}) or {}, ensure_ascii=False),
+        "{{EVIDENCE_STATUS}}": plan.evidence_status,
+        "{{COMPARISON_SUPPORT_STATUS}}": plan.comparison_support_status,
+        "{{RANKING_PRESERVED}}": json.dumps(plan.ranking_preserved, ensure_ascii=False),
+        "{{UNSUPPORTED_REASONS}}": json.dumps(plan.unsupported_reasons, ensure_ascii=False),
+        "{{UNKNOWN_FIELDS}}": json.dumps(plan.unknown_fields, ensure_ascii=False),
+        "{{FAILED_TOOLS}}": json.dumps(plan.failed_tools, ensure_ascii=False),
+        "{{PARTIAL_FIELDS}}": json.dumps(plan.partial_fields, ensure_ascii=False),
+        "{{EVIDENCE_REVIEW_RESULT}}": json.dumps(plan.evidence_review_result, ensure_ascii=False),
+        "{{ANSWER_VERIFY_RESULT}}": json.dumps(plan.answer_verify_result, ensure_ascii=False),
     }
     prompt = template
     for placeholder, value in replacements.items():
@@ -177,11 +209,176 @@ def _normalize_verifier_response(content: Any) -> VerifierResponse:
         )
 
 
+def _status_list(*values: Any) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, (list, tuple, set)):
+            iterable = value
+        else:
+            iterable = [value]
+        for item in iterable:
+            text = str(item or "").strip().lower()
+            if text and text not in result:
+                result.append(text)
+    return result
+
+
+def _contains_any(haystack: str, phrases: list[str]) -> bool:
+    return any(phrase and phrase in haystack for phrase in phrases)
+
+
+def _contains_uncertainty_notice(text: str) -> bool:
+    return _contains_any(
+        text,
+        [
+            "暂时无法确认",
+            "无法确认",
+            "暂时没查到",
+            "没查到",
+            "还不确定",
+            "不确定",
+            "稍后再试",
+            "目前只能确认",
+            "部分信息",
+            "部分阶段",
+            "还需要补充",
+        ],
+    )
+
+
+def _facet_has_uncertainty_text(text: str, facet: str) -> bool:
+    if facet == "open_status":
+        return _contains_any(
+            text,
+            [
+                "暂时无法确认营业状态",
+                "无法确认营业状态",
+                "营业状态暂时无法确认",
+                "营业状态无法确认",
+                "无法判断是否营业",
+                "不确定是否营业",
+                "暂时没查到营业状态",
+                "暂时无法确认",
+                "无法确认",
+            ],
+        ) and _contains_any(text, ["营业状态", "是否营业", "开门", "关门", "打烊"])
+    if facet == "coupon":
+        return _contains_any(
+            text,
+            [
+                "暂时无法确认优惠情况",
+                "无法确认优惠情况",
+                "优惠情况暂时无法确认",
+                "有没有券暂时无法确认",
+                "暂时没查到优惠",
+                "不确定有没有券",
+                "无法判断有没有券",
+                "暂时无法确认",
+                "无法确认",
+            ],
+        ) and _contains_any(text, ["优惠情况", "有没有券", "有券"])
+    if facet == "distance":
+        return _contains_any(
+            text,
+            [
+                "距离信息暂时无法确认",
+                "暂时无法确认距离",
+                "无法确认距离",
+                "无法判断距离",
+                "暂时没查到距离",
+                "暂时无法确认",
+                "无法确认",
+            ],
+        ) and _contains_any(text, ["距离", "公里", "km", "米"])
+    if facet == "rating":
+        return _contains_any(text, ["评分暂时无法确认", "无法确认评分", "暂时没查到评分", "不确定评分"])
+    if facet == "avg_price":
+        return _contains_any(text, ["人均暂时无法确认", "价格暂时无法确认", "无法确认人均", "无法确认价格"])
+    return False
+
+
+def _facet_contract_from_target(target: dict[str, Any]) -> tuple[dict[str, str], dict[str, Any], dict[str, str]]:
+    facet_statuses: dict[str, str] = {}
+    grounded_facts: dict[str, Any] = {}
+    facet_reasons: dict[str, str] = {}
+
+    open_status = str(target.get("open_status", "unknown") or "unknown").lower()
+    if open_status in {"open", "closed"}:
+        facet_statuses["open_status"] = "grounded"
+        grounded_facts["open_status"] = open_status
+    elif open_status == "empty":
+        facet_statuses["open_status"] = "empty"
+    elif open_status in {"failed", "circuit_open", "error", "backend_unavailable", "timeout"}:
+        facet_statuses["open_status"] = "failed"
+        facet_reasons["open_status"] = "open_status_tool_failed"
+    else:
+        facet_statuses["open_status"] = "unknown"
+        facet_reasons["open_status"] = "open_status_unknown"
+
+    coupon_status = str(target.get("coupon_status", "unknown") or "unknown").lower()
+    coupon_titles = [str(item).strip() for item in (target.get("coupon_titles") or []) if str(item).strip()]
+    if coupon_status == "has_coupon" or coupon_titles:
+        facet_statuses["coupon"] = "grounded"
+        grounded_facts["coupon_count"] = int(target.get("coupon_count") or len(coupon_titles))
+        grounded_facts["coupon_titles"] = coupon_titles
+    elif coupon_status == "empty":
+        facet_statuses["coupon"] = "empty"
+        grounded_facts["coupon_count"] = 0
+        grounded_facts["coupon_titles"] = []
+    elif coupon_status in {"failed", "circuit_open", "error", "backend_unavailable", "timeout"}:
+        facet_statuses["coupon"] = "failed"
+        facet_reasons["coupon"] = "coupon_tool_failed"
+    else:
+        facet_statuses["coupon"] = "unknown"
+        facet_reasons["coupon"] = "coupon_unknown"
+
+    distance_km = target.get("distance_km")
+    if distance_km is not None:
+        facet_statuses["distance"] = "grounded"
+        grounded_facts["distance_km"] = distance_km
+        if target.get("eta_minutes") is not None:
+            grounded_facts["eta_minutes"] = target.get("eta_minutes")
+    else:
+        facet_statuses["distance"] = "unknown"
+        facet_reasons["distance"] = "distance_tool_missing_or_location_unresolved"
+
+    if target.get("rating") is not None:
+        facet_statuses["rating"] = "grounded"
+        grounded_facts["rating"] = target.get("rating")
+    else:
+        facet_statuses["rating"] = facet_statuses.get("rating", "unknown")
+
+    if target.get("avg_price") is not None:
+        facet_statuses["avg_price"] = "grounded"
+        grounded_facts["avg_price"] = target.get("avg_price")
+    else:
+        facet_statuses["avg_price"] = facet_statuses.get("avg_price", "unknown")
+
+    return facet_statuses, grounded_facts, facet_reasons
+
+
 def _heuristic_verify(plan: DecisionPlan, response_text: str) -> dict[str, Any]:
     """Fallback verifier when the LLM verifier payload is unavailable or invalid."""
     plan_dict = _to_dict(plan)
     answer_type = str(plan_dict.get("answer_type", "") or "")
     text = str(response_text or "")
+    semantic_frame = _to_dict(plan_dict.get("semantic_frame"))
+    grounding_status = str(plan_dict.get("grounding_status") or semantic_frame.get("grounding_status") or "").strip().lower()
+    evidence_status = str(plan_dict.get("evidence_status") or "").strip().lower()
+    comparison_support_status = str(plan_dict.get("comparison_support_status") or semantic_frame.get("comparison_support_status") or "").strip().lower()
+    stage_statuses = _status_list(plan_dict.get("stage_statuses"), semantic_frame.get("stage_statuses"))
+    exploration_stages = [item for item in (plan_dict.get("exploration_stages") or semantic_frame.get("exploration_stages") or []) if isinstance(item, dict)]
+    unknown_fields = {str(item).strip().lower() for item in (plan_dict.get("unknown_fields") or semantic_frame.get("unknown_fields") or []) if str(item).strip()}
+    failed_tools = {str(item).strip().lower() for item in (plan_dict.get("failed_tools") or semantic_frame.get("failed_tools") or []) if str(item).strip()}
+    partial_fields = {str(item).strip().lower() for item in (plan_dict.get("partial_fields") or semantic_frame.get("partial_fields") or []) if str(item).strip()}
+    unsupported_reasons = [str(item).strip() for item in (plan_dict.get("unsupported_reasons") or semantic_frame.get("unsupported_reasons") or []) if str(item).strip()]
+    ranking_preserved = bool(plan_dict.get("ranking_preserved", semantic_frame.get("ranking_preserved", True)))
+    has_uncertainty_notice = _contains_uncertainty_notice(text)
+    facet_statuses = {str(k).strip().lower(): str(v).strip().lower() for k, v in dict(plan_dict.get("facet_statuses") or semantic_frame.get("facet_statuses") or {}).items() if str(k).strip()}
+    grounded_facts = dict(plan_dict.get("grounded_facts") or semantic_frame.get("grounded_facts") or {})
+    facet_reasons = dict(plan_dict.get("facet_reasons") or semantic_frame.get("facet_reasons") or {})
 
     forbidden_claims = [str(item).strip() for item in (plan_dict.get("forbidden_claims") or []) if str(item).strip()]
     for claim in forbidden_claims:
@@ -194,8 +391,8 @@ def _heuristic_verify(plan: DecisionPlan, response_text: str) -> dict[str, Any]:
                 "unknown_fields": [],
                 "false_fields": [],
                 "unsupported_claims": [],
-                "recoverable": False,
-            }
+                    "recoverable": False,
+                }
 
     def _first_target() -> dict[str, Any]:
         targets = plan_dict.get("selected_targets") or []
@@ -204,8 +401,30 @@ def _heuristic_verify(plan: DecisionPlan, response_text: str) -> dict[str, Any]:
             return first if isinstance(first, dict) else _to_dict(first)
         return {}
 
-    def _contains_any(haystack: str, phrases: list[str]) -> bool:
-        return any(phrase and phrase in haystack for phrase in phrases)
+    if not facet_statuses and plan_dict.get("selected_targets"):
+        inferred_statuses, inferred_grounded, inferred_reasons = _facet_contract_from_target(_first_target())
+        facet_statuses.update(inferred_statuses)
+        grounded_facts.update(inferred_grounded)
+        facet_reasons.update(inferred_reasons)
+
+    grounded_downgraded_facets: list[str] = []
+    for facet, status in facet_statuses.items():
+        if status not in {"grounded", "empty"}:
+            continue
+        if _facet_has_uncertainty_text(text, facet):
+            issues.append(facet)
+            grounded_downgraded_facets.append(facet)
+    if grounded_downgraded_facets:
+        return {
+            "passed": False,
+            "violation": "grounded_fact_downgraded_to_unknown",
+            "failure_code": "grounded_fact_downgraded_to_unknown",
+            "violations": [f"{facet} grounded but answer says unknown" for facet in grounded_downgraded_facets],
+            "unknown_fields": grounded_downgraded_facets,
+            "false_fields": [],
+            "unsupported_claims": [text],
+            "recoverable": True,
+        }
 
     def _distance_phrase_ok(value: Any, text_value: str) -> bool:
         if value is None:
@@ -236,13 +455,14 @@ def _heuristic_verify(plan: DecisionPlan, response_text: str) -> dict[str, Any]:
                     "recoverable": False,
                 }
 
-        coupon_status = str(target.get("coupon_status") or "").strip().lower()
-        open_status = str(target.get("open_status") or "").strip().lower()
+        coupon_status = str(facet_statuses.get("coupon") or target.get("coupon_status") or "").strip().lower()
+        open_status = str(facet_statuses.get("open_status") or target.get("open_status") or "").strip().lower()
         distance_km = target.get("distance_km")
         unknown_facts = {str(item).strip() for item in (target.get("unknown_facts") or []) if str(item).strip()}
         failed_facts = {str(item).strip() for item in (target.get("failed_facts") or []) if str(item).strip()}
+        partial_facts = {str(item).strip() for item in (target.get("partial_facts") or []) if str(item).strip()}
 
-        if coupon_status == "has_coupon":
+        if coupon_status in {"grounded", "has_coupon"}:
             if not _contains_any(text, ["有券", "可用券", "优惠券"]):
                 return {
                     "passed": False,
@@ -254,19 +474,34 @@ def _heuristic_verify(plan: DecisionPlan, response_text: str) -> dict[str, Any]:
                     "unsupported_claims": [],
                     "recoverable": False,
                 }
-        elif coupon_status in {"empty", "unknown", "failed", "circuit_open"} or "coupon" in unknown_facts or "coupon" in failed_facts:
+        elif coupon_status in {"empty", "unknown", "failed", "circuit_open", "partial"} or "coupon" in unknown_facts or "coupon" in failed_facts or "coupon" in partial_facts or "coupon" in partial_fields:
             if _contains_any(text, ["没有券", "没券", "无券"]):
+                violation = "unknown_as_false"
+                if coupon_status in {"failed", "circuit_open"} or "coupon" in failed_facts or "coupon" in failed_tools:
+                    violation = "failed_as_no"
                 return {
                     "passed": False,
-                    "violation": "unsupported_coupon",
-                    "failure_code": "unsupported_coupon",
-                    "violations": ["unsupported_coupon"],
+                    "violation": violation,
+                    "failure_code": violation,
+                    "violations": [violation, "unsupported_coupon"],
                     "unknown_fields": ["coupon"],
                     "false_fields": ["coupon"],
                     "unsupported_claims": [],
                     "recoverable": False,
                 }
-            if not _contains_any(text, ["暂时无法确认", "无法确认", "暂时没查到", "稍后再试"]):
+            if coupon_status == "partial" or "coupon" in partial_facts or "coupon" in partial_fields:
+                if not has_uncertainty_notice:
+                    return {
+                        "passed": False,
+                        "violation": "partial_as_complete",
+                        "failure_code": "partial_as_complete",
+                        "violations": ["partial_as_complete"],
+                        "unknown_fields": ["coupon"],
+                        "false_fields": [],
+                        "unsupported_claims": [],
+                        "recoverable": False,
+                    }
+            if not has_uncertainty_notice:
                 return {
                     "passed": False,
                     "violation": "coupon_needs_uncertain_notice",
@@ -278,7 +513,7 @@ def _heuristic_verify(plan: DecisionPlan, response_text: str) -> dict[str, Any]:
                     "recoverable": False,
                 }
 
-        if open_status == "open":
+        if open_status in {"grounded", "open"}:
             if not _contains_any(text, ["营业中", "正在营业", "目前营业", "营业"]):
                 return {
                     "passed": False,
@@ -302,19 +537,34 @@ def _heuristic_verify(plan: DecisionPlan, response_text: str) -> dict[str, Any]:
                     "unsupported_claims": [],
                     "recoverable": False,
                 }
-        elif open_status in {"unknown", "failed", "circuit_open"} or "open_status" in unknown_facts or "open_status" in failed_facts:
+        elif open_status in {"unknown", "failed", "circuit_open", "partial"} or "open_status" in unknown_facts or "open_status" in failed_facts or "open_status" in partial_facts or "open_status" in partial_fields:
             if _contains_any(text, ["正在营业", "营业中", "目前营业", "已打烊", "已关门", "不营业"]):
+                violation = "unknown_as_false"
+                if open_status in {"failed", "circuit_open"} or "open_status" in failed_facts or "open_status" in failed_tools:
+                    violation = "failed_as_no"
                 return {
                     "passed": False,
-                    "violation": "unsupported_open_status",
-                    "failure_code": "unsupported_open_status",
-                    "violations": ["unsupported_open_status"],
+                    "violation": violation,
+                    "failure_code": violation,
+                    "violations": [violation, "unsupported_open_status"],
                     "unknown_fields": ["open_status"],
                     "false_fields": ["open_status"],
                     "unsupported_claims": [],
                     "recoverable": False,
                 }
-            if not _contains_any(text, ["暂时无法确认", "无法确认", "稍后再试"]):
+            if open_status == "partial" or "open_status" in partial_facts or "open_status" in partial_fields:
+                if not has_uncertainty_notice:
+                    return {
+                        "passed": False,
+                        "violation": "partial_as_complete",
+                        "failure_code": "partial_as_complete",
+                        "violations": ["partial_as_complete"],
+                        "unknown_fields": ["open_status"],
+                        "false_fields": [],
+                        "unsupported_claims": [],
+                        "recoverable": False,
+                    }
+            if not has_uncertainty_notice:
                 return {
                     "passed": False,
                     "violation": "open_status_needs_uncertain_notice",
@@ -338,19 +588,34 @@ def _heuristic_verify(plan: DecisionPlan, response_text: str) -> dict[str, Any]:
                     "unsupported_claims": [],
                     "recoverable": False,
                 }
-        elif "distance" in unknown_facts or "distance" in failed_facts:
+        elif "distance" in unknown_facts or "distance" in failed_facts or "distance" in partial_facts or "distance" in partial_fields:
             if _contains_any(text, ["离我很近", "不远", "很近", "几分钟就到", "分钟就到"]):
+                violation = "unknown_as_false"
+                if "distance" in failed_facts or "distance" in failed_tools:
+                    violation = "failed_as_no"
                 return {
                     "passed": False,
-                    "violation": "unsupported_distance",
-                    "failure_code": "unsupported_distance",
-                    "violations": ["unsupported_distance"],
+                    "violation": violation,
+                    "failure_code": violation,
+                    "violations": [violation, "unsupported_distance"],
                     "unknown_fields": ["distance"],
                     "false_fields": ["distance"],
                     "unsupported_claims": [],
                     "recoverable": False,
                 }
-            if not _contains_any(text, ["暂时无法确认", "无法确认", "稍后再试"]):
+            if "distance" in partial_facts or "distance" in partial_fields:
+                if not has_uncertainty_notice:
+                    return {
+                        "passed": False,
+                        "violation": "partial_as_complete",
+                        "failure_code": "partial_as_complete",
+                        "violations": ["partial_as_complete"],
+                        "unknown_fields": ["distance"],
+                        "false_fields": [],
+                        "unsupported_claims": [],
+                        "recoverable": False,
+                    }
+            if not has_uncertainty_notice:
                 return {
                     "passed": False,
                     "violation": "distance_needs_uncertain_notice",
@@ -380,6 +645,17 @@ def _heuristic_verify(plan: DecisionPlan, response_text: str) -> dict[str, Any]:
             for item in selected_targets
             if isinstance(item, dict)
         ]
+        if not ranking_preserved:
+            return {
+                "passed": False,
+                "violation": "ranking_changed_by_llm",
+                "failure_code": "ranking_changed_by_llm",
+                "violations": ["ranking_changed_by_llm"],
+                "unknown_fields": [],
+                "false_fields": [],
+                "unsupported_claims": [],
+                "recoverable": False,
+            }
         positions = [text.find(name) for name in allowed_names if name]
         if allowed_names and any(pos < 0 for pos in positions):
             return {
@@ -392,6 +668,93 @@ def _heuristic_verify(plan: DecisionPlan, response_text: str) -> dict[str, Any]:
                 "unsupported_claims": [],
                 "recoverable": False,
             }
+        if comparison_support_status and comparison_support_status not in {"grounded", "supported", "ok", "sufficient"}:
+            if _contains_any(text, ["更好", "最推荐", "胜出", "领先", "综合来看", "整体来看", "更适合"]):
+                return {
+                    "passed": False,
+                    "violation": "comparison_winner_unsupported",
+                    "failure_code": "comparison_winner_unsupported",
+                    "violations": ["comparison_winner_unsupported"],
+                    "unknown_fields": [],
+                    "false_fields": [],
+                    "unsupported_claims": [text],
+                    "recoverable": False,
+                }
+        if len(positions) >= 2 and positions != sorted(positions):
+            return {
+                "passed": False,
+                "violation": "ranking_changed_by_llm",
+                "failure_code": "ranking_changed_by_llm",
+                "violations": ["ranking_changed_by_llm"],
+                "unknown_fields": [],
+                "false_fields": [],
+                "unsupported_claims": [],
+                "recoverable": False,
+            }
+        if _contains_any(text, ["更好", "最推荐", "胜出", "领先", "综合来看", "整体来看", "更适合"]) and not allowed_names:
+            return {
+                "passed": False,
+                "violation": "comparison_winner_unsupported",
+                "failure_code": "comparison_winner_unsupported",
+                "violations": ["comparison_winner_unsupported"],
+                "unknown_fields": [],
+                "false_fields": [],
+                "unsupported_claims": [text],
+                "recoverable": False,
+            }
+        return {
+            "passed": True,
+            "violation": "",
+            "failure_code": "",
+            "violations": [],
+            "unknown_fields": [],
+            "false_fields": [],
+            "unsupported_claims": [],
+            "recoverable": False,
+        }
+
+    if answer_type == "recommendation":
+        selected_targets = plan_dict.get("selected_targets") or []
+        allowed_names = [
+            str(item.get("shop_name") or item.get("shop_id") or "").strip()
+            for item in selected_targets
+            if isinstance(item, dict)
+        ]
+        if not ranking_preserved:
+            return {
+                "passed": False,
+                "violation": "ranking_changed_by_llm",
+                "failure_code": "ranking_changed_by_llm",
+                "violations": ["ranking_changed_by_llm"],
+                "unknown_fields": [],
+                "false_fields": [],
+                "unsupported_claims": [],
+                "recoverable": False,
+            }
+        positions = [text.find(name) for name in allowed_names if name]
+        if allowed_names and any(pos < 0 for pos in positions):
+            return {
+                "passed": False,
+                "violation": "missing_recommendation_targets",
+                "failure_code": "missing_recommendation_targets",
+                "violations": ["missing_recommendation_targets"],
+                "unknown_fields": [],
+                "false_fields": [],
+                "unsupported_claims": [],
+                "recoverable": False,
+            }
+        if comparison_support_status and comparison_support_status not in {"grounded", "supported", "ok", "sufficient"}:
+            if _contains_any(text, ["更好", "最推荐", "胜出", "领先", "综合来看", "整体来看", "更适合"]):
+                return {
+                    "passed": False,
+                    "violation": "unsupported_comparison_winner",
+                    "failure_code": "unsupported_comparison_winner",
+                    "violations": ["unsupported_comparison_winner"],
+                    "unknown_fields": [],
+                    "false_fields": [],
+                    "unsupported_claims": [text],
+                    "recoverable": False,
+                }
         if len(positions) >= 2 and positions != sorted(positions):
             return {
                 "passed": False,
@@ -414,34 +777,29 @@ def _heuristic_verify(plan: DecisionPlan, response_text: str) -> dict[str, Any]:
             "recoverable": False,
         }
 
-    if answer_type == "recommendation":
-        selected_targets = plan_dict.get("selected_targets") or []
-        allowed_names = [
-            str(item.get("shop_name") or item.get("shop_id") or "").strip()
-            for item in selected_targets
-            if isinstance(item, dict)
-        ]
-        positions = [text.find(name) for name in allowed_names if name]
-        if allowed_names and any(pos < 0 for pos in positions):
+    if answer_type in {"exploration_plan", "exploration"}:
+        stage_statuses_norm = _status_list(stage_statuses, [str(item.get("status", "") or "").lower() for item in exploration_stages])
+        incomplete_statuses = [status for status in stage_statuses_norm if status in {"unknown", "failed", "empty", "partial"}]
+        if incomplete_statuses and not has_uncertainty_notice:
+            if _contains_any(text, ["已经安排好", "完整", "全部", "都已", "没有问题", "已成功", "可直接"]):
+                return {
+                    "passed": False,
+                    "violation": "exploration_stage_partial_as_complete",
+                    "failure_code": "exploration_stage_partial_as_complete",
+                    "violations": ["exploration_stage_partial_as_complete"],
+                    "unknown_fields": incomplete_statuses,
+                    "false_fields": [],
+                    "unsupported_claims": [text],
+                    "recoverable": False,
+                }
             return {
                 "passed": False,
-                "violation": "missing_recommendation_targets",
-                "failure_code": "missing_recommendation_targets",
-                "violations": ["missing_recommendation_targets"],
-                "unknown_fields": [],
+                "violation": "exploration_stage_needs_uncertain_notice",
+                "failure_code": "exploration_stage_needs_uncertain_notice",
+                "violations": ["exploration_stage_needs_uncertain_notice"],
+                "unknown_fields": incomplete_statuses,
                 "false_fields": [],
-                "unsupported_claims": [],
-                "recoverable": False,
-            }
-        if len(positions) >= 2 and positions != sorted(positions):
-            return {
-                "passed": False,
-                "violation": "ranking_changed_by_llm",
-                "failure_code": "ranking_changed_by_llm",
-                "violations": ["ranking_changed_by_llm"],
-                "unknown_fields": [],
-                "false_fields": [],
-                "unsupported_claims": [],
+                "unsupported_claims": [text],
                 "recoverable": False,
             }
         return {

@@ -102,6 +102,21 @@ def _coerce_ranking_policy(value: Any) -> dict[str, Any] | None:
     return _to_dict(value) or None
 
 
+def _coerce_dict_value(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump()
+        return dumped if isinstance(dumped, dict) else {}
+    try:
+        return dict(value)
+    except Exception:
+        return {}
+
+
 def decision_to_answer_plan(decision_plan: DecisionPlan, evidence_pack: Any = None) -> dict:
     """Convert a P2 DecisionPlan to an AnswerPlan-compatible dict.
 
@@ -214,6 +229,9 @@ def decision_to_answer_plan(decision_plan: DecisionPlan, evidence_pack: Any = No
         "ranking_snapshot_id": snapshot.get("snapshot_id", ""),
         "comparison_matrix_id": comparison_matrix.get("matrix_id", ""),
         "tone": decision_plan.decision_context.get("tone", "neutral") if isinstance(decision_plan.decision_context, dict) else "neutral",
+        "facet_statuses": dict(getattr(decision_plan, "facet_statuses", {}) or {}),
+        "grounded_facts": dict(getattr(decision_plan, "grounded_facts", {}) or {}),
+        "facet_reasons": dict(getattr(decision_plan, "facet_reasons", {}) or {}),
         "fallback_template_type": _map_fallback_template(decision_plan, evidence),
     }
 
@@ -296,6 +314,33 @@ class DecisionPlan(BaseModel):
     decision_context: dict[str, Any] = Field(default_factory=dict)
     style_hints: list[str] = Field(default_factory=list)
 
+    # Phase 6 semantic sidecar fields
+    semantic_frame: dict[str, Any] = Field(default_factory=dict)
+    semantic_parse_source: str = ""
+    grounding_status: str = ""
+    missing_slot_type: str = ""
+    router_policy_decision: dict[str, Any] = Field(default_factory=dict)
+    router_policy_conflicts: list[str] = Field(default_factory=list)
+    exploration_stages: list[dict[str, Any]] = Field(default_factory=list)
+    stage_queries: list[str] = Field(default_factory=list)
+    stage_evidence_requirements: list[list[str]] = Field(default_factory=list)
+    stage_statuses: list[str] = Field(default_factory=list)
+    scene: str = ""
+    time: str = ""
+    location: dict[str, Any] = Field(default_factory=dict)
+    facet_statuses: dict[str, str] = Field(default_factory=dict)
+    grounded_facts: dict[str, Any] = Field(default_factory=dict)
+    facet_reasons: dict[str, str] = Field(default_factory=dict)
+    evidence_status: str = ""
+    comparison_support_status: str = ""
+    ranking_preserved: bool = True
+    unsupported_reasons: list[str] = Field(default_factory=list)
+    unknown_fields: list[str] = Field(default_factory=list)
+    failed_tools: list[str] = Field(default_factory=list)
+    partial_fields: list[str] = Field(default_factory=list)
+    evidence_review_result: dict[str, Any] = Field(default_factory=dict)
+    answer_verify_result: dict[str, Any] = Field(default_factory=dict)
+
     # For AnswerGenerator: forbidden claims, unknowns to mention
     forbidden_claims: list[str] = Field(default_factory=list)
     must_mention_unknowns: list[str] = Field(default_factory=list)
@@ -325,11 +370,23 @@ class DecisionPlan(BaseModel):
         "claim_bindings",
         "winner_evidence_refs",
         "missing_fields",
+        "router_policy_conflicts",
+        "stage_queries",
+        "stage_statuses",
+        "unsupported_reasons",
+        "unknown_fields",
+        "failed_tools",
+        "partial_fields",
         mode="before",
     )
     @classmethod
     def _coerce_list_fields(cls, value: Any) -> list[Any]:
         return _coerce_list_value(value)
+
+    @field_validator("location", "facet_statuses", "grounded_facts", "facet_reasons", mode="before")
+    @classmethod
+    def _coerce_dict_fields(cls, value: Any) -> dict[str, Any]:
+        return _coerce_dict_value(value)
 
 
 class DecisionReviewResult(BaseModel):

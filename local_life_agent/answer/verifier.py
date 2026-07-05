@@ -235,13 +235,23 @@ def _facet_rules(answer: str, facet: str, item: dict[str, Any], issues: list[str
             distance_km = distance_value.get("distance_km", distance_km)
         elif isinstance(distance_value, (int, float)):
             distance_km = distance_value
+        tool_name = str(item.get("tool_name", "") or "").strip()
+        is_straight_line_tool = tool_name == "calculate_distance_km" or bool(
+            isinstance(distance_value, dict) and str(distance_value.get("method", "") or "").lower() == "haversine"
+        )
         if status == "ok":
             if distance_km is not None:
                 expected = str(distance_km)
                 if expected not in answer and not _match_any_regex(answer, [r"\d+(\.\d+)?\s*(\u516c\u91cc|km|\u7c73)"]):
                     issues.append("distance_missing_numeric_claim")
+                if is_straight_line_tool and not _match_any_phrase(answer, ["直线距离", "直线"]):
+                    issues.append("distance_missing_straight_line_claim")
+                if is_straight_line_tool and _match_any_regex(answer, [r"\u9884\u8ba1", r"\d+\s*\u5206\u949f", r"\u6b65\u884c", r"\u9a7e\u8f66", r"\u5f00\u8f66", r"\u8def\u7ebf", r"\u591a\u4e45\u5230"]):
+                    issues.append("distance_false_eta_claim")
         elif status in {"unknown", "failed"}:
             if _match_any_regex(answer, [r"\u5f88\u8fd1", r"\u4e0d\u8fdc", r"\u5f88\u8fdc", r"\d+\s*\u5206\u949f", r"\u51e0\u5206\u949f"]):
+                issues.append("distance_false_positive")
+            if is_straight_line_tool and _match_any_phrase(answer, ["直线距离", "直线"]) and not _match_any_phrase(answer, ["无法确认", "暂时无法确认", "获取距离信息失败", "稍后再试"]):
                 issues.append("distance_false_positive")
             if not _match_any_phrase(answer, ["\u65e0\u6cd5\u786e\u8ba4\u8ddd\u79bb", "\u8ddd\u79bb\u6682\u65f6\u65e0\u6cd5\u786e\u8ba4", "\u83b7\u53d6\u8ddd\u79bb\u4fe1\u606f\u5931\u8d25", "\u7a0d\u540e\u518d\u8bd5"]):
                 issues.append("distance_needs_uncertain_notice")
@@ -380,6 +390,8 @@ def _comparison_issues(answer: str, evidence: dict[str, Any]) -> list[str]:
 
 def _build_suggested_fix(issues: list[str]) -> str:
     parts: list[str] = []
+    if any(issue == "grounded_fact_downgraded_to_unknown" for issue in issues):
+        parts.append("已确认的营业、优惠、评分、价格或距离事实不能改写成暂时无法确认，只能对对应的 unknown / failed / partial facet 保持保守。")
     if any(issue in {"ranking_changed_by_llm", "ranking_changed"} for issue in issues):
         parts.append("\u8bf7\u4e25\u683c\u6309 evidence \u4e2d\u7684\u6392\u5e8f\u8f93\u51fa\uff0c\u4e0d\u8981\u91cd\u6392\u5019\u9009\u5e97\u3002")
     if any(issue in {"unknown_claimed_as_worse", "unknown_as_false"} for issue in issues):

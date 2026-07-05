@@ -74,6 +74,21 @@ def _coerce_list_value(value: Any) -> list[Any]:
     return [value]
 
 
+def _coerce_dict_value(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump()
+        return dumped if isinstance(dumped, dict) else {}
+    try:
+        return dict(value)
+    except Exception:
+        return {}
+
+
 class FacetEvidence(BaseModel):
     """Per-facet evidence result for a single shop candidate."""
     shop_id: str = ""
@@ -137,6 +152,30 @@ class EvidenceReviewResult(BaseModel):
     fallback_reason: str = ""
     clarification_reason: str = ""
     next_step: str = ""
+    semantic_frame: dict[str, Any] = Field(default_factory=dict)
+    semantic_parse_source: str = ""
+    grounding_status: str = ""
+    missing_slot_type: str = ""
+    router_policy_decision: dict[str, Any] = Field(default_factory=dict)
+    router_policy_conflicts: list[str] = Field(default_factory=list)
+    conversation_continuity: dict[str, Any] = Field(default_factory=dict)
+    exploration_stages: list[dict[str, Any]] = Field(default_factory=list)
+    stage_queries: list[str] = Field(default_factory=list)
+    stage_evidence_requirements: list[list[str]] = Field(default_factory=list)
+    stage_statuses: list[str] = Field(default_factory=list)
+    scene: str = ""
+    time: str = ""
+    location: dict[str, Any] = Field(default_factory=dict)
+    facet_statuses: dict[str, str] = Field(default_factory=dict)
+    grounded_facts: dict[str, Any] = Field(default_factory=dict)
+    facet_reasons: dict[str, str] = Field(default_factory=dict)
+    evidence_status: str = ""
+    comparison_support_status: str = ""
+    ranking_preserved: bool = True
+    unsupported_reasons: list[str] = Field(default_factory=list)
+    unknown_fields: list[str] = Field(default_factory=list)
+    failed_tools: list[str] = Field(default_factory=list)
+    partial_fields: list[str] = Field(default_factory=list)
 
     @field_validator(
         "retryable_facets",
@@ -158,11 +197,23 @@ class EvidenceReviewResult(BaseModel):
         "stale_facets",
         "expired_facets",
         "disclaimer_facets",
+        "router_policy_conflicts",
+        "stage_queries",
+        "stage_statuses",
+        "unsupported_reasons",
+        "unknown_fields",
+        "failed_tools",
+        "partial_fields",
         mode="before",
     )
     @classmethod
     def _coerce_list_fields(cls, value: Any) -> list[Any]:
         return _coerce_list_value(value)
+
+    @field_validator("location", "facet_statuses", "grounded_facts", "facet_reasons", mode="before")
+    @classmethod
+    def _coerce_dict_fields(cls, value: Any) -> dict[str, Any]:
+        return _coerce_dict_value(value)
 
     @property
     def is_sufficient(self) -> bool:

@@ -24,6 +24,7 @@ from .schemas import (
     ExecutionPlan,
     OrchestrationDecision,
     ResolveShopResult,
+    SemanticFrame,
     ToolResult,
 )
 from .state import SessionState, StateUpdatePlan
@@ -50,6 +51,12 @@ def _first_text(value: Any) -> str:
                 return text
         return ""
     return str(value or "").strip()
+
+
+def _enum_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(getattr(value, "value", value) or "").strip()
 
 
 class GraphStateFieldContract(BaseModel):
@@ -138,8 +145,13 @@ class GraphStateModel(BaseModel):
     task_type: str = ""
     orchestration_decision: OrchestrationDecision | None = None
     top_intent: Any | None = None
-    semantic_frame: Any | None = None
+    semantic_frame: SemanticFrame | None = None
+    semantic_parse_source: str = ""
+    schema_validation_result: dict[str, Any] = Field(default_factory=dict)
+    grounding_status: str = ""
+    missing_slot_type: str = ""
     target_resolution: TargetResolutionResult | None = None
+    target_resolution_status: str = ""
     resolved_target: ResolveShopResult | None = None
     resolve_shop_result: ResolveShopResult | None = None
     comparison_target_resolution: ComparisonTargetResolution | None = None
@@ -149,6 +161,27 @@ class GraphStateModel(BaseModel):
     p2_decision_plan: CanonicalDecisionPlan | None = None
     answer_plan: AnswerPlan | None = None
     evidence_pack: EvidencePack | None = None
+    exploration_plan: Any | None = None
+    exploration_stages: list[dict[str, Any]] = Field(default_factory=list)
+    stage_queries: list[str] = Field(default_factory=list)
+    stage_evidence_requirements: list[list[str]] = Field(default_factory=list)
+    stage_statuses: list[str] = Field(default_factory=list)
+    scene: str = ""
+    time: str = ""
+    evidence_status: str = ""
+    evidence_review_result: dict[str, Any] = Field(default_factory=dict)
+    answer_verify_result: dict[str, Any] = Field(default_factory=dict)
+    unsupported_reasons: list[str] = Field(default_factory=list)
+    unknown_fields: list[str] = Field(default_factory=list)
+    failed_tools: list[str] = Field(default_factory=list)
+    partial_fields: list[str] = Field(default_factory=list)
+    comparison_support_status: str = ""
+    ranking_preserved: bool = True
+    comparison_requested: bool = False
+    comparison_context_anchor: bool = False
+    comparison_multi_target_signal: bool = False
+    comparison_resolution_status: str = ""
+    comparison_route_reason: str = ""
     state_update_plan: StateUpdatePlan | None = None
     session_state: SessionState | None = None
     session_state_before: SessionState | None = None
@@ -164,11 +197,19 @@ class GraphStateModel(BaseModel):
     last_recommendation_list: list[dict[str, Any]] = Field(default_factory=list)
     comparison_targets: list[dict[str, Any]] = Field(default_factory=list)
     pending_clarification: dict[str, Any] | None = None
+    clarification_resolution: dict[str, Any] = Field(default_factory=dict)
+    resume_strategy: str = ""
     review_results: dict[str, Any] = Field(default_factory=dict)
     budget_context: BudgetContext | None = None
     final_response: str = ""
     fallback_reason: str = ""
     answer_fallback_reason: str = ""
+    planning_started: str = ""
+    planning_finished: str = ""
+    execution_started: str = ""
+    execution_finished: str = ""
+    planning_tool_calls_count: int = 0
+    execution_tool_calls_count: int = 0
     error_code: str = ""
     error_message: str = ""
     workflow_run_status: str = ""
@@ -178,6 +219,10 @@ class GraphStateModel(BaseModel):
     workflow_finished_at: str = ""
     workflow_registered: bool = False
     workflow_callable: str = ""
+    workflow_candidate_reason: str = ""
+    router_policy_decision: dict[str, Any] = Field(default_factory=dict)
+    router_policy_conflicts: list[str] = Field(default_factory=list)
+    rule_pattern_signals: list[dict[str, Any]] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _mirror_aliases(self) -> GraphStateModel:
@@ -188,6 +233,8 @@ class GraphStateModel(BaseModel):
             self.workflow_name = self.orchestration_decision.workflow_name
         if self.orchestration_decision is not None and not self.response_mode:
             self.response_mode = self.orchestration_decision.response_mode
+        if self.orchestration_decision is not None and not self.workflow_candidate_reason:
+            self.workflow_candidate_reason = self.orchestration_decision.workflow_reason
         if self.execution_plan is None and self.validated_plan is not None:
             self.execution_plan = self.validated_plan
         elif self.validated_plan is None and self.execution_plan is not None:
@@ -204,6 +251,17 @@ class GraphStateModel(BaseModel):
             self.tool_result_set = dict(self.tool_results)
         elif self.tool_result_set and not self.tool_results:
             self.tool_results = dict(self.tool_result_set)
+        if self.semantic_frame is not None:
+            if not self.semantic_parse_source:
+                self.semantic_parse_source = (
+                    _enum_text(getattr(self.semantic_frame, "semantic_parse_source", ""))
+                    or _enum_text(getattr(self.semantic_frame, "parse_source", ""))
+                    or _enum_text(getattr(self.semantic_frame, "semantic_source", ""))
+                )
+            if not self.grounding_status:
+                self.grounding_status = _enum_text(getattr(self.semantic_frame, "grounding_status", ""))
+            if not self.missing_slot_type:
+                self.missing_slot_type = _enum_text(getattr(self.semantic_frame, "missing_slot_type", ""))
         return self
 
     @property

@@ -117,6 +117,45 @@ def _shop_display_name(evidence: dict[str, Any]) -> str:
     return "这家店"
 
 
+def _semantic_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return list(value)
+    if isinstance(value, tuple):
+        return list(value)
+    return [value]
+
+
+def _normalise_str_list(value: Any) -> list[str]:
+    items = _semantic_list(value)
+    result: list[str] = []
+    for item in items:
+        text = str(item or "").strip()
+        if text and text not in result:
+            result.append(text)
+    return result
+
+
+def _normalize_stage_requirements(stages: list[dict[str, Any]]) -> tuple[list[str], list[list[str]], list[str]]:
+    stage_queries: list[str] = []
+    stage_evidence_requirements: list[list[str]] = []
+    stage_statuses: list[str] = []
+    for stage in stages:
+        stage_dict = _to_dict(stage)
+        query = str(stage_dict.get("candidate_query") or stage_dict.get("query") or "").strip()
+        if query:
+            stage_queries.append(query)
+        requirements = [
+            str(item).strip()
+            for item in _semantic_list(stage_dict.get("evidence_requirements"))
+            if str(item).strip()
+        ]
+        stage_evidence_requirements.append(requirements)
+        stage_statuses.append(str(stage_dict.get("status", "planned") or "planned").strip() or "planned")
+    return stage_queries, stage_evidence_requirements, stage_statuses
+
+
 def _build_decision_plan(
     answer_plan: dict,
     evidence: dict,
@@ -128,6 +167,35 @@ def _build_decision_plan(
 
     answer_type = ap.get("answer_type", "general")
     comparison_matrix = ev.get("comparison_matrix") or {}
+    semantic_frame = _to_dict(ev.get("semantic_frame") or ap.get("semantic_frame"))
+    exploration_stages = [
+        _to_dict(item)
+        for item in _semantic_list(ev.get("exploration_stages") or semantic_frame.get("exploration_stages") or ap.get("exploration_stages"))
+        if _to_dict(item)
+    ]
+    stage_queries, stage_evidence_requirements, stage_statuses = _normalize_stage_requirements(
+        exploration_stages
+    )
+    semantic_parse_source = str(ev.get("semantic_parse_source") or semantic_frame.get("semantic_parse_source") or ap.get("semantic_parse_source") or "").strip()
+    grounding_status = str(ev.get("grounding_status") or semantic_frame.get("grounding_status") or ap.get("grounding_status") or "").strip()
+    missing_slot_type = str(ev.get("missing_slot_type") or semantic_frame.get("missing_slot_type") or ap.get("missing_slot_type") or "").strip()
+    router_policy_decision = _to_dict(ev.get("router_policy_decision") or semantic_frame.get("router_policy_decision"))
+    router_policy_conflicts = _normalise_str_list(ev.get("router_policy_conflicts") or semantic_frame.get("router_policy_conflicts") or ap.get("router_policy_conflicts"))
+    scene = str(ev.get("scene") or semantic_frame.get("scene") or ap.get("scene") or "").strip()
+    time = str(ev.get("time") or semantic_frame.get("time") or ap.get("time") or "").strip()
+    location = _to_dict(ev.get("location") or semantic_frame.get("location") or ap.get("location"))
+    evidence_status = str(ev.get("evidence_status") or "").strip()
+    comparison_support_status = str(ev.get("comparison_support_status") or "").strip()
+    ranking_preserved = bool(ev.get("ranking_preserved", True))
+    unsupported_reasons = _normalise_str_list(ev.get("unsupported_reasons"))
+    unknown_fields = _normalise_str_list(ev.get("unknown_fields"))
+    failed_tools = _normalise_str_list(ev.get("failed_tools"))
+    partial_fields = _normalise_str_list(ev.get("partial_fields"))
+    facet_statuses = _to_dict(ev.get("facet_statuses") or ap.get("facet_statuses"))
+    grounded_facts = _to_dict(ev.get("grounded_facts") or ap.get("grounded_facts"))
+    facet_reasons = _to_dict(ev.get("facet_reasons") or ap.get("facet_reasons"))
+    evidence_review_result = _to_dict(ev.get("evidence_review_result"))
+    answer_verify_result = _to_dict(ev.get("answer_verify_result"))
 
     decision_type = None
     if answer_type == "comparison" or (comparison_matrix and (comparison_matrix.get("rows") or comparison_matrix.get("overall_ranked"))):
@@ -192,6 +260,31 @@ def _build_decision_plan(
             "raw_comparison_rows": (ev.get("comparison_matrix") or {}).get("rows", []) if isinstance(ev.get("comparison_matrix") or {}, dict) else [],
             "raw_ranking_rows": (ev.get("ranking_snapshot") or {}).get("ranked", []) if isinstance(ev.get("ranking_snapshot") or {}, dict) else [],
         }
+        plan.semantic_frame = semantic_frame
+        plan.semantic_parse_source = semantic_parse_source
+        plan.grounding_status = grounding_status
+        plan.missing_slot_type = missing_slot_type
+        plan.router_policy_decision = router_policy_decision
+        plan.router_policy_conflicts = router_policy_conflicts
+        plan.exploration_stages = exploration_stages
+        plan.stage_queries = stage_queries
+        plan.stage_evidence_requirements = stage_evidence_requirements
+        plan.stage_statuses = stage_statuses
+        plan.scene = scene
+        plan.time = time
+        plan.location = location
+        plan.evidence_status = evidence_status or ("grounded" if not unknown_fields and not failed_tools else "partial" if unknown_fields or failed_tools else "grounded")
+        plan.comparison_support_status = comparison_support_status
+        plan.ranking_preserved = ranking_preserved
+        plan.unsupported_reasons = unsupported_reasons
+        plan.unknown_fields = unknown_fields
+        plan.failed_tools = failed_tools
+        plan.partial_fields = partial_fields
+        plan.facet_statuses = facet_statuses
+        plan.grounded_facts = grounded_facts
+        plan.facet_reasons = facet_reasons
+        plan.evidence_review_result = evidence_review_result
+        plan.answer_verify_result = answer_verify_result
         if decision_type == "recommendation" and shop_ids:
             shop_id_to_index = {str(sid): i for i, sid in enumerate(shop_ids)}
             plan.overall_ranking.sort(key=lambda x: shop_id_to_index.get(str(x.get("shop_id", "")), 999))
@@ -218,9 +311,7 @@ def _build_decision_plan(
                 if row_dict.get("rating") is not None:
                     facts.append(f"评分为 {row_dict.get('rating')}")
                 if row_dict.get("distance_km") is not None:
-                    dist_str = f"距离为 {row_dict.get('distance_km')} 公里"
-                    if row_dict.get("eta_minutes") is not None:
-                        dist_str += f"，预计时间 {row_dict.get('eta_minutes')} 分钟"
+                    dist_str = f"直线距离约 {row_dict.get('distance_km')} 公里"
                     facts.append(dist_str)
                 if row_dict.get("open_status") == "open":
                     facts.append("营业状态为：目前营业中")
@@ -430,10 +521,7 @@ def _build_decision_plan(
             uncertainty_notes.append(f"无法确认 {sname} 的优惠情况")
 
         if target_dict["distance_km"] is not None:
-            dist_str = f"距离为 {target_dict['distance_km']} 公里"
-            eta = target_dict.get("eta_minutes")
-            if eta is not None:
-                dist_str += f"，预计时间 {eta} 分钟"
+            dist_str = f"直线距离约 {target_dict['distance_km']} 公里"
             facts.append(dist_str)
         elif "distance" in target_dict["unknown_facts"]:
             uncertainty_notes.append(f"无法确认 {sname} 的距离/时间")
@@ -443,6 +531,29 @@ def _build_decision_plan(
 
         if facts:
             factual_points.append(f"{sname}: {'; '.join(facts)}")
+
+    if not facet_statuses and selected_targets:
+        first_target = selected_targets[0]
+        facet_statuses = {
+            "open_status": "grounded" if first_target.get("open_status") in {"open", "closed"} else "unknown",
+            "coupon": "grounded" if first_target.get("coupon_status") == "has_coupon" else "empty" if first_target.get("coupon_status") == "empty" else "unknown",
+            "distance": "grounded" if first_target.get("distance_km") is not None else "unknown",
+            "rating": "grounded" if first_target.get("rating") is not None else "unknown",
+            "avg_price": "grounded" if first_target.get("avg_price") is not None else "unknown",
+        }
+        grounded_facts = {
+            "open_status": first_target.get("open_status"),
+            "coupon_count": len(first_target.get("coupon_titles") or []) if first_target.get("coupon_status") == "has_coupon" else 0 if first_target.get("coupon_status") == "empty" else None,
+            "coupon_titles": list(first_target.get("coupon_titles") or []),
+            "distance_km": first_target.get("distance_km"),
+            "eta_minutes": first_target.get("eta_minutes"),
+            "rating": first_target.get("rating"),
+            "avg_price": first_target.get("avg_price"),
+        }
+        facet_reasons = {
+            "distance": "distance_tool_missing_or_location_unresolved" if first_target.get("distance_km") is None else "",
+        }
+        facet_reasons = {key: value for key, value in facet_reasons.items() if str(value).strip()}
 
     unknowns = ap.get("must_mention_unknowns") or []
     for u in unknowns:
@@ -463,6 +574,31 @@ def _build_decision_plan(
             "raw_ranking_rows": (ev.get("ranking_snapshot") or {}).get("ranked", []) if isinstance(ev.get("ranking_snapshot") or {}, dict) else [],
         },
         conversation_continuity=conversation_continuity or {},
+        semantic_frame=semantic_frame,
+        semantic_parse_source=semantic_parse_source,
+        grounding_status=grounding_status,
+        missing_slot_type=missing_slot_type,
+        router_policy_decision=router_policy_decision,
+        router_policy_conflicts=router_policy_conflicts,
+        exploration_stages=exploration_stages,
+        stage_queries=stage_queries,
+        stage_evidence_requirements=stage_evidence_requirements,
+        stage_statuses=stage_statuses,
+        scene=scene,
+        time=time,
+        location=location,
+        facet_statuses=facet_statuses,
+        grounded_facts=grounded_facts,
+        facet_reasons=facet_reasons,
+        evidence_status=evidence_status or ("grounded" if not unknown_fields and not failed_tools else "partial" if unknown_fields or failed_tools else "grounded"),
+        comparison_support_status=comparison_support_status,
+        ranking_preserved=ranking_preserved,
+        unsupported_reasons=unsupported_reasons,
+        unknown_fields=unknown_fields,
+        failed_tools=failed_tools,
+        partial_fields=partial_fields,
+        evidence_review_result=evidence_review_result,
+        answer_verify_result=answer_verify_result,
     )
 
 

@@ -87,11 +87,48 @@ def _render_user_prompt(
         "{{UNCERTAINTY_NOTES}}": json.dumps(plan.uncertainty_notes, ensure_ascii=False),
         "{{MUST_MENTION_UNKNOWNS}}": json.dumps(plan.must_mention_unknowns, ensure_ascii=False),
         "{{FORBIDDEN_CLAIMS}}": json.dumps(plan.forbidden_claims, ensure_ascii=False),
+        "{{SEMANTIC_FRAME}}": json.dumps(plan.semantic_frame, ensure_ascii=False),
+        "{{SEMANTIC_PARSE_SOURCE}}": plan.semantic_parse_source,
+        "{{GROUNDING_STATUS}}": plan.grounding_status,
+        "{{MISSING_SLOT_TYPE}}": plan.missing_slot_type,
+        "{{ROUTER_POLICY_DECISION}}": json.dumps(plan.router_policy_decision, ensure_ascii=False),
+        "{{ROUTER_POLICY_CONFLICTS}}": json.dumps(plan.router_policy_conflicts, ensure_ascii=False),
+        "{{EXPLORATION_STAGES}}": json.dumps(plan.exploration_stages, ensure_ascii=False),
+        "{{STAGE_QUERIES}}": json.dumps(plan.stage_queries, ensure_ascii=False),
+        "{{STAGE_EVIDENCE_REQUIREMENTS}}": json.dumps(plan.stage_evidence_requirements, ensure_ascii=False),
+        "{{STAGE_STATUSES}}": json.dumps(plan.stage_statuses, ensure_ascii=False),
+        "{{SCENE}}": plan.scene,
+        "{{TIME}}": plan.time,
+        "{{LOCATION}}": json.dumps(plan.location, ensure_ascii=False),
+        "{{FACET_STATUSES}}": json.dumps(getattr(plan, "facet_statuses", {}) or {}, ensure_ascii=False),
+        "{{GROUNDED_FACTS}}": json.dumps(getattr(plan, "grounded_facts", {}) or {}, ensure_ascii=False),
+        "{{FACET_REASONS}}": json.dumps(getattr(plan, "facet_reasons", {}) or {}, ensure_ascii=False),
+        "{{EVIDENCE_STATUS}}": plan.evidence_status,
+        "{{COMPARISON_SUPPORT_STATUS}}": plan.comparison_support_status,
+        "{{RANKING_PRESERVED}}": json.dumps(plan.ranking_preserved, ensure_ascii=False),
+        "{{UNSUPPORTED_REASONS}}": json.dumps(plan.unsupported_reasons, ensure_ascii=False),
+        "{{UNKNOWN_FIELDS}}": json.dumps(plan.unknown_fields, ensure_ascii=False),
+        "{{FAILED_TOOLS}}": json.dumps(plan.failed_tools, ensure_ascii=False),
+        "{{PARTIAL_FIELDS}}": json.dumps(plan.partial_fields, ensure_ascii=False),
+        "{{EVIDENCE_REVIEW_RESULT}}": json.dumps(plan.evidence_review_result, ensure_ascii=False),
+        "{{ANSWER_VERIFY_RESULT}}": json.dumps(plan.answer_verify_result, ensure_ascii=False),
     }
 
     prompt = template
     for placeholder, value in replacements.items():
         prompt = prompt.replace(placeholder, value)
+
+    facet_contract_block = "\n".join(
+        [
+            "### FACET_STATUSES",
+            json.dumps(getattr(plan, "facet_statuses", {}) or {}, ensure_ascii=False),
+            "### GROUNDED_FACTS",
+            json.dumps(getattr(plan, "grounded_facts", {}) or {}, ensure_ascii=False),
+            "### FACET_REASONS",
+            json.dumps(getattr(plan, "facet_reasons", {}) or {}, ensure_ascii=False),
+        ]
+    )
+    prompt = f"{facet_contract_block}\n\n{prompt}"
 
     # Build rewrite instruction if needed
     if rewrite_count > 0 and previous_violations:
@@ -105,6 +142,8 @@ def _render_user_prompt(
             f"- 如果 coupon/open_status/distance/price/rating 是 unknown 或工具失败，"
             f"必须表述为{lq}暂时无法确认{rq}、{lq}暂时没查到{rq}等，"
             f"绝不能声称{lq}没有{rq}或编造具体数值。\n"
+            "- 对于 grounded_facts 里已经确认的事实，rewrite 必须保留并准确表达，不能把它们降级成 unknown。\n"
+            "- 只允许对 facet_statuses 中标记为 unknown / failed / partial 的字段使用保守表达，且只针对对应字段，不要把其他已知事实一起降级。\n"
             "- 只提及 selected_targets 和 omitted_targets 里的店铺，绝不捏造或提及其他店名。\n"
             "- 严格保留整体推荐/对比的排序顺序，不得擅自更改。\n"
             f"- 如果有 omitted_targets 且非空，绝对不能说{lq}对比了全部{rq}、{lq}对比了所有几家{rq}等全量表述。\n"
@@ -170,6 +209,22 @@ def _check_boundary(plan: DecisionPlan, text: str) -> bool:
             if phrase in text:
                 return False
 
+    if not plan.ranking_preserved:
+        ranking_markers = ["更好", "最推荐", "胜出", "领先", "综合来看", "整体来看", "更适合", "更近", "更便宜"]
+        if any(phrase in text for phrase in ranking_markers):
+            return False
+
+    stage_statuses = [str(item).strip().lower() for item in (plan.stage_statuses or []) if str(item).strip()]
+    if any(status in {"unknown", "failed", "empty", "partial"} for status in stage_statuses):
+        if any(phrase in text for phrase in ["已经安排好", "完整", "全部", "都已", "没有问题", "已成功", "可直接"]):
+            return False
+        if not any(phrase in text for phrase in ["暂时无法确认", "无法确认", "部分信息", "部分阶段", "还需要补充", "暂时没查到"]):
+            return False
+
+    if plan.comparison_support_status and plan.comparison_support_status not in {"grounded", "supported", "ok", "sufficient"}:
+        if any(phrase in text for phrase in ["最推荐", "更好", "胜出", "领先", "整体来看", "综合来看", "更适合"]):
+            return False
+
     return True
 
 
@@ -186,6 +241,9 @@ def _rule_based_verbalize(plan: DecisionPlan) -> str:
     )
     factual_points = [str(item) for item in (plan_dict.get("factual_points") or []) if str(item).strip()]
     uncertainty_notes = [str(item) for item in (plan_dict.get("uncertainty_notes") or []) if str(item).strip()]
+    facet_statuses = dict(plan_dict.get("facet_statuses") or {})
+    grounded_facts = dict(plan_dict.get("grounded_facts") or {})
+    facet_reasons = dict(plan_dict.get("facet_reasons") or {})
 
     def _target_name() -> str:
         for item in (main_recommendation, *(selected_targets or [])):
@@ -198,6 +256,42 @@ def _rule_based_verbalize(plan: DecisionPlan) -> str:
     target_name = _target_name()
 
     if answer_type in {"single_shop", "single_shop_query"}:
+        snippets: list[str] = []
+        open_status = str(grounded_facts.get("open_status") or "").lower()
+        if open_status == "open":
+            snippets.append("目前营业中")
+        elif open_status == "closed":
+            snippets.append("目前已打烊")
+        coupon_count = grounded_facts.get("coupon_count")
+        coupon_titles = [str(item).strip() for item in (grounded_facts.get("coupon_titles") or []) if str(item).strip()]
+        if coupon_count is not None or coupon_titles:
+            if coupon_titles:
+                snippets.append(f"当前查到 {len(coupon_titles)} 张优惠券")
+            elif int(coupon_count or 0) > 0:
+                snippets.append(f"当前查到 {coupon_count} 张优惠券")
+            else:
+                snippets.append("当前暂无可用优惠券")
+        distance_km = grounded_facts.get("distance_km")
+        if distance_km is not None:
+            dist_snippet = f"距离约 {distance_km} 公里"
+            eta_minutes = grounded_facts.get("eta_minutes")
+            if eta_minutes is not None:
+                dist_snippet += f"，预计 {eta_minutes} 分钟"
+            snippets.append(dist_snippet)
+        if snippets:
+            uncertain_facets = []
+            for facet, status in facet_statuses.items():
+                if status in {"unknown", "failed", "partial"}:
+                    if facet == "distance":
+                        uncertain_facets.append("距离信息暂时无法确认")
+                    elif facet == "coupon":
+                        uncertain_facets.append("优惠情况暂时无法确认")
+                    elif facet == "open_status":
+                        uncertain_facets.append("营业状态暂时无法确认")
+            pieces = [f"{target_name} {'；'.join(snippets)}。"]
+            if uncertain_facets:
+                pieces.append("".join(dict.fromkeys(uncertain_facets)))
+            return " ".join(pieces)
         for point in factual_points:
             if "有券" in point:
                 return f"{target_name}{point.split(':', 1)[1].strip() if ':' in point else '有券'}"
@@ -234,6 +328,21 @@ def _rule_based_verbalize(plan: DecisionPlan) -> str:
         if names:
             return f"附近这几家更值得优先看：{'、'.join(names)}。"
         return "我会优先参考当前结果来给你推荐。"
+
+    if answer_type in {"exploration_plan", "exploration"}:
+        stage_statuses = [str(item).strip().lower() for item in (plan_dict.get("stage_statuses") or []) if str(item).strip()]
+        stage_queries = [str(item).strip() for item in (plan_dict.get("stage_queries") or []) if str(item).strip()]
+        segments: list[str] = []
+        if stage_queries:
+            segments.append("我先按阶段帮你拆开：")
+            segments.append(" → ".join(stage_queries))
+        else:
+            segments.append("我先按阶段帮你拆开这次安排。")
+        if any(status in {"unknown", "failed", "empty", "partial"} for status in stage_statuses):
+            segments.append("其中有些阶段的信息还不完整，暂时只能给你部分规划。")
+        elif uncertainty_notes:
+            segments.append("其中有些信息还需要再确认。")
+        return " ".join(segments)
 
     if factual_points:
         return factual_points[0]
@@ -353,6 +462,18 @@ def verbalize_decision_plan(
         return _rule_based_verbalize(plan)
 
     user_prompt = _render_user_prompt(plan, rewrite_count=rewrite_count, previous_violations=previous_violations)
+    facet_prefix = "\n".join(
+        [
+            "### FACET_STATUSES",
+            json.dumps(getattr(plan, "facet_statuses", {}) or {}, ensure_ascii=False),
+            "### GROUNDED_FACTS",
+            json.dumps(getattr(plan, "grounded_facts", {}) or {}, ensure_ascii=False),
+            "### FACET_REASONS",
+            json.dumps(getattr(plan, "facet_reasons", {}) or {}, ensure_ascii=False),
+        ]
+    )
+    if "FACET_STATUSES" not in user_prompt:
+        user_prompt = f"{facet_prefix}\n\n{user_prompt}"
 
     try:
         res = _invoke_verbalizer_llm(

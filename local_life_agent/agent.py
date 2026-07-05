@@ -182,7 +182,13 @@ def run_agent(input_text: str, session_id: str = "") -> AgentResponse:
     return run_agent_graph(input_text, session_id=session_id)
 
 
-def run_agent_graph(input_text: str, session_id: str = "") -> AgentResponse:
+def run_agent_graph(
+    input_text: str,
+    session_id: str = "",
+    *,
+    trace_id: str | None = None,
+    turn_id: str | None = None,
+) -> AgentResponse:
     """Execute one full turn via ``StateGraph`` (todo/05 LangGraph entry).
 
     This is the LangGraph-based alternative to ``run_agent()``.
@@ -193,7 +199,8 @@ def run_agent_graph(input_text: str, session_id: str = "") -> AgentResponse:
     final_state: dict[str, Any] = {}
     from .engine.graph_builder import build_graph
 
-    trace_id = f"trace_{id(input_text)}_{session_id or 'anon'}"
+    trace_id = str(trace_id or f"trace_{id(input_text)}_{session_id or 'anon'}")
+    turn_id = str(turn_id or "")
     log_kv(
         _FILE_LOGGER,
         logging.INFO,
@@ -214,7 +221,7 @@ def run_agent_graph(input_text: str, session_id: str = "") -> AgentResponse:
         "raw_text": input_text,
         "session_id": session_id or "",
         "trace_id": trace_id,
-        "turn_id": "",
+        "turn_id": turn_id,
         "user_id": "",
         "normalized_text": "",
         "input_type": "text",

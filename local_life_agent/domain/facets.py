@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .enums import Facet
 
@@ -107,6 +107,7 @@ class RankingPolicy(BaseModel):
 
 class TargetResolutionResult(BaseModel):
     resolved: bool = False
+    status: str = ""
     target_shop: dict[str, Any] | None = None
     source: str | None = None
     confidence: float = 0.0
@@ -115,6 +116,42 @@ class TargetResolutionResult(BaseModel):
     reference_type: str | None = None
     unresolved_reason: str | None = None
     comparison_targets: list[dict[str, Any]] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _normalize_status(self) -> TargetResolutionResult:
+        """Keep the status field aligned with the legacy resolved flag."""
+        status = str(self.status or "").strip().lower()
+        if status in {"resolved", "ambiguous", "missing", "not_found", "partial", "failed"}:
+            self.status = status
+            return self
+
+        if self.resolved:
+            self.status = "resolved"
+            return self
+
+        target_shop = _to_dict(self.target_shop)
+        comparison_targets = [ _to_dict(item) for item in (self.comparison_targets or []) if _to_dict(item) ]
+        unresolved_reason = str(self.unresolved_reason or "").strip().lower()
+        resolution_reason = str(self.resolution_reason or "").strip().lower()
+        reference_type = str(self.reference_type or "").strip().lower()
+
+        if comparison_targets:
+            self.status = "resolved" if len(comparison_targets) >= 2 else "partial"
+        elif unresolved_reason in {"ordinal_out_of_range", "no_target_detected"}:
+            self.status = "not_found" if unresolved_reason == "ordinal_out_of_range" else "missing"
+        elif unresolved_reason in {"missing_last_recommendation_list", "missing_current_shop"}:
+            self.status = "missing"
+        elif unresolved_reason in {"comparison_targets_need_clarification"}:
+            self.status = "partial"
+        elif unresolved_reason in {"explicit_shop_name_needs_candidate_resolution", "current_shop_reference"}:
+            self.status = "ambiguous"
+        elif target_shop:
+            self.status = "ambiguous"
+        elif reference_type == "ordinal_reference" and resolution_reason == "ordinal_out_of_range":
+            self.status = "not_found"
+        else:
+            self.status = "missing"
+        return self
 
     @field_validator("comparison_targets", mode="before")
     @classmethod
@@ -446,37 +483,61 @@ def build_target_resolution_result(
         or any(token in text for token in ("这家", "那家", "这间", "那间", "它", "第一家", "第二家"))
     )
 
-    if has_current_shop_hint and has_reference_cue and (has_deictic_hint or any(token in lower for token in ("这家", "那家", "它", "第一家", "第二家"))):
+    def _build_result(
+        *,
+        resolved: bool,
+        status: str,
+        target_shop: dict[str, Any] | None = None,
+        source: str | None = None,
+        confidence: float = 0.0,
+        resolution_reason: str | None = None,
+        reference_type: str | None = None,
+        unresolved_reason: str | None = None,
+        comparison_targets: list[dict[str, Any]] | None = None,
+    ) -> TargetResolutionResult:
         return TargetResolutionResult(
+            resolved=resolved,
+            status=status,
+            target_shop=target_shop,
+            source=source,
+            confidence=confidence,
+            owner="orchestration_router",
+            resolution_reason=resolution_reason,
+            reference_type=reference_type,
+            unresolved_reason=unresolved_reason,
+            comparison_targets=comparison_targets or [],
+        )
+
+    if has_current_shop_hint and has_reference_cue and (has_deictic_hint or any(token in lower for token in ("这家", "那家", "它", "第一家", "第二家"))):
+        return _build_result(
             resolved=True,
+            status="resolved",
             target_shop=_clean_shop(current_shop),
             source="current_shop",
             confidence=1.0,
-            owner="orchestration_router",
             resolution_reason="current_shop_reference",
             reference_type="current_shop",
-            comparison_targets=[],
         )
 
     if comparison_targets:
         cleaned_targets = [_clean_shop(item) for item in comparison_targets if _clean_shop(item).get("shop_id") or _clean_shop(item).get("shop_name")]
         if len(cleaned_targets) >= 2:
-            return TargetResolutionResult(
+            return _build_result(
                 resolved=True,
+                status="resolved",
                 target_shop=cleaned_targets[0],
                 source="comparison_targets",
                 confidence=0.95,
-                owner="orchestration_router",
                 resolution_reason="comparison_targets_resolved",
                 reference_type="comparison_targets",
                 comparison_targets=cleaned_targets,
             )
-        return TargetResolutionResult(
+        return _build_result(
             resolved=False,
+            status="partial" if cleaned_targets else "missing",
             target_shop=cleaned_targets[0] if cleaned_targets else None,
             source="comparison_targets",
             confidence=0.4 if cleaned_targets else 0.0,
-            owner="orchestration_router",
             resolution_reason="comparison_targets_need_clarification",
             reference_type="comparison_targets",
             unresolved_reason="comparison_targets_need_clarification",
@@ -485,12 +546,12 @@ def build_target_resolution_result(
 
     if has_ordinal_hint:
         if not last_recommendations:
-            return TargetResolutionResult(
+            return _build_result(
                 resolved=False,
+                status="missing",
                 target_shop=None,
                 source="last_recommendation_list",
                 confidence=0.0,
-                owner="orchestration_router",
                 resolution_reason="missing_last_recommendation_list",
                 reference_type="ordinal_reference",
                 unresolved_reason="missing_last_recommendation_list",
@@ -507,91 +568,90 @@ def build_target_resolution_result(
         if 1 <= index <= len(last_recommendations):
             target = _clean_shop(last_recommendations[index - 1])
             if target.get("shop_id") or target.get("shop_name"):
-                return TargetResolutionResult(
+                return _build_result(
                     resolved=True,
+                    status="resolved",
                     target_shop=target,
                     source="last_recommendation_list",
                     confidence=0.95,
-                    owner="orchestration_router",
                     resolution_reason="ordinal_reference",
                     reference_type="ordinal_reference",
-                    comparison_targets=[],
                 )
-        return TargetResolutionResult(
+        return _build_result(
             resolved=False,
+            status="not_found",
             target_shop=None,
             source="last_recommendation_list",
             confidence=0.0,
-            owner="orchestration_router",
             resolution_reason="ordinal_out_of_range",
             reference_type="ordinal_reference",
             unresolved_reason="ordinal_out_of_range",
         )
 
     if merchant_mentions and len(merchant_mentions) == 1 and not has_comparison_hint:
-        return TargetResolutionResult(
+        return _build_result(
             resolved=False,
+            status="ambiguous",
             target_shop=None,
             source="explicit_shop_name",
             confidence=0.5,
-            owner="orchestration_router",
             resolution_reason="explicit_shop_name_needs_candidate_resolution",
             reference_type="explicit_shop_name",
             unresolved_reason="explicit_shop_name_needs_candidate_resolution",
         )
 
     if has_current_shop_hint and has_deictic_hint:
-        return TargetResolutionResult(
+        return _build_result(
             resolved=True,
+            status="resolved",
             target_shop=_clean_shop(current_shop),
             source="current_shop",
             confidence=1.0,
-            owner="orchestration_router",
             resolution_reason="current_shop_reference",
             reference_type="current_shop",
         )
 
     if deictic_refs or has_deictic_hint:
-        return TargetResolutionResult(
+        return _build_result(
             resolved=False,
+            status="missing",
             target_shop=None,
             source="current_shop",
             confidence=0.0,
-            owner="orchestration_router",
             resolution_reason="missing_current_shop",
             reference_type="current_shop",
             unresolved_reason="missing_current_shop",
         )
 
     if has_comparison_hint and not comparison_targets:
-        return TargetResolutionResult(
+        return _build_result(
             resolved=False,
+            status="missing",
             target_shop=None,
             source="comparison_targets",
             confidence=0.0,
-            owner="orchestration_router",
             resolution_reason="comparison_targets_need_clarification",
             reference_type="comparison_targets",
             unresolved_reason="comparison_targets_need_clarification",
         )
 
     if has_current_shop_hint and has_reference_cue and (has_ordinal_hint or bool(reference_mentions) or bool(merchant_mentions)):
-        return TargetResolutionResult(
+        return _build_result(
             resolved=True,
+            status="resolved",
             target_shop=_clean_shop(current_shop),
             source="current_shop",
             confidence=1.0,
-            owner="orchestration_router",
             resolution_reason="current_shop_reference",
             reference_type="current_shop",
         )
 
-    return TargetResolutionResult(
+    return _build_result(
         resolved=False,
+        status="missing",
         target_shop=None,
         source="current_shop" if has_current_shop_hint else None,
         confidence=0.0,
-        owner="orchestration_router",
         resolution_reason="no_target_detected",
         reference_type="current_shop" if has_current_shop_hint else None,
         unresolved_reason="no_target_detected",

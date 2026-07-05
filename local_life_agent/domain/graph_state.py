@@ -60,6 +60,10 @@ class GraphState(TypedDict, total=False):
 
     # === 语义帧 (Semantic Frame) — write: semantic_parse/slot_extractor, read: context_recovery/task_router ===
     semantic_frame: Optional[SemanticFrame]
+    semantic_parse_source: str
+    schema_validation_result: dict[str, object]
+    grounding_status: str
+    missing_slot_type: str
     facet_set: Optional[FacetSet]
     facets: list[QueryFacet]
     target_resolution: Optional[TargetResolutionResult]
@@ -72,6 +76,8 @@ class GraphState(TypedDict, total=False):
     active_turn_result: dict[str, object]
     active_turn_route: str
     restored_task: str
+    clarification_resolution: dict
+    resume_strategy: str
     selected_candidate: dict
     selected_index: int
 
@@ -127,12 +133,16 @@ class GraphState(TypedDict, total=False):
     orchestration_pattern: str
     workflow_name: str
     workflow_reason: str
+    workflow_candidate_reason: str
     task_complexity: str
     requires_tool: bool
     requires_clarification: bool
     next_action: str
     orchestration_error_code: str
     orchestration_error_message: str
+    router_policy_decision: dict
+    router_policy_conflicts: list[str]
+    rule_pattern_signals: list[dict]
 
     # === Phase 5 workflow dispatch ===
     workflow_run_status: str
@@ -146,6 +156,26 @@ class GraphState(TypedDict, total=False):
     # === 回答层 (Answer Layer) — write: answer_plan_build/answer_generate/final_response_build, read: answer_verify/emit_response ===
     answer_plan: Optional[AnswerPlan]
     exploration_plan: Optional[ExplorationPlan]
+    exploration_stages: list
+    stage_queries: list[str]
+    stage_evidence_requirements: list
+    stage_statuses: list[str]
+    scene: str
+    time: str
+    evidence_status: str
+    evidence_review_result: dict
+    answer_verify_result: dict
+    unsupported_reasons: list[str]
+    unknown_fields: list[str]
+    failed_tools: list[str]
+    partial_fields: list[str]
+    comparison_support_status: str
+    ranking_preserved: bool
+    comparison_requested: bool
+    comparison_context_anchor: bool
+    comparison_multi_target_signal: bool
+    comparison_resolution_status: str
+    comparison_route_reason: str
     final_response: str
 
     # === 状态更新 (State Update) — write: state_update_planner, read: persist_session_state ===
@@ -198,6 +228,12 @@ class GraphState(TypedDict, total=False):
     llm_verbalizer_violation: Optional[str]
     llm_verbalizer_error: Optional[str]
     generated_llm_answer_before_fallback: str
+    planning_started: str
+    planning_finished: str
+    execution_started: str
+    execution_finished: str
+    planning_tool_calls_count: int
+    execution_tool_calls_count: int
     comparison_target_resolution: Optional[ComparisonTargetResolution]
     reference_resolution_source: str
     answer_verify_passed: bool
