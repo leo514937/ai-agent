@@ -59,7 +59,7 @@ def test_build_pending_clarification_records_resume_strategy():
         reason="ambiguous_shop",
     )
 
-    assert pending.resume_strategy == "resume_original_task"
+    assert pending.resume_strategy == "resolve_shop_reference"
     assert pending.expires_at is not None
     assert pending.expires_at > pending.created_at
 
@@ -155,6 +155,67 @@ def test_recommendation_state_update_keeps_traceable_metadata():
     assert last_meta["location_context"] == user_location
 
 
+def test_recommendation_reference_dependency_promotes_current_shop():
+    user_location = {"lat": 39.96, "lng": 116.36, "location_name": "北邮"}
+    directive = plan_state_update(
+        {
+            "task_type": "recommendation",
+            "local_life_goal_draft": {"candidate_source": "recommendation"},
+            "resolved_target": {
+                "status": "RESOLVED",
+                "resolved_shop": {"shop_id": "shop_1", "shop_name": "A"},
+                "source": "last_recommendation_list",
+                "reference_type": "ordinal_reference",
+                "resolution_reason": "ordinal_reference",
+            },
+            "reference_resolution_source": "deterministic_tool_workflow",
+            "last_recommendation_list": [{"shop_id": "shop_1", "shop_name": "A"}],
+            "evidence_pack": {
+                "evidence_items": [
+                    {"evidence_id": "ev_1", "call_id": "call_1", "shop_id": "shop_1", "facet": "distance"}
+                ],
+            },
+            "user_location": user_location,
+        },
+        "recommendation",
+        "RESOLVED",
+    )
+
+    assert directive["set_fields"]["current_shop"] == {"shop_id": "shop_1", "shop_name": "A"}
+    current_meta = _meta(directive["set_fields"]["current_shop_meta"])
+    assert current_meta["source"] == "deterministic_tool_workflow"
+    assert current_meta["evidence_ref"] == "ev_1"
+    assert current_meta["location_context"] == user_location
+
+
+def test_recommendation_reference_dependency_tolerates_unknown_tool_result():
+    directive = plan_state_update(
+        {
+            "task_type": "recommendation",
+            "target_resolution": {
+                "resolved": True,
+                "source": "last_recommendation_list",
+                "reference_type": "ordinal_reference",
+                "resolution_reason": "ordinal_reference",
+            },
+            "resolved_target": {
+                "status": "RESOLVED",
+                "resolved_shop": {"shop_id": "shop_1", "shop_name": "A"},
+            },
+            "reference_resolution_source": "deterministic_tool_workflow",
+            "last_recommendation_list": [{"shop_id": "shop_1", "shop_name": "A"}],
+            "tool_result_set": {
+                "call_1": {"tool_name": "search_shops", "result_status": "unknown", "success": True}
+            },
+        },
+        "recommendation",
+        "RESOLVED",
+    )
+
+    assert directive["set_fields"]["current_shop"] == {"shop_id": "shop_1", "shop_name": "A"}
+    assert directive["set_fields"]["last_recommendation_list"] == [{"shop_id": "shop_1", "shop_name": "A"}]
+
+
 def test_comparison_state_update_keeps_traceable_metadata():
     user_location = {"lat": 39.96, "lng": 116.36, "location_name": "北邮"}
     directive = plan_state_update(
@@ -194,5 +255,5 @@ def test_pending_state_update_keeps_resume_strategy_and_ttl():
 
     pending_meta = _meta(directive["set_fields"]["pending_clarification_meta"])
     assert pending_meta["source"] == "target_resolve"
-    assert pending_meta["resume_strategy"] == "resume_original_task"
+    assert pending_meta["resume_strategy"] == "resolve_shop_reference"
     assert pending_meta["ttl"] is not None

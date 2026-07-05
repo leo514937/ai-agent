@@ -112,24 +112,29 @@ class SpyRealLLMBackend:
         return response
 
     def _extract_user_text(self, prompt: str) -> str:
-        markers = ["User text:", "用户输入：", "用户输入:"]
+        markers = ["User text", "用户输入", "用户输入：", "用户输入:", "- 原始文本:", "原始文本:", "Raw text", "TEXT:"]
         for marker in markers:
-            if marker in prompt:
-                return prompt.split(marker, 1)[1].strip().splitlines()[0].strip()
+            idx = prompt.rfind(marker)
+            if idx < 0:
+                continue
+            tail = prompt[idx + len(marker) :].lstrip("：: \t\r\n")
+            if tail:
+                return tail.splitlines()[0].strip()
         return prompt.strip()
 
     def _top_intent_response(self, prompt: str, timeout_ms: int, kwargs: dict[str, Any]) -> dict[str, Any]:
         text = self._extract_user_text(prompt)
+        scenario = self._scenario_payload(text)
         payload = {
-            "top_intent": "chat" if text in {"你好", "您好"} else "local_life",
-            "confidence": 0.99,
+            "top_intent": scenario.get("top_intent") or ("chat" if text in {"你好", "您好"} else "local_life"),
+            "confidence": scenario.get("confidence", 0.99),
             "reason": f"spy_top_intent:{self.sentinel_id}",
         }
         return self._wrap(payload, timeout_ms, kwargs)
 
     def _semantic_response(self, prompt: str, timeout_ms: int, kwargs: dict[str, Any]) -> dict[str, Any]:
         text = self._extract_user_text(prompt)
-        payload = self._scenario_payload(text)
+        payload = self._canonicalize_semantic_payload(self._scenario_payload(text), text=text)
         payload["ranking_signals"] = {
             **dict(payload.get("ranking_signals") or {}),
             "spy_marker": self.sentinel_id,
@@ -140,7 +145,116 @@ class SpyRealLLMBackend:
         }
         return self._wrap(payload, timeout_ms, kwargs)
 
+    def _canonicalize_semantic_payload(self, payload: dict[str, Any], *, text: str) -> dict[str, Any]:
+        result = dict(payload or {})
+        hard_constraints = dict(result.get("hard_constraints") or {})
+        soft_preferences = dict(result.get("soft_preferences") or {})
+        ranking_signals = dict(result.get("ranking_signals") or {})
+        reference_mentions = [str(item).strip() for item in result.get("reference_mentions") or [] if str(item).strip()]
+        merchant_mentions = [str(item).strip() for item in result.get("merchant_mentions") or [] if str(item).strip()]
+        ordinal_references = [str(item).strip() for item in result.get("ordinal_references") or [] if str(item).strip()]
+        deictic_references = [str(item).strip() for item in result.get("deictic_references") or [] if str(item).strip()]
+        exploration_stages = [dict(item) for item in result.get("exploration_stages") or [] if isinstance(item, dict)]
+
+        location_name = str(result.get("location", "") or hard_constraints.get("location", "") or "").strip()
+        if location_name:
+            result.setdefault("location", {"location_name": location_name})
+            result.setdefault(
+                "location_reference",
+                {
+                    "reference_type": "location_reference",
+                    "text": location_name,
+                    "location_name": location_name,
+                    "resolved": False,
+                },
+            )
+
+        category_value = result.get("category")
+        if not category_value:
+            hard_category = hard_constraints.get("category")
+            if isinstance(hard_category, list):
+                hard_category = next((str(item).strip() for item in hard_category if str(item).strip()), "")
+            category_value = str(hard_category or "").strip()
+        if category_value:
+            result.setdefault("category", category_value)
+
+        if merchant_mentions:
+            result.setdefault("shop_target", {"shop_name": merchant_mentions[0]})
+            result.setdefault(
+                "shop_reference",
+                {
+                    "reference_type": "shop_reference",
+                    "text": merchant_mentions[0],
+                    "shop_name": merchant_mentions[0],
+                    "resolved": False,
+                },
+            )
+
+        if ordinal_references:
+            ordinal_ref = ordinal_references[0]
+            result.setdefault(
+                "ordinal_reference",
+                {
+                    "reference_type": "ordinal_reference",
+                    "text": ordinal_ref,
+                    "resolved": False,
+                },
+            )
+
+        if deictic_references:
+            deictic_ref = deictic_references[0]
+            result.setdefault(
+                "deictic_reference",
+                {
+                    "reference_type": "deictic_reference",
+                    "text": deictic_ref,
+                    "resolved": False,
+                },
+            )
+
+        if reference_mentions and not (result.get("reference") or {}).get("text"):
+            result.setdefault("reference", {"text": reference_mentions[0], "references": reference_mentions})
+
+        if result.get("comparison_targets") and not result.get("comparison_intent"):
+            result["comparison_intent"] = True
+
+        if result.get("comparison_targets") and not result.get("comparison_structure"):
+            if ordinal_references:
+                result["comparison_structure"] = "ordinal"
+            elif deictic_references:
+                result["comparison_structure"] = "deictic"
+            elif merchant_mentions:
+                result["comparison_structure"] = "explicit"
+            else:
+                result["comparison_structure"] = "pairwise"
+
+        if exploration_stages and not result.get("workflow_hint"):
+            result["workflow_hint"] = "exploration_planning"
+        if exploration_stages and not result.get("primary_task"):
+            result["primary_task"] = "exploration"
+        if exploration_stages and not result.get("task_type"):
+            result["task_type"] = "local_trip_plan"
+
+        if result.get("task_type") == "general_chat" and result.get("top_intent") == "chat":
+            result["workflow_hint"] = result.get("workflow_hint") or "direct_response"
+
+        result.setdefault("semantic_parse_source", "spy_real_llm")
+        result.setdefault("parse_source", "spy_real_llm")
+        result.setdefault("llm_called", True)
+        result.setdefault("confidence", 0.97)
+        result.setdefault("need_context", bool(result.get("need_context")))
+        result.setdefault("hard_constraints", hard_constraints)
+        result.setdefault("soft_preferences", soft_preferences)
+        result.setdefault("ranking_signals", ranking_signals)
+        result.setdefault("reference_mentions", reference_mentions)
+        result.setdefault("merchant_mentions", merchant_mentions)
+        result.setdefault("ordinal_references", ordinal_references)
+        result.setdefault("deictic_references", deictic_references)
+        result.setdefault("exploration_stages", exploration_stages)
+        return result
+
     def _scenario_payload(self, text: str) -> dict[str, Any]:
+        normalized_text = self._normalize_text_key(text)
         if (
             "哪个好" in text
             or "哪个更好" in text
@@ -178,7 +292,7 @@ class SpyRealLLMBackend:
         for marker, payload in self._scenario_payloads.items():
             if marker == "__default__":
                 return dict(payload)
-            if marker and marker in text:
+            if marker and (marker in text or text in marker or self._normalize_text_key(marker) in normalized_text or normalized_text in self._normalize_text_key(marker)):
                 return dict(payload)
 
         if "第一家" in text and "券" in text:
@@ -198,6 +312,81 @@ class SpyRealLLMBackend:
                 "soft_preferences": {},
                 "ranking_signals": {"query_terms": ["火锅"]},
                 "follow_up": {"is_follow_up": True, "refine_action": "coupon_lookup"},
+                "confidence": 0.98,
+                "need_context": False,
+            }
+
+        if any(token in text for token in ("川味轩", "海底捞", "远方烧烤", "山城一锅")) and any(
+            token in text for token in ("有券", "现在营业", "营业", "远不远", "多远", "距离")
+        ):
+            task_type = "single_shop_query"
+            primary_task = "coupon_query" if "券" in text else "open_status" if "营业" in text else "distance"
+            merchant_mentions = [token for token in ("川味轩(知春路店)", "川味轩", "海底捞(牡丹园店)", "海底捞", "远方烧烤(清河店)", "远方烧烤", "山城一锅") if token in text]
+            facets: list[dict[str, Any]] = [{"name": "coupon", "required": True}] if "券" in text else []
+            if "营业" in text:
+                facets.append({"name": "open_status", "required": True})
+            if "远不远" in text or "多远" in text or "距离" in text:
+                facets.append({"name": "distance", "required": True})
+            if not facets:
+                facets = [{"name": "detail", "required": True}]
+            return {
+                "top_intent": "local_life",
+                "task_type": task_type,
+                "primary_task": primary_task,
+                "facets": facets,
+                "merchant_mentions": merchant_mentions,
+                "reference_mentions": [],
+                "comparison_targets": [],
+                "ordinal_references": [],
+                "deictic_references": [],
+                "focused_facets": [item["name"] for item in facets],
+                "comparison_focus": "",
+                "hard_constraints": {},
+                "soft_preferences": {},
+                "ranking_signals": {"query_terms": ["火锅"]},
+                "follow_up": None,
+                "confidence": 0.99,
+                "need_context": False,
+            }
+
+        if "这家" in text and any(token in text for token in ("有券", "现在营业", "营业", "远不远", "多远", "距离")):
+            return {
+                "top_intent": "local_life",
+                "task_type": "single_shop_query",
+                "primary_task": "coupon_query" if "券" in text else "open_status" if "营业" in text else "distance",
+                "facets": [{"name": "coupon", "required": True}] if "券" in text else [{"name": "open_status", "required": True}],
+                "merchant_mentions": [],
+                "reference_mentions": ["这家"],
+                "comparison_targets": [],
+                "ordinal_references": [],
+                "deictic_references": ["这家"],
+                "focused_facets": ["coupon"] if "券" in text else ["open_status"],
+                "comparison_focus": "",
+                "hard_constraints": {},
+                "soft_preferences": {},
+                "ranking_signals": {"query_terms": ["火锅"]},
+                "follow_up": {"is_follow_up": True, "refine_action": "single_shop_reference"},
+                "confidence": 0.96,
+                "need_context": True,
+            }
+
+        if "第一家" in text and any(token in text for token in ("有券", "现在营业", "营业", "远不远", "多远", "距离")):
+            return {
+                "top_intent": "local_life",
+                "task_type": "single_shop_query",
+                "primary_task": "coupon_query" if "券" in text else "open_status" if "营业" in text else "distance",
+                "facets": [{"name": "coupon", "required": True}] if "券" in text else [{"name": "open_status", "required": True}],
+                "merchant_mentions": [],
+                "reference_mentions": ["第一家"],
+                "comparison_targets": [],
+                "ordinal_references": ["第一家"],
+                "deictic_references": [],
+                "focused_facets": ["coupon"] if "券" in text else ["open_status"],
+                "comparison_focus": "",
+                "hard_constraints": {},
+                "soft_preferences": {},
+                "ranking_signals": {"query_terms": ["火锅"]},
+                "follow_up": {"is_follow_up": True, "refine_action": "single_shop_reference"},
                 "confidence": 0.98,
                 "need_context": False,
             }
@@ -315,6 +504,9 @@ class SpyRealLLMBackend:
             "confidence": 0.95,
             "need_context": False,
         }
+
+    def _normalize_text_key(self, text: str) -> str:
+        return "".join(ch for ch in str(text or "") if ch.isalnum() or "\u4e00" <= ch <= "\u9fff")
 
     def _verbalizer_response(self, prompt: str, timeout_ms: int, kwargs: dict[str, Any]) -> dict[str, Any]:
         answer_type = self._extract_scalar(prompt, "- 意图类型:")

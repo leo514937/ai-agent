@@ -125,11 +125,37 @@ def test_exploration_planning_router_runner_boundary(monkeypatch):
         lambda answer, evidence, task_type: {"passed": True, "issues": [], "suggested_fix": "", "task_type": task_type},
     )
 
-    state = _state("先喝咖啡然后吃晚饭", task_type="coffee_then_dinner")
+    state = _state(
+        "五道口附近晚上约会怎么安排",
+        task_type="date_plan",
+        facets=[
+            {"name": "restaurant", "group": "category", "required": True},
+            {"name": "coffee", "group": "category", "required": True},
+            {"name": "date_scene", "group": "scene", "required": True},
+        ],
+    )
+    state["semantic_frame"] = {
+        "task_type": "date_plan",
+        "primary_task": "exploration",
+        "workflow_hint": "exploration_planning",
+        "scene": "date",
+        "time": "evening",
+        "location": {"text": "五道口附近", "location_name": "五道口附近"},
+        "exploration_stages": [
+            {"stage_id": "stage_1", "stage_type": "eat", "candidate_query": "餐厅", "order": 1, "required": True, "evidence_requirements": ["detail", "open_status", "distance"]},
+            {"stage_id": "stage_2", "stage_type": "coffee", "candidate_query": "咖啡店", "order": 2, "required": True, "evidence_requirements": ["detail", "open_status", "distance"]},
+        ],
+        "hard_constraints": {},
+        "soft_preferences": {},
+        "ranking_signals": {},
+        "need_context": False,
+        "confidence": 0.92,
+    }
     decision = route_orchestration(state)
 
     assert decision["workflow_name"] == "exploration_planning"
     assert decision["orchestration_pattern"] == "exploration_planning"
+    assert decision["response_mode"] == "exploration_plan"
     registration = WORKFLOW_REGISTRY.lookup("exploration_planning")
     assert registration.entry_node == "response_subgraph"
     assert registration.callable_name == "run_exploration_planning_workflow"
@@ -262,6 +288,7 @@ def test_exploration_partial_success_degrades_without_invention(monkeypatch):
     assert result["workflow_name"] == "clarification_fallback"
     assert result["response_mode"] in {"clarify", "fallback"}
     assert "pending_clarification" in result
+    assert "workflow_clarification_request" in result
     assert "海底捞" not in result.get("final_response", "")
     assert "咖啡" not in result.get("final_response", "")
 
@@ -295,6 +322,7 @@ def test_exploration_tool_failure_marks_failed_facets_and_blocks_polluted_writeb
     assert result["workflow_name"] == "clarification_fallback"
     assert result["response_mode"] in {"clarify", "fallback"}
     assert "pending_clarification" in result
+    assert "workflow_clarification_request" in result
     assert "state_update_plan_preview" not in result
     assert "失败" not in result.get("final_response", "")
 
@@ -330,6 +358,7 @@ def test_exploration_answer_verify_failure_rewrites_or_fallbacks(monkeypatch):
     assert result["workflow_name"] == "clarification_fallback"
     assert result["response_mode"] in {"clarify", "fallback"}
     assert "pending_clarification" in result
+    assert "workflow_clarification_request" in result
 
 
 def test_exploration_state_update_plan_uses_shared_writeback_rules():
@@ -351,7 +380,8 @@ def test_exploration_state_update_plan_uses_shared_writeback_rules():
         "",
     )
 
-    assert directive["set_fields"]["last_recommendation_list"] == [{"shop_id": "shop_r_1", "shop_name": "餐厅A"}]
+    assert "last_recommendation_list" not in directive["set_fields"]
+    assert "last_recommendation_list" in directive["clear_fields"]
     assert "current_shop" in directive["clear_fields"]
     assert "pending_clarification" in directive["clear_fields"]
 
@@ -385,3 +415,4 @@ def test_p7_does_not_introduce_exploration_subgraph_or_workflow_merge():
     assert "exploration_planning_subgraph" not in source_text
     assert "workflow_names" not in source_text
     assert "final_responses" not in source_text
+    assert "run_clarification_fallback_workflow(" not in source_text

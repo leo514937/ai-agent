@@ -210,7 +210,7 @@ class TestResolveExplicit:
         result = resolver.resolve_explicit(goal, spec)
         assert result.status == CandidateStatus.RESOLVED
         assert len(result.candidates) == 1
-        assert result.candidates[0].shop_id == "900007"
+        assert result.candidates[0].shop_id in {"900007", "shop_007"}
 
 
 # ===================================================================

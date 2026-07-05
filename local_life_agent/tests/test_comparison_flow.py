@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import json
+import re
 from typing import Any
 
 import pytest
 
+from .. import agent
 from ..agent import run_agent_graph
 from ..answer.evidence_builder import build_evidence
 from ..answer.generator import generate_answer
 from ..answer.verifier import verify_answer
 from ..engine import graph_builder
+from ..llm.client import _default_llm_backend, clear_llm_backend, set_llm_backend
 from ..session.store import get_session_store, reset_session_store
 from ..domain.state import SessionState
 from .fakes.comparison_planner import plan_comparison
@@ -38,6 +42,192 @@ def _reset_store():
     reset_session_store()
     yield
     reset_session_store()
+
+
+def _user_text_from_prompt(prompt: str) -> str:
+    match = re.search(r"用户输入：\s*(.*)", prompt, re.S)
+    if not match:
+        match = re.search(r"User text\s*:?\s*(.*)", prompt, re.S)
+    return match.group(1).strip() if match else prompt
+
+
+def _comparison_llm_backend_impl(
+    prompt: str,
+    system_prompt: str = "",
+    temperature: float = 0.0,
+    timeout_ms: int = 3000,
+    **kwargs: Any,
+):
+    user_text = _user_text_from_prompt(prompt)
+    if "顶层意图路由" in prompt or "意图分类器" in prompt:
+        return {
+            "ok": True,
+            "content": {"top_intent": "local_life", "confidence": 0.99, "reason": "comparison_test_backend"},
+            "confidence": 0.99,
+            "raw": json.dumps({"top_intent": "local_life"}, ensure_ascii=False),
+            "error_code": "",
+            "error_message": "",
+        }
+    if "本地生活语义解析器" not in prompt and "本地生活语义框架提取器" not in prompt:
+        return _default_llm_backend(prompt, system_prompt, temperature, timeout_ms, **kwargs)
+
+    semantic: dict[str, Any] = {
+        "top_intent": "local_life",
+        "intent": "local_life",
+        "task_type": "recommendation",
+        "primary_task": "recommendation",
+        "workflow_hint": "recommendation",
+        "facets": [],
+        "merchant_mentions": [],
+        "brand_mentions": [],
+        "branch_mentions": [],
+        "reference_mentions": [],
+        "comparison_targets": [],
+        "ordinal_references": [],
+        "deictic_references": [],
+        "focused_facets": [],
+        "comparison_focus": "",
+        "hard_constraints": {},
+        "soft_preferences": {},
+        "ranking_signals": {"query_terms": ["火锅"]},
+        "follow_up": None,
+        "confidence": 0.95,
+        "need_context": False,
+        "missing_slots": [],
+        "comparison_intent": False,
+        "comparison_structure": "unknown",
+        "comparison_facets": [],
+    }
+
+    if "附近推荐火锅" in user_text or "推荐几家火锅" in user_text or "推荐几家" in user_text:
+        semantic.update(
+            {
+                "task_type": "recommendation",
+                "primary_task": "recommendation",
+                "workflow_hint": "recommendation",
+                "hard_constraints": {"category": "火锅"},
+                "soft_preferences": {"nearby_preferred": True},
+                "ranking_signals": {"query_terms": ["火锅"], "category": "火锅", "nearby_preferred": True},
+                "confidence": 0.96,
+            }
+        )
+    elif "这三家" in user_text and ("哪个好" in user_text or "哪个更好" in user_text or "谁更好" in user_text or "哪家更好" in user_text or "比" in user_text or "对比" in user_text):
+        semantic.update(
+            {
+                "task_type": "comparison",
+                "primary_task": "comparison",
+                "workflow_hint": "comparison",
+                "comparison_intent": True,
+                "comparison_structure": "deictic",
+                "comparison_targets": [{"shop_name": "这三家", "reference": "deictic", "source_text": "这三家"}],
+                "deictic_references": ["这三家"],
+                "reference_mentions": ["这三家"],
+                "need_context": False,
+                "confidence": 0.97,
+            }
+        )
+    elif ("第一家" in user_text or "第二家" in user_text or "第三家" in user_text) and ("哪个好" in user_text or "哪个更好" in user_text or "谁更好" in user_text or "哪家更好" in user_text or "比" in user_text or "对比" in user_text):
+        ordinal_refs = [token for token in ("第一家", "第二家", "第三家") if token in user_text]
+        explicit_mentions = [token for token in ("海底捞", "山城一锅") if token in user_text]
+        semantic.update(
+            {
+                "task_type": "comparison",
+                "primary_task": "comparison",
+                "workflow_hint": "comparison",
+                "comparison_intent": True,
+                "comparison_structure": "multi_target" if len(ordinal_refs) + len(explicit_mentions) >= 2 else "ordinal",
+                "comparison_targets": (
+                    [{"shop_name": token, "reference": "ordinal", "source_text": token} for token in ordinal_refs]
+                    + [{"shop_name": token, "reference": "explicit", "source_text": token} for token in explicit_mentions]
+                ),
+                "ordinal_references": ordinal_refs,
+                "merchant_mentions": explicit_mentions,
+                "reference_mentions": ordinal_refs,
+                "need_context": False,
+                "confidence": 0.97,
+            }
+        )
+    elif "第一家和海底捞比呢" in user_text or "第一家和海底捞比" in user_text:
+        semantic.update(
+            {
+                "task_type": "comparison",
+                "primary_task": "comparison",
+                "workflow_hint": "comparison",
+                "comparison_intent": True,
+                "comparison_structure": "multi_target",
+                "comparison_targets": [
+                    {"shop_name": "第一家", "reference": "ordinal", "source_text": "第一家"},
+                    {"shop_name": "海底捞", "reference": "explicit", "source_text": "海底捞"},
+                ],
+                "ordinal_references": ["第一家"],
+                "merchant_mentions": ["海底捞"],
+                "reference_mentions": ["第一家"],
+                "need_context": False,
+                "confidence": 0.97,
+            }
+        )
+    elif "这家" in user_text and ("哪个好" in user_text or "比" in user_text or "有券" in user_text or "营业" in user_text):
+        semantic.update(
+            {
+                "task_type": "single_shop_query",
+                "primary_task": "coupon_query" if "券" in user_text else "open_status" if "营业" in user_text else "single_shop_query",
+                "workflow_hint": "single_shop_query",
+                "facets": [{"name": "coupon", "required": True}] if "券" in user_text else [{"name": "open_status", "required": True}],
+                "deictic_references": ["这家"],
+                "reference_mentions": ["这家"],
+                "need_context": True,
+                "confidence": 0.96,
+            }
+        )
+    elif ("第一家" in user_text or "第二家" in user_text or "第三家" in user_text) and ("有券" in user_text or "营业" in user_text):
+        ordinal_refs = [token for token in ("第一家", "第二家", "第三家") if token in user_text]
+        semantic.update(
+            {
+                "task_type": "single_shop_query",
+                "primary_task": "coupon_query" if "券" in user_text else "open_status",
+                "workflow_hint": "single_shop_query",
+                "facets": [{"name": "coupon", "required": True}] if "券" in user_text else [{"name": "open_status", "required": True}],
+                "ordinal_references": ordinal_refs,
+                "reference_mentions": ordinal_refs,
+                "need_context": True,
+                "confidence": 0.96,
+            }
+        )
+    elif "便宜一点" in user_text:
+        semantic.update(
+            {
+                "task_type": "recommendation",
+                "primary_task": "recommendation_refine",
+                "workflow_hint": "recommendation",
+                "soft_preferences": {"price_preference": "cheap"},
+                "ranking_signals": {"query_terms": ["火锅"], "price_preference": "cheap"},
+                "need_context": True,
+                "confidence": 0.96,
+            }
+        )
+
+    return {
+        "ok": True,
+        "content": semantic,
+        "confidence": semantic.get("confidence", 0.95),
+        "raw": json.dumps(semantic, ensure_ascii=False),
+        "error_code": "",
+        "error_message": "",
+    }
+
+
+@pytest.fixture(autouse=True)
+def _comparison_llm_backend(monkeypatch: pytest.MonkeyPatch):
+    """Use a comparison-aware backend so graph tests can reach the recovery path."""
+
+    agent._GRAPH_CACHE = None
+    set_llm_backend(_comparison_llm_backend_impl)
+    monkeypatch.setattr(graph_builder, "call_llm", _comparison_llm_backend_impl)
+    try:
+        yield
+    finally:
+        clear_llm_backend()
+        agent._GRAPH_CACHE = None
 
 
 @pytest.fixture(autouse=True)
@@ -145,6 +335,9 @@ def test_compare_three_from_last_recommendation_list(monkeypatch: pytest.MonkeyP
     assert "search_shops" not in _tool_names(response)
     assert "evidence_planner" in _comparison_trace_nodes(response)
     assert len((response.debug.evidence_pack.get("comparison_matrix") or {}).get("rows", [])) == 3
+    assert response.debug.turn_trace["comparison_requested"] is True
+    assert response.debug.turn_trace["comparison_context_anchor"] is True
+    assert "comparison_requested" in (response.debug.turn_trace["comparison_route_reason"] or "")
 
 
 def test_compare_first_item_and_explicit_shop(monkeypatch: pytest.MonkeyPatch):
@@ -174,6 +367,8 @@ def test_compare_first_item_and_explicit_shop(monkeypatch: pytest.MonkeyPatch):
     assert targets[0] == SHOP_A
     assert len({item["shop_id"] for item in targets}) >= 2
     assert "search_shops" not in _tool_names(response)
+    assert response.debug.turn_trace["comparison_requested"] is True
+    assert "comparison" in (response.debug.turn_trace["comparison_route_reason"] or "")
 
 
 def test_compare_this_shop_without_current_shop_must_clarify(monkeypatch: pytest.MonkeyPatch):
@@ -190,6 +385,7 @@ def test_compare_this_shop_without_current_shop_must_clarify(monkeypatch: pytest
     assert response.debug.session_state_after.get("comparison_targets", []) in ([], None)
     assert "evidence_planner" not in _comparison_trace_nodes(response)
     assert "get_coupon_list" not in _tool_names(response)
+    assert response.debug.turn_trace["comparison_route_reason"]
 
 
 def test_compare_duplicate_targets_blocked():

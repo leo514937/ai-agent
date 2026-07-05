@@ -6,7 +6,10 @@ import importlib
 import json
 import logging
 
-from ..domain.enums import RefineAction, TaskType
+import pytest
+
+from ..domain.enums import GroundingStatus, MissingSlotType, PreferenceType, RefineAction, SemanticParseSource, TaskType
+from ..domain.schemas import SemanticFrame
 from ..domain.session_context_summary import (
     SessionContextSummary,
     build_session_context_summary,
@@ -19,6 +22,7 @@ from ..semantic.intent_parser import (
     _validate_semantic_payload,
     parse_semantic_frame,
 )
+from ..semantic.slot_extractor import extract_slots
 
 
 def _semantic_ok_backend(*_args, **_kwargs):
@@ -42,6 +46,17 @@ def _semantic_ok_backend(*_args, **_kwargs):
         "error_code": "",
         "error_message": "",
         "attempts": 1,
+    }
+
+
+def _structured_backend(content: dict, *, raw: str | None = None, attempts: int = 1):
+    return {
+        "ok": True,
+        "content": content,
+        "raw": raw if raw is not None else json.dumps(content, ensure_ascii=False),
+        "error_code": "",
+        "error_message": "",
+        "attempts": attempts,
     }
 
 
@@ -115,6 +130,19 @@ def test_semantic_parser_ignores_llm_wrapper_metadata():
     assert result["semantic_frame"] is not None
     assert result["semantic_frame"].task_type == TaskType.recommendation
     assert result["error_code"] == ""
+
+
+def test_exploration_slot_extractor_builds_stage_level_plan():
+    frame = extract_slots("五道口附近晚上约会怎么安排", "local_life")
+
+    assert frame["workflow_hint"] == "exploration_planning"
+    assert frame["scene"] == "date"
+    assert frame["time"] == "evening"
+    assert frame["location"]["location_name"] == "五道口附近"
+    assert frame["missing_slot_type"] == ""
+    assert [stage["stage_type"] for stage in frame["exploration_stages"]] == ["eat", "coffee", "walk"]
+    assert frame["exploration_stages"][0]["candidate_query"] == "餐厅"
+    assert "open_status" in frame["exploration_stages"][0]["evidence_requirements"]
 
 
 def test_semantic_parser_generalizes_coupon_queries():
@@ -259,6 +287,199 @@ def test_task_type_source_in_graph_state():
     assert "dropped_facets" in hints, (
         f"GraphState missing dropped_facets. Available: {list(hints.keys())}"
     )
+
+
+def test_parsed_semantic_frame_roundtrips_with_extended_schema():
+    result = parse_semantic_frame("海底捞水晶城店有券吗", "local_life", llm_call=_semantic_ok_backend)
+    frame = result["semantic_frame"]
+
+    assert isinstance(frame, SemanticFrame)
+    restored = SemanticFrame.model_validate_json(frame.model_dump_json())
+    assert restored.semantic_source == frame.semantic_source
+    assert restored.parse_source.value == frame.semantic_source
+    assert restored.semantic_parse_source.value == frame.semantic_source
+
+
+def test_structured_llm_output_exposes_parse_sources_and_schema_validation():
+    content = extract_slots("推荐北京邮电大学附近的火锅或烧烤，要性价比高的", "local_life")
+    content.update(
+        {
+            "task_type": "recommendation",
+            "primary_task": "recommendation",
+            "workflow_hint": "recommendation",
+            "comparison_intent": False,
+            "comparison_structure": "unknown",
+            "preference_signals": [
+                {"preference_type": "value_for_money", "value": "value_for_money", "text": "性价比高"}
+            ],
+            "soft_preferences": {"price_preference": "value_for_money"},
+            "ranking_signals": {"ranking_policy": "value_for_money_first"},
+            "facets": [],
+            "focused_facets": [],
+            "comparison_targets": [],
+            "comparison_facets": [],
+            "comparison_focus": "",
+            "exploration_stages": [],
+            "missing_slots": [],
+            "missing_slot_type": "other",
+            "follow_up": None,
+            "need_context": False,
+            "discourse_marker": "",
+            "constraint_update": False,
+            "new_task_override": False,
+            "cancel_intent": False,
+        }
+    )
+
+    result = parse_semantic_frame("推荐北京邮电大学附近的火锅或烧烤，要性价比高的", "local_life", llm_call=lambda *args, **kwargs: _structured_backend(content))
+
+    frame = result["semantic_frame"]
+    assert frame is not None
+    assert frame.preference_signals[0].preference_type == PreferenceType.value_for_money
+    assert result["parse_source"] == "real_llm"
+    assert result["semantic_parse_source"] == "real_llm"
+    assert result["schema_validation_result"]["status"] == "validated"
+    assert frame.model_dump_json()
+
+
+def test_schema_validation_failure_falls_back_with_low_confidence():
+    bad_content = {
+        "top_intent": "local_life",
+        "task_type": "single_shop_query",
+        "primary_task": "single_shop_query",
+        "merchant_mentions": ["海底捞"],
+        "shop_id": "fake_shop",
+        "confidence": 0.98,
+    }
+
+    result = parse_semantic_frame("海底捞西直门店有券吗", "local_life", llm_call=lambda *args, **kwargs: _structured_backend(bad_content))
+
+    assert result["semantic_frame"] is not None
+    assert result["semantic_parse_source"] == "fallback_rules"
+    assert result["semantic_frame"].confidence >= 0.85
+    assert result["fallback_reason"]
+    assert result["schema_validation_result"]["status"] in {"fallback", "recovered"}
+
+
+@pytest.mark.parametrize(
+    ("text", "content_builder", "expectations"),
+    [
+        (
+            "推荐几家比较便宜的烧烤",
+            lambda: {
+                "top_intent": "local_life",
+                "task_type": "recommendation",
+                "primary_task": "recommendation",
+                "category": "烧烤",
+                "comparison_intent": False,
+                "preference_signals": [
+                    {"preference_type": "relative_price_preference", "value": "relative_price_preference", "text": "比较便宜"}
+                ],
+                "soft_preferences": {"price_preference": "lower_price"},
+                "confidence": 0.92,
+            },
+            {"task_type": TaskType.recommendation, "pref": PreferenceType.relative_price_preference, "comparison": False},
+        ),
+        (
+            "第一家和第二家比一下",
+            lambda: {
+                "top_intent": "local_life",
+                "task_type": "comparison",
+                "primary_task": "comparison",
+                "comparison_intent": True,
+                "comparison_structure": "multi_target",
+                "comparison_targets": [
+                    {"shop_name": "第一家", "reference": "ordinal", "source_text": "第一家"},
+                    {"shop_name": "第二家", "reference": "ordinal", "source_text": "第二家"},
+                ],
+                "ordinal_references": ["第一家", "第二家"],
+                "comparison_facets": [],
+                "confidence": 0.93,
+            },
+            {"task_type": TaskType.comparison, "comparison": True},
+        ),
+        (
+            "这家有券吗",
+            lambda: {
+                "top_intent": "local_life",
+                "task_type": "single_shop_query",
+                "primary_task": "single_shop_query",
+                "merchant_mentions": [],
+                "shop_reference": {"reference_type": "shop_reference", "text": "这家", "resolved": False},
+                "deictic_reference": {"reference_type": "deictic_reference", "text": "这家", "resolved": False},
+                "filter_signals": [{"filter_type": "coupon_filter", "value": True, "required": True, "text": "有券"}],
+                "need_context": True,
+                "confidence": 0.84,
+            },
+            {"task_type": TaskType.single_shop_query, "need_context": True},
+        ),
+        (
+            "不要烧烤了，推荐咖啡",
+            lambda: {
+                "top_intent": "local_life",
+                "task_type": "recommendation",
+                "primary_task": "recommendation",
+                "category": "咖啡",
+                "new_task_override": True,
+                "constraint_update": True,
+                "confidence": 0.88,
+            },
+            {"task_type": TaskType.recommendation, "override": True},
+        ),
+        (
+            "算了",
+            lambda: {
+                "top_intent": "local_life",
+                "task_type": "clarification_reply",
+                "primary_task": "clarification_reply",
+                "cancel_intent": True,
+                "need_context": False,
+                "confidence": 0.62,
+            },
+            {"task_type": TaskType.clarification_reply, "cancel": True},
+        ),
+        (
+            "帮我安排一个先吃饭再喝咖啡的约会路线",
+            lambda: {
+                "top_intent": "local_life",
+                "task_type": "recommendation",
+                "primary_task": "recommendation",
+                "workflow_hint": "exploration_planning",
+                "exploration_stages": [
+                    {"stage_type": "scene", "scene": "eat", "query": "吃饭"},
+                    {"stage_type": "scene", "scene": "coffee", "query": "咖啡"},
+                ],
+                "discourse_marker": "先",
+                "missing_slot_type": "missing_exploration_location",
+                "need_context": True,
+                "confidence": 0.86,
+            },
+            {"task_type": TaskType.recommendation, "explore": True},
+        ),
+    ],
+)
+def test_structured_examples_cover_phase2_semantics(text, content_builder, expectations):
+    result = parse_semantic_frame(text, "local_life", llm_call=lambda *args, **kwargs: _structured_backend(content_builder()))
+    frame = result["semantic_frame"]
+
+    assert frame is not None
+    assert result["semantic_parse_source"] == "real_llm"
+    assert result["schema_validation_result"]["status"] == "validated"
+    assert frame.task_type == expectations["task_type"]
+    if expectations.get("comparison") is True:
+        assert frame.comparison_intent is True
+    if expectations.get("override") is True:
+        assert frame.new_task_override is True
+        assert frame.constraint_update is True
+    if expectations.get("cancel") is True:
+        assert frame.cancel_intent is True
+    if expectations.get("need_context") is True:
+        assert frame.need_context is True
+    if expectations.get("explore") is True:
+        assert len(frame.exploration_stages) >= 2
+        assert frame.missing_slot_type == MissingSlotType.missing_exploration_location
+    if expectations.get("pref") is not None:
+        assert frame.preference_signals[0].preference_type == expectations["pref"]
 
 
 # ===================================================================

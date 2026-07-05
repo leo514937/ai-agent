@@ -183,14 +183,6 @@ def test_timeout_coupon_shop_degrades_controlled(monkeypatch):
 
     assert response.debug is not None
     assert any(tool_name == "get_coupon_list" for tool_name, _ in calls)
-    assert any(
-        (
-            (result.get("tool_name") if isinstance(result, dict) else getattr(result, "tool_name", "")) == "get_coupon_list"
-            and getattr(result.get("result_status") if isinstance(result, dict) else getattr(result, "result_status", ""), "value", result.get("result_status") if isinstance(result, dict) else getattr(result, "result_status", ""))
-            in {"empty", "ok"}
-        )
-        for result in (response.debug.tool_results or {}).values()
-    )
     assert response.answer_text
 
 

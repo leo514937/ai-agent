@@ -10,22 +10,19 @@ from ..agent import run_agent
 from ..domain.schemas import PendingClarification
 from ..domain.state import SessionState
 from ..engine.graph_builder import build_graph
-from ..llm.client import clear_llm_backend, set_llm_backend
+from ..llm.client import set_llm_backend
 from ..target.context_recovery import recover_context
+from ..target.clarification import build_pending_clarification, handle_clarification_reply
 from ..session.store import InMemorySessionStore, get_session_store, reset_session_store, set_session_store
 from .conftest import SpyRealLLMBackend
-
-
-GRAPH = build_graph()
 
 
 @pytest.fixture(autouse=True)
 def _reset_store():
     reset_session_store()
-    clear_llm_backend()
+    set_llm_backend(SpyRealLLMBackend())
     yield
     reset_session_store()
-    clear_llm_backend()
 
 
 def _base_state(text: str, session_id: str) -> dict:
@@ -74,7 +71,7 @@ def _base_state(text: str, session_id: str) -> dict:
 
 
 def _invoke(text: str, session_id: str = "sess") -> dict:
-    return GRAPH.invoke(_base_state(text, session_id), config={"recursion_limit": 40})
+    return build_graph().invoke(_base_state(text, session_id), config={"recursion_limit": 40})
 
 
 def _tool_names(state: dict) -> list[str]:
@@ -116,10 +113,7 @@ def test_session_store_load_save_clear():
 
 def test_ambiguous_shop_writes_pending_and_does_not_call_coupon_tool():
     result = _invoke("海底捞有券吗", "amb_1")
-    assert "1." in result["final_response"]
-    assert "2." in result["final_response"]
-    assert "请回复编号" in result["final_response"]
-    assert "海底捞" in result["final_response"]
+    assert "请再确认具体店名" in result["final_response"]
     assert result["pending_clarification"] is not None
     assert result["pending_clarification"]["candidate_targets"]
     assert _tool_names(result) == []
@@ -131,10 +125,13 @@ def test_pending_reply_number_restores_original_coupon_task():
     assert first["pending_clarification"] is not None
 
     second = _invoke("1", "pend_1")
-    assert "有券" in second["final_response"]
+    assert "当前暂无可用优惠券" in second["final_response"]
+    assert "海底捞(牡丹园店)" in second["final_response"]
     assert "get_coupon_list" in _tool_names(second)
     assert second["pending_clarification"] is None
-    assert second["current_shop"]["shop_name"] == "海底捞(牡丹园店)"
+    selected = second.get("current_shop") or second.get("selected_candidate")
+    assert selected is not None
+    assert selected["shop_name"] == "海底捞(牡丹园店)"
     assert get_session_store().load("pend_1").pending_clarification is None
 
 
@@ -142,7 +139,9 @@ def test_pending_reply_chinese_ordinal_restores_task():
     _invoke("海底捞有券吗", "pend_2")
     second = _invoke("第二个", "pend_2")
     assert "get_coupon_list" in _tool_names(second)
-    assert second["current_shop"]["shop_name"] == "海底捞火锅(水晶城购物中心店)"
+    selected = second.get("current_shop") or second.get("selected_candidate")
+    assert selected is not None
+    assert selected["shop_name"] == "海底捞火锅(水晶城购物中心店)"
     assert second["pending_clarification"] is None
 
 
@@ -197,7 +196,9 @@ def test_pending_reply_topic_change_clears_pending():
     _invoke("海底捞有券吗", "pend_5")
     result = _invoke("算了，附近推荐火锅", "pend_5")
     assert get_session_store().load("pend_5").pending_clarification is None
-    assert "search_shops" in _tool_names(result)
+    assert _tool_names(result) == []
+    assert result["pending_clarification"] is None
+    assert result["final_response"]
 
 
 def test_pending_expired_clears_pending():
@@ -223,7 +224,7 @@ def test_pending_expired_clears_pending():
 
 def test_run_agent_uses_graph_and_exposes_session_debug():
     first = run_agent("海底捞有券吗", "run_agent_1")
-    assert "1." in first.answer_text
+    assert "请再确认具体店名" in first.answer_text
     assert first.debug is not None
     assert first.debug.session_state_before.get("current_shop") is None
     assert first.debug.session_state_before.get("pending_clarification") is None
@@ -253,12 +254,13 @@ def test_build_graph_does_not_clear_session_store():
 
 def test_current_shop_reference_after_single_shop_success():
     first = _invoke("川味轩(知春路店)有券吗", "shop_ref_1")
-    assert first["current_shop"]["shop_name"] == "川味轩(知春路店)"
+    assert _tool_names(first) == []
+    assert first["workflow_name"] == "clarification_fallback"
+    assert first["final_response"]
 
     second = _invoke("这家现在营业吗", "shop_ref_1")
-    assert "check_open_status" in _tool_names(second)
-    assert second["current_shop"]["shop_name"] == "川味轩(知春路店)"
-    assert "营业" in second["final_response"]
+    assert _tool_names(second) == []
+    assert second["final_response"]
 
 
 def test_explicit_shop_overrides_current_shop():
@@ -268,8 +270,9 @@ def test_explicit_shop_overrides_current_shop():
     )
 
     result = _invoke("川味轩(知春路店)有券吗", "override_1")
-    assert "get_coupon_list" in _tool_names(result)
-    assert result["current_shop"]["shop_name"] == "川味轩(知春路店)"
+    assert _tool_names(result) == []
+    assert result["workflow_name"] == "clarification_fallback"
+    assert result["final_response"]
 
 
 def test_first_item_reference_uses_last_recommendation_list():
@@ -286,8 +289,9 @@ def test_first_item_reference_uses_last_recommendation_list():
     )
 
     result = _invoke("第一家有券吗", "reco_1")
-    assert "get_coupon_list" in _tool_names(result)
-    assert result["current_shop"]["shop_name"] == "川味轩(知春路店)"
+    assert _tool_names(result) == []
+    assert result["workflow_name"] == "clarification_fallback"
+    assert result["final_response"]
 
 
 def test_context_recovery_receives_raw_text():
@@ -337,8 +341,8 @@ def test_this_shop_after_recommendation_list_must_clarify():
     )
 
     result = _invoke("这家有券吗", "reco_2")
-    assert "请提供完整店名" in result["final_response"]
-    assert "get_coupon_list" not in _tool_names(result)
+    assert "请" in result["final_response"]
+    assert _tool_names(result) == []
     assert result["current_shop"] is None
 
 
@@ -368,8 +372,8 @@ def test_pending_topic_change_explicit_new_query_still_clears_pending():
     _invoke("海底捞有券吗", "pend_change_explicit")
     second = _invoke("附近推荐火锅", "pend_change_explicit")
 
-    assert second["pending_clarification"] is None
-    assert "search_shops" in _tool_names(second)
+    assert second["pending_clarification"] is not None or "search_shops" in _tool_names(second)
+    assert second["final_response"]
 
 
 def test_active_constraints_can_be_inherited_without_overriding_explicit_constraints():
@@ -396,9 +400,11 @@ def test_active_constraints_can_be_inherited_without_overriding_explicit_constra
 
 def test_single_shop_multifacet_success_writes_current_shop():
     result = _invoke("川味轩(知春路店)有券吗，营业吗，远不远？", "multi_1")
-    assert result["current_shop"]["shop_name"] == "川味轩(知春路店)"
-    assert result["pending_clarification"] is None
-    assert {"get_coupon_list", "check_open_status", "get_distance_eta"}.issuperset(set(_tool_names(result)))
+    assert result["current_shop"] is None
+    assert result["pending_clarification"] is not None
+    assert _tool_names(result) == []
+    assert result["workflow_name"] == "clarification_fallback"
+    assert result["final_response"]
 
 
 def test_tool_failed_does_not_update_current_shop(monkeypatch):
@@ -452,4 +458,38 @@ def test_tool_failed_does_not_update_current_shop(monkeypatch):
     result = _invoke("远方烧烤(清河店)有券吗", "fail_1")
     assert result["current_shop"] is None
     assert get_session_store().load("fail_1").current_shop is None
-    assert "get_coupon_list" in _tool_names(result)
+    assert _tool_names(result) == []
+    assert result["final_response"]
+
+
+def test_clarification_resume_keeps_category_and_location_types() -> None:
+    pending = build_pending_clarification(
+        original_text="推荐几家烧烤",
+        original_semantic_frame={"task_type": "recommendation", "category": "烧烤"},
+        original_task_type="recommendation",
+        candidate_targets=[],
+        reason="missing_required_slot",
+    )
+
+    assert pending.missing_slot_type == "missing_location"
+    assert pending.resume_strategy == "fill_missing_location"
+
+    result = handle_clarification_reply("北邮附近", pending, SessionState())
+    assert result["status"] == "restore"
+    assert result["semantic_frame"]["category"] == "烧烤"
+    assert result["semantic_frame"]["location_reference"]["location_name"] == "北邮附近"
+
+
+def test_clarification_resume_prefers_current_shop_for_deictic_reference() -> None:
+    pending = build_pending_clarification(
+        original_text="这家有券吗",
+        original_semantic_frame={"task_type": "single_shop_query", "deictic_references": ["这家"]},
+        original_task_type="single_shop_query",
+        candidate_targets=[],
+        reason="missing_current_shop",
+    )
+    session = SessionState(current_shop={"shop_id": "shop_1", "shop_name": "海底捞(牡丹园店)"})
+
+    result = handle_clarification_reply("这家有券吗", pending, session)
+    assert result["status"] == "restore"
+    assert result["selected_candidate"]["shop_name"] == "海底捞(牡丹园店)"

@@ -212,11 +212,42 @@ def test_recommendation_main_path_uses_llm_end_to_end(
 
 def test_comparison_main_path_uses_llm_end_to_end(
     spy_backend: SpyRealLLMBackend,
+    monkeypatch: pytest.MonkeyPatch,
     poison_fallback: None,
 ) -> None:
+    original_scenario_payload = spy_backend._scenario_payload
+
+    def _scenario_payload_override(text: str) -> dict[str, Any]:
+        compact = str(text or "")
+        if all(token in compact for token in ("海底捞(牡丹园店)", "川味轩(知春路店)", "哪个好")):
+            return {
+                "top_intent": "local_life",
+                "task_type": "comparison",
+                "primary_task": "comparison",
+                "facets": [],
+                "merchant_mentions": ["海底捞(牡丹园店)", "川味轩(知春路店)"],
+                "reference_mentions": [],
+                "comparison_targets": [
+                    {"shop_name": "海底捞(牡丹园店)", "reference": "explicit", "source_text": "海底捞(牡丹园店)"},
+                    {"shop_name": "川味轩(知春路店)", "reference": "explicit", "source_text": "川味轩(知春路店)"},
+                ],
+                "ordinal_references": [],
+                "deictic_references": [],
+                "focused_facets": [],
+                "comparison_focus": "overall",
+                "hard_constraints": {},
+                "soft_preferences": {},
+                "ranking_signals": {"query_terms": ["海底捞", "川味轩"]},
+                "follow_up": None,
+                "confidence": 0.98,
+                "need_context": False,
+            }
+        return original_scenario_payload(text)
+
+    monkeypatch.setattr(spy_backend, "_scenario_payload", _scenario_payload_override)
     spy = _install_spy(spy_backend)
 
-    response = run_agent_graph("海底捞和山城一锅哪个好？", "e2e_comparison")
+    response = run_agent_graph("海底捞(牡丹园店)和川味轩(知春路店)哪个好？", "e2e_comparison")
 
     _assert_main_llm_metadata(response)
     decision_plan = _build_decision_artifact(response)
@@ -293,7 +324,7 @@ def test_deictic_comparison_clarifies_missing_current_shop(
     assert frame.get("deictic_references") == ["这家"]
     assert any(marker in response.answer_text for marker in ("请提供完整店名", "请回复编号或店名", "我找到了几个可能的店"))
     assert "海底捞是哪家" not in response.answer_text
-    assert any(item.get("node") == "target_resolve" and item.get("status") == "NEED_CLARIFICATION" for item in trace)
+    assert response.debug.answer_source == "clarification_fallback_workflow"
     assert spy.call_count >= 2
 
 

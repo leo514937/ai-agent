@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ...input.normalizer import normalize_text
+from ...tools.db_tools import calculate_distance_km as _calculate_distance_km
 
 
 _FIXTURE_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "mock_data"
@@ -184,6 +185,14 @@ def get_distance_eta(shop_id: str, from_location: dict[str, float]) -> dict[str,
     distance = _haversine_km(float(from_location.get("lat", 39.9609)), float(from_location.get("lng", 116.3581)), float(shop.get("lat", 0)), float(shop.get("lng", 0)))
     etas = _calc_etas(distance)
     return {"success": True, "result_status": "ok", "data": {"shop_id": shop_id, "shop_name": shop.get("shop_name", ""), "distance_km": distance, "eta_minutes": etas["driving"], "etas": etas, "traffic_level": "low"}}
+
+
+def calculate_distance_km(
+    origin: dict[str, Any] | None = None,
+    destination: dict[str, Any] | None = None,
+    mode: str = "straight_line",
+) -> dict[str, Any]:
+    return _calculate_distance_km(origin=origin, destination=destination, mode=mode)
 
 
 def get_shop_cards(shop_ids: list[str], user_location: dict[str, float] | None = None, need_coupon_brief: bool = True, need_open_status: bool = True, need_distance_eta: bool = True, max_items: int | None = None) -> dict[str, Any]:

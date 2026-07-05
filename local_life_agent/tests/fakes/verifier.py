@@ -19,6 +19,74 @@ def _contains_any(text: str, phrases: list[str]) -> bool:
     return any(phrase and phrase in text for phrase in phrases)
 
 
+def _facet_has_uncertainty_text(text: str, facet: str) -> bool:
+    if facet == "open_status":
+        return _contains_any(
+            text,
+            [
+                "暂时无法确认营业状态",
+                "无法确认营业状态",
+                "营业状态暂时无法确认",
+                "营业状态无法确认",
+                "无法判断是否营业",
+                "不确定是否营业",
+                "暂时没查到营业状态",
+                "暂时无法确认",
+                "无法确认",
+            ],
+        ) and _contains_any(text, ["营业状态", "是否营业", "开门", "关门", "打烊"])
+    if facet == "coupon":
+        return _contains_any(
+            text,
+            [
+                "暂时无法确认优惠情况",
+                "无法确认优惠情况",
+                "优惠情况暂时无法确认",
+                "有没有券暂时无法确认",
+                "暂时没查到优惠",
+                "不确定有没有券",
+                "无法判断有没有券",
+                "暂时无法确认",
+                "无法确认",
+            ],
+        ) and _contains_any(text, ["优惠情况", "有没有券", "有券"])
+    if facet == "distance":
+        return _contains_any(
+            text,
+            [
+                "距离信息暂时无法确认",
+                "暂时无法确认距离",
+                "无法确认距离",
+                "无法判断距离",
+                "暂时没查到距离",
+                "暂时无法确认",
+                "无法确认",
+            ],
+        ) and _contains_any(text, ["距离", "公里", "km", "米"])
+    if facet == "rating":
+        return _contains_any(text, ["评分暂时无法确认", "无法确认评分", "暂时没查到评分", "不确定评分"])
+    if facet == "avg_price":
+        return _contains_any(text, ["人均暂时无法确认", "价格暂时无法确认", "无法确认人均", "无法确认价格"])
+    return False
+
+
+def _facet_statuses_from_target(target: dict[str, Any]) -> dict[str, str]:
+    facet_statuses: dict[str, str] = {}
+    open_status = str(target.get("open_status", "unknown") or "unknown").lower()
+    facet_statuses["open_status"] = "grounded" if open_status in {"open", "closed"} else "unknown"
+    coupon_status = str(target.get("coupon_status", "unknown") or "unknown").lower()
+    if coupon_status == "has_coupon" or (target.get("coupon_titles") or []):
+        facet_statuses["coupon"] = "grounded"
+    elif coupon_status == "empty":
+        facet_statuses["coupon"] = "empty"
+    else:
+        facet_statuses["coupon"] = "unknown"
+    facet_statuses["distance"] = "grounded" if target.get("distance_km") is not None else "unknown"
+    facet_statuses["rating"] = "grounded" if target.get("rating") is not None else "unknown"
+    facet_statuses["avg_price"] = "grounded" if target.get("avg_price") is not None else "unknown"
+    return facet_statuses
+
+
 def _closest_expected_name(answer: str, expected_names: list[str], phrase_index: int) -> str:
     best_name = ""
     best_distance: int | None = None
@@ -54,6 +122,7 @@ def fake_verifier_verify(self, plan: Any, response_text: str, **_: Any) -> dict[
     uncertainty_notes = [str(item) for item in (plan_dict.get("uncertainty_notes") or []) if str(item).strip()]
     forbidden_claims = [str(item) for item in (plan_dict.get("forbidden_claims") or []) if str(item).strip()]
     omitted_targets = [item for item in (plan_dict.get("omitted_targets") or []) if isinstance(item, dict)]
+    facet_statuses = {str(k).strip().lower(): str(v).strip().lower() for k, v in dict(plan_dict.get("facet_statuses") or {}).items() if str(k).strip()}
 
     issues: list[str] = []
     unknown_fields: list[str] = []
@@ -180,15 +249,29 @@ def fake_verifier_verify(self, plan: Any, response_text: str, **_: Any) -> dict[
 
     # Shop-specific facets
     target = selected_targets[0] if selected_targets else {}
+    if not facet_statuses and target:
+        facet_statuses.update(_facet_statuses_from_target(target))
+    if target:
+        inferred_statuses = _facet_statuses_from_target(target)
+    else:
+        inferred_statuses = {}
     target_name = str(target.get("shop_name", "") or target.get("name", "") or "这家店").strip() or "这家店"
-    target_coupon = str(target.get("coupon_status", "unknown") or "unknown").lower()
-    target_open = str(target.get("open_status", "unknown") or "unknown").lower()
+    target_coupon = str(facet_statuses.get("coupon") or inferred_statuses.get("coupon") or str(target.get("coupon_status", "unknown") or "unknown")).lower()
+    target_open = str(facet_statuses.get("open_status") or inferred_statuses.get("open_status") or str(target.get("open_status", "unknown") or "unknown")).lower()
     target_distance = target.get("distance_km")
     target_price = target.get("avg_price")
     target_rating = target.get("rating")
     unknown_facts = {str(item) for item in (target.get("unknown_facts") or [])}
     failed_facts = {str(item) for item in (target.get("failed_facts") or [])}
     factual_points_text = " ".join(str(item) for item in (plan_dict.get("factual_points") or []))
+
+    for facet, status in facet_statuses.items():
+        if status in {"grounded", "empty"} and _facet_has_uncertainty_text(response_text, facet):
+            issues.append(facet)
+            issues.append("grounded_fact_downgraded_to_unknown")
+            unknown_fields.append(facet)
+            unsupported_claims.append(response_text)
+            return fail("grounded_fact_downgraded_to_unknown", recoverable=True)
 
     if "券" in response_text or "优惠" in response_text:
         if target_coupon == "failed" or "coupon" in failed_facts:
@@ -209,7 +292,7 @@ def fake_verifier_verify(self, plan: Any, response_text: str, **_: Any) -> dict[
                 unsupported_claims.append(response_text)
                 return fail("unknown_as_false")
 
-    if ("营业状态为：目前营业中" in factual_points_text or target_open == "open") and not _contains_any(response_text, ["营业中", "正在营业", "正常营业"]):
+    if ("营业状态为：目前营业中" in factual_points_text or target_open == "grounded" or target_open == "open") and not _contains_any(response_text, ["营业中", "正在营业", "正常营业"]):
         if not _contains_any(response_text, ["暂时无法确认", "无法确认", "不确定", "没查到", "暂未拿到"]):
             issues.append("open_status_missing_open_claim")
             return fail("missing_required_evidence")
@@ -223,13 +306,15 @@ def fake_verifier_verify(self, plan: Any, response_text: str, **_: Any) -> dict[
             issues.extend(["tool_failure_as_fact", "unsupported_open_status"])
             unsupported_claims.append(response_text)
             return fail("tool_failure_as_fact")
-        if target_open == "unknown" or "open_status" in unknown_facts:
+        if target_open in {"unknown", "partial"} or "open_status" in unknown_facts:
             if _contains_any(response_text, ["不营业", "关门", "打烊", "营业中", "正在营业"]):
                 issues.extend(["unknown_as_false", "unsupported_open_status"])
                 unknown_fields.append("open_status")
                 false_fields.append("open_status")
                 unsupported_claims.append(response_text)
                 return fail("unknown_as_false")
+            if _contains_any(response_text, ["暂时无法确认", "无法确认", "不确定", "没查到", "暂未拿到"]):
+                pass
     if _contains_any(response_text, ["距离", "公里", "km", "米", "很近", "很远", "不远", "几分钟"]):
         if target_distance is None or "distance" in unknown_facts:
             if _contains_any(response_text, ["很近", "很远", "不远", "几分钟", "离我很近", "离我很远"]):

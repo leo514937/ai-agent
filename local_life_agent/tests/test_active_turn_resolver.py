@@ -253,6 +253,40 @@ def test_pending_topic_switch_short_no_keyword():
     assert result.route == "pending_invalid"
 
 
+def test_semantic_new_task_override_short_circuits_pending():
+    from local_life_agent.domain.state import SessionState
+
+    session = SessionState(pending_clarification=_make_pending())
+    state: dict[str, Any] = {
+        "raw_text": "不要烧烤了，推荐咖啡",
+        "normalized_text": "不要烧烤了，推荐咖啡",
+        "session_state_before": session,
+        "session_state": session,
+    }
+    result = _h_active_turn_resolver(state)
+    atr = result.get("active_turn_result", {})
+    assert atr.get("route") == "topic_switch"
+    assert atr.get("source") == "semantic"
+    assert atr.get("reason") == "semantic_new_task_override"
+
+
+def test_semantic_constraint_update_short_circuits_pending():
+    from local_life_agent.domain.state import SessionState
+
+    session = SessionState(pending_clarification=_make_pending())
+    state: dict[str, Any] = {
+        "raw_text": "要更便宜一点的",
+        "normalized_text": "要更便宜一点的",
+        "session_state_before": session,
+        "session_state": session,
+    }
+    result = _h_active_turn_resolver(state)
+    atr = result.get("active_turn_result", {})
+    assert atr.get("route") == "topic_switch"
+    assert atr.get("source") == "semantic"
+    assert atr.get("reason") == "semantic_constraint_update"
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # resolve_active_turn — edge cases
 # ═══════════════════════════════════════════════════════════════════════

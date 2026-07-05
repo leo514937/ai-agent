@@ -101,6 +101,9 @@ class _FakeExecutor(ToolExecutor):
         if tool_name == "get_distance_eta":
             data = mock_tools.get_distance_eta(str(args.get("shop_id", "")), args.get("from_location") or {"lat": 39.9609, "lng": 116.3581})
             return RawToolResult(data=data.get("data"), success=data.get("success", False), error_code=data.get("error_code"), error_message=data.get("error_message", ""), backend_source=self.backend_source)
+        if tool_name == "calculate_distance_km":
+            data = mock_tools.calculate_distance_km(args.get("origin"), args.get("destination"), args.get("mode", "straight_line"))
+            return RawToolResult(data=data.get("data"), success=data.get("success", False), error_code=data.get("error_code"), error_message=data.get("error_message", ""), backend_source=self.backend_source)
         return RawToolResult(data=None, success=False, error_code="TOOL_NOT_REGISTERED", backend_source=self.backend_source)
 
 
@@ -138,6 +141,18 @@ class TestSuccessfulExecution:
         })
         assert r["success"] is True
         assert r["result_status"] == "ok"
+        assert r["data"]["distance_km"] is not None
+
+    def test_calculate_distance_km(self):
+        r = _call(_mock_gw(), "calculate_distance_km", {
+            "origin": {"lat": 39.9609, "lng": 116.3581},
+            "destination": {"lat": 39.953, "lng": 116.350},
+            "mode": "straight_line",
+        })
+        assert r["success"] is True
+        assert r["result_status"] == "ok"
+        assert r["data"]["method"] == "haversine"
+        assert r["data"]["eta_minutes"] is None
         assert r["data"]["distance_km"] is not None
 
     def test_resolve_shop_exact(self):
@@ -240,6 +255,15 @@ class TestValidationFailure:
         assert r["success"] is False
         assert r["result_status"] == "failed"
         assert r["error_code"] == "SCHEMA_VALIDATION_FAILED"
+
+    def test_missing_origin_coordinates(self):
+        r = _call(_mock_gw(), "calculate_distance_km", {
+            "destination": {"lat": 39.953, "lng": 116.350},
+            "mode": "straight_line",
+        })
+        assert r["success"] is False
+        assert r["result_status"] == "unknown"
+        assert r["data"]["blocked_reason"] == "missing_origin_coordinates"
 
 
 # ═══════════════════════════════════════════════════════════════════

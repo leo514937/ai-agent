@@ -102,7 +102,11 @@ def test_orchestration_shadow_patch_uses_serializable_model():
         {
             "top_intent": "local_life",
             "task_type": "comparison",
-            "semantic_frame": {"confidence": 0.91},
+            "semantic_frame": {
+                "confidence": 0.91,
+                "comparison_intent": True,
+                "comparison_structure": "multi_target",
+            },
             "comparison_targets": [{"shop_id": "shop_1"}, {"shop_id": "shop_2"}],
             "raw_text": "比较这两家店",
         }
@@ -110,6 +114,9 @@ def test_orchestration_shadow_patch_uses_serializable_model():
 
     assert "orchestration_decision" in patch
     assert patch["orchestration_decision"].model_dump()["workflow_name"] == "discovery_decision"
+    assert patch["router_policy_decision"]["workflow_name"] == "discovery_decision"
+    assert patch["workflow_candidate_reason"]
+    assert isinstance(patch["rule_pattern_signals"], list)
 
 
 def test_orchestration_shadow_node_is_independent_from_planning():

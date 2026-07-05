@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from local_life_agent.domain.candidate import GoalType, LocalLifeGoalDraft
-from local_life_agent.domain.evidence import EvidenceReviewResult, ToolStatus
+from local_life_agent.domain.evidence import EvidenceReviewAction, EvidenceReviewResult, ToolStatus
 from local_life_agent.planning.evidence_review import (
     _classify_status,
     _detect_failed_as_empty,
@@ -221,3 +221,70 @@ class TestReviewEvidenceTrace:
         review_evidence(goal, pack)
         captured = capsys.readouterr()
         assert captured.out == ""
+
+    def test_review_evidence_respects_missing_exploration_location(self):
+        goal = LocalLifeGoalDraft(goal_type=GoalType.RECOMMENDATION, required_facets=["location"])
+        pack = {
+            "semantic_frame": {
+                "missing_slot_type": "missing_exploration_location",
+                "exploration_stages": [{"stage_type": "eat"}, {"stage_type": "coffee"}],
+                "stage_statuses": ["ok", "partial"],
+            },
+            "stage_statuses": ["ok", "partial"],
+            "exploration_stages": [{"stage_type": "eat"}, {"stage_type": "coffee"}],
+            "evidence_status": "partial",
+        }
+
+        result = review_evidence(goal, pack)
+
+        assert result.action in (EvidenceReviewAction.CLARIFY, EvidenceReviewAction.REPLAN_MISSING_FACETS)
+        assert result.clarification_reason == "missing_exploration_location"
+        assert result.evidence_incomplete is True
+        assert result.stage_statuses == ["ok", "partial"]
+        assert result.trace_payload["evidence_status"] == "partial"
+
+    def test_review_evidence_marks_unsupported_comparison_support(self):
+        goal = LocalLifeGoalDraft(goal_type=GoalType.COMPARISON, required_facets=["rating"])
+        pack = {
+            "comparison_support_status": "unsupported",
+            "semantic_frame": {
+                "comparison_support_status": "unsupported",
+                "stage_statuses": ["ok"],
+            },
+            "stage_statuses": ["ok"],
+        }
+
+        result = review_evidence(goal, pack)
+
+        assert "comparison_support_status:unsupported" in result.unsafe_answer_risks
+        assert "comparison_support" in result.missing_evidence
+
+    def test_review_evidence_preserves_facet_statuses_and_grounded_facts(self):
+        goal = LocalLifeGoalDraft(
+            goal_type=GoalType.SINGLE_SHOP_QUERY,
+            required_facets=["coupon", "open_status", "distance"],
+        )
+        pack = {
+            "facet_statuses": {
+                "coupon": "grounded",
+                "open_status": "grounded",
+                "distance": "unknown",
+            },
+            "grounded_facts": {
+                "coupon_count": 3,
+                "open_status": "open",
+            },
+            "facet_reasons": {
+                "distance": "distance_tool_missing_or_location_unresolved",
+            },
+            "evidence_status": "partial",
+        }
+
+        result = review_evidence(goal, pack)
+
+        assert result.facet_statuses["coupon"] == "grounded"
+        assert result.facet_statuses["open_status"] == "grounded"
+        assert result.facet_statuses["distance"] == "unknown"
+        assert result.grounded_facts["coupon_count"] == 3
+        assert result.grounded_facts["open_status"] == "open"
+        assert result.facet_reasons["distance"] == "distance_tool_missing_or_location_unresolved"

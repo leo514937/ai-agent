@@ -245,6 +245,54 @@ def test_verbalizer_uncertainty_notes_fallback(monkeypatch: pytest.MonkeyPatch):
     assert "注意" in res
 
 
+def test_verbalizer_rewrite_keeps_grounded_facts_and_limits_distance(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("local_life_agent.config.ENABLE_LLM_VERBALIZER", True)
+
+    plan = DecisionPlan(
+        answer_type="single_shop_query",
+        selected_targets=[
+            {
+                "shop_name": "牡丹园小火锅",
+                "open_status": "open",
+                "coupon_status": "has_coupon",
+                "coupon_titles": ["券1", "券2", "券3"],
+                "distance_km": None,
+            }
+        ],
+        factual_points=["牡丹园小火锅: 营业状态为：目前营业中; 有券：券1、券2、券3"],
+        uncertainty_notes=["无法确认 牡丹园小火锅 的距离/时间"],
+        facet_statuses={"open_status": "grounded", "coupon": "grounded", "distance": "unknown"},
+        grounded_facts={"open_status": "open", "coupon_count": 3, "coupon_titles": ["券1", "券2", "券3"]},
+        facet_reasons={"distance": "distance_tool_missing_or_location_unresolved"},
+    )
+
+    captured: dict[str, str] = {}
+
+    def client(*args, **kwargs):
+        captured["prompt"] = kwargs.get("prompt", "")
+        captured["system_prompt"] = kwargs.get("system_prompt", "")
+        return {
+            "ok": True,
+            "content": {"natural_response": "牡丹园小火锅目前营业中，当前查到 3 张优惠券；距离信息暂时无法确认。"},
+            "confidence": 0.99,
+            "raw": "{}",
+            "error_code": "",
+            "error_message": "",
+        }
+
+    text = verbalize_decision_plan(
+        plan,
+        llm_client=client,
+        rewrite_count=1,
+        previous_violations=["grounded_fact_downgraded_to_unknown"],
+    )
+
+    assert "目前营业中" in text
+    assert "3 张优惠券" in text
+    assert "距离信息暂时无法确认" in text
+    assert "grounded facts" in captured["prompt"] or "grounded facts" in captured["system_prompt"]
+
+
 def test_recommendation_count_dynamic(monkeypatch: pytest.MonkeyPatch):
     # Template path removed — when LLM is disabled, returns error message
     monkeypatch.setattr("local_life_agent.config.ENABLE_LLM_VERBALIZER", False)
@@ -302,3 +350,50 @@ def test_verbalizer_unknown_as_false_violation(monkeypatch: pytest.MonkeyPatch):
     assert "注意" in res
     assert metadata_out.get("violation") is not None
     assert metadata_out.get("answer_verify_passed") is False
+
+
+def test_rule_based_verbalizer_preserves_partial_exploration_notice():
+    plan = DecisionPlan(
+        answer_type="exploration_plan",
+        exploration_stages=[
+            {"stage_type": "eat", "candidate_query": "先吃饭"},
+            {"stage_type": "coffee", "candidate_query": "再喝咖啡"},
+        ],
+        stage_queries=["先吃饭", "再喝咖啡"],
+        stage_statuses=["ok", "partial"],
+        evidence_status="partial",
+        partial_fields=["coffee"],
+    )
+
+    text = verbalize_decision_plan(
+        plan,
+        llm_client=lambda *args, **kwargs: {"ok": False, "error_message": "llm unavailable"},
+    )
+
+    assert "先吃饭" in text
+    assert "再喝咖啡" in text
+    assert "部分" in text or "不完整" in text
+
+
+def test_rule_based_verbalizer_refuses_to_turn_unknown_into_fact():
+    plan = DecisionPlan(
+        answer_type="single_shop_query",
+        selected_targets=[
+            {
+                "shop_id": "shop_sc_05",
+                "shop_name": "川味轩(知春路店)",
+                "coupon_status": "unknown",
+            }
+        ],
+        uncertainty_notes=["coupon 暂时无法确认"],
+        unknown_fields=["coupon"],
+        evidence_status="unknown",
+    )
+
+    text = verbalize_decision_plan(
+        plan,
+        llm_client=lambda *args, **kwargs: {"ok": False, "error_message": "llm unavailable"},
+    )
+
+    assert "川味轩(知春路店)" not in text
+    assert "无法确认" in text or "暂时" in text

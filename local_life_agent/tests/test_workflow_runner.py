@@ -126,6 +126,7 @@ def test_workflow_runner_dispatches_by_orchestration_decision(monkeypatch):
     assert result["workflow_callable"] == "spy_discovery_dispatch"
     assert result["response_mode"] == "recommendation"
     assert result["workflow_runner_error"] == ""
+    assert result["workflow_candidate_reason"] == "recommendation route"
 
 
 def test_workflow_runner_dispatches_exploration_workflow(monkeypatch):

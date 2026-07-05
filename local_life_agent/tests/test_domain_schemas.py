@@ -25,10 +25,23 @@ from ..domain.enums import (
     Facet,
     ToolResultStatus,
     ErrorCode,
+    ComparisonStructure,
+    FilterType,
+    GroundingStatus,
+    MissingSlotType,
+    MultiTurnSignalType,
+    PreferenceType,
+    ReferenceType,
+    SemanticParseSource,
 )
 from ..domain.schemas import (
     SourceType,
     MatchedBy,
+    SemanticPreference,
+    SemanticFilter,
+    SemanticReference,
+    MultiTurnSemanticSignal,
+    ExplorationStageSpec,
     UserContext,
     TurnInput,
     SemanticFrame,
@@ -45,6 +58,8 @@ from ..domain.schemas import (
     AnswerPlan,
     GlobalTurnContext,
 )
+from ..domain.graph_state_model import GraphStateModel
+from ..domain.state_validation import validate_graph_state
 from ..domain.state import SessionState, SessionWriteDirective
 
 
@@ -109,7 +124,7 @@ class TestSemanticFrame:
         )
         assert sf.top_intent == TopIntent.local_life
         assert sf.task_type == TaskType.recommendation
-        assert Facet.coupon in sf.facets
+        assert {facet.name for facet in sf.facets} == {"coupon", "distance"}
         assert sf.confidence == 0.95
 
     def test_json_roundtrip(self):
@@ -124,10 +139,131 @@ class TestSemanticFrame:
         restored = SemanticFrame.model_validate_json(data)
         assert restored == sf
 
+    def test_core_semantic_axes_are_supported(self):
+        sf = SemanticFrame(
+            intent=TopIntent.local_life,
+            task_type=TaskType.recommendation,
+            primary_task="recommendation",
+            comparison_intent=True,
+            comparison_structure=ComparisonStructure.pairwise,
+            comparison_targets=[{"shop_name": "A店"}, {"shop_name": "B店"}],
+            preference_signals=[
+                SemanticPreference(
+                    preference_type=PreferenceType.value_for_money,
+                    value="value_for_money",
+                    text="性价比高",
+                ),
+                SemanticPreference(
+                    preference_type=PreferenceType.relative_price_preference,
+                    value="relative_price_preference",
+                    text="便宜一点",
+                ),
+            ],
+            location_reference=SemanticReference(
+                reference_type=ReferenceType.location_reference,
+                text="附近",
+                value={"scope": "nearby"},
+            ),
+            shop_reference=SemanticReference(
+                reference_type=ReferenceType.shop_reference,
+                text="这家",
+                value={"shop_name": "A店"},
+            ),
+            ordinal_reference=SemanticReference(
+                reference_type=ReferenceType.ordinal_reference,
+                text="第一家",
+                value=["第一家"],
+            ),
+            deictic_reference=SemanticReference(
+                reference_type=ReferenceType.deictic_reference,
+                text="这家",
+                value=["这家"],
+            ),
+            constraint_update=True,
+            new_task_override=False,
+            cancel_intent=False,
+            discourse_marker="先",
+            parse_source=SemanticParseSource.real_llm,
+            semantic_parse_source=SemanticParseSource.real_llm,
+            grounding_status=GroundingStatus.grounded,
+            confidence=0.77,
+        )
+
+        assert sf.intent == TopIntent.local_life
+        assert sf.top_intent == TopIntent.local_life
+        assert sf.comparison_intent is True
+        assert sf.comparison_structure == ComparisonStructure.pairwise
+        assert sf.preference_signals[0].preference_type == PreferenceType.value_for_money
+        assert sf.preference_signals[1].preference_type == PreferenceType.relative_price_preference
+        assert sf.location_reference is not None and sf.location_reference.reference_type == ReferenceType.location_reference
+        assert sf.shop_reference is not None and sf.shop_reference.reference_type == ReferenceType.shop_reference
+        assert sf.ordinal_reference is not None and sf.ordinal_reference.reference_type == ReferenceType.ordinal_reference
+        assert sf.deictic_reference is not None and sf.deictic_reference.reference_type == ReferenceType.deictic_reference
+        assert sf.constraint_update is True
+        assert sf.cancel_intent is False
+        assert sf.discourse_marker == "先"
+        assert sf.parse_source == SemanticParseSource.real_llm
+        assert sf.semantic_parse_source == SemanticParseSource.real_llm
+        assert sf.grounding_status == GroundingStatus.grounded
+
+    def test_exploration_and_missing_slot_types_are_supported(self):
+        sf = SemanticFrame(
+            top_intent=TopIntent.local_life,
+            task_type=TaskType.recommendation,
+            exploration_stages=[
+                ExplorationStageSpec(stage_type="scene", scene="约会"),
+                ExplorationStageSpec(stage_type="time", time="晚上"),
+                ExplorationStageSpec(stage_type="constraints", constraints={"budget": 50}),
+            ],
+            missing_slot_type=MissingSlotType.missing_location,
+            missing_slots=["missing_location"],
+            parse_source=SemanticParseSource.diagnostic_rules,
+            semantic_parse_source=SemanticParseSource.diagnostic_rules,
+        )
+
+        assert [stage.stage_type for stage in sf.exploration_stages] == ["scene", "time", "constraints"]
+        assert sf.missing_slot_type == MissingSlotType.missing_location
+        assert sf.missing_slots == ["missing_location"]
+
+    def test_roundtrip_preserves_parse_and_grounding_metadata(self):
+        sf = SemanticFrame(
+            top_intent=TopIntent.local_life,
+            task_type=TaskType.single_shop_query,
+            parse_source=SemanticParseSource.fallback_rules,
+            semantic_parse_source=SemanticParseSource.fallback_rules,
+            grounding_status=GroundingStatus.partially_grounded,
+            confidence=0.6,
+        )
+        data = sf.model_dump_json()
+        restored = SemanticFrame.model_validate_json(data)
+        assert restored.parse_source == SemanticParseSource.fallback_rules
+        assert restored.semantic_parse_source == SemanticParseSource.fallback_rules
+        assert restored.grounding_status == GroundingStatus.partially_grounded
+
     def test_invalid_top_intent_string_fails(self):
         """Pydantic must reject strings not in the TopIntent enum."""
         with pytest.raises(ValidationError):
             SemanticFrame.model_validate({"top_intent": "invalid_intent"})
+
+    def test_invalid_comparison_without_targets_fails(self):
+        with pytest.raises(ValidationError):
+            SemanticFrame.model_validate(
+                {
+                    "top_intent": "local_life",
+                    "comparison_intent": True,
+                    "confidence": 0.8,
+                }
+            )
+
+    def test_cancel_intent_cannot_coexist_with_new_task_override(self):
+        with pytest.raises(ValidationError):
+            SemanticFrame.model_validate(
+                {
+                    "top_intent": "local_life",
+                    "cancel_intent": True,
+                    "new_task_override": True,
+                }
+            )
 
 
 class TestPendingClarification:
@@ -455,6 +591,71 @@ class TestGlobalTurnContext:
         assert restored == ctx
 
 
+class TestSemanticSignalModels:
+    def test_preference_filter_reference_and_multiturn_models_roundtrip(self):
+        preference = SemanticPreference(
+            preference_type=PreferenceType.scene_preference,
+            value="scene_preference",
+            text="适合约会",
+        )
+        filter_signal = SemanticFilter(
+            filter_type=FilterType.open_now_filter,
+            value=True,
+            required=True,
+            text="现在营业",
+        )
+        reference = SemanticReference(
+            reference_type=ReferenceType.ordinal_reference,
+            text="第一家",
+            value=["第一家"],
+        )
+        signal = MultiTurnSemanticSignal(
+            signal_type=MultiTurnSignalType.new_task_override,
+            text="不要烧烤了，推荐咖啡",
+            from_state=False,
+        )
+
+        assert SemanticPreference.model_validate_json(preference.model_dump_json()) == preference
+        assert SemanticFilter.model_validate_json(filter_signal.model_dump_json()) == filter_signal
+        assert SemanticReference.model_validate_json(reference.model_dump_json()) == reference
+        assert MultiTurnSemanticSignal.model_validate_json(signal.model_dump_json()) == signal
+
+
+class TestGraphStateModel:
+    def test_validation_adapts_semantic_observability(self):
+        payload = {
+            "trace_id": "trace_001",
+            "semantic_frame": SemanticFrame(
+                top_intent=TopIntent.local_life,
+                semantic_source="real_llm",
+                parse_source=SemanticParseSource.real_llm,
+                semantic_parse_source=SemanticParseSource.real_llm,
+                grounding_status=GroundingStatus.grounded,
+                missing_slot_type=MissingSlotType.missing_location,
+            ),
+        }
+
+        result = validate_graph_state(payload)
+        assert result.is_valid is True
+        assert result.model.semantic_parse_source == "real_llm"
+        assert result.model.grounding_status == "grounded"
+        assert result.model.missing_slot_type == "missing_location"
+
+    def test_json_roundtrip(self):
+        model = GraphStateModel(
+            trace_id="trace_001",
+            semantic_parse_source="diagnostic_rules",
+            grounding_status="partially_grounded",
+            missing_slot_type="missing_shop_target",
+            schema_validation_result={"ok": True},
+        )
+        data = model.model_dump_json()
+        restored = GraphStateModel.model_validate_json(data)
+        assert restored.semantic_parse_source == "diagnostic_rules"
+        assert restored.grounding_status == "partially_grounded"
+        assert restored.missing_slot_type == "missing_shop_target"
+
+
 # ===================================================================
 # §4 — SessionState
 # ===================================================================
@@ -534,7 +735,9 @@ class TestEnums:
         assert Facet.service.value == "service"
         assert Facet.review_summary.value == "review_summary"
         assert Facet.scene_fit.value == "scene_fit"
-        assert len(Facet) == 11
+        assert Facet.ordinal_reference.value == "ordinal_reference"
+        assert Facet.comparison_targets.value == "comparison_targets"
+        assert len(Facet) >= 13
 
     def test_tool_result_status_values(self):
         assert ToolResultStatus.ok.value == "ok"
@@ -567,3 +770,19 @@ class TestEnums:
         assert ErrorCode.TOOL_TIMEOUT.value == "TOOL_TIMEOUT"
         assert ErrorCode.BACKEND_UNAVAILABLE.value == "BACKEND_UNAVAILABLE"
         assert ErrorCode.ANSWER_VERIFIER_FAILED.value == "ANSWER_VERIFIER_FAILED"
+
+    def test_semantic_parse_source_values(self):
+        assert SemanticParseSource.real_llm.value == "real_llm"
+        assert SemanticParseSource.diagnostic_rules.value == "diagnostic_rules"
+        assert SemanticParseSource.fallback_rules.value == "fallback_rules"
+        assert SemanticParseSource.test.value == "test"
+
+    def test_grounding_status_values(self):
+        assert GroundingStatus.grounded.value == "grounded"
+        assert GroundingStatus.partially_grounded.value == "partially_grounded"
+        assert GroundingStatus.ungrounded.value == "ungrounded"
+
+    def test_missing_slot_type_values(self):
+        assert MissingSlotType.missing_location.value == "missing_location"
+        assert MissingSlotType.missing_shop_target.value == "missing_shop_target"
+        assert MissingSlotType.missing_comparison_targets.value == "missing_comparison_targets"

@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import pytest
 
+from ..answer.b2_mini_verifier import _heuristic_verify
 from ..answer.verifier import verify_answer
+from ..domain.schemas import DecisionPlan
 from .fakes.verifier import fake_verifier_verify
 
 
@@ -369,5 +371,145 @@ def test_verify_answer_ignores_snapshot_as_facet_fallback():
     result = verify_answer(answer, evidence, "coupon_query")
 
     assert result["passed"] is True
+
+
+def test_verify_answer_blocks_grounded_open_coupon_downgraded_to_unknown():
+    evidence = {
+        "selected_targets": [
+            {
+                "shop_name": "牡丹园小火锅",
+                "open_status": "open",
+                "coupon_status": "has_coupon",
+                "coupon_titles": ["券1", "券2", "券3"],
+                "distance_km": None,
+            }
+        ],
+        "facet_statuses": {
+            "open_status": "grounded",
+            "coupon": "grounded",
+            "distance": "unknown",
+        },
+        "grounded_facts": {
+            "open_status": "open",
+            "coupon_count": 3,
+            "coupon_titles": ["券1", "券2", "券3"],
+        },
+        "unknown_items": [
+            {
+                "shop_name": "牡丹园小火锅",
+                "facet": "distance",
+                "value": None,
+            }
+        ],
+        "forbidden_claims": [],
+    }
+    answer = "暂时无法确认它的营业状态、优惠情况以及距离信息。"
+
+    result = verify_answer(answer, evidence, "single_shop_query")
+
+    assert result["passed"] is False
+    assert "grounded_fact_downgraded_to_unknown" in result["issues"]
+    assert "open_status" in result["issues"] or "coupon" in result["issues"]
+
+
+def test_verify_answer_allows_grounded_open_coupon_with_unknown_distance():
+    evidence = {
+        "selected_targets": [
+            {
+                "shop_name": "牡丹园小火锅",
+                "open_status": "open",
+                "coupon_status": "has_coupon",
+                "coupon_titles": ["券1", "券2", "券3"],
+                "distance_km": None,
+            }
+        ],
+        "facet_statuses": {
+            "open_status": "grounded",
+            "coupon": "grounded",
+            "distance": "unknown",
+        },
+        "grounded_facts": {
+            "open_status": "open",
+            "coupon_count": 3,
+            "coupon_titles": ["券1", "券2", "券3"],
+        },
+        "unknown_items": [
+            {
+                "shop_name": "牡丹园小火锅",
+                "facet": "distance",
+                "value": None,
+            }
+        ],
+        "forbidden_claims": [],
+    }
+    answer = "牡丹园小火锅目前营业中，当前查到 3 张优惠券；距离信息暂时无法确认。"
+
+    result = verify_answer(answer, evidence, "single_shop_query")
+
+    assert result["passed"] is True
     assert "unknown_as_false" not in result["issues"]
+
+
+def test_heuristic_verify_blocks_unknown_as_false_and_partial_as_complete():
+    plan = DecisionPlan(
+        answer_type="single_shop_query",
+        selected_targets=[
+            {
+                "shop_id": "shop_sc_05",
+                "shop_name": "川味轩(知春路店)",
+                "coupon_status": "unknown",
+                "open_status": "failed",
+            }
+        ],
+        uncertainty_notes=["coupon 暂时无法确认"],
+        unknown_fields=["coupon"],
+        failed_tools=["open_status"],
+        partial_fields=["coupon"],
+        evidence_status="partial",
+    )
+
+    result = _heuristic_verify(plan, "川味轩(知春路店)没有优惠券，也不营业，已经完全确认好了。")
+
+    assert result["passed"] is False
+    assert result["violation"] in {"unknown_as_false", "failed_as_no", "partial_as_complete"}
+    assert "coupon" in result["unknown_fields"] or "open_status" in result["unknown_fields"]
+
+
+def test_heuristic_verify_blocks_unsupported_comparison_winner_and_ranking_change():
+    plan = DecisionPlan(
+        answer_type="comparison",
+        selected_targets=[
+            {"shop_id": "shop_sc_05", "shop_name": "川味轩(知春路店)"},
+            {"shop_id": "shop_007", "shop_name": "海底捞(牡丹园店)"},
+        ],
+        overall_ranking=[
+            {"shop_id": "shop_sc_05", "shop_name": "川味轩(知春路店)"},
+            {"shop_id": "shop_007", "shop_name": "海底捞(牡丹园店)"},
+        ],
+        comparison_support_status="unsupported",
+        ranking_preserved=False,
+    )
+
+    result = _heuristic_verify(plan, "综合来看海底捞(牡丹园店)更好，排序也改成海底捞在前。")
+
+    assert result["passed"] is False
+    assert result["violation"] in {"comparison_winner_unsupported", "ranking_changed_by_llm"}
+
+
+def test_heuristic_verify_requires_uncertainty_for_partial_exploration():
+    plan = DecisionPlan(
+        answer_type="exploration_plan",
+        exploration_stages=[
+            {"stage_type": "eat"},
+            {"stage_type": "coffee"},
+        ],
+        stage_statuses=["ok", "partial"],
+        evidence_status="partial",
+        partial_fields=["coffee"],
+    )
+
+    result = _heuristic_verify(plan, "我已经安排好了吃饭和喝咖啡两段路线。")
+
+    assert result["passed"] is False
+    assert result["violation"] in {"exploration_stage_partial_as_complete", "exploration_stage_needs_uncertain_notice"}
 

@@ -47,9 +47,11 @@ class TestPlanEvidence:
         call_facets = {c.facet for c in plan.tool_calls}
         assert call_facets == {"coupon", "open_status", "distance"}
         call_names = {c.tool_name for c in plan.tool_calls}
-        assert call_names == {"get_coupon_list", "check_open_status", "get_distance_eta"}
+        assert call_names == {"get_coupon_list", "check_open_status", "calculate_distance_km"}
         distance_call = next(c for c in plan.tool_calls if c.facet == "distance")
-        assert distance_call.args["from_location"] == {"lat": 39.9609, "lng": 116.3581}
+        assert distance_call.args["origin"] == {"lat": 39.9609, "lng": 116.3581}
+        assert distance_call.args["destination"] == {}
+        assert distance_call.args["mode"] == "straight_line"
 
     def test_missing_location_skips_distance_call(self):
         goal = LocalLifeGoalDraft(

@@ -128,6 +128,7 @@ def test_target_resolution_result_unresolved_missing_current_shop():
     )
 
     assert result.resolved is False
+    assert result.status == "missing"
     assert result.source == "current_shop"
     assert result.unresolved_reason == "missing_current_shop"
     assert result.owner == "orchestration_router"
@@ -141,6 +142,7 @@ def test_target_resolution_result_ordinal_reference_source():
     )
 
     assert result.resolved is True
+    assert result.status == "resolved"
     assert result.source == "last_recommendation_list"
     assert result.reference_type == "ordinal_reference"
     assert result.target_shop == {"shop_id": "shop_1", "shop_name": "第一家", "address": "", "alias": []}
@@ -150,9 +152,35 @@ def test_target_resolution_result_defaults_are_backward_compatible():
     result = TargetResolutionResult()
 
     assert result.resolved is False
+    assert result.status == "missing"
     assert result.target_shop is None
     assert result.confidence == 0.0
     assert result.model_dump()["comparison_targets"] == []
+
+
+def test_target_resolution_result_statuses_cover_reference_sources():
+    explicit = build_target_resolution_result(
+        {"merchant_mentions": ["海底捞"], "task_type": "single_shop_query"},
+        session_state={},
+        raw_text="海底捞有券吗",
+    )
+    comparison = build_target_resolution_result(
+        {
+            "comparison_targets": [{"shop_id": "shop_1", "shop_name": "第一家"}],
+            "task_type": "comparison",
+        },
+        session_state={},
+        raw_text="第一家和第二家哪个好",
+    )
+    ordinal_not_found = build_target_resolution_result(
+        {"ordinal_references": ["第三家"], "task_type": "single_shop_query"},
+        session_state={"last_recommendation_list": [{"shop_id": "shop_1", "shop_name": "第一家"}]},
+        raw_text="第三家有券吗",
+    )
+
+    assert explicit.status == "ambiguous"
+    assert comparison.status == "partial"
+    assert ordinal_not_found.status == "not_found"
 
 
 def test_multi_constraint_recommendation_facets_are_retained():

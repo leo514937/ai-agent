@@ -18,13 +18,38 @@ def test_run_agent_graph_exposes_turn_trace(monkeypatch):
                     {"node": "receive_input", "stage": "input_received", "status": "success", "duration_ms": 1},
                     {"node": "answer_verify", "stage": "answer_verify", "status": "success", "duration_ms": 2},
                 ],
-                "semantic_frame": {"top_intent": "local_life", "task_type": "recommendation"},
+                "semantic_frame": {
+                    "top_intent": "local_life",
+                    "task_type": "recommendation",
+                    "grounding_status": "grounded",
+                    "missing_slot_type": "",
+                },
+                "schema_validation_result": {"valid": True},
+                "router_policy_decision": {"workflow_name": "discovery_decision", "decision": "proceed"},
+                "router_policy_conflicts": ["keyword_vs_semantic"],
+                "target_resolution": {"status": "RESOLVED", "reason": "resolved_by_target_resolve"},
+                "target_resolution_status": "RESOLVED",
+                "resolved_target": {"status": "RESOLVED", "shop_name": "海底捞西直门店"},
+                "comparison_target_resolution": {"status": "RESOLVED", "targets": [{"shop_name": "A"}, {"shop_name": "B"}]},
+                "grounding_result": {"status": "RESOLVED"},
+                "grounding_status": "grounded",
+                "missing_slot_type": "",
+                "pending_clarification": None,
                 "execution_plan": {"tool_calls": [{"call_id": "call_1"}]},
                 "tool_result_set": {},
                 "evidence_pack": {"ranking_snapshot": {"ranked": [{"shop_id": "shop_1"}]}},
+                "evidence_status": "grounded",
+                "evidence_review_result": {"next_action": "pass", "supported": True},
+                "answer_verify_result": {"status": "pass", "supported": True},
+                "unsupported_reasons": ["none"],
+                "unknown_fields": ["coupon"],
+                "failed_tools": ["tool_1"],
+                "partial_fields": ["distance"],
+                "comparison_support_status": "supported",
+                "ranking_preserved": True,
                 "session_state_before": {},
                 "session_state_after": {},
-                "state_update_plan": {},
+                "state_update_plan": {"set_fields": {"current_shop": {"shop_name": "海底捞西直门店"}}},
                 "answer_source": "llm_verbalizer",
                 "answer_fallback_reason": "",
                 "fallback_reason": "",
@@ -37,6 +62,13 @@ def test_run_agent_graph_exposes_turn_trace(monkeypatch):
                 "rewrite_count": 0,
                 "rewrite_reason": "",
                 "final_safety_status": "safe",
+                "workflow_candidate_reason": "semantic_frame:explicit_shop",
+                "session_state_before": {
+                    "current_shop": {"shop_id": "shop_007", "shop_name": "海底捞(牡丹园店)"},
+                    "last_task_type": "single_shop_query",
+                    "active_constraints": {"location": "北京邮电大学附近"},
+                },
+                "conversation_continuity": {"previous_focus": "海底捞西直门店", "is_follow_up": True},
             }
 
     monkeypatch.setattr("local_life_agent.engine.graph_builder.build_graph", lambda: FakeGraph())
@@ -50,6 +82,28 @@ def test_run_agent_graph_exposes_turn_trace(monkeypatch):
     assert response.debug.turn_trace["tool_call_count"] == 1
     assert response.debug.turn_trace["legacy_used"] is False
     assert response.debug.turn_trace["fallback_used"] is False
+    assert response.debug.turn_trace["semantic_frame"]["grounding_status"] == "grounded"
+    assert response.debug.turn_trace["schema_validation_result"]["valid"] is True
+    assert response.debug.turn_trace["router_policy_decision"]["workflow_name"] == "discovery_decision"
+    assert response.debug.turn_trace["router_policy_conflicts"] == ["keyword_vs_semantic"]
+    assert response.debug.turn_trace["target_resolution_status"] == "RESOLVED"
+    assert response.debug.turn_trace["resolved_target"]["shop_name"] == "海底捞西直门店"
+    assert response.debug.turn_trace["comparison_target_resolution"]["status"] == "RESOLVED"
+    assert response.debug.turn_trace["grounding_result"]["status"] == "RESOLVED"
+    assert response.debug.turn_trace["grounding_status"] == "grounded"
+    assert response.debug.turn_trace["missing_slot_type"] is None
+    assert response.debug.turn_trace["evidence_status"] == "grounded"
+    assert response.debug.turn_trace["evidence_review_result"]["next_action"] == "pass"
+    assert response.debug.turn_trace["answer_verify_result"]["status"] == "pass"
+    assert response.debug.turn_trace["unsupported_reasons"] == ["none"]
+    assert response.debug.turn_trace["unknown_fields"] == ["coupon"]
+    assert response.debug.turn_trace["failed_tools"] == ["tool_1"]
+    assert response.debug.turn_trace["partial_fields"] == ["distance"]
+    assert response.debug.turn_trace["comparison_support_status"] == "supported"
+    assert response.debug.turn_trace["ranking_preserved"] is True
+    assert response.debug.turn_trace["state_update_plan"]["set_fields"]["current_shop"]["shop_name"] == "海底捞西直门店"
+    assert response.debug.turn_trace["conversation_continuity"]["previous_focus"] == "海底捞(牡丹园店)"
+    assert response.debug.turn_trace["workflow_candidate_reason"] == "semantic_frame:explicit_shop"
 
 
 def test_trace_store_sanitizes_sensitive_fields():
@@ -144,3 +198,37 @@ def test_turn_audit_reports_missing_nodes_and_failed_tools():
     assert "orchestration_router_shadow" in audit["missing_nodes"]
     assert "workflow_runner" in audit["missing_nodes"]
     assert "execution_review_subgraph" in audit["missing_nodes"]
+
+
+def test_build_turn_trace_marks_planning_and_execution_boundaries():
+    trace = build_turn_trace(
+        {
+            "trace_id": "trace_boundary",
+            "session_id": "session_boundary",
+            "turn_id": "turn_boundary",
+            "raw_text": "川味轩(知春路店)有券吗，顺便看现在营业吗，远不远？",
+            "task_type": "single_shop_query",
+            "event_log": [
+                {"node": "planning_subgraph", "stage": "planning_started", "status": "success", "duration_ms": 1},
+                {"node": "planning_subgraph", "stage": "planning_finished", "status": "success", "duration_ms": 2},
+                {"node": "execution_review_subgraph", "stage": "execution_started", "status": "success", "duration_ms": 3},
+                {"node": "execution_review_subgraph", "stage": "execution_finished", "status": "success", "duration_ms": 4},
+            ],
+            "execution_plan": {"tool_calls": [{"call_id": "call_coupon"}, {"call_id": "call_open"}]},
+            "tool_result_set": {
+                "call_coupon": {"result_status": "ok"},
+                "call_open": {"result_status": "ok"},
+            },
+            "target_resolution_status": "RESOLVED",
+            "target_resolution": {"status": "RESOLVED"},
+            "resolved_target": {"status": "RESOLVED"},
+            "evidence_status": "grounded",
+            "evidence_review_result": {"status": "ok"},
+        },
+        user_text="川味轩(知春路店)有券吗，顺便看现在营业吗，远不远？",
+        total_duration_ms=10,
+    )
+
+    stages = {event.stage for event in trace.events}
+    assert {"planning_started", "planning_finished", "execution_started", "execution_finished"} <= stages
+    assert trace.tool_call_count == 2

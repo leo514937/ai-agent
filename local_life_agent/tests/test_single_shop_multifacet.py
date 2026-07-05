@@ -6,6 +6,7 @@ import time
 
 from local_life_agent import config as app_config
 from local_life_agent.llm.client import clear_llm_backend, set_llm_backend
+from local_life_agent.tests.conftest import SpyRealLLMBackend
 
 from ..agent import run_agent_graph
 from ..engine import graph_builder as gb
@@ -14,6 +15,31 @@ from ..target.shop_resolver import resolve_shop
 
 
 def test_multi_facet_plan_executes_same_shop_in_parallel(monkeypatch):
+    backend = SpyRealLLMBackend(
+        scenario_payloads={
+            "川味轩(知春路店)有券吗，顺便看现在营业吗，远不远？": {
+                "top_intent": "local_life",
+                "task_type": "single_shop_query",
+                "primary_task": "single_shop_query",
+                "merchant_mentions": ["川味轩(知春路店)"],
+                "reference_mentions": [],
+                "comparison_targets": [],
+                "ordinal_references": [],
+                "deictic_references": [],
+                "facets": [
+                    {"name": "coupon", "required": True},
+                    {"name": "open_status", "required": True},
+                    {"name": "distance", "required": True},
+                ],
+                "location": {"location_name": "知春路"},
+                "hard_constraints": {"location": "知春路"},
+                "soft_preferences": {},
+                "ranking_signals": {},
+                "confidence": 0.98,
+                "need_context": False,
+            }
+        }
+    )
     calls: list[tuple[str, dict]] = []
     original = gb.dispatch_tool_call
 
@@ -21,46 +47,87 @@ def test_multi_facet_plan_executes_same_shop_in_parallel(monkeypatch):
         calls.append((tool_name, dict(kwargs)))
         return original(tool_name, kwargs)
 
+    set_llm_backend(backend)
     monkeypatch.setattr(gb, "dispatch_tool_call", spy_dispatch)
-
-    response = run_agent_graph("川味轩(知春路店)有券吗，顺便看现在营业吗，远不远？", "stage11_multi")
+    try:
+        response = run_agent_graph("川味轩(知春路店)有券吗，顺便看现在营业吗，远不远？", "stage11_multi")
+    finally:
+        clear_llm_backend()
 
     assert response.answer_text
     assert response.debug is not None
     assert response.debug.execution_plan
+    assert {call["tool_name"] for call in response.debug.execution_plan.get("tool_calls", [])} == {
+        "get_coupon_list",
+        "check_open_status",
+        "calculate_distance_km",
+    }
     assert response.debug.tool_results
     assert {tool_name for tool_name, _ in calls} == {
         "get_coupon_list",
         "check_open_status",
-        "get_distance_eta",
+        "calculate_distance_km",
     }
     assert len(calls) == 3
-    assert len({kwargs["shop_id"] for _, kwargs in calls}) == 1
+    assert len({kwargs["shop_id"] for _, kwargs in calls if kwargs.get("shop_id")}) == 1
+    distance_call = next(kwargs for tool_name, kwargs in calls if tool_name == "calculate_distance_km")
+    assert "origin" in distance_call and "destination" in distance_call
     assert "有券" in response.answer_text
     assert "营业" in response.answer_text
     assert "距离" in response.answer_text
+    assert "暂时无法确认营业状态" not in response.answer_text
+    assert "暂时无法确认优惠情况" not in response.answer_text
 
 
 def test_optional_distance_timeout_does_not_block_other_facets(monkeypatch):
+    backend = SpyRealLLMBackend(
+        scenario_payloads={
+            "川味轩(知春路店)有券吗，顺便看现在营业吗，顺便看看距离远不远？": {
+                "top_intent": "local_life",
+                "task_type": "single_shop_query",
+                "primary_task": "single_shop_query",
+                "merchant_mentions": ["川味轩(知春路店)"],
+                "reference_mentions": [],
+                "comparison_targets": [],
+                "ordinal_references": [],
+                "deictic_references": [],
+                "facets": [
+                    {"name": "coupon", "required": True},
+                    {"name": "open_status", "required": True},
+                    {"name": "distance", "required": True},
+                ],
+                "location": {"location_name": "知春路"},
+                "hard_constraints": {"location": "知春路"},
+                "soft_preferences": {},
+                "ranking_signals": {},
+                "confidence": 0.98,
+                "need_context": False,
+            }
+        }
+    )
     original = gb.dispatch_tool_call
     original_deadline = app_config.DEADLINE_MS
 
     def slow_distance_dispatch(tool_name: str, kwargs: dict):
-        if tool_name == "get_distance_eta":
+        if tool_name == "calculate_distance_km":
             time.sleep(0.2)
         return original(tool_name, kwargs)
 
+    set_llm_backend(backend)
     monkeypatch.setattr(gb, "dispatch_tool_call", slow_distance_dispatch)
     monkeypatch.setattr(app_config, "DEADLINE_MS", 80)
     try:
         response = run_agent_graph("川味轩(知春路店)有券吗，顺便看现在营业吗，顺便看看距离远不远？", "stage11_timeout")
     finally:
         monkeypatch.setattr(app_config, "DEADLINE_MS", original_deadline)
+        clear_llm_backend()
 
     assert response.answer_text
     assert "有券" in response.answer_text
     assert "营业" in response.answer_text
     assert "暂时无法确认" in response.answer_text and "距离" in response.answer_text
+    assert "暂时无法确认营业状态" not in response.answer_text
+    assert "暂时无法确认优惠情况" not in response.answer_text
 
 
 def test_graph_semantic_parse_uses_llm_call(monkeypatch):
@@ -104,7 +171,7 @@ def test_graph_semantic_parse_uses_llm_call(monkeypatch):
     assert backend_calls
     assert response.debug is not None
     assert response.debug.semantic_frame["facets"][0]["name"] == "distance"
-    assert "get_distance_eta" in response.debug.execution_plan["stages"][0]["tool_names"]
+    assert "calculate_distance_km" in response.debug.execution_plan["stages"][0]["tool_names"]
     assert "距离" in response.answer_text
     assert "券" not in response.answer_text
 
@@ -198,10 +265,35 @@ def test_unrecognized_facet_does_not_default_coupon(monkeypatch):
 
 
 def test_optional_distance_failed_does_not_fallback_whole_request(monkeypatch):
+    backend = SpyRealLLMBackend(
+        scenario_payloads={
+            "川味轩(知春路店)有券吗，顺便看现在营业吗，顺便看看距离远不远？": {
+                "top_intent": "local_life",
+                "task_type": "single_shop_query",
+                "primary_task": "single_shop_query",
+                "merchant_mentions": ["川味轩(知春路店)"],
+                "reference_mentions": [],
+                "comparison_targets": [],
+                "ordinal_references": [],
+                "deictic_references": [],
+                "facets": [
+                    {"name": "coupon", "required": True},
+                    {"name": "open_status", "required": True},
+                    {"name": "distance", "required": True},
+                ],
+                "location": {"location_name": "知春路"},
+                "hard_constraints": {"location": "知春路"},
+                "soft_preferences": {},
+                "ranking_signals": {},
+                "confidence": 0.98,
+                "need_context": False,
+            }
+        }
+    )
     original = gb.dispatch_tool_call
 
     def flaky_dispatch(tool_name: str, kwargs: dict):
-        if tool_name == "get_distance_eta":
+        if tool_name == "calculate_distance_km":
             return {
                 "call_id": kwargs.get("call_id", ""),
                 "shop_id": kwargs.get("shop_id", ""),
@@ -216,15 +308,19 @@ def test_optional_distance_failed_does_not_fallback_whole_request(monkeypatch):
             }
         return original(tool_name, kwargs)
 
+    set_llm_backend(backend)
     monkeypatch.setattr(gb, "dispatch_tool_call", flaky_dispatch)
-
-    response = run_agent_graph("川味轩(知春路店)有券吗，顺便看现在营业吗，顺便看看距离远不远？", "stage11_optional_failed")
+    try:
+        response = run_agent_graph("川味轩(知春路店)有券吗，顺便看现在营业吗，顺便看看距离远不远？", "stage11_optional_failed")
+    finally:
+        clear_llm_backend()
 
     assert response.answer_text
     assert "有券" in response.answer_text
     assert "营业" in response.answer_text
     assert "距离" in response.answer_text
     assert "失败" in response.answer_text or "暂时无法确认" in response.answer_text
+    assert "暂时无法确认营业状态" not in response.answer_text
 
 
 def test_shop_resolver_wrapper_uses_gateway(monkeypatch):

@@ -117,3 +117,4 @@ def test_exploration_planning_is_registered_callable(monkeypatch):
     assert patch["workflow_registered"] is True
     assert patch["response_mode"] == "exploration_plan"
     assert patch["workflow_callable"] == "run_exploration_planning_workflow"
+    assert patch["workflow_candidate_reason"] == "exploration test"
