@@ -4,12 +4,21 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Merchant } from '../../services/types';
 import { MerchantCard } from '../merchant/MerchantCard';
 
+interface MessageTiming {
+  startedAt?: number;
+  firstTokenAt?: number;
+  completedAt?: number;
+  failedAt?: number;
+  elapsedMs?: number;
+}
+
 interface Message {
   id: string;
   sender: 'user' | 'assistant';
   text: string;
   steps?: string[];
   shops?: Merchant[];
+  timing?: MessageTiming;
 }
 
 interface SessionHistoryItem {
@@ -18,6 +27,39 @@ interface SessionHistoryItem {
   timestamp: number;
   messages: Message[];
 }
+
+const MessageTimer: React.FC<{ timing?: MessageTiming; isStreaming?: boolean }> = ({ timing, isStreaming }) => {
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    if (!isStreaming || !timing?.startedAt || timing.completedAt || timing.failedAt) {
+      return;
+    }
+    const interval = setInterval(() => {
+      setNow(Date.now());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [isStreaming, timing]);
+
+  if (!timing?.startedAt) return <span>已思考若干秒</span>;
+
+  if (timing.failedAt) {
+    const elapsed = Math.round(((timing.elapsedMs || (timing.failedAt - timing.startedAt)) / 1000));
+    return <span className="text-accent-red">已中断，用时 {elapsed} 秒</span>;
+  }
+
+  if (timing.completedAt) {
+    const elapsed = Math.round(((timing.elapsedMs || (timing.completedAt - timing.startedAt)) / 1000));
+    return <span>用时 {elapsed} 秒</span>;
+  }
+
+  if (isStreaming) {
+    const elapsed = Math.round((now - timing.startedAt) / 1000);
+    return <span className="text-primary">{elapsed > 2 ? `已思考 ${elapsed} 秒` : `思考中 ${elapsed} 秒`}</span>;
+  }
+
+  return <span>已思考若干秒</span>;
+};
 
 interface ChatViewProps {
   sessionId: string;
@@ -97,7 +139,20 @@ export const ChatView: React.FC<ChatViewProps> = ({ sessionId, initialQuery, onU
         const historyList: SessionHistoryItem[] = JSON.parse(saved);
         const matched = historyList.find(h => h.sessionId === sessionId);
         if (matched) {
-          setMessages(matched.messages);
+          // 修正可能因为强制刷新被中断的消息
+          const fixedMessages = matched.messages.map((m, i) => {
+            if (m.sender === 'assistant' && i === matched.messages.length - 1) {
+              if (m.timing && m.timing.startedAt && !m.timing.completedAt && !m.timing.failedAt) {
+                return {
+                  ...m,
+                  timing: { ...m.timing, failedAt: Date.now() },
+                  text: m.text ? m.text + '\n\n⚠️ *[会话被中断]*' : '⚠️ *[会话被中断]*'
+                };
+              }
+            }
+            return m;
+          });
+          setMessages(fixedMessages);
           return;
         }
       } catch (e) {
@@ -137,7 +192,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ sessionId, initialQuery, onU
   // 3. 将消息写入 localStorage 并更新 layout 历史列表
   const persistMessages = (updatedMessages: Message[]) => {
     if (!sessionId) return;
-    
+
     // 如果只有一条欢迎消息，不需要保存
     if (updatedMessages.length <= 1) return;
 
@@ -188,11 +243,17 @@ export const ChatView: React.FC<ChatViewProps> = ({ sessionId, initialQuery, onU
       abortControllerRef.current = null;
       setIsStreaming(false);
 
+      const failedAt = Date.now();
       const finalMsgs: Message[] = messages.map((m, idx) => {
         if (idx === messages.length - 1 && m.sender === 'assistant') {
           return {
             ...m,
             text: m.text + '\n\n⚠️ *[已停止生成]*',
+            timing: {
+              ...m.timing,
+              failedAt,
+              elapsedMs: m.timing?.startedAt ? failedAt - m.timing.startedAt : undefined,
+            }
           };
         }
         return m;
@@ -221,7 +282,13 @@ export const ChatView: React.FC<ChatViewProps> = ({ sessionId, initialQuery, onU
 
     // 助手占位消息
     const assistantMsgId = `assistant-${Date.now()}`;
-    const placeholderMsg: Message = { id: assistantMsgId, sender: 'assistant', text: '' };
+    const startTime = Date.now();
+    const placeholderMsg: Message = {
+      id: assistantMsgId,
+      sender: 'assistant',
+      text: '',
+      timing: { startedAt: startTime }
+    };
     const stageMsgs = [...initialMsgs, placeholderMsg];
     setMessages(stageMsgs);
     persistMessages(stageMsgs);
@@ -230,6 +297,16 @@ export const ChatView: React.FC<ChatViewProps> = ({ sessionId, initialQuery, onU
     let streamText = '';
     let finalShops: Merchant[] = [];
     let currentTraceSteps: string[] = stageMsgs[stageMsgs.length - 1].steps || [];
+    let firstTokenAt: number | undefined = undefined;
+    let currentMsgs = stageMsgs;
+
+    const updateAssistantState = (updates: Partial<Message>) => {
+      currentMsgs = currentMsgs.map(m =>
+        m.id === assistantMsgId ? { ...m, ...updates, timing: { ...m.timing, ...updates.timing } } : m
+      );
+      setMessages(currentMsgs);
+      persistMessages(currentMsgs);
+    };
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
@@ -286,53 +363,62 @@ export const ChatView: React.FC<ChatViewProps> = ({ sessionId, initialQuery, onU
                 case 'trace_started':
                   currentTraceSteps = ['⚡ 会话路由调度中...'];
                   setCurrentSteps([...currentTraceSteps]);
+                  updateAssistantState({ steps: [...currentTraceSteps] });
                   break;
                 case 'input_normalized':
                   currentTraceSteps.push('📝 输入安全防御与规范化校验已通过');
                   setCurrentSteps([...currentTraceSteps]);
+                  updateAssistantState({ steps: [...currentTraceSteps] });
                   break;
                 case 'intent_detected':
                   currentTraceSteps.push(`🎯 意图识别成功：${payload.top_intent === 'local_life' ? '本地生活服务' : payload.top_intent}`);
                   setCurrentSteps([...currentTraceSteps]);
+                  updateAssistantState({ steps: [...currentTraceSteps] });
                   break;
                 case 'semantic_frame_ready':
                   currentTraceSteps.push(`🔍 语义解析已完成。解析模式：${payload.task_type || '通用'}`);
                   setCurrentSteps([...currentTraceSteps]);
+                  updateAssistantState({ steps: [...currentTraceSteps] });
                   break;
                 case 'target_resolved':
                   currentTraceSteps.push(`📍 关联商户定位：${payload.resolve_status}`);
                   setCurrentSteps([...currentTraceSteps]);
+                  updateAssistantState({ steps: [...currentTraceSteps] });
                   break;
                 case 'task_planned':
                   currentTraceSteps.push(`📋 执行规划：大模型编排工具链，计划包含 ${payload.tool_call_count || 1} 个底层工具调用`);
                   setCurrentSteps([...currentTraceSteps]);
+                  updateAssistantState({ steps: [...currentTraceSteps] });
                   break;
                 case 'tool_call_started':
                   currentTraceSteps.push(`⚙️ 正在执行系统查询：${payload.tool_name}...`);
                   setCurrentSteps([...currentTraceSteps]);
+                  updateAssistantState({ steps: [...currentTraceSteps] });
                   break;
                 case 'tool_call_finished':
                   currentTraceSteps.push(`✅ 数据拉取完成：${payload.tool_name}，状态: ${payload.status}`);
                   setCurrentSteps([...currentTraceSteps]);
+                  updateAssistantState({ steps: [...currentTraceSteps] });
                   break;
                 case 'evidence_built':
                   currentTraceSteps.push(`📊 数据汇总：真实证据包已装配完毕`);
                   setCurrentSteps([...currentTraceSteps]);
+                  updateAssistantState({ steps: [...currentTraceSteps] });
                   break;
                 case 'answer_plan_built':
                   currentTraceSteps.push('🤖 语言模型正在校验语气与事实正确性，生成中...');
                   setCurrentSteps([...currentTraceSteps]);
+                  updateAssistantState({ steps: [...currentTraceSteps] });
                   break;
                 case 'answer_delta':
                   if (payload.delta_text) {
+                    if (!firstTokenAt) firstTokenAt = Date.now();
                     streamText += payload.delta_text;
-                    setMessages((prev) =>
-                      prev.map((msg) =>
-                        msg.id === assistantMsgId
-                          ? { ...msg, text: streamText, steps: [...currentTraceSteps] }
-                          : msg
-                      )
-                    );
+                    updateAssistantState({
+                      text: streamText,
+                      steps: [...currentTraceSteps],
+                      timing: { firstTokenAt }
+                    });
                   }
                   break;
                 case 'final':
@@ -370,29 +456,31 @@ export const ChatView: React.FC<ChatViewProps> = ({ sessionId, initialQuery, onU
         }
       }
 
-      const finalMsgs: Message[] = stageMsgs.map((msg) =>
-        msg.id === assistantMsgId
-          ? {
-              ...msg,
-              text: streamText || 'AI 助手当前未返回表述内容。',
-              steps: [...currentTraceSteps],
-              shops: finalShops,
-            }
-          : msg
-      );
-      setMessages(finalMsgs);
-      persistMessages(finalMsgs);
+      const completedAt = Date.now();
+      updateAssistantState({
+        text: streamText || 'AI 助手当前未返回表述内容。',
+        steps: [...currentTraceSteps],
+        shops: finalShops,
+        timing: {
+          firstTokenAt,
+          completedAt,
+          elapsedMs: startTime ? completedAt - startTime : undefined,
+        }
+      });
     } catch (err: any) {
       if (err.name === 'AbortError') {
         console.log('API stream aborted by user');
       } else {
-        const errorMsgs: Message[] = stageMsgs.map((msg) =>
-          msg.id === assistantMsgId
-            ? { ...msg, text: `❌ 异常：${err.message || '网络连接超时或无法触达后端服务'}` }
-            : msg
-        );
-        setMessages(errorMsgs);
-        persistMessages(errorMsgs);
+        const failedAt = Date.now();
+        updateAssistantState({
+          text: `❌ 异常：${err.message || '网络连接超时或无法触达后端服务'}`,
+          steps: [...currentTraceSteps],
+          timing: {
+            firstTokenAt,
+            failedAt,
+            elapsedMs: startTime ? failedAt - startTime : undefined,
+          }
+        });
       }
     } finally {
       setIsStreaming(false);
@@ -403,9 +491,9 @@ export const ChatView: React.FC<ChatViewProps> = ({ sessionId, initialQuery, onU
 
   return (
     <div className="flex-1 flex flex-col h-full bg-themeBg-main relative">
-      
+
       {/* 1. 消息区 */}
-      <div 
+      <div
         ref={chatContainerRef}
         className="flex-1 overflow-y-auto px-4 md:px-8 py-6 flex flex-col gap-6 scrollbar-thin pb-36"
       >
@@ -421,7 +509,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ sessionId, initialQuery, onU
             <p className="text-xs text-themeText-muted font-semibold mb-10 text-center max-w-lg">
               我已与大众点评商户及优惠数据库连通，支持流式实时决策与可信审计。您可以试着选择下方推荐话题开始咨询：
             </p>
-            
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
               {suggestionCards.map((card, idx) => (
                 <div
@@ -444,7 +532,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ sessionId, initialQuery, onU
         {messages.length > 1 && (
           // 消息流内容：居中限制宽度 w-full max-w-3xl
           <div className="max-w-3xl mx-auto w-full flex flex-col gap-6">
-            {messages.map((msg) => {
+            {messages.map((msg, idx) => {
               const isUser = msg.sender === 'user';
               return (
                 <div
@@ -486,20 +574,24 @@ export const ChatView: React.FC<ChatViewProps> = ({ sessionId, initialQuery, onU
 
                       {/* 推理链与卡片组件：放在文本流下方，无背景气泡 */}
                       <div className="w-full flex flex-col gap-3">
-                        {/* 推理链轨迹 */}
-                        {msg.steps && msg.steps.length > 0 && (
-                          <details className="mt-1 group">
-                            <summary className="text-[11px] text-themeText-light cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden hover:text-themeText-muted transition-colors outline-none flex items-center gap-1 font-medium">
-                              <span>已思考若干秒 &gt;</span>
-                            </summary>
-                            <div className="mt-1.5 pl-3.5 border-l border-themeBorder text-[9px] font-mono text-themeText-muted flex flex-col gap-1.5 leading-relaxed">
-                              {msg.steps.map((step, idx) => (
-                                <div key={idx} className="flex gap-1.5">
-                                  <span className="text-primary shrink-0">▸</span>
-                                  <span>{step}</span>
-                                </div>
-                              ))}
-                            </div>
+                        {/* 计时器与推理链轨迹 */}
+                        {(msg.timing || (msg.steps && msg.steps.length > 0)) && (
+                          <details className="mt-1 group" open={isStreaming && idx === messages.length - 1}>
+                            <summary className={`text-[11px] text-themeText-light select-none list-none [&::-webkit-details-marker]:hidden hover:text-themeText-muted transition-colors outline-none flex items-center gap-1 font-medium ${msg.steps && msg.steps.length > 0 ? 'cursor-pointer' : 'pointer-events-none'}`}>
+                              <MessageTimer timing={msg.timing} isStreaming={isStreaming && idx === messages.length - 1} />
+                              {msg.steps && msg.steps.length > 0 && (
+                                <span className="text-primary/70 group-open:rotate-90 transition-transform">▸</span>
+                              )}                            </summary>
+                            {msg.steps && msg.steps.length > 0 && (
+                              <div className="mt-1.5 pl-3.5 border-l border-themeBorder text-[9px] font-mono text-themeText-muted flex flex-col gap-1.5 leading-relaxed">
+                                {msg.steps.map((step, stepIdx) => (
+                                  <div key={stepIdx} className="flex gap-1.5">
+                                    <span className="text-primary shrink-0">▸</span>
+                                    <span>{step}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                           </details>
                         )}
 
@@ -542,7 +634,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ sessionId, initialQuery, onU
                   </div>
                   <span className="font-semibold">决策中枢正在读取商户库并评估执行计划...</span>
                 </div>
-                
+
                 {currentSteps.length > 0 && (
                   <div className="mt-1.5 pl-3.5 border-l border-primary/20 text-[9px] font-mono text-themeText-muted flex flex-col gap-1 w-72 md:w-96 animate-pulse-subtle">
                     <p className="font-extrabold text-primary text-[8px] uppercase tracking-wider mb-1 shrink-0">⚙️ 实时推理链路（LangGraph 节点）</p>
@@ -604,7 +696,7 @@ export const ChatView: React.FC<ChatViewProps> = ({ sessionId, initialQuery, onU
               )}
             </div>
           </form>
-          
+
           <div className="flex items-center justify-between text-[8px] text-themeText-light px-2 font-bold tracking-wide">
             <span>会话 ID: {sessionId}</span>
             <span className="flex items-center gap-1">

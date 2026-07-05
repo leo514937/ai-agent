@@ -255,3 +255,9 @@
   - **问题分析**：由于 `sessionId` 初始状态为 `""` 并通过客户端 `useEffect` 动态设置为带有时间戳的 ID，导致 `ChatView` 发生 client-side mount 后的二次卸载与重挂载（Reconciliation key 变更）。当用户在首屏刚刚加载（未完全 mount 或 hydration 阶段）立即交互时，会导致输入内容被清空、焦点丢失、或者发送请求因 session ID 重置而中断。
   - **解决机制**：在 `layout.tsx` 中引入 `isMounted` 状态控制，延迟 client-side 动态组件（如 `ChatView`）的初次渲染，保证首屏渲染/水合 HTML 与服务器端完全一致，消除 Hydration 冲突；同时确保 `ChatView` 在 `sessionId` 实例化完成之后才一次性正确挂载，避免了无用的卸载/重挂载周期，彻底消除了首屏不可发送消息、点击后重置、以及丢失焦点的问题。
   - **验证测试**：前端 Next.js 项目 `npm run build` 打包编译 100% 通过；在 Playwright 环境中对首屏即时输入及流式回复发送进行了完整性测试，功能与状态保存均表现完美。
+
+## 2026-07-04 进展
+- **前端聊天交互优化 - 增加 AI 思考计时显示**：
+  - **状态结构拓展**：为前端 `Message` 接口增加了可选的 `MessageTiming` 字段，包含了 `startedAt`, `firstTokenAt`, `completedAt`, `failedAt`, `elapsedMs`，支持追踪助手回复完整生命周期的耗时情况。
+  - **组件与生命周期注入**：在 `ChatView.tsx` 中新建并引入了 `MessageTimer` 函数式组件，通过内部的 `setInterval` 机制提供流畅的前端实时秒表计时，无缝对接了既有的 SSE 流式更新状态 (`isStreaming`)。
+  - **UI 与动态文本展现**：实现了“思考中 X 秒”、“已思考 X 秒”、“用时 X 秒”、“已中断，用时 X 秒”的动态状态文本切换，并替换了原有静态的“已思考若干秒”提示，进一步提升了仿 ChatGPT 对话框架的使用体验。
