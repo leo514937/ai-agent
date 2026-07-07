@@ -20,10 +20,15 @@ from .schemas import (
     ConflictingFacet,
     ComparisonTargetResolution,
     FacetSet,
+    ContextualizedTurn,
     EvidencePack,
     ExecutionPlan,
     ExplorationPlan,
+    FocusContext,
+    FreshnessMeta,
     OrchestrationDecision,
+    LocationContext,
+    ClarificationRequest,
     PendingClarification,
     QueryFacet,
     ResolveShopResult,
@@ -72,7 +77,7 @@ class GraphState(TypedDict, total=False):
 
     # === 澄清状态 (Pending Clarification) — write: clarify_decide/resolve_shop, read: check_pending/context_recovery ===
     pending_clarification: Optional[PendingClarification]
-    clarification_request: Optional[PendingClarification]
+    clarification_request: Optional[ClarificationRequest]
     active_turn_result: dict[str, object]
     active_turn_route: str
     restored_task: str
@@ -92,6 +97,10 @@ class GraphState(TypedDict, total=False):
     comparison_result: object
     recommendation_candidates: list
     precomputed_tool_results: dict[str, ToolResult]
+    contextualized_turn: Optional[ContextualizedTurn]
+    focus_context: Optional[FocusContext]
+    freshness_meta: Optional[FreshnessMeta]
+    location_context: Optional[LocationContext]
 
     # === P2 目标 (Goal) — write: goal_planner/goal_review, read: candidate_resolve/evidence_planner/decision_planner ===
     goal_plan: Optional[GoalPlan]
@@ -251,6 +260,8 @@ class GraphState(TypedDict, total=False):
     user_location: dict
     preview_text: str
     preview_policy_result: dict
+    response_contract_v1: object
+    response_contract_v2: object
     stream_status: str
     evidence_cache_key: str
     evidence_cache_scope: str

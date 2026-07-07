@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from importlib import import_module
+import sys
 import re
 from typing import Any
 
@@ -25,6 +26,7 @@ _LIST_DEICTIC_HINTS = ("这三家", "这几家", "这几间", "这些", "上面�
 _ORDINAL_RE = re.compile(r"第\s*([1-9一二三四五六七八九十])\s*(个|家|间|店)?")
 _LIST_COUNT_RE = re.compile(r"(这|前)\s*([1-9]\d*|[一二两三四五六七八九十]+)\s*(家|个|间)")
 _COMPARISON_SPLIT_RE = re.compile(r"[和跟与及、]")
+_COMPARISON_NOISE_HINTS = ("推荐", "附近", "周边", "火锅", "烧烤", "性价比", "性价", "价格", "划算")
 
 _CHINESE_TO_INT = {
     "一": 1,
@@ -74,6 +76,22 @@ def _shop_dict(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
 
 
+def _candidate_shop_dict(candidate: Any) -> dict[str, Any]:
+    """兼容 plain candidate dict 与嵌套 shop 字段两种候选结构。"""
+    item = _shop_dict(candidate)
+    if not item:
+        return {}
+    shop = item.get("shop") or item.get("resolved_shop") or item
+    shop_dict = _shop_dict(shop)
+    if not shop_dict:
+        return {}
+    if not shop_dict.get("address") and item.get("address"):
+        shop_dict["address"] = item.get("address")
+    if not shop_dict.get("alias") and item.get("alias"):
+        shop_dict["alias"] = item.get("alias")
+    return shop_dict
+
+
 def _recommendation_candidates(session_state: dict | SessionState | None) -> list[dict[str, Any]]:
     raw = _session_get(session_state, "last_recommendation_list") or []
     candidates: list[dict[str, Any]] = []
@@ -81,6 +99,24 @@ def _recommendation_candidates(session_state: dict | SessionState | None) -> lis
         shop = _shop_dict(item)
         if shop.get("shop_id") and shop.get("shop_name"):
             candidates.append(shop)
+    return candidates
+
+
+def _comparison_candidates(session_state: dict | SessionState | None) -> list[dict[str, Any]]:
+    raw = _session_get(session_state, "comparison_targets") or []
+    candidates: list[dict[str, Any]] = []
+    for item in raw:
+        shop = _shop_dict(item)
+        if shop.get("shop_id") and shop.get("shop_name"):
+            candidates.append(shop)
+    if candidates:
+        return candidates
+    comparison_result = _session_get(session_state, "comparison_result")
+    if isinstance(comparison_result, dict):
+        for item in comparison_result.get("rows") or []:
+            shop = _shop_dict(item)
+            if shop.get("shop_id") and shop.get("shop_name"):
+                candidates.append(shop)
     return candidates
 
 
@@ -98,7 +134,7 @@ def _infer_comparison_mentions_from_text(text: str) -> list[str]:
     if not compact:
         return []
 
-    compare_markers = ("比较", "对比", "哪个好", "哪个更好", "谁更好", "比")
+    compare_markers = ("比较", "对比", "哪个好", "哪个更好", "谁更好", "比一比", "比下", "比呢")
     cut_index = len(compact)
     for marker in compare_markers:
         idx = compact.find(marker)
@@ -112,6 +148,8 @@ def _infer_comparison_mentions_from_text(text: str) -> list[str]:
     for part in _COMPARISON_SPLIT_RE.split(prefix):
         token = part.strip("，,。！？?!~呢吧嘛呀啊")
         if not token:
+            continue
+        if any(noise in token for noise in _COMPARISON_NOISE_HINTS):
             continue
         if _parse_ordinal(token) is not None:
             continue
@@ -189,7 +227,7 @@ def _append_unique(targets: list[dict[str, Any]], target: dict[str, Any]) -> Non
 
 def _resolve_ordinal_reference(reference: str, session_state: dict | SessionState | None) -> dict[str, Any]:
     index = _parse_ordinal(reference)
-    candidates = _recommendation_candidates(session_state)
+    candidates = _comparison_candidates(session_state) or _recommendation_candidates(session_state)
     if index is None:
         return {"status": "unresolved", "reason": "ordinal_not_detected", "source_ref": reference}
     if 1 <= index <= len(candidates):
@@ -211,7 +249,7 @@ def _resolve_ordinal_reference(reference: str, session_state: dict | SessionStat
 
 def _resolve_deictic_reference(reference: str, session_state: dict | SessionState | None) -> dict[str, Any]:
     compact = str(reference or "").strip()
-    recommendation_candidates = _recommendation_candidates(session_state)
+    recommendation_candidates = _comparison_candidates(session_state) or _recommendation_candidates(session_state)
     is_list = (compact in _LIST_DEICTIC_HINTS) or bool(_LIST_COUNT_RE.search(compact))
     if is_list:
         count = _parse_list_size(compact)
@@ -261,10 +299,12 @@ def resolve_comparison_targets(
     reference_mentions = [str(item).strip() for item in frame.get("reference_mentions", []) or [] if str(item).strip()]
 
     def _resolve_explicit(query: str) -> dict[str, Any]:
-        try:
-            _graph_builder = import_module("local_life_agent.engine.graph_builder")
-        except Exception:
-            _graph_builder = None
+        _graph_builder = sys.modules.get("local_life_agent.engine.graph_builder")
+        if _graph_builder is None:
+            try:
+                from ..engine import graph_builder as _graph_builder
+            except Exception:
+                _graph_builder = None
 
         if _graph_builder is not None:
             resolve_shop_fn = getattr(_graph_builder, "resolve_shop", None)
@@ -376,7 +416,7 @@ def resolve_comparison_targets(
                 cand_list = resolved.get("candidates") or []
                 if cand_list:
                     for cand in cand_list:
-                        cand_dict = _shop_dict(cand.get("shop") if isinstance(cand, dict) else cand)
+                        cand_dict = _candidate_shop_dict(cand)
                         _append_unique(targets, _comparison_shop(cand_dict))
                 unresolved_targets.append(
                     {
@@ -384,9 +424,9 @@ def resolve_comparison_targets(
                         "query": query,
                         "source_ref": source_ref,
                         "candidates": [
-                            _comparison_shop(_shop_dict(cand.get("shop") if isinstance(cand, dict) else cand))
+                            _comparison_shop(_candidate_shop_dict(cand))
                             for cand in cand_list
-                            if _shop_dict(cand.get("shop") if isinstance(cand, dict) else cand)
+                            if _candidate_shop_dict(cand)
                         ],
                     }
                 )
@@ -458,7 +498,7 @@ def resolve_comparison_targets(
             cand_list = resolved.get("candidates") or []
             if cand_list:
                 for cand in cand_list:
-                    cand_dict = _shop_dict(cand.get("shop") if isinstance(cand, dict) else cand)
+                    cand_dict = _candidate_shop_dict(cand)
                     _append_unique(targets, _comparison_shop(cand_dict))
             unresolved_targets.append(
                 {
@@ -466,9 +506,9 @@ def resolve_comparison_targets(
                     "query": query_text,
                     "source_ref": query_text,
                     "candidates": [
-                        _comparison_shop(_shop_dict(cand.get("shop") if isinstance(cand, dict) else cand))
+                        _comparison_shop(_candidate_shop_dict(cand))
                         for cand in cand_list
-                        if _shop_dict(cand.get("shop") if isinstance(cand, dict) else cand)
+                        if _candidate_shop_dict(cand)
                     ],
                 }
             )

@@ -1,6 +1,50 @@
 """Core global enumerations for the local life agent."""
 
+from __future__ import annotations
+
 from enum import Enum
+from typing import Any
+
+
+class ResponseMode(str, Enum):
+    """Normalized third-layer response mode."""
+
+    DIRECT = "direct"
+    DIRECT_RESPONSE = "direct_response"
+    REJECT = "reject"
+    CLARIFY = "clarify"
+    FALLBACK = "fallback"
+    ANSWER = "answer"
+    TOOL_ANSWER = "tool_answer"
+    COMPARISON = "comparison"
+    EXPLORATION_PLAN = "exploration_plan"
+
+
+_RESPONSE_MODE_ALIASES: dict[str, ResponseMode] = {
+    "direct": ResponseMode.DIRECT,
+    "direct_response": ResponseMode.DIRECT,
+    "reject": ResponseMode.REJECT,
+    "clarify": ResponseMode.CLARIFY,
+    "fallback": ResponseMode.FALLBACK,
+    "answer": ResponseMode.ANSWER,
+    "tool_answer": ResponseMode.TOOL_ANSWER,
+    "comparison": ResponseMode.COMPARISON,
+    "exploration_plan": ResponseMode.EXPLORATION_PLAN,
+}
+
+
+def normalize_response_mode(value: Any) -> ResponseMode | None:
+    """Map legacy strings and enum-like values to a canonical ResponseMode."""
+
+    if value is None or value == "":
+        return None
+    if isinstance(value, ResponseMode):
+        return value
+    raw = getattr(value, "value", value)
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    return _RESPONSE_MODE_ALIASES.get(text)
 
 
 class TopIntent(str, Enum):

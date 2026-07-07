@@ -7,6 +7,7 @@ import pytest
 
 from local_life_agent.semantic.slot_extractor import _extract_deictic
 from local_life_agent.target.context_recovery import recover_context
+from local_life_agent.target.reference_resolver import resolve_comparison_targets, resolve_references
 from local_life_agent.answer.evidence_builder import build_evidence
 from local_life_agent.domain.schemas import ComparisonMatrix, EvidencePack, ComparisonCell
 from local_life_agent.domain.state import SessionState
@@ -40,11 +41,19 @@ def test_group_deictic_size_parsing():
 
     frame_three = {"task_type": "comparison", "deictic_references": ["这三家"]}
     res_three = recover_context(session, frame_three)
-    assert len(res_three.get("comparison_targets", [])) == 3
+    assert res_three["context_resolution"]["status"] == "SIGNAL_ONLY"
+    assert res_three["context_resolution"]["reference_signal"]["deictic_references"] == ["这三家"]
+    resolved_three = resolve_references("这三家", session, frame_three)
+    assert resolved_three["status"] == "resolved_list"
+    assert len(resolved_three.get("targets", [])) == 3
 
     frame_several = {"task_type": "comparison", "deictic_references": ["这几家"]}
     res_several = recover_context(session, frame_several)
-    assert len(res_several.get("comparison_targets", [])) == 3
+    assert res_several["context_resolution"]["status"] == "SIGNAL_ONLY"
+    assert res_several["context_resolution"]["reference_signal"]["deictic_references"] == ["这几家"]
+    resolved_several = resolve_references("这几家", session, frame_several)
+    assert resolved_several["status"] == "resolved_list"
+    assert len(resolved_several.get("targets", [])) == 3
 
 
 def test_resolve_deictic_reference_with_group():
@@ -56,8 +65,11 @@ def test_resolve_deictic_reference_with_group():
     # "这三家" -> should resolve first 3 shops
     frame = {"task_type": "comparison", "deictic_references": ["这三家"]}
     res_three = recover_context(session, frame)
-    targets_three = res_three.get("comparison_targets", [])
-    assert res_three["context_resolution"]["status"] == "RESOLVED"
+    assert res_three["context_resolution"]["status"] == "SIGNAL_ONLY"
+    assert res_three["context_resolution"]["reference_signal"]["deictic_references"] == ["这三家"]
+    resolved_three = resolve_references("这三家", session, frame)
+    assert resolved_three["status"] == "resolved_list"
+    targets_three = resolved_three.get("targets", [])
     assert len(targets_three) == 3
     assert targets_three[2].get("shop_id") == SHOP_C["shop_id"]
 
@@ -78,7 +90,10 @@ def test_deictic_priority_clarification():
         ]
     }
     res = recover_context(session, frame)
-    assert res["context_resolution"]["status"] == "NEED_CLARIFICATION"
+    assert res["context_resolution"]["status"] == "SIGNAL_ONLY"
+    assert res["context_resolution"]["reference_signal"]["deictic_references"] == ["这家"]
+    resolved = resolve_comparison_targets("这家和海底捞比呢？", session, frame)
+    assert resolved["status"] == "NEED_CLARIFICATION"
 
 
 def test_comparison_matrix_cells_validation():

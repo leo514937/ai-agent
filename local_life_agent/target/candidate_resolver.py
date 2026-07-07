@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..config import SEARCH_LIMIT
+from ..location_utils import normalize_location_payload
 from ..tools import db_client
 from ..domain.candidate import (
     CandidateSet,
@@ -37,11 +38,11 @@ def _unwrap_resolve_shop_result(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def _default_resolve_shop(query: str, **kw: Any) -> dict[str, Any]:
-    from ..engine import graph_builder as gb
+    from .shop_resolver import resolve_shop as canonical_resolve_shop
 
     params = dict(kw or {})
     params.setdefault("location", {})
-    return gb.resolve_shop(query, **params)
+    return canonical_resolve_shop(query, **params)
 
 
 def _default_search_shops(query: str, **kw: Any) -> dict[str, Any]:
@@ -55,6 +56,28 @@ def _default_search_shops(query: str, **kw: Any) -> dict[str, Any]:
     if isinstance(data, dict) and "data" in data:
         return data
     return result
+
+
+def _location_from_state(state: dict[str, Any] | None) -> dict[str, Any]:
+    if not state:
+        return {}
+    from ..tools.db_tools import geocode_location
+
+    for key in ("user_location", "user_context"):
+        location = geocode_location(normalize_location_payload(state.get(key)))
+        if location.get("lat") is not None and location.get("lng") is not None:
+            return location
+    semantic_frame = normalize_location_payload(state.get("semantic_frame"))
+    location = geocode_location(semantic_frame.get("location"))
+    if location.get("lat") is not None and location.get("lng") is not None:
+        return location
+    session = state.get("session_state_before") or state.get("session_state") or {}
+    session_payload = normalize_location_payload(session)
+    if session_payload:
+        location = geocode_location(session_payload.get("location"))
+        if location.get("lat") is not None and location.get("lng") is not None:
+            return location
+    return {}
 
 
 def _to_dict(value: Any) -> dict[str, Any]:
@@ -492,7 +515,7 @@ class CandidateResolver:
             return self.resolve_context(goal, spec, state)
         if source == CandidateSource.MIXED:
             return self.resolve_mixed(goal, spec, state)
-        return self.resolve_discovery(goal, spec)
+        return self.resolve_discovery(goal, spec, state)
 
     # ------------------------------------------------------------------
     # Explicit resolution
@@ -834,6 +857,7 @@ class CandidateResolver:
         self,
         goal: Any,
         spec: CandidateSpec,
+        state: dict[str, Any] | None = None,
     ) -> CandidateSet:
         """Discover shops via search_shops.
 
@@ -854,11 +878,12 @@ class CandidateResolver:
         limit = spec.limit or SEARCH_LIMIT
         candidates: list[ResolvedCandidate] = []
         seen_shop_ids: set[str] = set()
+        location = _location_from_state(state)
         for query in query_variants:
             if limit and len(candidates) >= limit:
                 break
 
-            result = self._search_shops(query)
+            result = self._search_shops(query, location=location or None, limit=limit)
             data = result.get("data") or []
             if not isinstance(data, list):
                 data = []
@@ -922,7 +947,7 @@ class CandidateResolver:
         """
         explicit_set = self.resolve_explicit(goal, spec, state)
         context_set = self.resolve_context(goal, spec, state)
-        discovery_set = self.resolve_discovery(goal, spec)
+        discovery_set = self.resolve_discovery(goal, spec, state)
 
         merged: list[ResolvedCandidate] = []
         seen_ids: set[str] = set()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import json
 from typing import Any, Callable
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -603,10 +604,11 @@ def _build_recovery_frame(
         return None, normalized, "structured_recovery_failed"
 
     frame.confidence = min(float(frame.confidence or 0.0), 0.5)
+    semantic_source = "diagnostic_rules" if fallback_reason else source
     frame = _annotate_frame(
         frame,
-        semantic_source=source,
-        parse_source=SemanticParseSource.real_llm if source in {"real_llm", "fake_llm", "spy_real_llm"} else SemanticParseSource.fallback_rules,
+        semantic_source=semantic_source,
+        parse_source=SemanticParseSource.real_llm if semantic_source in {"real_llm", "fake_llm", "spy_real_llm"} else SemanticParseSource.fallback_rules,
         llm_backend=llm_backend,
         fallback_reason=fallback_reason,
         llm_called=llm_called,
@@ -660,7 +662,7 @@ def _safe_extract_slots(text: str, top_intent: str) -> dict[str, Any]:
             "top_intent": top_intent,
             "task_type": task_type,
             "primary_task": primary_task,
-            "facets": [],
+            "facets": [{"name": facet, "required": True} for facet in focused_facets],
             "merchant_mentions": merchant_mentions,
             "brand_mentions": [],
             "branch_mentions": [],
@@ -678,6 +680,82 @@ def _safe_extract_slots(text: str, top_intent: str) -> dict[str, Any]:
             "need_context": False,
         }
     return payload
+
+
+def _semantic_full_timeout_ms() -> int:
+    return max(LLM_TIMEOUT_MS, 30000)
+
+
+def _semantic_repair_timeout_ms() -> int:
+    return max(8000, min(_semantic_full_timeout_ms() // 2, 12000))
+
+
+def _build_semantic_repair_prompt(
+    normalised_text: str,
+    top_intent: str,
+    *,
+    session_summary_json: str,
+    repair_hints: dict[str, Any],
+) -> str:
+    compact_hints = {
+        key: value
+        for key, value in repair_hints.items()
+        if key
+        in {
+            "task_type",
+            "primary_task",
+            "workflow_hint",
+            "comparison_intent",
+            "comparison_facets",
+            "comparison_targets",
+            "merchant_mentions",
+            "brand_mentions",
+            "branch_mentions",
+            "reference_mentions",
+            "ordinal_references",
+            "deictic_references",
+            "focused_facets",
+            "location",
+            "location_reference",
+            "shop_reference",
+            "category",
+            "hard_constraints",
+            "soft_preferences",
+            "ranking_signals",
+            "need_context",
+            "comparison_focus",
+        }
+        and value not in (None, [], {}, "")
+    }
+    payload = {
+        "top_intent": top_intent,
+        "text": normalised_text,
+        "session_context": json.loads(session_summary_json) if session_summary_json else {},
+        "hints": compact_hints,
+    }
+    return (
+        "你是本地生活语义修复器。只输出 JSON，不要解释，不要重复题外内容。\n"
+        "目标：基于用户原文和已有提示，修复一个尽量完整但最小化的 semantic frame。\n"
+        "优先保证 top_intent、task_type、primary_task、facets、merchant_mentions、location、reference、preferences 的结构合法。\n"
+        "如果不确定，请保守填写空数组/空对象，不要编造店名、坐标或候选。\n"
+        f"输入：{json.dumps(payload, ensure_ascii=False)}"
+    )
+
+
+def _semantic_llm_attempt(
+    llm_call: Callable[..., dict[str, Any]],
+    *,
+    prompt: str,
+    timeout_ms: int,
+) -> dict[str, Any]:
+    return llm_call(
+        prompt,
+        system_prompt="",
+        timeout_ms=timeout_ms,
+        temperature=0.0,
+        max_retries=0,
+        response_validator=_validate_semantic_payload,
+    )
 
 
 def parse_top_intent(text: str, llm_call: Callable[..., dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -841,6 +919,11 @@ def parse_semantic_frame(
             "llm_backend": frame.llm_backend,
             "fallback_reason": frame.fallback_reason,
             "llm_called": frame.llm_called,
+            "semantic_parse_status": "fallback",
+            "semantic_parse_mode": "rules",
+            "semantic_parse_retry_count": 0,
+            "semantic_parse_attempts": 0,
+            "semantic_parse_reason": "empty_input",
             "schema_validation_result": _schema_validation_result(
                 status="fallback",
                 source="empty_input",
@@ -871,6 +954,11 @@ def parse_semantic_frame(
                 "llm_backend": "",
                 "fallback_reason": "llm_call_unavailable",
                 "llm_called": False,
+                "semantic_parse_status": "failed",
+                "semantic_parse_mode": "rules",
+                "semantic_parse_retry_count": 0,
+                "semantic_parse_attempts": 0,
+                "semantic_parse_reason": "llm_call_unavailable",
                 "semantic_repair_hints": _safe_extract_slots(normalised_text, top_intent),
                 "schema_validation_result": _schema_validation_result(
                     status="failed",
@@ -907,6 +995,11 @@ def parse_semantic_frame(
             "llm_backend": frame.llm_backend,
             "fallback_reason": frame.fallback_reason,
             "llm_called": frame.llm_called,
+            "semantic_parse_status": "fallback",
+            "semantic_parse_mode": "rules",
+            "semantic_parse_retry_count": 0,
+            "semantic_parse_attempts": 0,
+            "semantic_parse_reason": "llm_call_unavailable",
             "semantic_repair_hints": _safe_extract_slots(normalised_text, top_intent),
             "schema_validation_result": _schema_validation_result(
                 status="fallback",
@@ -935,22 +1028,52 @@ def parse_semantic_frame(
         ss = None
     summary = build_session_context_summary(ss)
     summary_json = summary.model_dump_json()
+    repair_hints = _safe_extract_slots(normalised_text, top_intent)
 
-    rendered_prompt = (
+    full_prompt = (
         prompt_template
         .replace("{{TEXT}}", normalised_text)
         .replace("{{TOP_INTENT}}", top_intent)
         .replace("{{SESSION_CONTEXT}}", summary_json)
     )
-
-    result = llm_call(
-        rendered_prompt,
-        system_prompt="",
-        timeout_ms=LLM_TIMEOUT_MS,
-        temperature=0.0,
-        max_retries=1,
-        response_validator=_validate_semantic_payload,
+    repair_prompt = _build_semantic_repair_prompt(
+        normalised_text,
+        top_intent,
+        session_summary_json=summary_json,
+        repair_hints=repair_hints,
     )
+
+    parse_retry_count = 0
+    parse_attempts = 0
+    parse_mode = "full_prompt"
+    parse_status = "pending"
+    parse_reason = ""
+
+    result = _semantic_llm_attempt(
+        llm_call,
+        prompt=full_prompt,
+        timeout_ms=_semantic_full_timeout_ms(),
+    )
+    parse_attempts += 1
+    if not result.get("ok"):
+        parse_reason = str(result.get("error_code", "") or result.get("error_message", "") or "semantic_parse_failed")
+        parse_retry_count = 1
+        parse_mode = "repair_prompt"
+        repair_result = _semantic_llm_attempt(
+            llm_call,
+            prompt=repair_prompt,
+            timeout_ms=_semantic_repair_timeout_ms(),
+        )
+        parse_attempts += 1
+        result = repair_result
+        if repair_result.get("ok"):
+            parse_status = "repaired"
+            parse_reason = parse_reason or str(result.get("error_code", "") or result.get("error_message", "") or "semantic_parse_failed")
+        else:
+            parse_status = "failed"
+            parse_reason = str(repair_result.get("error_code", "") or repair_result.get("error_message", "") or parse_reason or "semantic_parse_failed")
+    else:
+        parse_status = "validated"
 
     if result.get("ok"):
         payload = result["content"] or {}
@@ -991,12 +1114,31 @@ def parse_semantic_frame(
                 fallback_reason="",
                 llm_called=True,
             )
+            frame.semantic_parse_status = parse_status
+            frame.semantic_parse_mode = parse_mode
+            frame.semantic_parse_retry_count = parse_retry_count
+            frame.semantic_parse_attempts = parse_attempts
+            frame.semantic_parse_reason = parse_reason
             schema_validation_result = _schema_validation_result(
-                status="validated",
+                status=parse_status,
                 source="llm",
                 confidence=float(frame.confidence or 0.0),
                 payload_preview={"top_intent": normalized_payload.get("top_intent"), "task_type": normalized_payload.get("task_type"), "workflow_hint": normalized_payload.get("workflow_hint")},
             )
+            schema_validation_result.update(
+                {
+                    "parse_status": parse_status,
+                    "parse_mode": parse_mode,
+                    "parse_retry_count": parse_retry_count,
+                    "parse_attempts": parse_attempts,
+                    "parse_reason": parse_reason,
+                }
+            )
+            if parse_status != "validated":
+                frame.semantic_source = "diagnostic_rules"
+                frame.parse_source = SemanticParseSource.fallback_rules
+                frame.semantic_parse_source = SemanticParseSource.fallback_rules
+                frame.fallback_reason = parse_reason or frame.fallback_reason or "semantic_parse_repaired"
         except ValidationError as exc:
             recovery_frame, recovery_preview, recovery_error = _build_recovery_frame(
                 normalised_text,
@@ -1009,6 +1151,11 @@ def parse_semantic_frame(
             )
             if recovery_frame is not None:
                 frame = recovery_frame
+                frame.semantic_parse_status = "recovered"
+                frame.semantic_parse_mode = parse_mode
+                frame.semantic_parse_retry_count = parse_retry_count
+                frame.semantic_parse_attempts = parse_attempts
+                frame.semantic_parse_reason = parse_reason or "SEMANTIC_SCHEMA_VALIDATION_FAILED"
                 schema_validation_result = _schema_validation_result(
                     status="recovered",
                     source="llm_raw_recovery",
@@ -1016,6 +1163,15 @@ def parse_semantic_frame(
                     payload_preview=recovery_preview or normalized_payload,
                     error_code="SEMANTIC_SCHEMA_REPAIRED",
                     error_message=str(exc),
+                )
+                schema_validation_result.update(
+                    {
+                        "parse_status": "recovered",
+                        "parse_mode": parse_mode,
+                        "parse_retry_count": parse_retry_count,
+                        "parse_attempts": parse_attempts,
+                        "parse_reason": frame.semantic_parse_reason,
+                    }
                 )
             elif allow_fallback:
                 frame = _fallback_semantic_frame(
@@ -1026,6 +1182,11 @@ def parse_semantic_frame(
                     llm_backend=llm_backend,
                     semantic_source="diagnostic_rules",
                 )
+                frame.semantic_parse_status = "fallback"
+                frame.semantic_parse_mode = parse_mode
+                frame.semantic_parse_retry_count = parse_retry_count
+                frame.semantic_parse_attempts = parse_attempts
+                frame.semantic_parse_reason = parse_reason or "SEMANTIC_SCHEMA_VALIDATION_FAILED"
                 schema_validation_result = _schema_validation_result(
                     status="fallback",
                     source="slot_extractor_recovery",
@@ -1033,6 +1194,15 @@ def parse_semantic_frame(
                     payload_preview=recovery_preview or normalized_payload,
                     error_code="SEMANTIC_SCHEMA_VALIDATION_FAILED",
                     error_message=str(exc),
+                )
+                schema_validation_result.update(
+                    {
+                        "parse_status": "fallback",
+                        "parse_mode": parse_mode,
+                        "parse_retry_count": parse_retry_count,
+                        "parse_attempts": parse_attempts,
+                        "parse_reason": frame.semantic_parse_reason,
+                    }
                 )
             else:
                 response = {
@@ -1046,6 +1216,11 @@ def parse_semantic_frame(
                     "llm_backend": llm_backend,
                     "fallback_reason": "SEMANTIC_SCHEMA_VALIDATION_FAILED",
                     "llm_called": True,
+                    "semantic_parse_status": "failed",
+                    "semantic_parse_mode": parse_mode,
+                    "semantic_parse_retry_count": parse_retry_count,
+                    "semantic_parse_attempts": parse_attempts,
+                    "semantic_parse_reason": parse_reason or "SEMANTIC_SCHEMA_VALIDATION_FAILED",
                     "schema_validation_result": _schema_validation_result(
                         status="failed",
                         source="llm_validation",
@@ -1065,12 +1240,54 @@ def parse_semantic_frame(
                     error_message=str(exc),
                     llm_backend=llm_backend,
                     raw_preview=result.get("raw", ""),
+                    parse_mode=parse_mode,
+                    parse_retry_count=parse_retry_count,
+                    parse_attempts=parse_attempts,
                 )
                 return response
-        if frame.top_intent is None and top_intent in {item.value for item in TopIntent}:
-            frame.top_intent = TopIntent(top_intent)
-            frame.intent = frame.top_intent
-        dropped_facets = get_last_dropped_facets()
+    if not result.get("ok"):
+        error_code = result.get("error_code", "") or parse_reason or "SEMANTIC_PARSE_FAILED"
+        error_message = result.get("error_message", "") or "semantic parse failed"
+        if not allow_fallback:
+            response = {
+                "semantic_frame": None,
+                "error_code": error_code,
+                "error_message": error_message,
+                "raw": result.get("raw", ""),
+                "semantic_source": "",
+                "parse_source": "",
+                "semantic_parse_source": "",
+                "llm_backend": str(result.get("llm_backend", "") or ""),
+                "fallback_reason": error_code,
+                "llm_called": True,
+                "semantic_parse_status": "failed",
+                "semantic_parse_mode": parse_mode,
+                "semantic_parse_retry_count": parse_retry_count,
+                "semantic_parse_attempts": parse_attempts,
+                "semantic_parse_reason": parse_reason or error_code,
+                "semantic_repair_hints": _safe_extract_slots(normalised_text, top_intent),
+                "schema_validation_result": _schema_validation_result(
+                    status="failed",
+                    source="llm_failure",
+                    confidence=0.0,
+                    error_code=error_code,
+                    error_message=error_message,
+                ),
+            }
+            return response
+        frame = _fallback_semantic_frame(
+            normalised_text,
+            top_intent,
+            fallback_reason=error_code,
+            llm_called=True,
+            llm_backend=str(result.get("llm_backend", "") or ""),
+            semantic_source="diagnostic_rules",
+        )
+        frame.semantic_parse_status = "fallback"
+        frame.semantic_parse_mode = parse_mode
+        frame.semantic_parse_retry_count = parse_retry_count
+        frame.semantic_parse_attempts = parse_attempts
+        frame.semantic_parse_reason = parse_reason or error_code
         response = {
             "semantic_frame": frame,
             "error_code": "",
@@ -1081,101 +1298,49 @@ def parse_semantic_frame(
             "semantic_parse_source": _enum_value(frame.semantic_parse_source),
             "llm_backend": frame.llm_backend,
             "fallback_reason": frame.fallback_reason,
-            "llm_called": frame.llm_called,
-            "schema_validation_result": schema_validation_result,
-            "dropped_facets": dropped_facets,
-        }
-        log_kv(
-            _SERVICE_LOG,
-            logging.INFO,
-            "[SEMANTIC_PARSE_RESULT]",
-            tone="route",
-            source="llm",
-            semantic_source=frame.semantic_source,
-            llm_backend=frame.llm_backend,
-            task_type=frame.task_type,
-            primary_task=frame.primary_task,
-            focused_facets=frame.focused_facets,
-            merchant_mentions=frame.merchant_mentions,
-            dropped_facets=dropped_facets,
-            llm_payload=payload,
-            raw_preview=result.get("raw", ""),
-        )
-        return response
-
-    error_code = result.get("error_code", "") or "SEMANTIC_PARSE_FAILED"
-    error_message = result.get("error_message", "") or "semantic parse failed"
-    if not allow_fallback:
-        response = {
-            "semantic_frame": None,
-            "error_code": error_code,
-            "error_message": error_message,
-            "raw": result.get("raw", ""),
-            "semantic_source": "",
-            "parse_source": "",
-            "semantic_parse_source": "",
-            "llm_backend": str(result.get("llm_backend", "") or ""),
-            "fallback_reason": error_code,
             "llm_called": True,
+            "semantic_parse_status": frame.semantic_parse_status,
+            "semantic_parse_mode": frame.semantic_parse_mode,
+            "semantic_parse_retry_count": frame.semantic_parse_retry_count,
+            "semantic_parse_attempts": frame.semantic_parse_attempts,
+            "semantic_parse_reason": frame.semantic_parse_reason,
             "semantic_repair_hints": _safe_extract_slots(normalised_text, top_intent),
             "schema_validation_result": _schema_validation_result(
-                status="failed",
-                source="llm_failure",
-                confidence=0.0,
+                status="fallback",
+                source="slot_extractor_fallback",
+                confidence=frame.confidence,
+                payload_preview={},
                 error_code=error_code,
                 error_message=error_message,
             ),
         }
         log_kv(
             _SERVICE_LOG,
-            logging.ERROR,
+            logging.WARNING,
             "[SEMANTIC_PARSE_RESULT]",
-            tone="error",
-            source="llm_failed",
-            error_code=error_code,
-            error_message=error_message,
-            llm_backend=result.get("llm_backend", ""),
+            tone="warn",
+            source="fallback",
+            semantic_source=frame.semantic_source,
+            llm_backend=frame.llm_backend,
+            fallback_reason=frame.fallback_reason,
             raw_preview=result.get("raw", ""),
-            repair_hints=response.get("semantic_repair_hints"),
+            semantic_frame=frame,
+            parse_status=response["semantic_parse_status"],
+            parse_mode=response["semantic_parse_mode"],
+            parse_retry_count=response["semantic_parse_retry_count"],
+            parse_attempts=response["semantic_parse_attempts"],
+            parse_reason=response["semantic_parse_reason"],
         )
         return response
 
-    recovery_frame, recovery_preview, _recovery_error = _build_recovery_frame(
-        normalised_text,
-        top_intent,
-        result.get("raw") or result.get("content") or {},
-        llm_called=True,
-        llm_backend=str(result.get("llm_backend", "") or ""),
-        source="diagnostic_rules",
-        fallback_reason=error_code,
-    )
-    if recovery_frame is not None:
-        frame = recovery_frame
-        schema_validation_result = _schema_validation_result(
-            status="recovered",
-            source="llm_raw_recovery",
-            confidence=frame.confidence,
-            payload_preview=recovery_preview or {},
-            error_code=error_code,
-            error_message=error_message,
-        )
-    else:
-        frame = _fallback_semantic_frame(
-            normalised_text,
-            top_intent,
-            fallback_reason=error_code,
-            llm_called=True,
-            llm_backend=str(result.get("llm_backend", "") or ""),
-            semantic_source="diagnostic_rules",
-        )
-        schema_validation_result = _schema_validation_result(
-            status="fallback",
-            source="slot_extractor_fallback",
-            confidence=frame.confidence,
-            payload_preview=recovery_preview or {},
-            error_code=error_code,
-            error_message=error_message,
-        )
+    if frame.top_intent is None and top_intent in {item.value for item in TopIntent}:
+        frame.top_intent = TopIntent(top_intent)
+        frame.intent = frame.top_intent
+    dropped_facets = get_last_dropped_facets()
+    if frame.semantic_parse_status in {"fallback", "failed", "recovered"} or str(frame.fallback_reason or ""):
+        frame.semantic_source = "diagnostic_rules"
+        frame.parse_source = SemanticParseSource.fallback_rules
+        frame.semantic_parse_source = SemanticParseSource.fallback_rules
     response = {
         "semantic_frame": frame,
         "error_code": "",
@@ -1186,22 +1351,143 @@ def parse_semantic_frame(
         "semantic_parse_source": _enum_value(frame.semantic_parse_source),
         "llm_backend": frame.llm_backend,
         "fallback_reason": frame.fallback_reason,
-        "llm_called": True,
-        "semantic_repair_hints": _safe_extract_slots(normalised_text, top_intent),
+        "llm_called": frame.llm_called,
+        "semantic_parse_status": frame.semantic_parse_status or parse_status,
+        "semantic_parse_mode": frame.semantic_parse_mode or parse_mode,
+        "semantic_parse_retry_count": frame.semantic_parse_retry_count or parse_retry_count,
+        "semantic_parse_attempts": frame.semantic_parse_attempts or parse_attempts,
+        "semantic_parse_reason": frame.semantic_parse_reason or parse_reason,
         "schema_validation_result": schema_validation_result,
+        "dropped_facets": dropped_facets,
     }
     log_kv(
         _SERVICE_LOG,
-        logging.WARNING,
+        logging.INFO,
         "[SEMANTIC_PARSE_RESULT]",
-        tone="warn",
-        source="fallback",
+        tone="route",
+        source="llm",
         semantic_source=frame.semantic_source,
         llm_backend=frame.llm_backend,
-        fallback_reason=frame.fallback_reason,
+        task_type=frame.task_type,
+        primary_task=frame.primary_task,
+        focused_facets=frame.focused_facets,
+        merchant_mentions=frame.merchant_mentions,
+        dropped_facets=dropped_facets,
+        llm_payload=payload,
         raw_preview=result.get("raw", ""),
-        semantic_frame=frame,
+        parse_status=response["semantic_parse_status"],
+        parse_mode=response["semantic_parse_mode"],
+        parse_retry_count=response["semantic_parse_retry_count"],
+        parse_attempts=response["semantic_parse_attempts"],
+        parse_reason=response["semantic_parse_reason"],
     )
     return response
+
+    if not result.get("ok"):
+        error_code = result.get("error_code", "") or "SEMANTIC_PARSE_FAILED"
+        error_message = result.get("error_message", "") or "semantic parse failed"
+        if not allow_fallback:
+            response = {
+                "semantic_frame": None,
+                "error_code": error_code,
+                "error_message": error_message,
+                "raw": result.get("raw", ""),
+                "semantic_source": "",
+                "parse_source": "",
+                "semantic_parse_source": "",
+                "llm_backend": str(result.get("llm_backend", "") or ""),
+                "fallback_reason": error_code,
+                "llm_called": True,
+                "semantic_parse_status": "failed",
+                "semantic_parse_mode": parse_mode,
+                "semantic_parse_retry_count": parse_retry_count,
+                "semantic_parse_attempts": parse_attempts,
+                "semantic_parse_reason": parse_reason or error_code,
+                "semantic_repair_hints": _safe_extract_slots(normalised_text, top_intent),
+                "schema_validation_result": _schema_validation_result(
+                    status="failed",
+                    source="llm_failure",
+                    confidence=0.0,
+                    error_code=error_code,
+                    error_message=error_message,
+                ),
+            }
+            log_kv(
+                _SERVICE_LOG,
+                logging.ERROR,
+                "[SEMANTIC_PARSE_RESULT]",
+                tone="error",
+                source="llm_failed",
+                error_code=error_code,
+                error_message=error_message,
+                llm_backend=result.get("llm_backend", ""),
+                raw_preview=result.get("raw", ""),
+                repair_hints=response.get("semantic_repair_hints"),
+                parse_mode=parse_mode,
+                parse_retry_count=parse_retry_count,
+                parse_attempts=parse_attempts,
+            )
+            return response
+
+        frame = _fallback_semantic_frame(
+            normalised_text,
+            top_intent,
+            fallback_reason=error_code,
+            llm_called=True,
+            llm_backend=str(result.get("llm_backend", "") or ""),
+            semantic_source="diagnostic_rules",
+        )
+        frame.semantic_parse_status = "fallback"
+        frame.semantic_parse_mode = parse_mode
+        frame.semantic_parse_retry_count = parse_retry_count
+        frame.semantic_parse_attempts = parse_attempts
+        frame.semantic_parse_reason = parse_reason or error_code
+        if frame.top_intent is None and top_intent in {item.value for item in TopIntent}:
+            frame.top_intent = TopIntent(top_intent)
+            frame.intent = frame.top_intent
+        response = {
+            "semantic_frame": frame,
+            "error_code": "",
+            "error_message": "",
+            "raw": result.get("raw", ""),
+            "semantic_source": frame.semantic_source,
+            "parse_source": _enum_value(frame.parse_source),
+            "semantic_parse_source": _enum_value(frame.semantic_parse_source),
+            "llm_backend": frame.llm_backend,
+            "fallback_reason": frame.fallback_reason,
+            "llm_called": True,
+            "semantic_parse_status": frame.semantic_parse_status,
+            "semantic_parse_mode": frame.semantic_parse_mode,
+            "semantic_parse_retry_count": frame.semantic_parse_retry_count,
+            "semantic_parse_attempts": frame.semantic_parse_attempts,
+            "semantic_parse_reason": frame.semantic_parse_reason,
+            "semantic_repair_hints": _safe_extract_slots(normalised_text, top_intent),
+            "schema_validation_result": _schema_validation_result(
+                status="fallback",
+                source="slot_extractor_fallback",
+                confidence=frame.confidence,
+                payload_preview={},
+                error_code=error_code,
+                error_message=error_message,
+            ),
+        }
+        log_kv(
+            _SERVICE_LOG,
+            logging.WARNING,
+            "[SEMANTIC_PARSE_RESULT]",
+            tone="warn",
+            source="fallback",
+            semantic_source=frame.semantic_source,
+            llm_backend=frame.llm_backend,
+            fallback_reason=frame.fallback_reason,
+            raw_preview=result.get("raw", ""),
+            semantic_frame=frame,
+            parse_status=response["semantic_parse_status"],
+            parse_mode=response["semantic_parse_mode"],
+            parse_retry_count=response["semantic_parse_retry_count"],
+            parse_attempts=response["semantic_parse_attempts"],
+            parse_reason=response["semantic_parse_reason"],
+        )
+        return response
 
 

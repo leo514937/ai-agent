@@ -11,6 +11,7 @@ from .candidate_decision import (
     build_candidate_decision_plan,
     map_candidate_decision_plan_to_decision_plan,
 )
+from .rewrite_instruction import RewriteInstruction
 
 def _get_tool_results_from_evidence(evidence: dict) -> dict[str, Any]:
     tool_results = evidence.get("tool_results")
@@ -167,6 +168,9 @@ def _build_decision_plan(
 
     answer_type = ap.get("answer_type", "general")
     comparison_matrix = ev.get("comparison_matrix") or {}
+    comparison_winner = _to_dict(comparison_matrix.get("statistical_winner"))
+    comparison_winner_provenance = _to_dict(comparison_matrix.get("winner_provenance"))
+    comparison_winner_uncertainty_note = str(comparison_matrix.get("winner_uncertainty_note", "") or "").strip()
     semantic_frame = _to_dict(ev.get("semantic_frame") or ap.get("semantic_frame"))
     exploration_stages = [
         _to_dict(item)
@@ -191,6 +195,7 @@ def _build_decision_plan(
     unknown_fields = _normalise_str_list(ev.get("unknown_fields"))
     failed_tools = _normalise_str_list(ev.get("failed_tools"))
     partial_fields = _normalise_str_list(ev.get("partial_fields"))
+    fallback_template_type = str(ap.get("fallback_template_type") or ev.get("fallback_template_type") or "").strip()
     facet_statuses = _to_dict(ev.get("facet_statuses") or ap.get("facet_statuses"))
     grounded_facts = _to_dict(ev.get("grounded_facts") or ap.get("grounded_facts"))
     facet_reasons = _to_dict(ev.get("facet_reasons") or ap.get("facet_reasons"))
@@ -300,6 +305,13 @@ def _build_decision_plan(
     forbidden_claims = list(ap.get("forbidden_claims", []))
     main_recommendation = None
 
+    recommendation_snapshot = ev.get("ranking_snapshot") or {}
+    recommendation_ranked_items = [
+        _to_dict(item)
+        for item in (recommendation_snapshot.get("ranked") or recommendation_snapshot.get("ranked_shops") or recommendation_snapshot.get("shops") or [])
+        if _to_dict(item)
+    ]
+
     if answer_type == "comparison" or (comparison_matrix and (comparison_matrix.get("rows") or comparison_matrix.get("overall_ranked"))):
         rows = comparison_matrix.get("rows", []) or []
         for row in rows:
@@ -320,8 +332,7 @@ def _build_decision_plan(
 
                 c_status = row_dict.get("coupon_status")
                 if c_status == "has_coupon":
-                    titles = row_dict.get("coupon_titles") or []
-                    facts.append(f"有券：{'、'.join(str(t) for t in titles[:3])}" if titles else "有券")
+                    facts.append("有券")
                 elif c_status == "empty":
                     facts.append("当前暂无可用优惠券")
                 elif c_status == "unknown":
@@ -349,6 +360,38 @@ def _build_decision_plan(
         notes = comparison_matrix.get("uncertainty_notes") or []
         for note in notes:
             uncertainty_notes.append(str(note))
+        if comparison_winner_uncertainty_note:
+            uncertainty_notes.append(comparison_winner_uncertainty_note)
+
+    elif answer_type == "recommendation" and recommendation_ranked_items:
+        selected_targets.extend(recommendation_ranked_items)
+        overall_ranking.extend(recommendation_ranked_items)
+        main_recommendation = recommendation_ranked_items[0]
+        for item in recommendation_ranked_items:
+            name = item.get("shop_name") or item.get("shop_id") or "这家店"
+            facts = []
+            for facet_name in ("rating", "distance_km", "coupon_status", "open_status", "avg_price"):
+                value = item.get(facet_name)
+                if value is None:
+                    continue
+                if facet_name == "coupon_status":
+                    if value == "has_coupon":
+                        facts.append("有券")
+                    elif value == "empty":
+                        facts.append("当前暂无可用优惠券")
+                elif facet_name == "open_status":
+                    if value == "open":
+                        facts.append("营业状态为：目前营业中")
+                    elif value == "closed":
+                        facts.append("营业状态为：目前已打烊")
+                elif facet_name == "distance_km":
+                    facts.append(f"距离约 {value} 公里")
+                elif facet_name == "rating":
+                    facts.append(f"评分为 {value}")
+                elif facet_name == "avg_price":
+                    facts.append(f"人均约 {value} 元")
+            if facts:
+                factual_points.append(f"{name}: {'; '.join(facts)}")
 
     else:
         facet_results = ev.get("facet_results") or []
@@ -513,8 +556,7 @@ def _build_decision_plan(
             uncertainty_notes.append(f"无法确认 {sname} 的营业状态")
 
         if target_dict["coupon_status"] == "has_coupon":
-            titles = target_dict.get("coupon_titles") or []
-            facts.append(f"有券：{'、'.join(str(t) for t in titles[:3])}" if titles else "有券")
+            facts.append("有券")
         elif target_dict["coupon_status"] == "empty":
             facts.append("当前暂无可用优惠券")
         elif "coupon" in target_dict["unknown_facts"]:
@@ -568,10 +610,16 @@ def _build_decision_plan(
         best_for=best_for,
         factual_points=factual_points,
         uncertainty_notes=uncertainty_notes,
+        statistical_winner=comparison_winner or None,
+        winner_provenance=comparison_winner_provenance,
+        winner_uncertainty_note=comparison_winner_uncertainty_note,
         forbidden_claims=forbidden_claims,
         decision_context={
             "raw_comparison_rows": (ev.get("comparison_matrix") or {}).get("rows", []) if isinstance(ev.get("comparison_matrix") or {}, dict) else [],
             "raw_ranking_rows": (ev.get("ranking_snapshot") or {}).get("ranked", []) if isinstance(ev.get("ranking_snapshot") or {}, dict) else [],
+            "comparison_winner": comparison_winner,
+            "comparison_winner_provenance": comparison_winner_provenance,
+            "comparison_winner_uncertainty_note": comparison_winner_uncertainty_note,
         },
         conversation_continuity=conversation_continuity or {},
         semantic_frame=semantic_frame,
@@ -599,6 +647,7 @@ def _build_decision_plan(
         partial_fields=partial_fields,
         evidence_review_result=evidence_review_result,
         answer_verify_result=answer_verify_result,
+        fallback_template_type=fallback_template_type,
     )
 
 
@@ -610,6 +659,8 @@ def generate_answer(
     metadata_out: dict | None = None,
     rewrite_count: int = 0,
     previous_violations: list[str] | None = None,
+    rewrite_instruction: RewriteInstruction | dict[str, Any] | None = None,
+    rewrite_mode: str = "",
     in_graph: bool = False,
     conversation_continuity: dict[str, Any] | None = None,
 ) -> str:
@@ -661,19 +712,90 @@ def generate_answer(
     from .. import config
     from .llm_verbalizer import verbalize_decision_plan
 
+    plan = _build_decision_plan(answer_plan, evidence, conversation_continuity=conversation_continuity)
+    metadata["decision_mode"] = str(getattr(plan, "decision_mode", "") or "")
+    metadata["fallback_used"] = bool(getattr(plan, "fallback_used", False))
+    metadata["candidate_count_before_decision"] = int(getattr(plan, "candidate_count_before_decision", 0) or 0)
+    metadata["candidate_count_after_decision"] = int(getattr(plan, "candidate_count_after_decision", 0) or 0)
+    metadata["evidence_preserved"] = bool(getattr(plan, "evidence_preserved", True))
+    metadata["decision_reason"] = str(getattr(plan, "decision_reason", "") or "")
+    metadata["comparison_winner"] = _to_dict(getattr(plan, "statistical_winner", {}) or {})
+    metadata["comparison_winner_provenance"] = _to_dict(getattr(plan, "winner_provenance", {}) or {})
+    metadata["comparison_winner_uncertainty_note"] = str(getattr(plan, "winner_uncertainty_note", "") or "").strip()
+    rewrite_instruction_obj = None
+    if rewrite_instruction is not None:
+        if isinstance(rewrite_instruction, RewriteInstruction):
+            rewrite_instruction_obj = rewrite_instruction
+        elif isinstance(rewrite_instruction, dict):
+            try:
+                rewrite_instruction_obj = RewriteInstruction.model_validate(rewrite_instruction)
+            except Exception:
+                rewrite_instruction_obj = None
+    if rewrite_instruction_obj is not None and not previous_violations:
+        previous_violations = list(rewrite_instruction_obj.violation_codes)
+
     if not config.ENABLE_LLM_VERBALIZER:
         if metadata_out is not None:
             metadata["answer_source"] = "llm_disabled"
             metadata["llm_verbalizer_enabled"] = False
             metadata["llm_verbalizer_called"] = False
+            metadata["llm_used"] = False
+            metadata["answer_verify_passed"] = False
+            metadata["answer_verify_violations"] = ["llm_disabled"]
+            metadata["fallback_reason"] = "llm_disabled"
+            metadata["answer_fallback_reason"] = "llm_disabled"
+            metadata["final_safety_status"] = "fallback"
+            metadata["verifier_result"] = "not_run"
+            metadata["verifier_failure_code"] = "llm_disabled"
+            metadata["verifier_recoverable"] = False
+            metadata["fallback_used"] = True
             metadata_out.update(metadata)
-        return "【LLM 服务未启用】无法生成自然语言回答。"
+        verbalized = verbalize_decision_plan(
+            plan,
+            llm_client=None,
+            metadata_out=None,
+            timeout_ms=config.LLM_TIMEOUT_MS,
+            rewrite_count=rewrite_count,
+            previous_violations=previous_violations,
+            rewrite_instruction=rewrite_instruction_obj,
+            rewrite_mode=rewrite_mode,
+            in_graph=in_graph,
+        )
+        return _normalize_coupon_phrase(verbalized)
 
     from ..llm.client import call_llm
     client = llm_client or call_llm
     metadata["llm_backend"] = str(getattr(client, "llm_backend", "") or getattr(config, "LLM_BACKEND", ""))
 
-    plan = _build_decision_plan(answer_plan, evidence, conversation_continuity=conversation_continuity)
+    # 单店事实型回答优先使用确定性摘要，避免 LLM verbalizer 漏掉已知事实。
+    if decision_type_meta == "single_shop" and len(getattr(plan, "selected_targets", []) or []) == 1 and getattr(plan, "factual_points", None):
+        factual_points = [str(item).strip() for item in (getattr(plan, "factual_points", []) or []) if str(item).strip()]
+        if factual_points:
+            deterministic_answer = "；".join(factual_points)
+            if getattr(plan, "uncertainty_notes", None):
+                notes = [str(item).strip() for item in (getattr(plan, "uncertainty_notes", []) or []) if str(item).strip()]
+                if notes:
+                    normalized_notes = [
+                        note if note.startswith("暂时") else f"暂时{note}"
+                        for note in notes
+                    ]
+                    deterministic_answer = f"{deterministic_answer}。{'；'.join(normalized_notes)}"
+            if metadata_out is not None:
+                metadata["answer_source"] = "deterministic_single_shop"
+                metadata["llm_used"] = False
+                metadata["llm_verbalizer_called"] = False
+                metadata["answer_verifier_result"] = "not_run"
+                metadata["answer_verify_passed"] = False
+                metadata["answer_verify_violations"] = []
+                metadata["verifier_result"] = "not_run"
+                metadata["verifier_failure_code"] = ""
+                metadata["verifier_recoverable"] = False
+                metadata.setdefault("fallback_reason", "")
+                metadata.setdefault("answer_fallback_reason", "")
+                metadata.setdefault("final_safety_status", "safe")
+                metadata_out.update(metadata)
+            return _normalize_coupon_phrase(deterministic_answer)
+
     verbalized = verbalize_decision_plan(
         plan,
         llm_client=client,
@@ -681,6 +803,8 @@ def generate_answer(
         timeout_ms=config.LLM_TIMEOUT_MS,
         rewrite_count=rewrite_count,
         previous_violations=previous_violations,
+        rewrite_instruction=rewrite_instruction_obj,
+        rewrite_mode=rewrite_mode,
         in_graph=in_graph,
     )
     metadata["llm_used"] = True

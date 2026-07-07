@@ -412,7 +412,6 @@ def _heuristic_verify(plan: DecisionPlan, response_text: str) -> dict[str, Any]:
         if status not in {"grounded", "empty"}:
             continue
         if _facet_has_uncertainty_text(text, facet):
-            issues.append(facet)
             grounded_downgraded_facets.append(facet)
     if grounded_downgraded_facets:
         return {

@@ -288,7 +288,7 @@ def normalize_query_facets(
 
     if any(token in text for token in ("附近", "周边", "周围", "离我", "多远", "距离")):
         add("nearby", "location", source="text")
-    if any(token in text for token in ("距离", "多远", "多久", "几分钟", "步行", "车程", "地铁")):
+    if any(token in text for token in ("距离", "多远", "几分钟", "步行", "车程", "地铁")):
         add("distance", "location", source="text")
     if any(token in text for token in ("远吗", "远不远", "太远", "有点远")):
         add("distance", "location", source="text")

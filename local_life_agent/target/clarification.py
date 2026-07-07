@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from .. import config
 from ..domain.enums import MissingSlotType
-from ..domain.schemas import PendingClarification, ResolveShopResult, ShopRef
+from ..domain.schemas import ClarificationRequest, PendingClarification, ResolveShopResult, ShopRef
 from ..domain.state import SessionState
 from ..semantic.slot_extractor import extract_slots
 from .reference_resolver import resolve_comparison_targets, resolve_references
@@ -45,11 +45,12 @@ def _as_dict(value: Any) -> dict[str, Any]:
 
 _MISSING_SLOT_PROMPTS: dict[str, str] = {
     "missing_shop_target": "请提供完整店名。",
+    "missing_shop": "请提供完整店名。",
     "ambiguous_shop_name": "我找到了几个可能的店，请再确认具体店名。",
     "ambiguous_shop": "我找到了几个可能的店，请再确认具体店名。",
     "ambiguous_comparison_targets": "请说明要比较哪几家店。",
-    "unresolved_reference": "请补充你指的是哪一家店。",
-    "unresolved_deictic_reference": "请补充你指的是哪一家店。",
+    "unresolved_reference": "请提供完整店名。",
+    "unresolved_deictic_reference": "请提供完整店名。",
     "unresolved_ordinal_reference": "请说明你说的是第几家店。",
     "missing_location": "请提供位置、商圈或附近范围。",
     "missing_category": "请补充你想找的品类。",
@@ -445,6 +446,52 @@ def build_pending_clarification(
     )
 
 
+def build_clarification_request(
+    pending: PendingClarification | dict[str, Any],
+    *,
+    question: str = "",
+    source_stage: str = "",
+    freshness_meta: Any | None = None,
+) -> ClarificationRequest:
+    """Normalize pending clarification into the unified request DTO."""
+
+    data = _as_dict(pending)
+    candidate_options = [
+        _canonicalize_candidate(_as_dict(item))
+        for item in (data.get("candidate_targets", []) or [])
+        if _as_dict(item).get("shop_id") or _as_dict(item).get("shop_name")
+    ]
+    resume_context = {
+        "original_text": str(data.get("original_text", "") or ""),
+        "original_task_type": str(data.get("original_task_type", "") or ""),
+        "reason": str(data.get("reason", "") or ""),
+        "source_node": str(data.get("source_node", "") or ""),
+        "resume_strategy": str(data.get("resume_strategy", "") or ""),
+        "ambiguous_target_slot": str(data.get("ambiguous_target_slot", "") or ""),
+        "already_resolved_targets": [
+            _as_dict(item)
+            for item in (data.get("already_resolved_targets", []) or [])
+            if _as_dict(item)
+        ],
+    }
+    clarification_type = str(data.get("missing_slot_type", "") or data.get("reason", "") or "").strip()
+    return ClarificationRequest(
+        clarification_id=str(data.get("pending_id", "") or ""),
+        clarification_type=clarification_type,
+        question=str(question or format_pending_prompt(data)).strip(),
+        missing_slots=[clarification_type] if clarification_type else [],
+        candidate_options=candidate_options,
+        resume_context=resume_context,
+        source_stage=str(source_stage or data.get("source_node", "") or "").strip(),
+        expires_at=data.get("expires_at"),
+        freshness_meta=freshness_meta,
+        pending_id=str(data.get("pending_id", "") or ""),
+        original_task_type=str(data.get("original_task_type", "") or ""),
+        reason=str(data.get("reason", "") or ""),
+        resume_strategy=str(data.get("resume_strategy", "") or ""),
+    )
+
+
 def format_pending_prompt(pending: PendingClarification | dict[str, Any]) -> str:
     """Format the clarification prompt shown to the user."""
     candidates = _pending_candidates(pending)
@@ -463,11 +510,26 @@ def format_pending_prompt(pending: PendingClarification | dict[str, Any]) -> str
             reason=reason,
             candidate_targets=candidates,
         )
+    if candidates and (
+        reason in {"ambiguous", "ambiguous_shop", "ambiguous_shop_name"}
+        or missing_slot_type in {
+            "ambiguous_shop",
+            "ambiguous_shop_name",
+            "ambiguous_comparison_targets",
+            "unresolved_reference",
+            "unresolved_deictic_reference",
+            "unresolved_ordinal_reference",
+        }
+    ):
+        lines = ["我找到了几个可能的店，你想查哪一家？"]
+        for index, candidate in enumerate(candidates, start=1):
+            lines.append(f"{index}. {candidate.get('shop_name', '')}")
+        lines.append("请回复编号或店名。")
+        return "\n".join(lines)
     if missing_slot_type in _MISSING_SLOT_PROMPTS:
         return _format_missing_slot_prompt(missing_slot_type)
     if not candidates:
         return "请补充更明确的信息。"
-
     lines = ["我找到了几个可能的店，你想查哪一家？"]
     for index, candidate in enumerate(candidates, start=1):
         lines.append(f"{index}. {candidate.get('shop_name', '')}")

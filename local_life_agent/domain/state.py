@@ -10,6 +10,8 @@ from __future__ import annotations
 from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .serialization import to_plain_dict
+
 
 class StateUpdatePlan(BaseModel):
     """Canonical session write plan used for state persistence.
@@ -35,19 +37,7 @@ class StateUpdatePlan(BaseModel):
     @field_validator("set_fields", "location_context", mode="before")
     @classmethod
     def _coerce_mapping(cls, value: Any) -> dict[str, Any]:
-        if value is None:
-            return {}
-        if isinstance(value, dict):
-            return dict(value)
-        model_dump = getattr(value, "model_dump", None)
-        if callable(model_dump):
-            dumped = model_dump()
-            if isinstance(dumped, dict):
-                return dumped
-        try:
-            return dict(value)
-        except Exception:
-            return {}
+        return to_plain_dict(value)
 
     @field_validator("clear_fields", mode="before")
     @classmethod

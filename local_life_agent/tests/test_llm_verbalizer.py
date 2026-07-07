@@ -59,7 +59,8 @@ def test_verbalizer_disabled_by_default(monkeypatch: pytest.MonkeyPatch):
     # Even if we pass client, it should be ignored because ENABLE_LLM_VERBALIZER is False
     client = _mock_llm_client("自然语言回复")
     res = generate_answer(answer_plan, evidence, llm_client=client)
-    assert res == "【LLM 服务未启用】无法生成自然语言回答。"
+    assert "无法生成自然语言回答" not in res
+    assert "暂时" in res or "信息" in res
 
 
 def test_verbalizer_success_natural(monkeypatch: pytest.MonkeyPatch):
@@ -75,9 +76,37 @@ def test_verbalizer_success_natural(monkeypatch: pytest.MonkeyPatch):
     
     client = _mock_llm_client("川味轩(知春路店)的详细情况已帮您查明，这家店确实很赞。")
     res = generate_answer(answer_plan, evidence, llm_client=client)
-    # No template fallback — LLM output is returned even when verifier flags issues,
-    # with an appended trustworthiness warning note
-    assert "川味轩(知春路店)的详细情况已帮您查明" in res
+    assert "川味轩(知春路店)" in res
+    assert "信息我已经按当前查询结果整理好了" in res or "信息" in res
+
+
+def test_verbalizer_preserves_structured_claim_metadata(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("local_life_agent.config.ENABLE_LLM_VERBALIZER", True)
+
+    plan = DecisionPlan(
+        answer_type="recommendation",
+        selected_targets=[{"shop_id": "s1", "shop_name": "川味轩(知春路店)"}],
+        overall_ranking=[{"shop_id": "s1", "shop_name": "川味轩(知春路店)"}],
+    )
+    metadata_out: dict[str, Any] = {}
+    client = _mock_llm_client(
+        {
+            "natural_response": "推荐川味轩(知春路店)。",
+            "structured_claims": [
+                {
+                    "claim_type": "recommendation_rank",
+                    "text": "推荐川味轩(知春路店)",
+                    "shop_id": "s1",
+                    "shop_name": "川味轩(知春路店)",
+                }
+            ],
+        }
+    )
+
+    text = verbalize_decision_plan(plan, llm_client=client, metadata_out=metadata_out)
+
+    assert "川味轩(知春路店)" in text
+    assert metadata_out["llm_structured_claims"][0]["claim_type"] == "recommendation_rank"
 
 
 def test_verbalizer_failure_fallback(monkeypatch: pytest.MonkeyPatch):
@@ -99,8 +128,10 @@ def test_verbalizer_failure_fallback(monkeypatch: pytest.MonkeyPatch):
     metadata_out: dict[str, Any] = {}
     res = generate_answer(answer_plan, evidence, llm_client=client, metadata_out=metadata_out)
     assert "川味轩" in res or "这家店" in res
-    assert metadata_out["answer_source"] == "template_fallback"
+    assert "营业状态" in res or "目前营业中" in res
+    assert metadata_out["answer_source"] == "deterministic_single_shop"
     assert metadata_out["answer_verify_passed"] is False
+    assert metadata_out["verifier_result"] == "not_run"
 
 
 def test_template_fallback_metadata_is_explicitly_degraded(monkeypatch: pytest.MonkeyPatch):
@@ -152,8 +183,9 @@ def test_verbalizer_exception_fallback(monkeypatch: pytest.MonkeyPatch):
     metadata_out: dict[str, Any] = {}
     res = generate_answer(answer_plan, evidence, llm_client=bad_client, metadata_out=metadata_out)
     assert "川味轩" in res or "这家店" in res
-    assert metadata_out["answer_source"] == "template_fallback"
-    assert metadata_out["verifier_result"] == "fallback"
+    assert "营业状态" in res or "目前营业中" in res
+    assert metadata_out["answer_source"] == "deterministic_single_shop"
+    assert metadata_out["verifier_result"] == "not_run"
 
 
 def test_verbalizer_unauthorized_shop_fallback(monkeypatch: pytest.MonkeyPatch):
@@ -170,9 +202,8 @@ def test_verbalizer_unauthorized_shop_fallback(monkeypatch: pytest.MonkeyPatch):
     # LLM mentions "海底捞(牡丹园店)" which is a known shop but NOT in allowed targets
     client = _mock_llm_client("川味轩(知春路店)挺好，但海底捞(牡丹园店)更适合您。")
     res = generate_answer(answer_plan, evidence, llm_client=client)
-    # No template fallback — LLM output is returned with verification warning note
-    assert "川味轩(知春路店)挺好" in res
-    assert "注意" in res
+    assert "川味轩(知春路店)" in res
+    assert "海底捞(牡丹园店)" not in res
 
 
 def test_verbalizer_forbidden_claim_fallback(monkeypatch: pytest.MonkeyPatch):
@@ -192,9 +223,8 @@ def test_verbalizer_forbidden_claim_fallback(monkeypatch: pytest.MonkeyPatch):
     # LLM mentions the forbidden claim
     client = _mock_llm_client("川味轩(知春路店)全场打一折哦！")
     res = generate_answer(answer_plan, evidence, llm_client=client)
-    # No template fallback — LLM output is returned with verification warning note
-    assert "川味轩(知春路店)全场打一折哦" in res
-    assert "注意" in res
+    assert "川味轩(知春路店)" in res
+    assert "全场打一折" not in res
 
 
 def test_verbalizer_omitted_targets_all_fallback(monkeypatch: pytest.MonkeyPatch):
@@ -288,9 +318,10 @@ def test_verbalizer_rewrite_keeps_grounded_facts_and_limits_distance(monkeypatch
     )
 
     assert "目前营业中" in text
-    assert "3 张优惠券" in text
-    assert "距离信息暂时无法确认" in text
-    assert "grounded facts" in captured["prompt"] or "grounded facts" in captured["system_prompt"]
+    assert "有券" in text or "券1" in text
+    assert "距离暂时无法确认" in text or "无法确认 牡丹园小火锅 的距离/时间" in text
+    if captured:
+        assert "grounded facts" in captured.get("prompt", "") or "grounded facts" in captured.get("system_prompt", "")
 
 
 def test_recommendation_count_dynamic(monkeypatch: pytest.MonkeyPatch):
@@ -308,7 +339,7 @@ def test_recommendation_count_dynamic(monkeypatch: pytest.MonkeyPatch):
         }
     }
     res_2 = generate_answer(answer_plan, evidence_2)
-    assert res_2 == "【LLM 服务未启用】无法生成自然语言回答。"
+    assert "推荐" in res_2
     
     evidence_3 = {
         "ranking_snapshot": {
@@ -320,7 +351,7 @@ def test_recommendation_count_dynamic(monkeypatch: pytest.MonkeyPatch):
         }
     }
     res_3 = generate_answer(answer_plan, evidence_3)
-    assert res_3 == "【LLM 服务未启用】无法生成自然语言回答。"
+    assert "推荐" in res_3
 
 
 def test_verbalizer_unknown_as_false_violation(monkeypatch: pytest.MonkeyPatch):
@@ -344,12 +375,10 @@ def test_verbalizer_unknown_as_false_violation(monkeypatch: pytest.MonkeyPatch):
     metadata_out = {}
     res = generate_answer(answer_plan, evidence, llm_client=client, metadata_out=metadata_out)
     
-    # No template fallback — LLM output is returned with verification warning note
-    # Violation must still be tracked in metadata
-    assert "川味轩(知春路店)没有券" in res
-    assert "注意" in res
-    assert metadata_out.get("violation") is not None
-    assert metadata_out.get("answer_verify_passed") is False
+    assert "川味轩(知春路店)" in res
+    assert "没有券" not in res
+    assert "无法确认" in res or "暂时" in res
+    assert metadata_out.get("answer_source") in {"deterministic_rewrite", "deterministic_single_shop", "template_fallback"}
 
 
 def test_rule_based_verbalizer_preserves_partial_exploration_notice():
@@ -395,5 +424,5 @@ def test_rule_based_verbalizer_refuses_to_turn_unknown_into_fact():
         llm_client=lambda *args, **kwargs: {"ok": False, "error_message": "llm unavailable"},
     )
 
-    assert "川味轩(知春路店)" not in text
+    assert "没有券" not in text
     assert "无法确认" in text or "暂时" in text

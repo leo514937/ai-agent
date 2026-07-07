@@ -346,6 +346,12 @@ class DecisionPlan(BaseModel):
     must_mention_unknowns: list[str] = Field(default_factory=list)
     decision_source: str = ""
     decision_confidence: float = 0.0
+    decision_mode: str = ""
+    fallback_used: bool = False
+    candidate_count_before_decision: int = 0
+    candidate_count_after_decision: int = 0
+    evidence_preserved: bool = True
+    decision_reason: str = ""
     claim_bindings: list[dict[str, Any]] = Field(default_factory=list)
     winner_evidence_refs: list[str] = Field(default_factory=list)
     missing_fields: list[str] = Field(default_factory=list)

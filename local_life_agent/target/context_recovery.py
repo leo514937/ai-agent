@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..domain.schemas import ResolveShopResult, ShopRef
 from ..domain.state import SessionState
-from .reference_resolver import resolve_comparison_targets, resolve_references
 
 
 def _frame_dict(semantic_frame: dict | Any | None) -> dict[str, Any]:
@@ -42,62 +40,65 @@ def _explicit_constraints(frame: dict[str, Any]) -> dict[str, Any]:
     return explicit
 
 
+def _reference_signal(frame: dict[str, Any], text: str) -> dict[str, Any]:
+    merchant_mentions = [str(item).strip() for item in (frame.get("merchant_mentions") or []) if str(item).strip()]
+    branch_mentions = [str(item).strip() for item in (frame.get("branch_mentions") or []) if str(item).strip()]
+    reference_mentions = [str(item).strip() for item in (frame.get("reference_mentions") or []) if str(item).strip()]
+    ordinal_references = [str(item).strip() for item in (frame.get("ordinal_references") or []) if str(item).strip()]
+    deictic_references = [str(item).strip() for item in (frame.get("deictic_references") or []) if str(item).strip()]
+    comparison_targets = [dict(item) if isinstance(item, dict) else item for item in (frame.get("comparison_targets") or []) if item is not None]
+
+    cue_count = sum(
+        1
+        for value in (
+            merchant_mentions,
+            branch_mentions,
+            reference_mentions,
+            ordinal_references,
+            deictic_references,
+            comparison_targets,
+        )
+        if value
+    )
+    if any(token in str(text or "") for token in ("这家", "那家", "这间", "那间", "它", "第一家", "第二家", "第三家")):
+        cue_count += 1
+
+    status = "SIGNAL_ONLY" if cue_count else "NONE"
+    reason = "comparison_reference_signal" if comparison_targets else "multi_turn_reference_signal" if cue_count else "no_reference_signal"
+    return {
+        "status": status,
+        "reason": reason,
+        "resolution_source": "first_layer_reference_signal",
+        "reference_signal": {
+            "merchant_mentions": merchant_mentions,
+            "branch_mentions": branch_mentions,
+            "reference_mentions": reference_mentions,
+            "ordinal_references": ordinal_references,
+            "deictic_references": deictic_references,
+            "comparison_targets": comparison_targets,
+        },
+    }
+
+
 def recover_context(
     session_state: dict | SessionState | None,
     semantic_frame: dict | Any,
     text: str | None = None,
 ) -> dict[str, Any]:
-    """Recover concrete shop targets from session context when possible."""
+    """Recover first-layer context signals without authoritative entity resolution."""
     frame = _frame_dict(semantic_frame)
-    task_type = frame.get("task_type")
-    task_type_value = getattr(task_type, "value", task_type)
-    mentions = frame.get("merchant_mentions") or []
+    source_text = text or frame.get("original_text") or ""
     explicit_constraints = _explicit_constraints(frame)
     inherited_constraints = {}
     if not explicit_constraints:
         inherited_constraints = _active_constraints(session_state)
-
-    if mentions and str(task_type_value or "") != "comparison":
-        resolution = {"status": "explicit_mention"}
-        if inherited_constraints:
-            resolution["inherited_constraints"] = inherited_constraints
-        return {"semantic_frame": frame, "context_resolution": resolution}
-
-    source_text = text or frame.get("original_text") or ""
-    if str(task_type_value or "") == "comparison":
-        comparison_resolution = resolve_comparison_targets(source_text, session_state, frame)
-        return {
-            "semantic_frame": frame,
-            "comparison_target_resolution": comparison_resolution,
-            "comparison_targets": comparison_resolution.get("targets", []),
-            "context_resolution": {
-                "status": comparison_resolution.get("status", ""),
-                "reason": comparison_resolution.get("reason", ""),
-                "prompt": comparison_resolution.get("prompt", ""),
-            },
-        }
-
-    resolution = resolve_references(source_text, session_state, frame)
-    if inherited_constraints and "inherited_constraints" not in resolution:
-        resolution["inherited_constraints"] = inherited_constraints
-    resolution_status = str(resolution.get("status", "") or "").upper()
-    if resolution_status == "RESOLVED":
-        target = resolution.get("target") or resolution.get("resolved_shop") or {}
-        if hasattr(target, "model_dump"):
-            target = target.model_dump()
-        resolved_target = ResolveShopResult(
-            status="RESOLVED",
-            resolved_shop=ShopRef(
-                shop_id=str(target.get("shop_id", "")),
-                shop_name=str(target.get("shop_name", "")),
-            ),
-            confidence=1.0,
-            reason=str(resolution.get("reason", "context_recovered")),
-        )
-        return {
-            "semantic_frame": frame,
-            "resolved_target": resolved_target,
-            "context_resolution": resolution,
-        }
-
-    return {"semantic_frame": frame, "context_resolution": resolution}
+    reference_resolution = _reference_signal(frame, source_text)
+    if inherited_constraints and "inherited_constraints" not in reference_resolution:
+        reference_resolution["inherited_constraints"] = inherited_constraints
+    task_type_value = str(getattr(frame.get("task_type"), "value", frame.get("task_type")) or "")
+    return {
+        "semantic_frame": frame,
+        "context_resolution": reference_resolution,
+        "reference_resolution_source": "first_layer_reference_signal",
+        "comparison_reference_signal": reference_resolution.get("reference_signal", {}) if task_type_value == "comparison" else {},
+    }

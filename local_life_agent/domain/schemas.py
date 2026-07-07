@@ -19,6 +19,7 @@ from .enums import (
     TopIntent,
     TaskType,
     Facet,
+    ResponseMode,
     ToolResultStatus,
     ErrorCode,
     ComparisonStructure,
@@ -39,6 +40,10 @@ from .facets import (
     build_target_resolution_result,
     normalize_query_facets,
 )
+from .contextualized_turn import ContextualizedTurn
+from .focus_context import FocusContext
+from .freshness import FreshnessMeta
+from .location_context import LocationContext
 
 
 def _coerce_list_value(value: Any) -> list[Any]:
@@ -308,6 +313,11 @@ class SemanticFrame(BaseModel):
     fallback_reason: str = ""
     llm_called: bool = False
     llm_backend: str = ""
+    semantic_parse_status: str = ""
+    semantic_parse_mode: str = ""
+    semantic_parse_retry_count: int = 0
+    semantic_parse_attempts: int = 0
+    semantic_parse_reason: str = ""
 
     # Candidate-resolution fields (populated by the Candidate layer)
     candidate_source: str | None = None
@@ -712,6 +722,90 @@ class PendingClarification(BaseModel):
     already_resolved_targets: list[dict[str, Any]] = Field(default_factory=list)
     ambiguous_target_slot: str = ""
     resume_strategy: str = ""
+
+
+class ClarificationRequest(BaseModel):
+    """Unified clarification request surfaced to the response layer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    clarification_id: str = ""
+    clarification_type: str = ""
+    question: str = ""
+    missing_slots: list[str] = Field(default_factory=list)
+    candidate_options: list[dict[str, Any]] = Field(default_factory=list)
+    resume_context: dict[str, Any] = Field(default_factory=dict)
+    source_stage: str = ""
+    expires_at: datetime | None = None
+    freshness_meta: FreshnessMeta | None = None
+    pending_id: str = ""
+    original_task_type: str = ""
+    reason: str = ""
+    resume_strategy: str = ""
+
+    @field_validator("missing_slots", "candidate_options", mode="before")
+    @classmethod
+    def _coerce_list_fields(cls, value: Any) -> list[Any]:
+        return _coerce_list_value(value)
+
+    @field_validator("resume_context", mode="before")
+    @classmethod
+    def _coerce_resume_context(cls, value: Any) -> dict[str, Any]:
+        return _coerce_location_value(value)
+
+    @model_validator(mode="after")
+    def _normalize(self) -> ClarificationRequest:
+        self.clarification_id = str(self.clarification_id or "").strip()
+        self.clarification_type = str(self.clarification_type or "").strip()
+        self.question = str(self.question or "").strip()
+        self.missing_slots = [str(item).strip() for item in (self.missing_slots or []) if str(item).strip()]
+        self.candidate_options = [item if isinstance(item, dict) else _coerce_location_value(item) for item in (self.candidate_options or []) if _coerce_location_value(item)]
+        self.resume_context = dict(self.resume_context or {})
+        self.source_stage = str(self.source_stage or "").strip()
+        self.pending_id = str(self.pending_id or "").strip()
+        self.original_task_type = str(self.original_task_type or "").strip()
+        self.reason = str(self.reason or "").strip()
+        self.resume_strategy = str(self.resume_strategy or "").strip()
+        if self.clarification_type and not self.missing_slots:
+            self.missing_slots = [self.clarification_type]
+        if not self.clarification_id:
+            self.clarification_id = self.pending_id or f"clarification_{self.source_stage or 'request'}"
+        return self
+
+
+class ErrorEnvelope(BaseModel):
+    """Structured early-response error payload."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    error_code: str = ""
+    message: str = ""
+    severity: str = "warning"
+    recoverable: bool = True
+    source_stage: str = ""
+    trace_id: str = ""
+    details: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("error_code", "message", "severity", "source_stage", "trace_id")
+    @classmethod
+    def _strip_fields(cls, value: Any) -> str:
+        return str(value or "").strip()
+
+    @field_validator("details", mode="before")
+    @classmethod
+    def _coerce_details(cls, value: Any) -> dict[str, Any]:
+        return _coerce_location_value(value)
+
+    @model_validator(mode="after")
+    def _normalize(self) -> ErrorEnvelope:
+        self.error_code = str(self.error_code or "").strip()
+        self.message = str(self.message or "").strip()
+        self.severity = str(self.severity or "warning").strip() or "warning"
+        self.source_stage = str(self.source_stage or "").strip()
+        self.trace_id = str(self.trace_id or "").strip()
+        self.details = dict(self.details or {})
+        self.recoverable = bool(self.recoverable)
+        return self
 
 
 class ActiveTurnResult(BaseModel):
@@ -1143,6 +1237,12 @@ class EvidencePack(BaseModel):
     partial_fields: list[str] = Field(default_factory=list)
     evidence_review_result: dict[str, Any] = Field(default_factory=dict)
     answer_verify_result: dict[str, Any] = Field(default_factory=dict)
+    decision_mode: str = ""
+    fallback_used: bool = False
+    candidate_count_before_decision: int = 0
+    candidate_count_after_decision: int = 0
+    evidence_preserved: bool = True
+    decision_reason: str = ""
     evidence_cache_key: str = ""
     evidence_cache_scope: str = ""
     evidence_cache_hit: bool = False
@@ -1424,6 +1524,9 @@ class ComparisonMatrix(BaseModel):
     overall_ranked: list[dict] = Field(default_factory=list)
     overall_ranking: list[dict] = Field(default_factory=list)
     reason_codes: list[str] = Field(default_factory=list)
+    statistical_winner: dict[str, Any] | None = None
+    winner_provenance: dict[str, Any] = Field(default_factory=dict)
+    winner_uncertainty_note: str = ""
 
 
 ComparisonCell.model_rebuild()
@@ -1434,10 +1537,23 @@ _ORCHESTRATION_PATTERNS = {
     "deterministic_tool",
     "discovery_decision",
     "exploration_planning",
+    "complex_orchestrator_workflow",
     "clarification_fallback",
+    "single_shop_fact_workflow",
+    "recommendation_decision_workflow",
+    "comparison_decision_workflow",
 }
-_ORCHESTRATION_COMPLEXITY = {"low", "medium", "high"}
+_ORCHESTRATION_COMPLEXITY = {"low", "medium", "high", "super_complex"}
 _ORCHESTRATION_RESPONSE_MODES = {
+    ResponseMode.DIRECT.value,
+    ResponseMode.DIRECT_RESPONSE.value,
+    ResponseMode.REJECT.value,
+    ResponseMode.CLARIFY.value,
+    ResponseMode.FALLBACK.value,
+    ResponseMode.ANSWER.value,
+    ResponseMode.TOOL_ANSWER.value,
+    ResponseMode.COMPARISON.value,
+    ResponseMode.EXPLORATION_PLAN.value,
     "direct_response",
     "tool_answer",
     "search_list",
@@ -1462,6 +1578,7 @@ class OrchestrationDecision(BaseModel):
 
     orchestration_pattern: str = "direct_response"
     workflow_name: str = "direct_response"
+    workflow_entry_name: str = ""
     workflow_reason: str = ""
     task_complexity: str = "low"
     requires_tool: bool = False
@@ -1483,6 +1600,13 @@ class OrchestrationDecision(BaseModel):
             raise ValueError("workflow_name must be a single value")
         return value
 
+    @field_validator("workflow_entry_name", mode="before")
+    @classmethod
+    def _reject_multi_value_workflow_entry_name(cls, value: Any) -> Any:
+        if isinstance(value, (list, tuple, set)):
+            raise ValueError("workflow_entry_name must be a single value")
+        return value
+
     @field_validator("orchestration_pattern", "workflow_name")
     @classmethod
     def _validate_pattern(cls, value: str) -> str:
@@ -1490,6 +1614,11 @@ class OrchestrationDecision(BaseModel):
         if value not in _ORCHESTRATION_PATTERNS:
             raise ValueError(f"unsupported orchestration pattern: {value}")
         return value
+
+    @field_validator("workflow_entry_name")
+    @classmethod
+    def _validate_workflow_entry_name(cls, value: str) -> str:
+        return str(value or "").strip()
 
     @field_validator("task_complexity")
     @classmethod
@@ -1538,7 +1667,11 @@ class DecisionPlan(BaseModel):
     best_for: dict[str, dict[str, Any]] = Field(default_factory=dict)
     factual_points: list[str] = Field(default_factory=list)
     uncertainty_notes: list[str] = Field(default_factory=list)
+    statistical_winner: dict[str, Any] | None = None
+    winner_provenance: dict[str, Any] = Field(default_factory=dict)
+    winner_uncertainty_note: str = ""
     forbidden_claims: list[str] = Field(default_factory=list)
+    fallback_template_type: str = ""
     style_hints: list[str] = Field(default_factory=list)
     decision_context: dict[str, Any] = Field(default_factory=dict)
     candidate_summaries: list[dict[str, Any]] = Field(default_factory=list)
@@ -1731,6 +1864,10 @@ class GlobalTurnContext(BaseModel):
     normalized_text: str = ""
     user_context: UserContext | None = None
     session_state_before: dict[str, Any] | None = None
+    contextualized_turn: ContextualizedTurn | None = None
+    focus_context: FocusContext | None = None
+    freshness_meta: FreshnessMeta | None = None
+    location_context: LocationContext | None = None
 
     # Intermediate artifacts (populated as the turn progresses)
     semantic_frame: SemanticFrame | None = None

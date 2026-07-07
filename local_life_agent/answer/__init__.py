@@ -8,6 +8,7 @@ import sys
 _MODULE_ALIASES = {
     "candidate_decision": "..planning.decision.candidate_decision",
     "evidence_builder": "..planning.evidence.evidence_builder",
+    "response_contract": ".response_contract",
 }
 
 for legacy_name, target in _MODULE_ALIASES.items():

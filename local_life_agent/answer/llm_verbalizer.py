@@ -7,6 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from ..config import MAX_REWRITE_ATTEMPTS
 from ..domain.schemas import DecisionPlan
 from ..llm.client import load_prompt
+from .rewrite_instruction import RewriteInstruction
+from .composers import compose_deterministic_response
 
 
 _GRAPH_REWRITE_LIMIT = max(1, MAX_REWRITE_ATTEMPTS - 1)
@@ -17,6 +19,77 @@ _GRAPH_REWRITE_LIMIT = max(1, MAX_REWRITE_ATTEMPTS - 1)
 
 _VERBALIZER_SYSTEM_PROMPT: str | None = None
 _VERBALIZER_USER_TEMPLATE: str | None = None
+
+
+def _uses_minimal_composer(plan: DecisionPlan) -> bool:
+    answer_type = str(getattr(plan, "answer_type", "") or "").strip()
+    fallback_template_type = str(getattr(plan, "fallback_template_type", "") or "").strip()
+    return answer_type in {
+        "single_shop",
+        "single_shop_query",
+        "clarification",
+        "general",
+        "chat",
+        "capability",
+        "out_of_scope",
+        "unsafe",
+        "invalid",
+        "forbidden",
+        "error",
+    } or fallback_template_type in {
+        "clarification",
+        "multi_facet_failed",
+        "multi_facet_empty",
+        "multi_facet_circuit_open",
+        "system_fallback",
+    }
+
+
+def _deterministic_text(plan: DecisionPlan, *, fallback_reason: str = "", context: dict[str, Any] | None = None) -> str:
+    return compose_deterministic_response(plan, fallback_reason=fallback_reason, context=context).answer_text
+
+
+def _rewrite_prefers_deterministic(rewrite_instruction: RewriteInstruction | None, plan: DecisionPlan, rewrite_mode: str) -> bool:
+    if rewrite_mode in {"deterministic_composer", "fallback", "trusted_fallback"}:
+        return True
+    if _uses_minimal_composer(plan):
+        return True
+    if rewrite_instruction is None:
+        return False
+    violation_codes = {str(item).strip() for item in (rewrite_instruction.violation_codes or []) if str(item).strip()}
+    if violation_codes & {
+        "empty_evidence_or_draft",
+        "template_fallback",
+        "llm_disabled",
+        "llm_client_unavailable",
+        "llm_call_failed",
+        "llm_verbalizer_error",
+        "prompt_load_failed",
+    }:
+        return True
+    if violation_codes & {
+        "ranking_changed_by_llm",
+        "unsupported_comparison_winner",
+        "missing_comparison_targets",
+        "missing_recommendation_targets",
+    }:
+        return True
+    if rewrite_instruction.unsupported_claims or rewrite_instruction.contradicted_claims:
+        return True
+    return False
+
+
+def _coerce_rewrite_instruction(value: Any) -> RewriteInstruction | None:
+    if value is None:
+        return None
+    if isinstance(value, RewriteInstruction):
+        return value
+    if isinstance(value, dict):
+        try:
+            return RewriteInstruction.model_validate(value)
+        except Exception:
+            return None
+    return None
 
 
 def _load_verbalizer_prompts() -> tuple[str, str]:
@@ -73,11 +146,24 @@ def _render_user_prompt(
     """Render the user prompt template with DecisionPlan data."""
     _, template = _load_verbalizer_prompts()
 
+    selected_targets = []
+    for item in getattr(plan, "selected_targets", []) or []:
+        if not isinstance(item, dict):
+            continue
+        normalized = dict(item)
+        if normalized.get("coupon_titles"):
+            normalized["coupon_titles"] = []
+        selected_targets.append(normalized)
+
+    grounded_facts = dict(getattr(plan, "grounded_facts", {}) or {})
+    if grounded_facts.get("coupon_titles"):
+        grounded_facts["coupon_titles"] = []
+
     replacements = {
         "{{ANSWER_TYPE}}": plan.answer_type,
         "{{DECISION_CONTEXT}}": json.dumps(plan.decision_context, ensure_ascii=False),
         "{{CONVERSATION_CONTINUITY}}": json.dumps(plan.conversation_continuity, ensure_ascii=False),
-        "{{SELECTED_TARGETS}}": json.dumps(plan.selected_targets, ensure_ascii=False),
+        "{{SELECTED_TARGETS}}": json.dumps(selected_targets, ensure_ascii=False),
         "{{OMITTED_TARGETS}}": json.dumps(plan.omitted_targets, ensure_ascii=False),
         "{{CANDIDATE_SUMMARIES}}": json.dumps(plan.candidate_summaries, ensure_ascii=False),
         "{{MAIN_RECOMMENDATION}}": json.dumps(plan.main_recommendation, ensure_ascii=False),
@@ -101,7 +187,7 @@ def _render_user_prompt(
         "{{TIME}}": plan.time,
         "{{LOCATION}}": json.dumps(plan.location, ensure_ascii=False),
         "{{FACET_STATUSES}}": json.dumps(getattr(plan, "facet_statuses", {}) or {}, ensure_ascii=False),
-        "{{GROUNDED_FACTS}}": json.dumps(getattr(plan, "grounded_facts", {}) or {}, ensure_ascii=False),
+        "{{GROUNDED_FACTS}}": json.dumps(grounded_facts, ensure_ascii=False),
         "{{FACET_REASONS}}": json.dumps(getattr(plan, "facet_reasons", {}) or {}, ensure_ascii=False),
         "{{EVIDENCE_STATUS}}": plan.evidence_status,
         "{{COMPARISON_SUPPORT_STATUS}}": plan.comparison_support_status,
@@ -160,6 +246,7 @@ def _render_user_prompt(
 class VerbalizerResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     natural_response: str = Field(description="The natural language response for the user.")
+    structured_claims: list[dict[str, Any]] = Field(default_factory=list)
 
 
 def _load_all_known_shop_names() -> list[str]:
@@ -278,6 +365,12 @@ def _rule_based_verbalize(plan: DecisionPlan) -> str:
             if eta_minutes is not None:
                 dist_snippet += f"，预计 {eta_minutes} 分钟"
             snippets.append(dist_snippet)
+        rating = grounded_facts.get("rating")
+        if rating is not None:
+            snippets.append(f"评分为 {rating}")
+        avg_price = grounded_facts.get("avg_price")
+        if avg_price is not None:
+            snippets.append(f"人均约 {avg_price} 元")
         if snippets:
             uncertain_facets = []
             for facet, status in facet_statuses.items():
@@ -288,6 +381,10 @@ def _rule_based_verbalize(plan: DecisionPlan) -> str:
                         uncertain_facets.append("优惠情况暂时无法确认")
                     elif facet == "open_status":
                         uncertain_facets.append("营业状态暂时无法确认")
+                    elif facet == "rating":
+                        uncertain_facets.append("评分信息暂时无法确认")
+                    elif facet in {"avg_price", "price"}:
+                        uncertain_facets.append("人均价格暂时无法确认")
             pieces = [f"{target_name} {'；'.join(snippets)}。"]
             if uncertain_facets:
                 pieces.append("".join(dict.fromkeys(uncertain_facets)))
@@ -306,14 +403,22 @@ def _rule_based_verbalize(plan: DecisionPlan) -> str:
             name = str(item_dict.get("shop_name", "") or item_dict.get("alias", "") or "").strip()
             if name:
                 names.append(name)
+        winner = _to_dict(plan_dict.get("statistical_winner"))
+        winner_name = str(winner.get("shop_name", "") or winner.get("alias", "") or winner.get("shop_id", "") or "").strip()
+        winner_reason = str(winner.get("reason") or winner.get("winner_reason") or winner.get("summary") or "").strip()
+
+        if winner_name:
+            if winner_reason:
+                return f"综合当前已知信息，整体更适合的是{winner_name}，因为{winner_reason}。"
+            return f"综合当前已知信息，整体更适合的是{winner_name}。"
         if len(names) >= 2 and not uncertainty_notes:
-            return f"综合当前已知信息，我会优先看{names[0]}，其次是{names[1]}。"
+            return f"当前还没有足够证据确认唯一赢家，只能先比较{names[0]}和{names[1]}。"
         if len(names) >= 2:
             return f"这两家目前信息还不够完整，我暂时无法确认谁更好，先参考{names[0]}和{names[1]}的已知信息。"
         if names:
             if uncertainty_notes:
                 return f"{names[0]}目前信息还不够完整，我暂时无法确认它是不是更好的选择。"
-            return f"综合当前已知信息，我会优先看{names[0]}。"
+            return f"综合当前已知信息，我会先关注{names[0]}。"
         if uncertainty_notes:
             return "当前已知信息还不够完整，我暂时无法确认哪家更好。"
         return "综合当前已知信息，我会优先参考这些店铺。"
@@ -416,6 +521,7 @@ def _mark_template_fallback_metadata(
 ) -> None:
     metadata_out["answer_source"] = "template_fallback"
     metadata_out["llm_verbalizer_error"] = error_message
+    metadata_out["fallback_reason"] = error_message
     metadata_out["answer_fallback_reason"] = error_message
     metadata_out["answer_verify_passed"] = False
     metadata_out["answer_verify_violations"] = ["template_fallback"]
@@ -424,6 +530,31 @@ def _mark_template_fallback_metadata(
     metadata_out["final_safety_status"] = "fallback"
     metadata_out["verifier_result"] = "fallback"
     metadata_out["verifier_failure_code"] = "template_fallback"
+    metadata_out["verifier_recoverable"] = False
+    metadata_out["fallback_used"] = True
+
+
+def _mark_deterministic_rewrite_metadata(
+    metadata_out: dict[str, Any],
+    *,
+    reason: str,
+    rewrite_count: int,
+    rewrite_mode: str = "",
+) -> None:
+    metadata_out["answer_source"] = "deterministic_rewrite"
+    metadata_out["llm_verbalizer_error"] = reason
+    metadata_out["fallback_reason"] = reason
+    metadata_out["answer_fallback_reason"] = reason
+    metadata_out["answer_verify_passed"] = False
+    metadata_out["answer_verify_violations"] = []
+    metadata_out["rewrite_needed"] = False
+    metadata_out["rewrite_count"] = rewrite_count
+    metadata_out["final_safety_status"] = "safe"
+    metadata_out["verifier_result"] = "not_run"
+    metadata_out["verifier_failure_code"] = ""
+    metadata_out["verifier_recoverable"] = False
+    metadata_out["fallback_used"] = True
+    metadata_out["rewrite_mode"] = rewrite_mode
 
 
 def verbalize_decision_plan(
@@ -434,12 +565,35 @@ def verbalize_decision_plan(
     timeout_ms: int = 30000,
     rewrite_count: int = 0,
     previous_violations: list[str] | None = None,
+    rewrite_instruction: RewriteInstruction | dict[str, Any] | None = None,
+    rewrite_mode: str = "",
     in_graph: bool = False,
 ) -> str:
     """Verbalize a DecisionPlan into natural language via LLM.
 
     No template fallback — on error, returns a descriptive error message.
     """
+    rewrite_instruction_obj = _coerce_rewrite_instruction(rewrite_instruction)
+    if rewrite_instruction_obj is not None and not previous_violations:
+        previous_violations = list(rewrite_instruction_obj.violation_codes)
+    if _rewrite_prefers_deterministic(rewrite_instruction_obj, plan, rewrite_mode):
+        fallback_label = rewrite_instruction_obj.fallback_mode if rewrite_instruction_obj is not None else rewrite_mode
+        if metadata_out is not None:
+            if llm_client is None or fallback_label in {"fallback", "system_fallback"}:
+                _mark_template_fallback_metadata(
+                    metadata_out,
+                    error_message=f"rewrite_instruction_{fallback_label or 'deterministic_composer'}",
+                    rewrite_count=rewrite_count,
+                )
+            else:
+                _mark_deterministic_rewrite_metadata(
+                    metadata_out,
+                    reason=f"rewrite_instruction_{fallback_label or 'deterministic_composer'}",
+                    rewrite_count=rewrite_count,
+                    rewrite_mode=rewrite_mode,
+                )
+        return _deterministic_text(plan, fallback_reason=f"rewrite_instruction_{fallback_label or 'deterministic_composer'}")
+
     # Check client
     if not llm_client:
         if metadata_out is not None:
@@ -448,7 +602,7 @@ def verbalize_decision_plan(
                 error_message="llm_client_unavailable",
                 rewrite_count=rewrite_count,
             )
-        return _rule_based_verbalize(plan)
+        return _deterministic_text(plan, fallback_reason="llm_client_unavailable")
 
     try:
         system_prompt, _ = _load_verbalizer_prompts()
@@ -459,7 +613,7 @@ def verbalize_decision_plan(
                 error_message=str(exc),
                 rewrite_count=rewrite_count,
             )
-        return _rule_based_verbalize(plan)
+        return _deterministic_text(plan, fallback_reason=str(exc))
 
     user_prompt = _render_user_prompt(plan, rewrite_count=rewrite_count, previous_violations=previous_violations)
     facet_prefix = "\n".join(
@@ -491,7 +645,7 @@ def verbalize_decision_plan(
                 error_message=str(exc),
                 rewrite_count=rewrite_count,
             )
-        return _rule_based_verbalize(plan)
+        return _deterministic_text(plan, fallback_reason=str(exc))
 
     if not res or not res.get("ok"):
         error_msg = str((res or {}).get("error_message", "") or (res or {}).get("error_code", "") or "llm_call_failed")
@@ -501,21 +655,32 @@ def verbalize_decision_plan(
                 error_message=error_msg,
                 rewrite_count=rewrite_count,
             )
-        return _rule_based_verbalize(plan)
+        return _deterministic_text(plan, fallback_reason=error_msg)
 
     content = res.get("content")
+    structured_claims: list[dict[str, Any]] = []
     if isinstance(content, VerbalizerResponse):
         natural_text = content.natural_response
+        structured_claims = [dict(item) for item in content.structured_claims if isinstance(item, dict)]
     elif isinstance(content, dict):
         natural_text = content.get("natural_response", "")
+        structured_claims = [dict(item) for item in (content.get("structured_claims") or []) if isinstance(item, dict)]
     else:
-        raise RuntimeError("missing_natural_response")
+        natural_text = ""
 
     if not natural_text:
-        raise RuntimeError("empty_natural_response")
+        if metadata_out is not None:
+            _mark_template_fallback_metadata(
+                metadata_out,
+                error_message="empty_natural_response",
+                rewrite_count=rewrite_count,
+            )
+        return _deterministic_text(plan, fallback_reason="empty_natural_response")
 
     if metadata_out is not None:
         metadata_out["generated_llm_answer_before_fallback"] = natural_text
+        if structured_claims:
+            metadata_out["llm_structured_claims"] = structured_claims
 
     from .b2_mini_verifier import B2MiniVerifier
     verifier = B2MiniVerifier(llm_client=llm_client)

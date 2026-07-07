@@ -114,14 +114,41 @@ def goal_plan_to_draft(plan: GoalPlan) -> Any:
     }
     candidate_source = cs_map.get(plan.candidate_source, CandidateSource.DISCOVERY)
 
+    required_facets: list[str] = []
+    optional_facets: list[str] = []
+    evidence_needs = list(plan.evidence_needs)
+    reference_facet_names = {
+        "ordinal_reference",
+        "previous_recommendation",
+        "comparison_targets",
+        "deictic_reference",
+    }
+    for facet in plan.facets:
+        facet_name = str(getattr(facet, "name", "") or "").strip()
+        if not facet_name:
+            continue
+        facet_group = str(getattr(facet, "group", "") or "").strip()
+        if facet_name in reference_facet_names or facet_group == "reference":
+            continue
+        if bool(getattr(facet, "required", False)):
+            if facet_name not in required_facets:
+                required_facets.append(facet_name)
+            if facet_name not in evidence_needs:
+                evidence_needs.append(facet_name)
+        else:
+            if facet_name not in optional_facets:
+                optional_facets.append(facet_name)
+            if not evidence_needs:
+                evidence_needs.append(facet_name)
+
     return LocalLifeGoalDraft(
         goal_type=goal_type,
         candidate_source=candidate_source,
         candidate_category=plan.candidate_category,
         candidate_limit=plan.candidate_limit,
-        evidence_needs=list(plan.evidence_needs),
-        required_facets=list(plan.required_facets),
-        optional_facets=list(plan.optional_facets),
+        evidence_needs=evidence_needs,
+        required_facets=list(plan.required_facets) or required_facets,
+        optional_facets=list(plan.optional_facets) or optional_facets,
         requested_count=plan.requested_count,
         min_required=plan.min_required,
         max_allowed=plan.max_allowed,

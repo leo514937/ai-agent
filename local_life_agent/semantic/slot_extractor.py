@@ -718,8 +718,10 @@ def extract_slots(text: str, top_intent: str) -> dict:
     return {
         "top_intent": top_intent,
         "intent": top_intent,
+        # DEPRECATED_COMPAT: 迁移期兼容输出，最终语义权威仍由 semantic_parse 提供。
         "task_type": task_type,
         "primary_task": primary_task,
+        # DEPRECATED_COMPAT: 仅用于兼容 workflow 迁移，不作为最终调度权威。
         "workflow_hint": workflow_hint,
         "comparison_intent": comparison,
         "comparison_structure": comparison_structure,

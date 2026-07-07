@@ -19,28 +19,26 @@ from .facets import TargetResolutionResult
 from .goal import GoalPlan, GoalReviewResult
 from .schemas import (
     AnswerPlan,
+    ContextualizedTurn,
     ComparisonTargetResolution,
     EvidencePack,
     ExecutionPlan,
+    FocusContext,
+    FreshnessMeta,
     OrchestrationDecision,
+    LocationContext,
+    ClarificationRequest,
     ResolveShopResult,
     SemanticFrame,
     ToolResult,
 )
 from .state import SessionState, StateUpdatePlan
+from .serialization import to_plain_dict
 from ..planning.budget.budget_context import BudgetContext
 
 
 def _to_dict(value: Any) -> dict[str, Any]:
-    if value is None:
-        return {}
-    if isinstance(value, dict):
-        return dict(value)
-    model_dump = getattr(value, "model_dump", None)
-    if callable(model_dump):
-        dumped = model_dump()
-        return dumped if isinstance(dumped, dict) else {}
-    return dict(getattr(value, "__dict__", {}) or {})
+    return to_plain_dict(value)
 
 
 def _first_text(value: Any) -> str:
@@ -196,12 +194,21 @@ class GraphStateModel(BaseModel):
     canonical_shop_entities: list[dict[str, Any]] = Field(default_factory=list)
     last_recommendation_list: list[dict[str, Any]] = Field(default_factory=list)
     comparison_targets: list[dict[str, Any]] = Field(default_factory=list)
+    contextualized_turn: ContextualizedTurn | None = None
+    focus_context: FocusContext | None = None
+    freshness_meta: FreshnessMeta | None = None
+    location_context: LocationContext | None = None
     pending_clarification: dict[str, Any] | None = None
+    clarification_request: ClarificationRequest | None = None
     clarification_resolution: dict[str, Any] = Field(default_factory=dict)
     resume_strategy: str = ""
     review_results: dict[str, Any] = Field(default_factory=dict)
     budget_context: BudgetContext | None = None
     final_response: str = ""
+    preview_text: str = ""
+    preview_policy_result: dict[str, Any] = Field(default_factory=dict)
+    response_contract_v1: Any | None = None
+    response_contract_v2: Any | None = None
     fallback_reason: str = ""
     answer_fallback_reason: str = ""
     planning_started: str = ""
@@ -247,6 +254,12 @@ class GraphStateModel(BaseModel):
             self.resolved_target = self.resolve_shop_result
         elif self.resolve_shop_result is None and self.resolved_target is not None:
             self.resolve_shop_result = self.resolved_target
+        if self.pending_clarification is not None and self.clarification_request is None:
+            try:
+                from ..target.clarification import build_clarification_request
+                self.clarification_request = build_clarification_request(self.pending_clarification, source_stage="graph_state_model")
+            except Exception:
+                pass
         if self.tool_results and not self.tool_result_set:
             self.tool_result_set = dict(self.tool_results)
         elif self.tool_result_set and not self.tool_results:

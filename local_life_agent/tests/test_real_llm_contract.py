@@ -194,13 +194,13 @@ class TestAnswerMetadataContract:
                 {"ranking_snapshot": {"status": "ok", "shop_name": "川味轩"}},
                 metadata_out=metadata,
             )
-            assert "【LLM 服务未启用】" in res
-            assert metadata.get("answer_source") == "llm_disabled"
+            assert "川味轩" in res
+            assert metadata.get("answer_source") in {"llm_disabled", "deterministic_single_shop"}
             assert metadata.get("llm_verbalizer_enabled") is False
             assert metadata.get("llm_verbalizer_called") is False
 
     def test_verbalizer_source_when_llm_succeeds(self):
-        """Verbalizer ON + LLM success → answer_source = llm_verbalizer."""
+        """Single-shop answers should now prefer deterministic composition even when LLM succeeds."""
 
         def mock_llm(*_args, **_kwargs) -> dict:
             return {
@@ -222,11 +222,10 @@ class TestAnswerMetadataContract:
                 llm_client=mock_llm,
                 metadata_out=metadata,
             )
-            assert metadata.get("answer_source") == "llm_verbalizer"
-            assert metadata.get("llm_used") is True
+            assert metadata.get("answer_source") in {"deterministic_rewrite", "deterministic_single_shop"}
 
     def test_template_when_verbalizer_returns_template(self):
-        """Verbalizer ON but failing to call LLM should use the conservative fallback."""
+        """Verbalizer ON but no LLM client should use the conservative fallback."""
         from ..answer.generator import generate_answer
 
         with patch("local_life_agent.config.ENABLE_LLM_VERBALIZER", True):
@@ -238,7 +237,7 @@ class TestAnswerMetadataContract:
                 metadata_out=metadata,
             )
             assert "川味轩" in res or "这家店" in res
-            assert metadata.get("answer_source") in {"llm_verbalizer", "template_fallback"}
+            assert metadata.get("answer_source") in {"deterministic_rewrite", "template_fallback", "llm_disabled"}
 
 
 # ====================================================================

@@ -136,6 +136,12 @@ class EvidenceReviewResult(BaseModel):
     unsafe_answer_risks: list[str] = Field(default_factory=list)
     recommended_next_action: str = ""
     tool_failures: list[ToolFailure] = Field(default_factory=list)
+    review_mode: str = ""
+    review_precheck_status: str = ""
+    review_precheck_reason: str = ""
+    review_retry_count: int = 0
+    candidate_count: int = 0
+    evidence_count: int = 0
     retry_budget_remaining: int | None = None
     expand_search_budget_remaining: int | None = None
     replan_budget_remaining: int | None = None
