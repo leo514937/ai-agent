@@ -11,6 +11,7 @@ from typing import Any
 from .. import config
 from ..observability.file_logger import get_python_service_logger, log_kv
 from ..observability.metrics import record_tool_call_metric
+from ..planning.evidence.tool_result_cache import ToolResultCache
 from .circuit_breaker import get_circuit_breaker_manager
 from .executor import (
     JavaToolExecutor,
@@ -145,6 +146,7 @@ class ToolCallGateway:
 class _BatchToolCall:
     call_id: str
     tool_name: str
+    facet: str
     kwargs: dict[str, Any]
     required: bool
     timeout_ms: int
@@ -171,6 +173,7 @@ class BatchToolExecutor:
         self._max_concurrency = max_concurrency or config.MAX_CONCURRENCY
         self._call_fn = call_fn or dispatch_tool_call
         self._backend_source = backend_source or config.TOOL_BACKEND
+        self._cache = ToolResultCache()
 
     def _normalize_call(self, call: Any) -> _BatchToolCall:
         if hasattr(call, "model_dump"):
@@ -180,6 +183,7 @@ class BatchToolExecutor:
         return _BatchToolCall(
             call_id=str(call.get("call_id", "") or call.get("tool_name", "")),
             tool_name=str(call.get("tool_name", "")),
+            facet=str(call.get("facet", "") or call.get("tool_name", "") or ""),
             kwargs=dict(call.get("args", {}) or {}),
             required=bool(call.get("required", True)),
             timeout_ms=int(call.get("timeout_ms", config.TOOL_DEFAULT_TIMEOUT_MS)),
@@ -245,16 +249,51 @@ class BatchToolExecutor:
             return {}
 
         batch_calls = [self._normalize_call(call) for call in tool_calls]
+        call_by_id = {call.call_id: call for call in batch_calls}
+        unique_calls: list[_BatchToolCall] = []
+        call_aliases: dict[str, str] = {}
+        seen_keys: dict[str, str] = {}
+        call_cache_keys: dict[str, str] = {}
+        for call in batch_calls:
+            payload = ToolResultCache.make_payload(
+                tool_name=call.tool_name,
+                shop_id=str(call.kwargs.get("shop_id", "")),
+                facet=str(call.facet or call.tool_name),
+                query_scope={},
+                args=call.kwargs,
+            )
+            cache_id = ToolResultCache.fingerprint(payload)
+            call_cache_keys[call.call_id] = cache_id
+            if cache_id in seen_keys:
+                call_aliases[call.call_id] = seen_keys[cache_id]
+                continue
+            unique_calls.append(call)
+            seen_keys[cache_id] = call.call_id
+
         semaphore = asyncio.Semaphore(max(1, min(self._max_concurrency, max(c.max_parallelism for c in batch_calls))))
         deadline = time.monotonic() + (self._deadline_ms / 1000.0)
 
         # Logical map stage: execute the batch concurrently and merge the
         # per-call payloads back into one result dict for the caller.
-        tasks = [self._run_one(call, semaphore, deadline) for call in batch_calls]
+        tasks = [self._run_one(call, semaphore, deadline) for call in unique_calls]
         results: dict[str, dict[str, Any]] = {}
 
         for call_id, payload in await asyncio.gather(*tasks):
-            results[call_id] = payload
+            call = call_by_id.get(call_id)
+            result_payload = dict(payload)
+            if call is not None:
+                result_payload.setdefault("call_id", call.call_id)
+                result_payload.setdefault("shop_id", str(call.kwargs.get("shop_id", "")))
+                result_payload.setdefault("tool_name", call.tool_name)
+            result_payload["tool_result_cache_key"] = call_cache_keys.get(call_id, "")
+            result_payload["tool_result_cache_hit"] = False
+            results[call_id] = result_payload
+        for alias, original in call_aliases.items():
+            if original in results:
+                cloned = dict(results[original])
+                cloned.setdefault("call_id", alias)
+                cloned["tool_result_cache_hit"] = True
+                results[alias] = cloned
 
         return results
 

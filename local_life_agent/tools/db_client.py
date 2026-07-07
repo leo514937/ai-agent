@@ -23,9 +23,7 @@ _FIXTURE_DIR = Path(__file__).resolve().parents[2] / "local_life_agent" / "tests
 def _use_fixture_backend() -> bool:
     """Return True when the bundled test fixtures should back DB queries."""
     raw = os.environ.get("LOCAL_LIFE_DB_FIXTURE_FALLBACK", "")
-    if raw.lower() in {"1", "true", "yes", "on"}:
-        return True
-    return "PYTEST_CURRENT_TEST" in os.environ
+    return raw.lower() in {"1", "true", "yes", "on"}
 
 
 @lru_cache(maxsize=None)
@@ -247,7 +245,8 @@ def query_all_shops() -> list[dict[str, Any]]:
             cur.execute(sql)
             return [_row_to_shop(row) for row in cur.fetchall()]
     except Exception:
-        return _fixture_shops()
+        _logger.exception("query_all_shops failed without fixture fallback")
+        raise
 
 
 def query_shop_by_id(shop_id: str) -> dict[str, Any] | None:
@@ -282,7 +281,8 @@ def query_shop_by_id(shop_id: str) -> dict[str, Any] | None:
             row = cur.fetchone()
             return _row_to_shop(row) if row else None
     except Exception:
-        return _fixture_find_shop(shop_id)
+        _logger.exception("query_shop_by_id failed without fixture fallback")
+        raise
 
 
 def query_shop_by_name(name: str) -> list[dict[str, Any]]:
@@ -316,8 +316,8 @@ def query_shop_by_name(name: str) -> list[dict[str, Any]]:
             cur.execute(sql, (pattern, name))
             return [_row_to_shop(row) for row in cur.fetchall()]
     except Exception:
-        query_lower = str(name or "").strip().lower()
-        return [dict(shop) for shop in _fixture_shops() if query_lower and query_lower in str(shop.get("shop_name", "")).lower()]
+        _logger.exception("query_shop_by_name failed without fixture fallback")
+        raise
 
 
 def query_shops_by_keyword(
@@ -358,7 +358,8 @@ def query_shops_by_keyword(
             rows = rows[:limit]
         return [_row_to_matched_shop(row) for row in rows]
     except Exception:
-        return _fixture_query_shops_by_keyword(keyword, limit)
+        _logger.exception("query_shops_by_keyword failed without fixture fallback")
+        raise
 
 
 def query_coupons_by_shop_id(shop_id: str) -> list[dict[str, Any]]:
@@ -390,8 +391,8 @@ def query_coupons_by_shop_id(shop_id: str) -> list[dict[str, Any]]:
             cur.execute(sql, (sid,))
             return [_row_to_coupon(row) for row in cur.fetchall()]
     except Exception:
-        sid_str = str(shop_id).strip()
-        return [dict(coupon) for coupon in _fixture_coupons() if coupon.get("shop_id") == sid_str]
+        _logger.exception("query_coupons_by_shop_id failed without fixture fallback")
+        raise
 
 
 def query_all_type_names() -> dict[int, str]:
@@ -403,4 +404,5 @@ def query_all_type_names() -> dict[int, str]:
             cur.execute("SELECT id, name FROM tb_shop_type")
             return {row["id"]: str(row["name"]) for row in cur.fetchall()}
     except Exception:
-        return {1: "美食"}
+        _logger.exception("query_all_type_names failed without fixture fallback")
+        raise

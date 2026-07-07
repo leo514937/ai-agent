@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import math
+import os
 from typing import Any
 
+from .. import config
 from . import db_client
 from ..input.normalizer import normalize_text
 from ..semantic.alias_index import build_alias_index
+from ..location_utils import normalize_location_payload
 from pathlib import Path
 import json
 
@@ -28,6 +31,38 @@ def _calc_etas(distance_km: float) -> dict[str, int]:
         mode: max(1, round(distance_km / (speed / 60)))
         for mode, speed in speeds.items()
     }
+
+
+def _fixture_backend_enabled() -> bool:
+    return os.environ.get("LOCAL_LIFE_DB_FIXTURE_FALLBACK", "").lower() in {"1", "true", "yes", "on"}
+
+
+_KNOWN_LOCATION_ALIASES: dict[str, dict[str, Any]] = {
+    "北京邮电大学": {
+        "name": "北京邮电大学",
+        "location_name": "北京邮电大学",
+        "lat": config.MOCK_LOCATION["lat"],
+        "lng": config.MOCK_LOCATION["lng"],
+        "city": "北京",
+        "district": "海淀区",
+        "city_hint": "海淀区",
+        "location_status": "provided",
+        "location_source": "mock_location",
+        "geo_status": "resolved",
+    },
+    "北邮": {
+        "name": "北邮",
+        "location_name": "北京邮电大学",
+        "lat": config.MOCK_LOCATION["lat"],
+        "lng": config.MOCK_LOCATION["lng"],
+        "city": "北京",
+        "district": "海淀区",
+        "city_hint": "海淀区",
+        "location_status": "provided",
+        "location_source": "mock_location",
+        "geo_status": "resolved",
+    },
+}
 
 
 # ── Internal helpers ──────────────────────────────────────────────
@@ -75,6 +110,49 @@ def _normalize_coord_payload(value: Any, *, field_name: str) -> tuple[dict[str, 
     return {"lat": lat_f, "lng": lng_f}, None
 
 
+def geocode_location(value: Any) -> dict[str, Any]:
+    """Best-effort location normalizer for known local-life anchors.
+
+    This helper keeps the existing tool contracts intact, but when the input
+    only provides a location name we can still attach the canonical mock
+    coordinates used by the local fixtures.
+    """
+    payload = normalize_location_payload(value)
+    if not payload:
+        return {}
+
+    if payload.get("lat") is not None and payload.get("lng") is not None:
+        payload["geo_status"] = payload.get("geo_status", "resolved")
+        return payload
+
+    raw_name = str(
+        payload.get("location_name")
+        or payload.get("name")
+        or payload.get("text")
+        or ""
+    ).strip()
+    if not raw_name:
+        payload.setdefault("geo_status", "missing")
+        payload.setdefault("location_status", "missing")
+        payload.setdefault("location_missing_reason", "location_name_missing")
+        return payload
+
+    for alias, resolved in _KNOWN_LOCATION_ALIASES.items():
+        if alias in raw_name or raw_name in alias:
+            merged = {**payload, **resolved}
+            merged.setdefault("location_name", resolved.get("location_name", raw_name))
+            merged["geo_status"] = "resolved"
+            merged["location_status"] = merged.get("location_status", "provided")
+            merged["location_source"] = merged.get("location_source", "mock_location")
+            return merged
+
+    payload.setdefault("location_name", raw_name)
+    payload.setdefault("geo_status", "missing")
+    payload.setdefault("location_status", "missing")
+    payload.setdefault("location_missing_reason", "location_geocode_missing")
+    return payload
+
+
 def calculate_distance_km(
     origin: dict[str, Any] | None = None,
     destination: dict[str, Any] | None = None,
@@ -85,6 +163,8 @@ def calculate_distance_km(
     This tool intentionally does not call any external map service and
     never returns walking/driving ETA. The method is always haversine.
     """
+    origin = geocode_location(origin)
+    destination = geocode_location(destination)
     origin_coords, origin_error = _normalize_coord_payload(origin, field_name="origin")
     if origin_error == "INVALID_COORDINATES":
         return {
@@ -189,10 +269,12 @@ def _lookup_shop(shop_id: str) -> dict[str, Any] | None:
 
 
 def _mock_data_dir() -> Path:
-    return Path(__file__).resolve().parents[1] / "mock_data"
+    return Path(__file__).resolve().parents[2] / "local_life_agent" / "tests" / "fixtures" / "mock_data"
 
 
 def _load_mock_json(name: str) -> list[dict[str, Any]]:
+    if not _fixture_backend_enabled():
+        return []
     path = _mock_data_dir() / name
     if not path.exists():
         return []
@@ -207,6 +289,8 @@ def _is_mock_shop_id(shop_id: str) -> bool:
 
 
 def _mock_lookup_shop(shop_id: str) -> dict[str, Any] | None:
+    if not _fixture_backend_enabled():
+        return None
     if not _is_mock_shop_id(shop_id):
         return None
     for shop in _load_mock_json("shops.json"):
@@ -216,12 +300,16 @@ def _mock_lookup_shop(shop_id: str) -> dict[str, Any] | None:
 
 
 def _mock_coupons_for_shop(shop_id: str) -> list[dict[str, Any]]:
+    if not _fixture_backend_enabled():
+        return []
     if not _is_mock_shop_id(shop_id):
         return []
     return [dict(item) for item in _load_mock_json("coupons.json") if str(item.get("shop_id", "")).strip() == str(shop_id).strip()]
 
 
 def _mock_distance_for_shop(shop_id: str) -> dict[str, Any] | None:
+    if not _fixture_backend_enabled():
+        return None
     if not _is_mock_shop_id(shop_id):
         return None
     for item in _load_mock_json("distance_eta.json"):
@@ -373,17 +461,36 @@ def search_shops(
         return {"success": True, "result_status": "ok", "data": []}
 
     matched = db_client.query_shops_by_keyword(query, limit=limit)
+    resolved_location = geocode_location(location)
+
+    # Prefer same-city / same-district results when the location can be geocoded.
+    location_hints = [
+        str(resolved_location.get("district", "") or "").strip(),
+        str(resolved_location.get("city_hint", "") or "").strip(),
+        str(resolved_location.get("city", "") or "").strip(),
+    ]
+    location_hints = [item for item in location_hints if item]
+    if location_hints:
+        filtered = []
+        for shop in matched:
+            address = str(shop.get("address", "") or "").strip()
+            city = str(shop.get("city", "") or "").strip()
+            if any(hint in address or hint == city for hint in location_hints):
+                filtered.append(shop)
+        if filtered:
+            matched = filtered
 
     # Sort by rating descending
     matched.sort(key=lambda s: s.get("rating", 0), reverse=True)
 
     # Enrich with distance if location provided
-    if location and matched:
+    location_coords = _normalize_coord_payload(resolved_location, field_name="origin")[0]
+    if location_coords and matched:
         enriched: list[dict] = []
         for shop in matched:
             shop_copy = dict(shop)
-            lat1 = location.get("lat", 39.9609)
-            lng1 = location.get("lng", 116.3581)
+            lat1 = location_coords.get("lat", 39.9609)
+            lng1 = location_coords.get("lng", 116.3581)
             lat2 = shop.get("lat", 0)
             lng2 = shop.get("lng", 0)
             distance = _haversine_km(lat1, lng1, lat2, lng2)
@@ -567,8 +674,9 @@ def get_distance_eta(shop_id: str, from_location: dict[str, float]) -> dict:
             },
         }
 
-    lat1 = from_location.get("lat", 39.9609)
-    lng1 = from_location.get("lng", 116.3581)
+    resolved_location = geocode_location(from_location)
+    lat1 = resolved_location.get("lat", 39.9609)
+    lng1 = resolved_location.get("lng", 116.3581)
     lat2 = shop.get("lat", 0)
     lng2 = shop.get("lng", 0)
 
@@ -650,7 +758,9 @@ def get_shop_cards(
     warnings: list[str] = []
     missing: list[str] = []
     items: list[dict[str, Any]] = []
-    if need_distance_eta and not user_location:
+    resolved_user_location = geocode_location(user_location) if user_location else {}
+    resolved_user_location_coords = _normalize_coord_payload(resolved_user_location, field_name="origin")[0]
+    if need_distance_eta and not resolved_user_location_coords:
         warnings.append("未提供用户位置，距离和 ETA 返回 null")
 
     capped_ids = [str(item).strip() for item in shop_ids or [] if str(item).strip()]
@@ -665,9 +775,9 @@ def get_shop_cards(
         open_status = shop.get("open_status", "unknown")
         distance_m = None
         eta_minutes = None
-        if need_distance_eta and user_location:
-            lat1 = user_location.get("lat", 39.9609)
-            lng1 = user_location.get("lng", 116.3581)
+        if need_distance_eta and resolved_user_location_coords:
+            lat1 = resolved_user_location_coords.get("lat", 39.9609)
+            lng1 = resolved_user_location_coords.get("lng", 116.3581)
             distance_km = _haversine_km(lat1, lng1, float(shop.get("lat", 0)), float(shop.get("lng", 0)))
             distance_m = int(round(distance_km * 1000))
             etas = _calc_etas(distance_km)
@@ -716,7 +826,7 @@ def get_shop_cards(
                 status=status,
                 input_payload={
                     "shop_ids": shop_ids,
-                    "user_location": user_location,
+                    "user_location": resolved_user_location or user_location,
                     "need_coupon_brief": need_coupon_brief,
                     "need_open_status": need_open_status,
                     "need_distance_eta": need_distance_eta,

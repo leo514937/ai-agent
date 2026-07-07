@@ -21,6 +21,7 @@ if str(_REPO_ROOT) not in sys.path:
 # ``tests.fakes`` instead of relying on a runtime mock backend.
 import local_life_agent.config as _cfg
 _cfg.TOOL_BACKEND = "db"
+os.environ.setdefault("LOCAL_LIFE_DB_FIXTURE_FALLBACK", "1")
 
 LLM_SENTINEL_PREFIX = "LLM_SENTINEL_"
 _SPY_OPT_OUT_MARKERS = {"no_spy_llm_backend", "real_llm_backend"}
