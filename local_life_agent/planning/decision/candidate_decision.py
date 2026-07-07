@@ -535,8 +535,20 @@ def map_candidate_decision_plan_to_decision_plan(plan: CandidateDecisionPlan) ->
             candidate.shop_id,
         ),
     )
-    
-    for candidate in sorted_candidates:
+
+    def _is_recommendation_blocked(candidate: CandidateItem) -> bool:
+        if plan.decision_type != "recommendation":
+            return False
+        if "detail" in candidate.failed_facts:
+            return True
+        open_status = str(candidate.facts.get("open_status", "") or "").strip().lower()
+        return open_status == "closed"
+
+    ranked_candidates = [candidate for candidate in sorted_candidates if not _is_recommendation_blocked(candidate)]
+    if plan.decision_type == "recommendation" and not ranked_candidates:
+        ranked_candidates = list(sorted_candidates)
+
+    for candidate in ranked_candidates:
         row_dict = {
             "shop_id": candidate.shop_id,
             "shop_name": candidate.shop_name,
@@ -589,7 +601,7 @@ def map_candidate_decision_plan_to_decision_plan(plan: CandidateDecisionPlan) ->
                     
     factual_points = []
     candidate_summaries = []
-    for candidate in sorted_candidates:
+    for candidate in ranked_candidates:
         facts = []
         sname = candidate.shop_name
         if candidate.facts.get("rating") is not None:

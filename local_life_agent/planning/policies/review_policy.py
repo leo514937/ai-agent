@@ -9,7 +9,9 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from ..budget.budget_context import BudgetContext, budget_context_from_state
 
 
 # ===================================================================
@@ -50,6 +52,91 @@ class NextAction(str, Enum):
     DEGRADE_ANSWER = "DEGRADE_ANSWER"        # P1/P2 only
     UNSUPPORTED_ANSWER = "UNSUPPORTED_ANSWER"
     FALLBACK = "FALLBACK"
+
+
+# ===================================================================
+# ReviewPolicy
+# ===================================================================
+
+
+class ReviewPolicy(BaseModel):
+    """Minimal review policy used to cap review and rewrite loops."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    max_review_rounds: int = 2
+    max_rewrite_rounds: int = 1
+    allow_fallback: bool = True
+    allow_clarify: bool = True
+
+    @field_validator("max_review_rounds", "max_rewrite_rounds", mode="before")
+    @classmethod
+    def _coerce_non_negative_int(cls, value: Any) -> int:
+        try:
+            return max(int(value), 0)
+        except Exception:
+            return 0
+
+    @field_validator("allow_fallback", "allow_clarify", mode="before")
+    @classmethod
+    def _coerce_bool(cls, value: Any) -> bool:
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"0", "false", "no", "off", "n"}:
+                return False
+            if normalized in {"1", "true", "yes", "on", "y"}:
+                return True
+        return bool(value)
+
+    @classmethod
+    def from_budget_context(cls, budget_context: BudgetContext | dict[str, Any] | None = None) -> ReviewPolicy:
+        if budget_context is None:
+            return cls()
+        if isinstance(budget_context, dict):
+            try:
+                budget_context = BudgetContext.model_validate(budget_context)
+            except Exception:
+                budget_context = BudgetContext()
+        if not isinstance(budget_context, BudgetContext):
+            return cls()
+        return cls(
+            max_review_rounds=max(int(budget_context.retry_budget or 0) + 1, 1),
+            max_rewrite_rounds=max(int(budget_context.rewrite_budget or 0), 1),
+        )
+
+    @classmethod
+    def from_state(cls, state: dict[str, Any] | None) -> ReviewPolicy:
+        state = state or {}
+        value = state.get("review_policy")
+        if isinstance(value, ReviewPolicy):
+            return value
+        if isinstance(value, dict):
+            try:
+                return cls.model_validate(value)
+            except Exception:
+                pass
+
+        execution_budget = state.get("execution_budget")
+        if execution_budget is not None:
+            from ..budget.execution_budget import ExecutionBudget
+
+            if isinstance(execution_budget, ExecutionBudget):
+                return cls(
+                    max_review_rounds=max(int(execution_budget.max_review_rounds or 0), 1),
+                    max_rewrite_rounds=max(int(execution_budget.max_rewrite_rounds or 0), 1),
+                )
+            if isinstance(execution_budget, dict):
+                try:
+                    budget = ExecutionBudget.model_validate(execution_budget)
+                except Exception:
+                    budget = None
+                if budget is not None:
+                    return cls(
+                        max_review_rounds=max(int(budget.max_review_rounds or 0), 1),
+                        max_rewrite_rounds=max(int(budget.max_rewrite_rounds or 0), 1),
+                    )
+
+        return cls.from_budget_context(budget_context_from_state(state))
 
 
 # P0 allowed next actions — test must fail if any other action is returned.
@@ -101,3 +188,7 @@ def assert_p0_next_action_allowed(result: SufficiencyCheckResult) -> None:
             f"Allowed: {', '.join(sorted(P0_ALLOWED_NEXT_ACTIONS))}. "
             f"Stage={result.stage.value}, status={result.status.value}."
         )
+
+
+def review_policy_from_state(state: dict[str, Any] | None) -> ReviewPolicy:
+    return ReviewPolicy.from_state(state)

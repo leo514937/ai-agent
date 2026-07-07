@@ -8,7 +8,7 @@ from typing import Any
 from ... import config
 from ...domain.enums import ToolResultStatus
 from .evidence_cache import EvidenceCache, get_default_evidence_cache
-from ..policies.ranking_policy import rank_candidates
+from ..policies.ranking_policy import derive_comparison_winner, rank_candidates
 
 
 def _to_dict(value: Any) -> dict[str, Any]:
@@ -39,6 +39,17 @@ def _status_value(value: Any) -> str:
     if isinstance(value, str):
         return value
     return str(value or "unknown")
+
+
+def _enum_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    raw_value = getattr(value, "value", None)
+    if raw_value is not None:
+        return str(raw_value)
+    return str(value)
 
 
 def _first_shop_name(resolved_target: dict[str, Any]) -> tuple[str, str]:
@@ -101,7 +112,15 @@ def _facet_result_payload(facet: str, result_status: str, data: Any) -> dict[str
             payload["value"] = "empty"
     elif facet == "open_status":
         if result_status == "ok" and isinstance(data, dict):
-            payload["value"] = data.get("open_status", "unknown")
+            open_status = data.get("open_status")
+            if open_status is None:
+                if data.get("is_open") is True:
+                    open_status = "open"
+                elif data.get("is_open") is False:
+                    open_status = "closed"
+                else:
+                    open_status = data.get("open_status_text", "unknown")
+            payload["value"] = open_status
     elif facet == "distance":
         if result_status == "ok" and isinstance(data, dict):
             payload["value"] = {
@@ -165,6 +184,19 @@ def _candidate_from_shop(shop: Any) -> dict[str, Any]:
     candidate.setdefault("open_status", candidate.get("open_status", "unknown"))
     candidate.setdefault("coupon_count", candidate.get("coupon_count"))
     return candidate
+
+
+def _normalize_open_status_value(data: Any) -> str:
+    if not isinstance(data, dict):
+        return "unknown"
+    open_status = data.get("open_status")
+    if open_status is not None and str(open_status).strip():
+        return str(open_status).strip().lower()
+    if data.get("is_open") is True:
+        return "open"
+    if data.get("is_open") is False:
+        return "closed"
+    return str(data.get("open_status_text", "unknown") or "unknown").strip().lower()
 
 
 def _search_result_candidates(tool_results: dict, plan_calls: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
@@ -815,6 +847,8 @@ def _build_comparison_evidence(
         if row.get("distance_km") is None:
             uncertainty_notes.append(f"{row.get('shop_name') or row.get('shop_id')}距离暂无法确认")
 
+    winner_payload = derive_comparison_winner(rows)
+
     from ...domain.schemas import ComparisonMatrix
     matrix_dict = {
         "matrix_id": f"cmp_{plan_dict.get('plan_id', '') or 'matrix'}",
@@ -827,6 +861,9 @@ def _build_comparison_evidence(
         "uncertainty_notes": uncertainty_notes,
         "overall_ranked": overall_ranked,
         "overall_ranking": overall_ranked,
+        "statistical_winner": winner_payload.get("statistical_winner"),
+        "winner_provenance": winner_payload.get("winner_provenance", {}),
+        "winner_uncertainty_note": winner_payload.get("winner_uncertainty_note", ""),
     }
     # Perform strict schemas validation
     ComparisonMatrix.model_validate(matrix_dict)
@@ -994,7 +1031,7 @@ def _build_evidence_uncached(
             if call_id:
                 plan_calls[call_id] = call_dict
 
-    task_type = str(plan_dict.get("task_type", ""))
+    task_type = _enum_value(plan_dict.get("task_type", ""))
     if task_type == "comparison":
         comparison_payload = _build_comparison_evidence(
             tool_results or {},
@@ -1107,7 +1144,7 @@ def _build_evidence_uncached(
                 )
         elif facet == "open_status":
             if result_status == "ok" and isinstance(data, dict):
-                open_status = str(data.get("open_status", "unknown"))
+                open_status = _normalize_open_status_value(data)
                 evidence_items.append(
                     {
                         "evidence_id": "evi_open_status",
@@ -1252,7 +1289,7 @@ def _build_evidence_uncached(
         "facet_statuses": facet_statuses,
     }
 
-    if str(plan_dict.get("task_type", "")) == "recommendation":
+    if _enum_value(plan_dict.get("task_type", "")) == "recommendation":
         return _build_recommendation_evidence(
             recommendation_candidates or [],
             tool_results or {},
@@ -1495,7 +1532,7 @@ def _build_recommendation_evidence(
                 detail_failed_shop_ids.add(shop_id)
         elif tool_name == "check_open_status":
             if result_status == "ok" and isinstance(data, dict):
-                open_status = str(data.get("open_status", "unknown"))
+                open_status = _normalize_open_status_value(data)
                 current_open_status = str(candidate.get("open_status", "unknown") or "unknown").lower()
                 if current_open_status not in {"open", "closed"}:
                     candidate["open_status"] = open_status
@@ -1670,8 +1707,8 @@ def _build_recommendation_evidence(
             if val is not None:
                 result["value"] = val
                 # For open_status, propagate value as open_status for verifier compatibility
-                if facet == "open_status" and isinstance(val, str):
-                    result["open_status"] = val
+                if facet == "open_status":
+                    result["open_status"] = str(val).strip().lower()
             facet_results.append(result)
     # Add distance facet from ranking snapshot (distance is rarely a separate tool call)
     for item in ranked_snapshot:
@@ -1721,21 +1758,6 @@ def _build_recommendation_evidence(
                 "value": os_val,
             })
             seen_facets.add("open_status")
-
-    print(f"[DEBUG _build_recommendation_evidence] ranked_snapshot={len(ranked_snapshot)}, facet_results={len(facet_results)}")
-    if facet_results:
-        for fr in facet_results:
-            print(f"  [DEBUG] facet={fr.get('facet')} result_status={fr.get('result_status')}")
-    elif evidence_items:
-        print(f"  [DEBUG] NO facet_results but {len(evidence_items)} evidence_items")
-        for ei in evidence_items[:5]:
-            print(f"  [DEBUG] ei facet={ei.get('facet')} result_status={ei.get('result_status')}")
-    else:
-        print(f"  [DEBUG] NO facet_results AND no evidence_items")
-        if ranked_snapshot:
-            print(f"  [DEBUG] first ranked item: {ranked_snapshot[0]}")
-        if candidates_by_shop_id:
-            print(f"  [DEBUG] first candidate: sid={list(candidates_by_shop_id.keys())[0]}, data={list(candidates_by_shop_id.values())[0]}")
 
     facet_contract_source = ranked_snapshot[0] if ranked_snapshot else {}
     facet_status_contract, grounded_facts_contract, facet_reason_contract = _facet_contract_from_target(

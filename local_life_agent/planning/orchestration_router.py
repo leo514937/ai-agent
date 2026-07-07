@@ -160,6 +160,7 @@ _ORCHESTRATION_POLICY_TABLE: dict[str, dict[str, Any]] = {
     "recommendation": {
         "orchestration_pattern": "discovery_decision",
         "workflow_name": "discovery_decision",
+        "workflow_entry_name": "recommendation_decision_workflow",
         "task_complexity": "medium",
         "requires_tool": True,
         "requires_clarification": False,
@@ -169,6 +170,7 @@ _ORCHESTRATION_POLICY_TABLE: dict[str, dict[str, Any]] = {
     "comparison": {
         "orchestration_pattern": "discovery_decision",
         "workflow_name": "discovery_decision",
+        "workflow_entry_name": "comparison_decision_workflow",
         "task_complexity": "medium",
         "requires_tool": True,
         "requires_clarification": False,
@@ -242,6 +244,15 @@ _ORCHESTRATION_POLICY_TABLE: dict[str, dict[str, Any]] = {
         "orchestration_pattern": "exploration_planning",
         "workflow_name": "exploration_planning",
         "task_complexity": "high",
+        "requires_tool": True,
+        "requires_clarification": False,
+        "response_mode": "exploration_plan",
+        "next_action": "run_workflow",
+    },
+    "super_complex": {
+        "orchestration_pattern": "complex_orchestrator_workflow",
+        "workflow_name": "complex_orchestrator_workflow",
+        "task_complexity": "super_complex",
         "requires_tool": True,
         "requires_clarification": False,
         "response_mode": "exploration_plan",
@@ -852,6 +863,19 @@ def _has_reference_signal(state: GraphState) -> bool:
 
 
 def _route_task_from_single_shop(state: GraphState, facets: list[str]) -> str:
+    raw_text = _extract_text(state)
+    if "有券" in raw_text or "优惠券" in raw_text or "coupon" in raw_text:
+        return "shop_coupon"
+    if "营业" in raw_text or "开门" in raw_text or "open" in raw_text:
+        return "shop_status"
+    if "距离" in raw_text or "多远" in raw_text or "eta" in raw_text:
+        return "shop_distance"
+    if "评价" in raw_text or "review" in raw_text:
+        return "shop_review_summary"
+    if "场景" in raw_text or "适合" in raw_text or "scene" in raw_text:
+        return "shop_scene_fit"
+    if "价格" in raw_text or "多少钱" in raw_text or "price" in raw_text:
+        return "shop_price"
     if not facets:
         primary_task = _extract_primary_task(state).lower()
         if "coupon" in primary_task:
@@ -914,6 +938,7 @@ def normalize_route_task(state: GraphState) -> str:
     semantic_comparison_structure = _as_str(semantic_frame.get("comparison_structure"))
     semantic_exploration_count = _semantic_exploration_count(state)
     semantic_workflow_hint = _semantic_text_field(semantic_frame, "workflow_hint")
+    semantic_task_complexity = _semantic_text_field(semantic_frame, "task_complexity")
     semantic_has_cancel = _semantic_cancel_intent(state)
     semantic_has_new_task_override = _semantic_new_task_override(state)
     state_comparison_targets = [item for item in (state.get("comparison_targets") or []) if item]
@@ -930,6 +955,13 @@ def normalize_route_task(state: GraphState) -> str:
             or facets
         )
     )
+    recommendation_reference_anchor = bool(
+        task_type == "recommendation"
+        and (
+            _has_reference_signal(state)
+            or _has_deterministic_target_hints(state)
+        )
+    )
     comparison_has_context_anchor = bool(
         len(session_last_recommendations) >= 2
         or len(state_comparison_targets) >= 2
@@ -944,6 +976,9 @@ def normalize_route_task(state: GraphState) -> str:
 
     if semantic_has_cancel:
         return "invalid"
+
+    if semantic_task_complexity == "super_complex" or semantic_workflow_hint in {"complex_orchestrator", "complex_orchestrator_workflow"} or task_type in {"complex_orchestrator", "super_complex"}:
+        return "super_complex"
 
     typed_missing_slots = {
         MissingSlotType.missing_location.value,
@@ -963,6 +998,9 @@ def normalize_route_task(state: GraphState) -> str:
         or len(resolved_targets) >= 2
         or (comparison_resolution.get("status") == "RESOLVED" and len(resolved_targets) >= 1 and len(state_comparison_targets) >= 2)
     )
+    single_shop_task = task_type == TaskType.single_shop_query.value or goal_type == TaskType.single_shop_query.value
+    if single_shop_task:
+        comparison_requested = False
     recommendation_has_anchor = bool(
         task_type == "recommendation"
         and (
@@ -973,39 +1011,63 @@ def normalize_route_task(state: GraphState) -> str:
             or facets
         )
     )
+    if single_shop_task and _has_single_shop_anchor(state):
+        route_task = _route_task_from_single_shop(state, facets)
+        if route_task != "unknown":
+            return route_task
+    if task_type == TaskType.recommendation.value and _has_reference_signal(state):
+        reference_resolution = resolve_references(raw_text_original, state, semantic_frame)
+        reference_status = str(reference_resolution.get("status", "") or "").lower()
+        if reference_status in {"resolved", "resolved_list"} or _has_deterministic_target_hints(state):
+            route_task = _route_task_from_single_shop(state, facets)
+            if route_task != "unknown":
+                return route_task
+            return task_type
+    if task_type == TaskType.coupon_query.value:
+        # 序数跟进“第一家有券吗”应优先继承上轮推荐列表，直接落到单店券查询。
+        if (semantic_ordinal_references or bool(re.search(r"第\s*([1-9一二三四五六七八九十])\s*(个|家|间|店)?", raw_text_original))) and has_session_recommendations:
+            return "shop_coupon"
     if (
         semantic_confidence < _SEMANTIC_LOW_CONFIDENCE_FLOOR
         and semantic_parse_source in {SemanticParseSource.fallback_rules.value, SemanticParseSource.diagnostic_rules.value, ""}
         and not semantic_has_new_task_override
         and not comparison_requested
         and not recommendation_has_anchor
+        and not recommendation_reference_anchor
     ):
         return "low_confidence"
 
     if (
         semantic_missing_slot_type in typed_missing_slots
         or (semantic_grounding_status in _GROUNDING_CLARIFICATION_STATUSES and semantic_confidence < 0.85)
-    ) and not semantic_has_new_task_override and not recommendation_has_anchor:
+    ) and not semantic_has_new_task_override and not recommendation_has_anchor and not recommendation_reference_anchor:
         return "missing_required_slot"
 
     if _has_pending_clarification(state) and not semantic_has_new_task_override:
         return "reference_failed"
 
     if comparison_requested:
-        if len(semantic_comparison_targets) >= 2 or len(state_comparison_targets) >= 2 or len(resolved_targets) >= 2:
-            if task_type in {"comparison", "deal_compare"}:
-                return task_type
-            if goal_type in {"comparison", "deal_compare"}:
-                return goal_type
-            return "comparison"
-        if comparison_has_context_anchor and comparison_has_multi_target_signal and comparison_resolution.get("status") in {"NEED_CLARIFICATION", "NOT_FOUND", "TOO_MANY", "PARTIAL"}:
-            if task_type in {"comparison", "deal_compare"}:
-                return task_type
-            if goal_type in {"comparison", "deal_compare"}:
-                return goal_type
-            return "comparison"
-        if comparison_resolution.get("unresolved_targets") or comparison_resolution.get("ambiguous_target"):
-            return "missing_required_slot"
+        single_shop_followup_hint = any(
+            token in raw_text_original
+            for token in ("有券", "优惠券", "营业", "开门", "距离", "多远", "评价", "价格", "人均")
+        )
+        if single_shop_followup_hint and len(semantic_ordinal_references) <= 1 and len(semantic_comparison_targets) <= 1:
+            comparison_requested = False
+        else:
+            if len(semantic_comparison_targets) >= 2 or len(state_comparison_targets) >= 2 or len(resolved_targets) >= 2:
+                if task_type in {"comparison", "deal_compare"}:
+                    return task_type
+                if goal_type in {"comparison", "deal_compare"}:
+                    return goal_type
+                return "comparison"
+            if comparison_has_context_anchor and comparison_has_multi_target_signal and comparison_resolution.get("status") in {"NEED_CLARIFICATION", "NOT_FOUND", "TOO_MANY", "PARTIAL"}:
+                if task_type in {"comparison", "deal_compare"}:
+                    return task_type
+                if goal_type in {"comparison", "deal_compare"}:
+                    return goal_type
+                return "comparison"
+            if comparison_resolution.get("unresolved_targets") or comparison_resolution.get("ambiguous_target"):
+                return "missing_required_slot"
     elif task_type in {"comparison", "deal_compare"} or goal_type in {"comparison", "deal_compare"}:
         if comparison_resolution.get("status") == "RESOLVED" and len(resolved_targets) >= 2:
             if task_type in {"comparison", "deal_compare"}:
@@ -1065,6 +1127,8 @@ def normalize_route_task(state: GraphState) -> str:
         # 只有已经存在单店锚点时，才允许这类修饰词把路由收回到单店工具流。
         if task_type == "comparison":
             return "comparison" if comparison_requested else "missing_required_slot"
+        if _has_reference_signal(state):
+            pass
         if task_type == "recommendation" and _has_deterministic_target_hints(state) and _count_single_shop_signal_groups(state) <= 1 and _has_single_shop_anchor(state):
             if "营业" in raw_text or "开门" in raw_text or "open" in raw_text:
                 return "shop_status"
@@ -1079,7 +1143,10 @@ def normalize_route_task(state: GraphState) -> str:
             route_task = _route_task_from_single_shop(state, facets)
             if route_task != "unknown":
                 return route_task
-        return task_type
+        if _has_reference_signal(state):
+            pass
+        else:
+            return task_type
 
     if goal_type in _DISCOVERY_TASKS:
         return goal_type
@@ -1087,16 +1154,18 @@ def normalize_route_task(state: GraphState) -> str:
     if task_type == TaskType.coupon_query.value:
         return "shop_coupon"
 
-    reference_requested = task_type == TaskType.single_shop_query.value or goal_type == TaskType.single_shop_query.value or _has_reference_signal(state)
+    reference_requested = (
+        task_type == TaskType.single_shop_query.value
+        or goal_type == TaskType.single_shop_query.value
+        or _has_reference_signal(state)
+        or (task_type == TaskType.recommendation.value and _has_reference_signal(state))
+    )
     if reference_requested:
         reference_resolution = resolve_references(raw_text_original, state, semantic_frame)
         reference_status = str(reference_resolution.get("status", "") or "").lower()
         if reference_status in {"resolved", "resolved_list"} or _has_verified_single_shop_anchor(state) or _has_deterministic_target_hints(state):
             if len({facet for facet in facets if facet}) > 1:
                 return "recommendation"
-            route_task = _route_task_from_single_shop(state, facets)
-            if route_task != "unknown":
-                return route_task
             if "有券" in raw_text or "优惠券" in raw_text or "coupon" in raw_text:
                 return "shop_coupon"
             if "营业" in raw_text or "开门" in raw_text or "open" in raw_text:
@@ -1109,6 +1178,9 @@ def normalize_route_task(state: GraphState) -> str:
                 return "shop_scene_fit"
             if "价格" in raw_text or "多少钱" in raw_text or "price" in raw_text:
                 return "shop_price"
+            route_task = _route_task_from_single_shop(state, facets)
+            if route_task != "unknown":
+                return route_task
             if primary_task:
                 if any(token in primary_task for token in ("coupon", "券")):
                     return "shop_coupon"
@@ -1365,6 +1437,94 @@ def validate_orchestration_decision(decision: OrchestrationDecision, state: Grap
         )
 
     normalized = decision.model_copy(deep=True)
+    semantic_frame = _to_dict(state.get("semantic_frame"))
+    session_last_recommendations = list(_session_value(state, "last_recommendation_list") or [])
+    session_current_shop = _to_dict(_session_value(state, "current_shop"))
+    semantic_ordinal_references = [item for item in (semantic_frame.get("ordinal_references") or []) if str(item).strip()]
+    semantic_deictic_references = [item for item in (semantic_frame.get("deictic_references") or []) if str(item).strip()]
+    semantic_coupon_facets = [
+        item
+        for item in (semantic_frame.get("facets") or [])
+        if str(_to_dict(item).get("name", "") or _to_dict(item).get("facet", "") or "").strip() == "coupon"
+    ]
+    coupon_requested = bool(
+        "有券" in str(state.get("raw_text", "") or state.get("normalized_text", "") or "")
+        or "优惠券" in str(state.get("raw_text", "") or state.get("normalized_text", "") or "")
+        or "团购" in str(state.get("raw_text", "") or state.get("normalized_text", "") or "")
+        or "coupon" in str(state.get("raw_text", "") or state.get("normalized_text", "") or "").lower()
+        or bool(semantic_coupon_facets)
+    )
+    recommendation_anchor_present = bool(
+        semantic_frame.get("category")
+        or semantic_frame.get("ranking_signals")
+        or semantic_frame.get("soft_preferences")
+        or semantic_frame.get("facets")
+        or semantic_frame.get("focused_facets")
+        or semantic_frame.get("current_shop")
+        or semantic_frame.get("comparison_targets")
+        or session_last_recommendations
+        or session_current_shop
+    )
+    comparison_anchor_present = _has_strong_comparison_context(state)
+    coupon_follow_up_with_history = (
+        coupon_requested
+        and (semantic_ordinal_references or bool(re.search(r"第\s*([1-9一二三四五六七八九十])\s*(个|家|间|店)?", str(state.get("raw_text", "") or state.get("normalized_text", "") or ""))))
+        and bool(session_last_recommendations)
+    )
+    comparison_deictic_needs_clarify = (
+        route_task == "comparison"
+        and bool(semantic_deictic_references)
+        and not (session_current_shop.get("shop_id") or session_current_shop.get("shop_name"))
+    )
+    if route_task in {"recommendation", "comparison"} or (route_task == "missing_required_slot" and _extract_task_type(state) in {"recommendation", "comparison"}):
+        if route_task == "comparison":
+            anchor_present = comparison_anchor_present
+        elif route_task == "recommendation":
+            anchor_present = recommendation_anchor_present
+        else:
+            anchor_present = recommendation_anchor_present or comparison_anchor_present
+        if anchor_present and not comparison_deictic_needs_clarify:
+            if normalized.workflow_name == "clarification_fallback":
+                normalized = normalized.model_copy(
+                    update={
+                        "workflow_name": "discovery_decision",
+                        "orchestration_pattern": "discovery_decision",
+                        "workflow_entry_name": "recommendation_decision_workflow" if route_task == "recommendation" else "comparison_decision_workflow",
+                        "requires_tool": True,
+                        "requires_clarification": False,
+                        "response_mode": "answer",
+                        "next_action": "run_workflow",
+                        "task_complexity": "medium",
+                        "workflow_reason": f"{normalized.workflow_reason}; anchor_present_for_{route_task}",
+                    }
+                )
+            if normalized.missing_fields:
+                normalized = normalized.model_copy(update={"missing_fields": []})
+        elif route_task in {"recommendation", "comparison"} and normalized.workflow_name == "discovery_decision":
+            normalized = normalized.model_copy(
+                update={
+                    "workflow_name": "discovery_decision",
+                    "orchestration_pattern": "discovery_decision",
+                    "workflow_entry_name": "recommendation_decision_workflow" if route_task == "recommendation" else "comparison_decision_workflow",
+                    "requires_tool": True,
+                    "requires_clarification": False,
+                    "response_mode": "recommendation" if route_task == "recommendation" else "comparison",
+                    "next_action": "run_workflow",
+                }
+            )
+    if coupon_follow_up_with_history and normalized.workflow_name == "clarification_fallback":
+        normalized = normalized.model_copy(
+            update={
+                "workflow_name": "deterministic_tool",
+                "orchestration_pattern": "deterministic_tool",
+                "requires_tool": True,
+                "requires_clarification": False,
+                "response_mode": "tool_answer",
+                "next_action": "run_workflow",
+                "task_complexity": "low",
+                "missing_fields": [],
+            }
+        )
     if normalized.workflow_name != normalized.orchestration_pattern:
         normalized = OrchestrationDecision(
             **_fallback_policy("workflow_name must match orchestration_pattern"),
@@ -1425,7 +1585,10 @@ def validate_orchestration_decision(decision: OrchestrationDecision, state: Grap
             }
         )
 
-    if route_task in _CLARIFICATION_TASKS:
+    if route_task in _CLARIFICATION_TASKS and not (
+        route_task == "missing_required_slot"
+        and (recommendation_anchor_present or comparison_anchor_present or coupon_follow_up_with_history)
+    ):
         normalized = normalized.model_copy(
             update={
                 "workflow_name": "clarification_fallback",
@@ -1509,6 +1672,21 @@ def build_orchestration_decision(state: GraphState) -> OrchestrationDecision:
         state,
     )
     route_task = normalize_route_task(state)
+    semantic_frame = _to_dict(state.get("semantic_frame"))
+    session_last_recommendations = list(_session_value(state, "last_recommendation_list") or [])
+    session_current_shop = _to_dict(_session_value(state, "current_shop"))
+    recommendation_anchor_present = bool(
+        semantic_frame.get("category")
+        or semantic_frame.get("ranking_signals")
+        or semantic_frame.get("soft_preferences")
+        or semantic_frame.get("facets")
+        or semantic_frame.get("focused_facets")
+        or semantic_frame.get("current_shop")
+        or semantic_frame.get("comparison_targets")
+        or session_last_recommendations
+        or session_current_shop
+    )
+    comparison_anchor_present = _has_strong_comparison_context(state)
 
     # Route-specific fallbacks and guard rails before the validator runs.
     if route_task == "forbidden":
@@ -1537,17 +1715,39 @@ def build_orchestration_decision(state: GraphState) -> OrchestrationDecision:
             }
         )
     if route_task == "missing_required_slot":
-        decision = decision.model_copy(
-            update={
-                "workflow_name": "clarification_fallback",
-                "orchestration_pattern": "clarification_fallback",
-                "requires_tool": False,
-                "requires_clarification": True,
-                "response_mode": "clarify",
-                "next_action": "clarify",
-                "task_complexity": "medium",
-            }
-        )
+        if _extract_task_type(state) not in {"recommendation", "comparison"} or not (recommendation_anchor_present or comparison_anchor_present):
+            decision = decision.model_copy(
+                update={
+                    "workflow_name": "clarification_fallback",
+                    "orchestration_pattern": "clarification_fallback",
+                    "requires_tool": False,
+                    "requires_clarification": True,
+                    "response_mode": "clarify",
+                    "next_action": "clarify",
+                    "task_complexity": "medium",
+                }
+            )
+    if route_task in {"recommendation", "comparison"} or (route_task == "missing_required_slot" and _extract_task_type(state) in {"recommendation", "comparison"}):
+        if route_task == "comparison":
+            anchor_present = comparison_anchor_present
+        elif route_task == "recommendation":
+            anchor_present = recommendation_anchor_present
+        else:
+            anchor_present = recommendation_anchor_present or comparison_anchor_present
+        if anchor_present and decision.workflow_name == "clarification_fallback":
+            decision = decision.model_copy(
+                update={
+                    "workflow_name": "discovery_decision",
+                    "orchestration_pattern": "discovery_decision",
+                    "requires_tool": True,
+                    "requires_clarification": False,
+                    "response_mode": "answer",
+                    "next_action": "run_workflow",
+                    "task_complexity": "medium",
+                    "missing_fields": [],
+                    "workflow_reason": f"{decision.workflow_reason}; anchor_present_for_{route_task}",
+                }
+            )
     if route_task == "reference_failed" and route_task not in _DETERMINISTIC_TASKS:
         decision = decision.model_copy(
             update={
@@ -1570,6 +1770,7 @@ def _decision_patch(decision: OrchestrationDecision, *, error_code: str = "", er
         "orchestration_decision": decision,
         "orchestration_pattern": decision.orchestration_pattern,
         "workflow_name": decision.workflow_name,
+        "workflow_entry_name": getattr(decision, "workflow_entry_name", ""),
         "workflow_reason": decision.workflow_reason,
         "task_complexity": decision.task_complexity,
         "requires_tool": decision.requires_tool,

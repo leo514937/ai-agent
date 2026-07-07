@@ -49,6 +49,27 @@ def _stringify_category(value: Any) -> str:
     return str(value).strip()
 
 
+def _infer_category_from_text(raw_text: str) -> str:
+    """从自然语言里保守提取候选品类，用于 discovery 查询兜底。"""
+    text = str(raw_text or "").strip()
+    if not text:
+        return ""
+
+    category_aliases: list[tuple[str, tuple[str, ...]]] = [
+        ("火锅", ("火锅", "锅底")),
+        ("咖啡", ("咖啡", "咖啡店", "咖啡馆", "咖啡厅")),
+        ("甜品", ("甜品", "甜点", "蛋糕", "下午茶", "甜食")),
+        ("餐厅", ("餐厅", "饭店", "美食", "吃饭", "就餐")),
+        ("亲子", ("亲子", "带娃", "儿童", "小朋友")),
+        ("娱乐", ("娱乐", "k歌", "K歌", "电影", "影院", "游玩", "玩乐")),
+        ("购物", ("购物", "商场", "逛街")),
+    ]
+    for category, tokens in category_aliases:
+        if any(token in text for token in tokens):
+            return category
+    return ""
+
+
 def _goal_type_from_task_type(task_type: TaskType | str | None) -> GoalType:
     """Map the legacy TaskType enum to the new GoalType enum."""
     if task_type is None:
@@ -185,6 +206,8 @@ def build_local_life_goal_draft(
         candidate_category = _stringify_category(frame.hard_constraints.get("category", ""))
     if not candidate_category:
         candidate_category = _stringify_category(frame.candidate_category)
+    if not candidate_category:
+        candidate_category = _infer_category_from_text(str((state or {}).get("raw_text", "") or ""))
 
     # Parse candidate_limit from frame or hard_constraints
     candidate_limit: int | None = None
@@ -343,7 +366,7 @@ def build_candidate_spec(
         inferred_mentions: list[str] = []
         if state:
             inferred_mentions = _infer_explicit_mentions_from_text(str(state.get("raw_text", "") or ""))
-        if goal.goal_type == GoalType.SINGLE_SHOP_QUERY and goal.candidate_source in {CandidateSource.EXPLICIT, CandidateSource.MIXED}:
+        if goal.goal_type in {GoalType.SINGLE_SHOP_QUERY, GoalType.COMPARISON} and goal.candidate_source in {CandidateSource.EXPLICIT, CandidateSource.MIXED}:
             if inferred_mentions:
                 spec.explicit_mentions = inferred_mentions
             elif full_mentions:
@@ -374,11 +397,29 @@ def build_candidate_spec(
                 if len(spec.explicit_mentions) > 1:
                     spec.limit = max(spec.limit or 0, len(spec.explicit_mentions))
         if (
+            goal.goal_type == GoalType.COMPARISON
+            and goal.candidate_source in {CandidateSource.EXPLICIT, CandidateSource.MIXED}
+            and not spec.explicit_mentions
+            and state
+        ):
+            inferred_mentions = _infer_explicit_mentions_from_text(str(state.get("raw_text", "") or ""))
+            if inferred_mentions:
+                spec.explicit_mentions = inferred_mentions
+                if len(spec.explicit_mentions) > 1:
+                    spec.limit = max(spec.limit or 0, len(spec.explicit_mentions))
+        if (
             goal.goal_type == GoalType.SINGLE_SHOP_QUERY
             and goal.candidate_source in {CandidateSource.EXPLICIT, CandidateSource.MIXED}
             and spec.explicit_mentions
         ):
             spec.query = " ".join(spec.explicit_mentions)
+        if goal.goal_type == GoalType.COMPARISON and spec.explicit_mentions:
+            spec.query = " ".join(spec.explicit_mentions)
+
+    if not spec.category:
+        spec.category = _infer_category_from_text(str((state or {}).get("raw_text", "") or ""))
+    if not spec.query:
+        spec.query = spec.category
 
     # Context ref
     if goal.candidate_source == CandidateSource.CONTEXT and frame is not None:

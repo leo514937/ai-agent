@@ -31,7 +31,8 @@ from typing import Any
 from ...domain.decision import DecisionPlan, DecisionReviewResult
 from ...domain.evidence import EvidenceReviewAction, EvidenceReviewResult
 from ...domain.goal import GoalPlan
-from ..policies.review_policy import SufficiencyCheckResult
+from ..budget.execution_budget import ExecutionBudget
+from ..policies.review_policy import ReviewPolicy, SufficiencyCheckResult
 
 
 def _to_dict(value: Any) -> dict[str, Any]:
@@ -157,6 +158,28 @@ def _has_core_coverage(
     return len(missing) == 0, missing
 
 
+def _coerce_review_policy(value: ReviewPolicy | dict[str, Any] | None) -> ReviewPolicy:
+    if isinstance(value, ReviewPolicy):
+        return value
+    if isinstance(value, dict):
+        try:
+            return ReviewPolicy.model_validate(value)
+        except Exception:
+            pass
+    return ReviewPolicy()
+
+
+def _coerce_execution_budget(value: ExecutionBudget | dict[str, Any] | None) -> ExecutionBudget:
+    if isinstance(value, ExecutionBudget):
+        return value
+    if isinstance(value, dict):
+        try:
+            return ExecutionBudget.model_validate(value)
+        except Exception:
+            pass
+    return ExecutionBudget()
+
+
 def review_decision(
     decision_plan: DecisionPlan | None = None,
     goal_plan: GoalPlan | dict[str, Any] | None = None,
@@ -164,6 +187,8 @@ def review_decision(
     candidate_review: SufficiencyCheckResult | dict[str, Any] | None = None,
     expand_search_count: int = 0,
     replan_evidence_count: int = 0,
+    review_policy: ReviewPolicy | dict[str, Any] | None = None,
+    execution_budget: ExecutionBudget | dict[str, Any] | None = None,
 ) -> DecisionReviewResult:
     """Review the DecisionPlan and determine next_action.
 
@@ -183,6 +208,8 @@ def review_decision(
     unknown_facets: list[str] = []
     failed_facets: list[str] = []
     evidence_action = _evidence_review_action(evidence_review)
+    policy = _coerce_review_policy(review_policy)
+    budget = _coerce_execution_budget(execution_budget)
 
     if evidence_action in {
         EvidenceReviewAction.CLARIFY.value,
@@ -307,7 +334,12 @@ def review_decision(
         trace["missing_required_facets"] = missing
         # Can we replan evidence?
         from ... import config as _cfg
-        if replan_evidence_count < _cfg.MAX_REPLAN_EVIDENCE_ROUNDS:
+        replan_limit = min(
+            _cfg.MAX_REPLAN_EVIDENCE_ROUNDS,
+            max(int(policy.max_review_rounds or 0), 0),
+            max(int(budget.max_review_rounds or 0), 0),
+        )
+        if replan_evidence_count < replan_limit:
             return DecisionReviewResult(
                 stage="decision_review",
                 status="insufficient",
@@ -367,7 +399,12 @@ def review_decision(
 
         if cr_status in ("need_more_candidates", "need_clarification"):
             from ... import config as _cfg
-            if expand_search_count < _cfg.MAX_EXPAND_SEARCH_ROUNDS:
+            expand_limit = min(
+                _cfg.MAX_EXPAND_SEARCH_ROUNDS,
+                max(int(policy.max_review_rounds or 0), 0),
+                max(int(budget.max_review_rounds or 0), 0),
+            )
+            if expand_search_count < expand_limit:
                 return DecisionReviewResult(
                     stage="decision_review",
                     status="insufficient",

@@ -21,6 +21,7 @@ from ...domain.candidate import CandidateSet, GoalType, LocalLifeGoalDraft
 from ...domain.enums import Facet
 from ...domain.schemas import ExecutionPlan, ToolCallSpec
 from ...observability.file_logger import log_kv
+from ...tools.db_tools import geocode_location
 from ...tools.registry import get_registry
 from .facet_budget import plan_evidence_result_from_candidate_set
 from ..llm_utils import invoke_structured_llm, model_validate_or_error
@@ -147,7 +148,8 @@ def plan_evidence(
     all_facets = required_facets + [f for f in optional_facets if f not in required_facets]
 
     candidates = list(candidate_set.candidates or [])
-    has_location = _coords_or_none(location) is not None
+    resolved_location = geocode_location(location)
+    has_location = _coords_or_none(resolved_location) is not None
     blocked_tool_calls: list[dict[str, Any]] = []
 
     # Deduplicate by shop_id + facet
@@ -176,7 +178,7 @@ def plan_evidence(
             candidate_payload = candidate.model_dump() if hasattr(candidate, "model_dump") else getattr(candidate, "raw", {})
             candidate_raw = candidate_payload.get("raw") if isinstance(candidate_payload, dict) else {}
             tool_calls.append(
-                _build_tool_call(shop_id, shop_name, facet, required, index, location, candidate_raw if isinstance(candidate_raw, dict) else {})
+                _build_tool_call(shop_id, shop_name, facet, required, index, resolved_location, candidate_raw if isinstance(candidate_raw, dict) else {})
             )
 
     planning_notes: list[str] = []
@@ -189,7 +191,7 @@ def plan_evidence(
                 "facet": "distance",
                 "tool_name": "calculate_distance_km",
                 "required": "distance" in required_facets,
-                "blocked_reason": _distance_block_reason(location),
+                "blocked_reason": _distance_block_reason(resolved_location),
             }
         )
 
@@ -216,7 +218,7 @@ def plan_evidence(
         timeout_policy={"default_timeout_ms": config.TOOL_DEFAULT_TIMEOUT_MS, "max_parallelism": config.MAX_CONCURRENCY},
         degradation_policy={"empty_results": "degrade_answer", "partial_results": "partial_answer", "tool_failure": "retry_or_degrade"},
     )
-    planner_result = plan_evidence_result_from_candidate_set(goal=goal, candidate_set=candidate_set, location=location)
+    planner_result = plan_evidence_result_from_candidate_set(goal=goal, candidate_set=candidate_set, location=resolved_location)
     plan.facet_candidates = [item.model_dump() for item in planner_result.facet_candidates]
     plan.facet_validation_result = planner_result.validation_result.model_dump() if planner_result.validation_result else None
     plan.facet_budget_plan = planner_result.budget_plan.model_dump() if planner_result.budget_plan else None

@@ -1,4 +1,7 @@
-"""Thin wrapper around evidence building and review."""
+"""DEPRECATED_COMPAT: evidence 构建与 review 的兼容壳。
+
+新代码应优先使用 planning/evidence 下的 canonical 实现。
+"""
 
 from __future__ import annotations
 

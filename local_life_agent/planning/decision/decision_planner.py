@@ -389,6 +389,12 @@ def plan_decision(
         answer_verify_result=answer_verify_result,
         decision_source="deterministic_decision_planner",
         decision_confidence=1.0 if winner_shop_id is not None else 0.0,
+        decision_mode="deterministic",
+        fallback_used=False,
+        candidate_count_before_decision=len(candidates),
+        candidate_count_after_decision=len(candidates),
+        evidence_preserved=True,
+        decision_reason=decision_reason,
         claim_bindings=[
             {"claim_id": f"claim_{idx+1}", "evidence_ids": claim.get("evidence_ids", [])}
             for idx, claim in enumerate(claims)
@@ -397,7 +403,6 @@ def plan_decision(
         missing_fields=list(missing_fields),
         next_action=next_action,
         reason=reason,
-        decision_reason=decision_reason,
         insufficient_evidence=insufficient_evidence,
     )
 
@@ -442,6 +447,12 @@ def plan_decision_with_llm(
         if strict:
             return None, error
         plan = plan_decision(goal_plan, candidate_set, evidence_pack, evidence_review)
+        plan.decision_mode = "deterministic_fallback"
+        plan.fallback_used = True
+        plan.candidate_count_before_decision = len([c for c in (getattr(plan, "candidates", []) or []) if str(c).strip()]) if hasattr(plan, "candidates") else len(_to_dict(candidate_set).get("candidates", []) or [])
+        plan.candidate_count_after_decision = len(list(plan.candidates or []))
+        plan.evidence_preserved = True
+        plan.decision_reason = plan.decision_reason or "llm_prompt_error_fallback"
         log_kv(_LOGGER, logging.WARNING, "[DECISION_PLANNER_FALLBACK]", tone="warn", decision_plan=plan, error=error)
         return plan, error
 
@@ -456,6 +467,12 @@ def plan_decision_with_llm(
         if strict:
             return None, error
         plan = plan_decision(goal_plan, candidate_set, evidence_pack, evidence_review)
+        plan.decision_mode = "deterministic_fallback"
+        plan.fallback_used = True
+        plan.candidate_count_before_decision = len([c for c in (getattr(plan, "candidates", []) or []) if str(c).strip()]) if hasattr(plan, "candidates") else len(_to_dict(candidate_set).get("candidates", []) or [])
+        plan.candidate_count_after_decision = len(list(plan.candidates or []))
+        plan.evidence_preserved = True
+        plan.decision_reason = plan.decision_reason or "llm_failed_fallback"
         log_kv(_LOGGER, logging.WARNING, "[DECISION_PLANNER_FALLBACK]", tone="warn", decision_plan=plan, error=error)
         return plan, error
 
@@ -471,11 +488,53 @@ def plan_decision_with_llm(
         if strict:
             return None, error
         plan = plan_decision(goal_plan, candidate_set, evidence_pack, evidence_review)
+        plan.decision_mode = "deterministic_fallback"
+        plan.fallback_used = True
+        plan.candidate_count_before_decision = len([c for c in (getattr(plan, "candidates", []) or []) if str(c).strip()]) if hasattr(plan, "candidates") else len(_to_dict(candidate_set).get("candidates", []) or [])
+        plan.candidate_count_after_decision = len(list(plan.candidates or []))
+        plan.evidence_preserved = True
+        plan.decision_reason = plan.decision_reason or "schema_invalid_fallback"
         log_kv(_LOGGER, logging.WARNING, "[DECISION_PLANNER_FALLBACK]", tone="warn", decision_plan=plan, error=error)
         return plan, error
 
     plan = model
+    decision_reason = str(plan.decision_reason or evidence_dict.get("decision_reason") or "").strip()
     plan.decision_source = plan.decision_source or "llm_decision_planner"
+    plan.decision_mode = "llm"
+    plan.candidate_count_before_decision = len(list(plan.candidates or []))
+    plan.candidate_count_after_decision = len(list(plan.candidates or []))
+    plan.fallback_used = False
+    plan.evidence_preserved = True
+    plan.decision_reason = plan.decision_reason or decision_reason
+    needs_fallback = (
+        plan.decision_type == DecisionType.UNSUPPORTED
+        or not list(plan.candidates or [])
+        or (plan.winner_shop_id is None and not list(plan.answerable_facets or []))
+    )
+    if needs_fallback:
+        deterministic_plan = plan_decision(goal_plan, candidate_set, evidence_pack, evidence_review)
+        if deterministic_plan is not None:
+            deterministic_has_signal = bool(deterministic_plan.candidates or deterministic_plan.winner_shop_id or deterministic_plan.answerable_facets)
+            if deterministic_has_signal and (
+                deterministic_plan.decision_type != DecisionType.UNSUPPORTED
+                or deterministic_plan.candidates
+                or deterministic_plan.winner_shop_id
+            ):
+                deterministic_plan.decision_source = deterministic_plan.decision_source or "deterministic_decision_planner_fallback"
+                deterministic_plan.decision_mode = "deterministic_fallback"
+                deterministic_plan.fallback_used = True
+                deterministic_plan.candidate_count_before_decision = len(list(deterministic_plan.candidates or []))
+                deterministic_plan.candidate_count_after_decision = len(list(deterministic_plan.candidates or []))
+                deterministic_plan.evidence_preserved = True
+                deterministic_plan.decision_reason = deterministic_plan.decision_reason or decision_reason
+                error = {
+                    "error_code": "DECISION_PLANNER_UNSUPPORTED_FALLBACK",
+                    "error_message": "llm decision was unsupported or empty; fell back to deterministic plan",
+                    "llm_backend": llm_result.get("llm_backend", ""),
+                    "raw": llm_result.get("raw", ""),
+                }
+                log_kv(_LOGGER, logging.WARNING, "[DECISION_PLANNER_FALLBACK]", tone="warn", decision_plan=deterministic_plan, error=error)
+                return deterministic_plan, error
     log_kv(
         _LOGGER,
         logging.INFO,
@@ -483,6 +542,11 @@ def plan_decision_with_llm(
         tone="llm",
         llm_backend=llm_result.get("llm_backend", ""),
         decision_plan=plan,
+        candidate_count_before_decision=plan.candidate_count_before_decision,
+        candidate_count_after_decision=plan.candidate_count_after_decision,
+        decision_mode=plan.decision_mode,
+        fallback_used=plan.fallback_used,
+        evidence_preserved=plan.evidence_preserved,
     )
     return plan, {
         "error_code": "",

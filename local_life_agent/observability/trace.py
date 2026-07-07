@@ -11,6 +11,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 from .. import config
+from ..domain.enums import normalize_response_mode
 
 
 _SENSITIVE_KEYS = {
@@ -41,6 +42,12 @@ class TraceSpanRecord:
     output_summary: dict[str, Any] = field(default_factory=dict)
     error_code: str | None = None
     error_message: str | None = None
+    decision: str = ""
+    llm_called: bool | None = None
+    tool_called: bool | None = None
+    input_snapshot: dict[str, Any] = field(default_factory=dict)
+    output_snapshot: dict[str, Any] = field(default_factory=dict)
+    error: dict[str, Any] = field(default_factory=dict)
     span_id: str = ""
     parent_span_id: str | None = None
     name: str = ""
@@ -168,16 +175,32 @@ class TurnTrace:
     verifier_duration_ms: int = 0
     events: list[TraceSpanRecord] = field(default_factory=list)
     spans: list[TraceSpanRecord] = field(default_factory=list)
+    stage_spans: list[TraceSpanRecord] = field(default_factory=list)
     metrics: dict[str, Any] = field(default_factory=dict)
     errors: list[dict[str, Any]] = field(default_factory=list)
     session_before_current_shop: Any | None = None
     session_before_last_recommendation_list_count: int = 0
 
     def __post_init__(self) -> None:
+        def _coerce_span(value: Any) -> TraceSpanRecord | Any:
+            if isinstance(value, TraceSpanRecord):
+                return value
+            if isinstance(value, dict):
+                try:
+                    return TraceSpanRecord(**value)
+                except Exception:
+                    return value
+            return value
         if not self.spans and self.events:
             self.spans = list(self.events)
         elif not self.events and self.spans:
             self.events = list(self.spans)
+        if self.events:
+            self.events = [_coerce_span(item) for item in self.events]
+        if self.spans:
+            self.spans = [_coerce_span(item) for item in self.spans]
+        if self.stage_spans:
+            self.stage_spans = [_coerce_span(item) for item in self.stage_spans]
         if self.metrics is None:
             self.metrics = {}
         if self.errors is None:
@@ -193,12 +216,20 @@ class TurnTrace:
 
     @property
     def response_mode(self) -> str | None:
-        return self.selected_flow
+        normalized = normalize_response_mode(self.selected_flow)
+        return normalized.value if normalized is not None else self.selected_flow
 
     def to_dict(self) -> dict[str, Any]:
+        def _dump_span(value: TraceSpanRecord | dict[str, Any]) -> dict[str, Any]:
+            if hasattr(value, "to_dict"):
+                return value.to_dict()
+            if isinstance(value, dict):
+                return dict(value)
+            return {}
         payload = asdict(self)
-        payload["events"] = [event.to_dict() for event in self.events]
-        payload["spans"] = [span.to_dict() for span in self.spans]
+        payload["events"] = [_dump_span(event) for event in self.events]
+        payload["spans"] = [_dump_span(span) for span in self.spans]
+        payload["stage_spans"] = [_dump_span(span) for span in self.stage_spans]
         payload["metrics"] = dict(self.metrics or {})
         payload["errors"] = list(self.errors or [])
         payload["workflow_name"] = self.workflow_name
@@ -232,6 +263,7 @@ class TurnTraceModel(BaseModel):
     total_duration_ms: int | None = None
     events: list[dict[str, Any]] = Field(default_factory=list)
     spans: list[dict[str, Any]] = Field(default_factory=list)
+    stage_spans: list[dict[str, Any]] = Field(default_factory=list)
     metrics: dict[str, Any] = Field(default_factory=dict)
     errors: list[dict[str, Any]] = Field(default_factory=list)
     workflow_name: str | None = None
@@ -361,6 +393,12 @@ def record_span(trace_id: str, span_name: str, metadata: dict | None = None) -> 
         output_summary=_coerce_dict(raw_metadata.get("output_summary")),
         error_code=_coerce_optional_str(raw_metadata.get("error_code")),
         error_message=_coerce_optional_str(raw_metadata.get("error_message")),
+        decision=_coerce_optional_str(raw_metadata.get("decision")) or _coerce_optional_str(raw_metadata.get("workflow_reason")) or "",
+        llm_called=_coerce_optional_bool(raw_metadata.get("llm_called")),
+        tool_called=_coerce_optional_bool(raw_metadata.get("tool_called")),
+        input_snapshot=_coerce_dict(raw_metadata.get("input_snapshot")),
+        output_snapshot=_coerce_dict(raw_metadata.get("output_snapshot")),
+        error=_coerce_dict(raw_metadata.get("error")),
         span_id=_coerce_optional_str(raw_metadata.get("span_id")) or f"{trace_id}:{span_name}:{started_at_ms}",
         parent_span_id=_coerce_optional_str(raw_metadata.get("parent_span_id")),
         name=_coerce_optional_str(raw_metadata.get("name")) or span_name,
@@ -479,8 +517,19 @@ def build_turn_trace(final_state: dict[str, Any], *, user_text: str = "", total_
     }
     tool_call_count = _infer_tool_call_count(execution_plan, final_state)
     normalized_spans = _normalize_trace_spans(events, final_state)
+    stage_spans = _build_stage_spans(events, final_state)
     trace_errors = _collect_trace_errors(final_state, events)
     turn_metrics = _build_turn_metrics_snapshot(final_state, total_duration_ms=total_duration_ms, trace=None)
+    fallback_semantic_source = (
+        _coerce_optional_str(final_state.get("semantic_source"))
+        or _coerce_optional_str(semantic_frame.get("semantic_source"))
+    )
+    fallback_reason = _coerce_optional_str(final_state.get("fallback_reason"))
+    semantic_parse_status = _coerce_optional_str(final_state.get("semantic_parse_status")) or _coerce_optional_str(semantic_frame.get("semantic_parse_status"))
+    if fallback_reason or semantic_parse_status in {"fallback", "failed", "recovered"}:
+        fallback_semantic_source = "diagnostic_rules"
+        if isinstance(semantic_frame, dict):
+            semantic_frame["semantic_source"] = "diagnostic_rules"
     turn_trace = TurnTrace(
         trace_id=trace_id,
         session_id=_coerce_optional_str(final_state.get("session_id")),
@@ -492,7 +541,7 @@ def build_turn_trace(final_state: dict[str, Any], *, user_text: str = "", total_
         top_intent_router_backend=_coerce_optional_str(final_state.get("top_intent_router_backend")),
         top_intent_router_error_type=_coerce_optional_str(final_state.get("top_intent_router_error_type")),
         top_intent_router_error_message=_coerce_optional_str(final_state.get("top_intent_router_error_message")),
-        semantic_source=_coerce_optional_str(final_state.get("semantic_source")) or _coerce_optional_str(semantic_frame.get("semantic_source")),
+        semantic_source=fallback_semantic_source,
         semantic_frame=semantic_frame,
         schema_validation_result=schema_validation_result,
         router_policy_decision=router_policy_decision,
@@ -574,6 +623,7 @@ def build_turn_trace(final_state: dict[str, Any], *, user_text: str = "", total_
         verifier_duration_ms=sum(event.duration_ms or 0 for event in events if event.stage == "answer_verify"),
         events=events,
         spans=normalized_spans,
+        stage_spans=stage_spans,
         metrics=turn_metrics.to_dict() if hasattr(turn_metrics, "to_dict") else _coerce_dict(turn_metrics),
         errors=trace_errors,
         session_before_current_shop=session_before.get("current_shop"),
@@ -685,6 +735,284 @@ def _normalize_span_name(span_name: str, stage: str) -> str:
     if key in {"semantic_parse", "context_recovery", "slot_extractor", "frame_validator", "understanding_subgraph"}:
         return "planning"
     return key or "unknown"
+
+
+_STAGE_SPAN_ORDER = [
+    "intake_span",
+    "routing_span",
+    "understanding_span",
+    "planning_span",
+    "execution_span",
+    "evidence_span",
+    "decision_span",
+    "response_span",
+]
+
+
+def _normalize_stage_span_name(span_name: str, stage: str) -> str:
+    key = str(span_name or stage or "").strip()
+    mapping = {
+        "receive_input": "intake_span",
+        "basic_input_validate": "intake_span",
+        "normalize_text": "intake_span",
+        "load_session_state": "intake_span",
+        "intake_guard_router": "routing_span",
+        "hard_guard": "routing_span",
+        "top_intent_router": "routing_span",
+        "orchestration_router_shadow": "routing_span",
+        "workflow_runner": "routing_span",
+        "semantic_parse": "understanding_span",
+        "slot_extractor": "understanding_span",
+        "frame_validator": "understanding_span",
+        "context_recovery": "understanding_span",
+        "understanding_subgraph": "understanding_span",
+        "goal_planner": "planning_span",
+        "goal_review": "planning_span",
+        "target_resolve": "planning_span",
+        "clarify_decide": "planning_span",
+        "evidence_planner": "planning_span",
+        "plan_validator": "planning_span",
+        "planning_subgraph": "planning_span",
+        "tool_execute": "execution_span",
+        "execution_review_subgraph": "execution_span",
+        "evidence_build": "evidence_span",
+        "evidence_review": "evidence_span",
+        "decision_planner": "decision_span",
+        "decision_review": "decision_span",
+        "answer_plan_build": "decision_span",
+        "answer_generate": "decision_span",
+        "answer_verify": "decision_span",
+        "rewrite": "decision_span",
+        "final_response_build": "response_span",
+        "clarify_response": "response_span",
+        "fallback_answer": "response_span",
+        "state_update_plan": "response_span",
+        "persist_session_state": "response_span",
+        "emit_response": "response_span",
+    }
+    return mapping.get(key, "response_span" if key in {"final_response", "preview_text"} else key or "unknown")
+
+
+def _snapshot_for_stage(stage_name: str, final_state: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], str, bool | None, bool | None]:
+    evidence_pack = _coerce_dict(final_state.get("evidence_pack"))
+    semantic_frame = _coerce_dict(final_state.get("semantic_frame"))
+    execution_plan = _coerce_dict(final_state.get("execution_plan") or final_state.get("validated_plan"))
+    tool_results = _coerce_dict(final_state.get("tool_results") or final_state.get("tool_result_set"))
+    answer_plan = _coerce_dict(final_state.get("answer_plan"))
+    response_directive = _coerce_dict(final_state.get("response_directive"))
+    response_contract_v2 = _coerce_dict(final_state.get("response_contract_v2"))
+    response_contract_v1 = _coerce_dict(final_state.get("response_contract_v1"))
+
+    if stage_name == "intake_span":
+        return (
+            _coerce_dict({
+                "raw_text": final_state.get("raw_text", ""),
+                "normalized_text": final_state.get("normalized_text", ""),
+                "input_type": final_state.get("input_type", ""),
+            }),
+            _coerce_dict({
+                "trace_id": final_state.get("trace_id", ""),
+                "session_id": final_state.get("session_id", ""),
+                "turn_id": final_state.get("turn_id", ""),
+            }),
+            str(final_state.get("guard_result", "") or final_state.get("pending_check_result", "") or ""),
+            None,
+            None,
+        )
+    if stage_name == "routing_span":
+        decision = _coerce_dict(final_state.get("router_policy_decision"))
+        return (
+            _coerce_dict({
+                "top_intent": final_state.get("top_intent", ""),
+                "semantic_source": final_state.get("semantic_source", ""),
+                "semantic_frame": semantic_frame,
+            }),
+            _coerce_dict({
+                "workflow_name": final_state.get("workflow_name", ""),
+                "response_mode": final_state.get("response_mode", ""),
+                "router_policy_decision": decision,
+            }),
+            str(decision.get("decision") or final_state.get("workflow_name", "") or final_state.get("response_mode", "") or ""),
+            _coerce_optional_bool(final_state.get("llm_called") or final_state.get("top_intent_router_llm_available")),
+            None,
+        )
+    if stage_name == "understanding_span":
+        return (
+            _coerce_dict({
+                "semantic_frame": semantic_frame,
+                "contextualized_turn": _coerce_dict(final_state.get("contextualized_turn")),
+                "focus_context": _coerce_dict(final_state.get("focus_context")),
+            }),
+            _coerce_dict({
+                "grounding_status": final_state.get("grounding_status", ""),
+                "reference_resolution_source": final_state.get("reference_resolution_source", ""),
+                "comparison_target_resolution": _coerce_dict(final_state.get("comparison_target_resolution")),
+            }),
+            str(final_state.get("semantic_source", "") or semantic_frame.get("semantic_parse_source", "") or final_state.get("grounding_status", "") or ""),
+            _coerce_optional_bool(final_state.get("llm_called") or semantic_frame.get("llm_called")),
+            None,
+        )
+    if stage_name == "planning_span":
+        return (
+            _coerce_dict({
+                "goal_plan": _coerce_dict(final_state.get("goal_plan")),
+                "target_resolution": _coerce_dict(final_state.get("target_resolution")),
+                "execution_plan": execution_plan,
+            }),
+            _coerce_dict({
+                "validated_plan": execution_plan,
+                "comparison_result": _coerce_dict(final_state.get("comparison_result")),
+                "clarification_request": _coerce_dict(final_state.get("clarification_request")),
+            }),
+            str(final_state.get("target_resolution_status", "") or final_state.get("planning_failure_code", "") or ""),
+            _coerce_optional_bool(final_state.get("planning_llm_called") or final_state.get("llm_called")),
+            bool(tool_results),
+        )
+    if stage_name == "execution_span":
+        return (
+            _coerce_dict({
+                "execution_plan": execution_plan,
+                "tool_result_set": tool_results,
+            }),
+            _coerce_dict({
+                "tool_result_count": len(tool_results),
+                "tool_backend": final_state.get("tool_backend", ""),
+            }),
+            str(len(tool_results) or final_state.get("execution_tool_calls_count", 0) or ""),
+            None,
+            True if tool_results else None,
+        )
+    if stage_name == "evidence_span":
+        return (
+            _coerce_dict({
+                "evidence_pack": evidence_pack,
+                "ranking_snapshot": _coerce_dict(evidence_pack.get("ranking_snapshot")),
+                "comparison_matrix": _coerce_dict(evidence_pack.get("comparison_matrix")),
+            }),
+            _coerce_dict({
+                "evidence_status": final_state.get("evidence_status", ""),
+                "evidence_review_result": _coerce_dict(final_state.get("evidence_review_result")),
+            }),
+            str(final_state.get("evidence_status", "") or final_state.get("evidence_review_result", {}).get("status", "") or ""),
+            None,
+            bool(tool_results),
+        )
+    if stage_name == "decision_span":
+        return (
+            _coerce_dict({
+                "answer_plan": answer_plan,
+                "rewrite_instruction": _coerce_dict(final_state.get("rewrite_instruction")),
+                "answer_verify_result": _coerce_dict(final_state.get("answer_verify_result")),
+            }),
+            _coerce_dict({
+                "verifier_result": final_state.get("verifier_result", ""),
+                "answer_source": final_state.get("answer_source", ""),
+                "fallback_reason": final_state.get("fallback_reason", ""),
+            }),
+            str(final_state.get("verifier_result", "") or final_state.get("answer_source", "") or ""),
+            _coerce_optional_bool(final_state.get("llm_called") or final_state.get("planning_llm_called") or final_state.get("llm_verbalizer_called")),
+            None,
+        )
+    if stage_name == "response_span":
+        return (
+            _coerce_dict({
+                "response_directive": response_directive,
+                "response_contract_v1": response_contract_v1,
+                "response_contract_v2": response_contract_v2,
+            }),
+            _coerce_dict({
+                "final_response": final_state.get("final_response", ""),
+                "preview_text": final_state.get("preview_text", ""),
+                "answer_source": final_state.get("answer_source", ""),
+            }),
+            str(final_state.get("answer_source", "") or response_directive.get("answer_source", "") or ""),
+            _coerce_optional_bool(final_state.get("llm_called") or final_state.get("llm_verbalizer_called")),
+            None,
+        )
+    return ({}, {}, "", None, None)
+
+
+def _build_stage_spans(events: list[TraceSpanRecord], final_state: dict[str, Any]) -> list[TraceSpanRecord]:
+    trace_id = str(final_state.get("trace_id", "") or "")
+    session_id = _coerce_optional_str(final_state.get("session_id"))
+    turn_id = str(final_state.get("turn_id", "") or "")
+    now_ms = int(time() * 1000)
+    stage_spans: list[TraceSpanRecord] = []
+    for stage_name in _STAGE_SPAN_ORDER:
+        related_events = [event for event in events if _normalize_stage_span_name(event.span_name, event.stage) == stage_name]
+        if related_events:
+            first_event = min(related_events, key=lambda event: event.timestamp_ms or now_ms)
+            last_event = max(related_events, key=lambda event: event.timestamp_ms or now_ms)
+            latency_ms = sum(int(event.duration_ms or event.latency_ms or 0) for event in related_events)
+            status = "error" if any(event.status == "error" or event.error_code or event.error_message for event in related_events) else (last_event.status or "ok")
+            decision = ""
+            llm_called = None
+            tool_called = None
+            input_snapshot, output_snapshot, decision, llm_called, tool_called = _snapshot_for_stage(stage_name, final_state)
+            error_payload = {}
+            for event in reversed(related_events):
+                if event.error_code or event.error_message or event.status == "error":
+                    error_payload = {
+                        "code": event.error_code or "TRACE_ERROR",
+                        "message": event.error_message or event.error_code or event.stage or event.span_name,
+                    }
+                    break
+            stage_spans.append(
+                TraceSpanRecord(
+                    trace_id=trace_id,
+                    span_name=stage_name,
+                    stage=stage_name,
+                    status=status,
+                    timestamp_ms=first_event.timestamp_ms,
+                    duration_ms=latency_ms,
+                    latency_ms=latency_ms,
+                    session_id=session_id,
+                    turn_id=turn_id,
+                    decision=decision,
+                    llm_called=llm_called,
+                    tool_called=tool_called,
+                    input_snapshot=input_snapshot,
+                    output_snapshot=output_snapshot,
+                    error=error_payload,
+                    metadata={
+                        "stage_name": stage_name,
+                        "source_span_names": [event.span_name for event in related_events],
+                    },
+                    input_summary=input_snapshot,
+                    output_summary=output_snapshot,
+                    error_code=error_payload.get("code"),
+                    error_message=error_payload.get("message"),
+                    span_id=f"{trace_id}:{stage_name}:{first_event.timestamp_ms}",
+                    name=stage_name,
+                )
+            )
+            continue
+        input_snapshot, output_snapshot, decision, llm_called, tool_called = _snapshot_for_stage(stage_name, final_state)
+        stage_spans.append(
+            TraceSpanRecord(
+                trace_id=trace_id,
+                span_name=stage_name,
+                stage=stage_name,
+                status="ok",
+                timestamp_ms=now_ms,
+                duration_ms=0,
+                latency_ms=0,
+                session_id=session_id,
+                turn_id=turn_id,
+                decision=decision,
+                llm_called=llm_called,
+                tool_called=tool_called,
+                input_snapshot=input_snapshot,
+                output_snapshot=output_snapshot,
+                error={},
+                metadata={"stage_name": stage_name, "source_span_names": []},
+                input_summary=input_snapshot,
+                output_summary=output_snapshot,
+                span_id=f"{trace_id}:{stage_name}:{now_ms}",
+                name=stage_name,
+            )
+        )
+    return stage_spans
 
 
 def _collect_trace_errors(final_state: dict[str, Any], events: list[TraceSpanRecord]) -> list[dict[str, Any]]:

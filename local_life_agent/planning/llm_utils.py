@@ -49,7 +49,7 @@ def render_prompt(template: str, replacements: dict[str, Any]) -> str:
         if isinstance(value, str):
             rendered = rendered.replace(key, value)
         else:
-            rendered = rendered.replace(key, json.dumps(value, ensure_ascii=False))
+            rendered = rendered.replace(key, json.dumps(value, ensure_ascii=False, default=str))
     return rendered
 
 
@@ -74,6 +74,7 @@ def invoke_structured_llm(
     response_validator: Callable[[Any], Any],
     llm_call: Callable[..., dict[str, Any]] | None = None,
     timeout_ms: int = LLM_TIMEOUT_MS,
+    max_retries: int = 0,
 ) -> dict[str, Any]:
     """Invoke an LLM and require a structured validated payload."""
     system_prompt, user_template = load_two_part_prompt(prompt_name)
@@ -89,6 +90,7 @@ def invoke_structured_llm(
         prompt_name=prompt_name,
         validator=validator_name,
         timeout_ms=timeout_ms,
+        max_retries=max_retries,
         replacement_keys=list(replacements.keys()),
         user_prompt_hash=_hash_text(user_prompt),
         system_prompt_hash=_hash_text(system_prompt),
@@ -99,7 +101,7 @@ def invoke_structured_llm(
         system_prompt=system_prompt,
         timeout_ms=timeout_ms,
         temperature=0.0,
-        max_retries=1,
+        max_retries=max_retries,
         response_validator=response_validator,
     )
 

@@ -1,4 +1,7 @@
-"""Thin wrapper around answer planning, generation, and verification."""
+"""DEPRECATED_COMPAT: answer 规划、生成、校验的兼容壳。
+
+Phase 1 只冻结既有导出面，不新增旧路径依赖。
+"""
 
 from __future__ import annotations
 

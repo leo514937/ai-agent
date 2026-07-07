@@ -279,6 +279,109 @@ def _semantic_snapshot_from_pack(evidence_pack: dict[str, Any]) -> dict[str, Any
     }
 
 
+def _candidate_count_from_pack(evidence_pack: dict[str, Any]) -> int:
+    ranking_snapshot = evidence_pack.get("ranking_snapshot") or {}
+    comparison_matrix = evidence_pack.get("comparison_matrix") or {}
+    targets = evidence_pack.get("target_shop_ids") or []
+    ranked = ranking_snapshot.get("ranked") or ranking_snapshot.get("ranked_shops") or ranking_snapshot.get("shops") or []
+    rows = comparison_matrix.get("rows") or comparison_matrix.get("overall_ranked") or []
+    if isinstance(rows, list) and rows:
+        return len(rows)
+    if isinstance(ranked, list) and ranked:
+        return len(ranked)
+    if isinstance(targets, list):
+        return len([item for item in targets if str(item).strip()])
+    return 0
+
+
+def _evidence_count_from_pack(evidence_pack: dict[str, Any]) -> int:
+    facet_results = evidence_pack.get("facet_results") or []
+    evidence_items = evidence_pack.get("evidence_items") or []
+    unknown_items = evidence_pack.get("unknown_items") or []
+    counts = 0
+    for item in (facet_results, evidence_items, unknown_items):
+        if isinstance(item, list):
+            counts += len(item)
+    return counts
+
+
+def _compact_candidate_review(candidate_review: Any) -> dict[str, Any]:
+    if candidate_review is None:
+        return {}
+    review = candidate_review.model_dump() if hasattr(candidate_review, "model_dump") else (candidate_review if isinstance(candidate_review, dict) else {})
+    if not isinstance(review, dict):
+        return {}
+    compact: dict[str, Any] = {}
+    for key in ("status", "reason", "next_action", "review_source", "candidate_count", "missing_fields", "uncertain_fields"):
+        if key in review and review.get(key) not in (None, "", [], {}):
+            compact[key] = review.get(key)
+    candidates = review.get("candidates") or review.get("ranked") or []
+    if isinstance(candidates, list):
+        compact["candidates"] = []
+        for item in candidates[:5]:
+            if isinstance(item, dict):
+                compact["candidates"].append(
+                    {
+                        "shop_id": item.get("shop_id", ""),
+                        "shop_name": item.get("shop_name", ""),
+                        "status": item.get("status", ""),
+                        "reason": item.get("reason", ""),
+                    }
+                )
+    return compact
+
+
+def _build_evidence_review_summary(
+    goal: LocalLifeGoalDraft,
+    evidence_pack: dict[str, Any],
+    tool_results: dict[str, Any] | None,
+    candidate_review: Any,
+    precheck: EvidenceReviewResult,
+) -> dict[str, Any]:
+    semantic_snapshot = _semantic_snapshot_from_pack(evidence_pack)
+    summary = {
+        "goal": {
+            "goal_type": getattr(goal.goal_type, "value", goal.goal_type),
+            "required_facets": list(goal.required_facets or []),
+            "optional_facets": list(goal.optional_facets or []),
+        },
+        "precheck": {
+            "status": precheck.status,
+            "next_action": str(getattr(precheck.next_action, "value", precheck.next_action)),
+            "reason": precheck.reason,
+            "candidate_count": _candidate_count_from_pack(evidence_pack),
+            "evidence_count": _evidence_count_from_pack(evidence_pack),
+        },
+        "evidence": {
+            "semantic_parse_source": semantic_snapshot["semantic_parse_source"],
+            "grounding_status": semantic_snapshot["grounding_status"],
+            "missing_slot_type": semantic_snapshot["missing_slot_type"],
+            "evidence_status": semantic_snapshot["evidence_status"],
+            "comparison_support_status": semantic_snapshot["comparison_support_status"],
+            "ranking_preserved": semantic_snapshot["ranking_preserved"],
+            "facet_statuses": semantic_snapshot["facet_statuses"],
+            "grounded_facts": semantic_snapshot["grounded_facts"],
+            "facet_reasons": semantic_snapshot["facet_reasons"],
+            "failed_tools": semantic_snapshot["failed_tools"],
+            "unknown_fields": semantic_snapshot["unknown_fields"],
+            "partial_fields": semantic_snapshot["partial_fields"],
+            "candidate_count": _candidate_count_from_pack(evidence_pack),
+            "evidence_count": _evidence_count_from_pack(evidence_pack),
+            "tool_results": {
+                key: {
+                    "tool_name": value.get("tool_name", ""),
+                    "result_status": value.get("result_status", ""),
+                    "error_code": value.get("error_code", ""),
+                }
+                for key, value in (tool_results or {}).items()
+                if isinstance(value, dict)
+            },
+        },
+        "candidate_review": _compact_candidate_review(candidate_review),
+    }
+    return summary
+
+
 def review_evidence(
     goal: LocalLifeGoalDraft,
     evidence_pack: dict[str, Any],
@@ -490,6 +593,13 @@ def review_evidence(
     result.failed_facets = list(dict.fromkeys(failed_facets))
     result.retryable_facets = list(dict.fromkeys(retryable_facets))
     result.tool_failures = tool_failures
+    result.review_source = result.review_source or "deterministic_review"
+    result.review_mode = "deterministic"
+    result.review_precheck_status = result.status
+    result.review_precheck_reason = result.reason
+    result.review_retry_count = 0
+    result.candidate_count = _candidate_count_from_pack(evidence_pack)
+    result.evidence_count = _evidence_count_from_pack(evidence_pack)
     result.retry_budget_remaining = retry_budget_remaining
     result.expand_search_budget_remaining = expand_search_budget_remaining
     result.replan_budget_remaining = replan_budget_remaining
@@ -691,6 +801,12 @@ def review_evidence(
         "status": result.status,
         "reason": result.reason,
         "action": result.action,
+        "review_mode": result.review_mode,
+        "review_precheck_status": result.review_precheck_status,
+        "review_precheck_reason": result.review_precheck_reason,
+        "review_retry_count": result.review_retry_count,
+        "candidate_count": result.candidate_count,
+        "evidence_count": result.evidence_count,
         "retry_budget_remaining": result.retry_budget_remaining,
         "expand_search_budget_remaining": result.expand_search_budget_remaining,
         "replan_budget_remaining": result.replan_budget_remaining,
@@ -772,11 +888,46 @@ def review_evidence_with_llm(
         candidate_review=candidate_review,
         strict=strict,
     )
+    precheck = review_evidence(goal, evidence_pack, tool_results)
+    precheck.review_mode = "deterministic_precheck"
+    precheck.review_precheck_status = precheck.status
+    precheck.review_precheck_reason = precheck.reason
+    precheck.review_retry_count = 0
+    precheck.candidate_count = _candidate_count_from_pack(evidence_pack)
+    precheck.evidence_count = _evidence_count_from_pack(evidence_pack)
+
+    should_call_llm = strict or precheck.next_action in {NextAction.REPLAN_EVIDENCE, NextAction.EXPAND_SEARCH}
+    if not should_call_llm:
+        meta = {
+            "error_code": "",
+            "error_message": "",
+            "llm_backend": "",
+            "raw": "",
+            "review_mode": "deterministic_precheck",
+            "precheck_status": precheck.status,
+            "precheck_reason": precheck.reason,
+            "candidate_count": precheck.candidate_count,
+            "evidence_count": precheck.evidence_count,
+        }
+        log_kv(
+            _logger,
+            logging.INFO,
+            "[EVIDENCE_REVIEW_SKIP_LLM]",
+            tone="route",
+            review=precheck,
+            review_mode=meta["review_mode"],
+            precheck_status=meta["precheck_status"],
+            precheck_reason=meta["precheck_reason"],
+            candidate_count=meta["candidate_count"],
+            evidence_count=meta["evidence_count"],
+        )
+        return precheck, meta
+
     replacements = {
         "{{GOAL_PLAN}}": goal.model_dump() if hasattr(goal, "model_dump") else dict(goal),
-        "{{EVIDENCE_PACK}}": _deep_dump(evidence_pack),
+        "{{EVIDENCE_PACK}}": _build_evidence_review_summary(goal, evidence_pack, tool_results, candidate_review, precheck),
         "{{TOOL_RESULTS}}": _deep_dump(tool_results) if tool_results else {},
-        "{{CANDIDATE_REVIEW}}": candidate_review.model_dump() if hasattr(candidate_review, "model_dump") else (candidate_review or {}),
+        "{{CANDIDATE_REVIEW}}": _compact_candidate_review(candidate_review),
     }
     try:
         llm_result = invoke_structured_llm(
@@ -784,13 +935,14 @@ def review_evidence_with_llm(
             replacements=replacements,
             response_validator=EvidenceReviewResult.model_validate,
             llm_call=llm_call,
+            max_retries=0,
         )
     except Exception as exc:
         error = {"error_code": "EVIDENCE_REVIEW_PROMPT_ERROR", "error_message": str(exc), "llm_backend": "", "raw": ""}
         log_kv(_logger, logging.ERROR, "[EVIDENCE_REVIEW_ERROR]", tone="error", error=error)
         if strict:
             return None, error
-        review = review_evidence(goal, evidence_pack, tool_results)
+        review = precheck
         log_kv(_logger, logging.WARNING, "[EVIDENCE_REVIEW_FALLBACK]", tone="warn", review=review, error=error)
         return review, error
 
@@ -804,7 +956,7 @@ def review_evidence_with_llm(
         log_kv(_logger, logging.WARNING, "[EVIDENCE_REVIEW_LLM_FAILED]", tone="warn", error=error)
         if strict:
             return None, error
-        review = review_evidence(goal, evidence_pack, tool_results)
+        review = precheck
         log_kv(_logger, logging.WARNING, "[EVIDENCE_REVIEW_FALLBACK]", tone="warn", review=review, error=error)
         return review, error
 
@@ -819,13 +971,19 @@ def review_evidence_with_llm(
         log_kv(_logger, logging.WARNING, "[EVIDENCE_REVIEW_SCHEMA_INVALID]", tone="warn", error=error)
         if strict:
             return None, error
-        review = review_evidence(goal, evidence_pack, tool_results)
+        review = precheck
         log_kv(_logger, logging.WARNING, "[EVIDENCE_REVIEW_FALLBACK]", tone="warn", review=review, error=error)
         return review, error
 
     review = model
     review.review_source = review.review_source or "llm_evidence_review"
     review.recommended_next_action = review.recommended_next_action or str(getattr(review.next_action, "value", review.next_action))
+    review.review_mode = "llm"
+    review.review_precheck_status = precheck.status
+    review.review_precheck_reason = precheck.reason
+    review.review_retry_count = 0
+    review.candidate_count = precheck.candidate_count
+    review.evidence_count = precheck.evidence_count
     log_kv(
         _logger,
         logging.INFO,
@@ -833,10 +991,20 @@ def review_evidence_with_llm(
         tone="llm",
         llm_backend=llm_result.get("llm_backend", ""),
         review=review,
+        review_mode=review.review_mode,
+        precheck_status=review.review_precheck_status,
+        precheck_reason=review.review_precheck_reason,
+        candidate_count=review.candidate_count,
+        evidence_count=review.evidence_count,
     )
     return review, {
         "error_code": "",
         "error_message": "",
         "llm_backend": llm_result.get("llm_backend", ""),
         "raw": llm_result.get("raw", ""),
+        "review_mode": review.review_mode,
+        "precheck_status": review.review_precheck_status,
+        "precheck_reason": review.review_precheck_reason,
+        "candidate_count": review.candidate_count,
+        "evidence_count": review.evidence_count,
     }

@@ -1,4 +1,4 @@
-"""Thin wrapper around tool execution primitives.
+"""DEPRECATED_COMPAT: tool execution 兼容壳。
 
 The batch path exposed here is a bounded, execution-layer MapReduce-style
 helper: it fans tool calls out concurrently inside the executor, then

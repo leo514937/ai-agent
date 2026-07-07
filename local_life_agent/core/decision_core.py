@@ -1,4 +1,7 @@
-"""Thin wrapper around candidate decision planning."""
+"""DEPRECATED_COMPAT: decision planning 兼容壳。
+
+Phase 1 仅保留旧调用方，不扩展新的导出或业务判断。
+"""
 
 from __future__ import annotations
 

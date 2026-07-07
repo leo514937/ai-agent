@@ -1,4 +1,7 @@
-"""Thin core wrappers for local-life pipeline boundaries."""
+"""DEPRECATED_COMPAT: 兼容旧 core 导入面的薄壳。
+
+Phase 1 只允许现有调用方继续使用，不接受新的业务依赖。
+"""
 
 from .planning_core import PlanningCore
 from .candidate_core import CandidateCore

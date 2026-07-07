@@ -49,7 +49,8 @@ class TestPlanEvidence:
         call_names = {c.tool_name for c in plan.tool_calls}
         assert call_names == {"get_coupon_list", "check_open_status", "calculate_distance_km"}
         distance_call = next(c for c in plan.tool_calls if c.facet == "distance")
-        assert distance_call.args["origin"] == {"lat": 39.9609, "lng": 116.3581}
+        assert distance_call.args["origin"].get("lat") == 39.9609
+        assert distance_call.args["origin"].get("lng") == 116.3581
         assert distance_call.args["destination"] == {}
         assert distance_call.args["mode"] == "straight_line"
 

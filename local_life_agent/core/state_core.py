@@ -1,4 +1,7 @@
-"""Thin wrappers around session state and location handling."""
+"""DEPRECATED_COMPAT: session state / location 兼容壳。
+
+这个模块只允许旧调用方继续使用，新的状态边界请走 canonical path。
+"""
 
 from __future__ import annotations
 

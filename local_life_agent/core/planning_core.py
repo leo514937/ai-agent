@@ -1,4 +1,7 @@
-"""Thin wrapper around goal and evidence planning."""
+"""DEPRECATED_COMPAT: goal / evidence planning 兼容壳。
+
+Canonical path 仍在 planning/goal 与 planning/evidence 的分层模块中。
+"""
 
 from __future__ import annotations
 

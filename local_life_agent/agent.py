@@ -75,6 +75,40 @@ def _audit_turn_completeness(final_state: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _extract_response_text(final_state: dict[str, Any]) -> str:
+    """Best-effort terminal answer extraction for legacy bypass compatibility.
+
+    The graph should prefer ``final_response`` as the authoritative field,
+    but some legacy paths still only populate the directive / draft fields.
+    Keep this extraction order narrow and deterministic so the terminal
+    response remains non-empty without changing graph semantics.
+    """
+    for key in ("final_response", "draft_response", "preview_text"):
+        text = str(final_state.get(key, "") or "").strip()
+        if text:
+            return text
+
+    directive = final_state.get("response_directive")
+    for attr in ("final_response", "answer_text", "preview_text"):
+        text = str(getattr(directive, attr, "") or "").strip()
+        if text:
+            return text
+
+    contract = final_state.get("response_contract_v1")
+    for attr in ("answer_text", "preview_text"):
+        text = str(getattr(contract, attr, "") or "").strip()
+        if text:
+            return text
+
+    contract_v2 = final_state.get("response_contract_v2")
+    for attr in ("answer_text", "preview_text", "final_response"):
+        text = str(getattr(contract_v2, attr, "") or "").strip()
+        if text:
+            return text
+
+    return ""
+
+
 def _debug_dump(value: Any, _seen: set[int] | None = None) -> Any:
     if isinstance(value, Enum):
         return value.value
@@ -281,7 +315,7 @@ def run_agent_graph(
     try:
         final_state = graph.invoke(initial, config={"recursion_limit": 64})
 
-        answer = final_state.get("final_response", "")
+        answer = _extract_response_text(final_state)
         trace_id = final_state.get("trace_id", "")
         sid = final_state.get("session_id", session_id)
         event_log = final_state.get("event_log", [])

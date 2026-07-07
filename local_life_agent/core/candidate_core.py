@@ -1,4 +1,8 @@
-"""Thin wrapper around candidate resolution."""
+"""DEPRECATED_COMPAT: candidate 解析兼容壳。
+
+Canonical path 优先走 target/candidate_resolver 与相关 target 业务层。
+Phase 1 冻结这里的调用面，后续再逐步迁移到 canonical path。
+"""
 
 from __future__ import annotations
 

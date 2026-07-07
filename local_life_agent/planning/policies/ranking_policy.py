@@ -4,7 +4,57 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from ...config import RECOMMENDATION_FINAL_TOP_K
+
+
+class RankingPolicy(BaseModel):
+    """Minimal executable ranking policy."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    hard_constraints: dict[str, Any] = Field(default_factory=dict)
+    filters: dict[str, Any] = Field(default_factory=dict)
+    sort_by: list[str] = Field(default_factory=lambda: ["total_score", "rating", "distance_km", "shop_id"])
+    top_k: int = RECOMMENDATION_FINAL_TOP_K
+
+    def model_post_init(self, __context: Any) -> None:
+        try:
+            self.top_k = max(int(self.top_k or 0), 1)
+        except Exception:
+            self.top_k = RECOMMENDATION_FINAL_TOP_K
+
+
+class ExpandSearchPolicy(BaseModel):
+    """Minimal expansion policy that preserves user hard constraints."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    preserve_hard_constraints: bool = True
+    preserve_filters: bool = True
+    preserve_sort_by: bool = True
+    extra_candidate_limit: int = 5
+
+    def expand(self, semantic_frame: dict[str, Any] | None = None) -> dict[str, Any]:
+        frame = _to_dict(semantic_frame)
+        hard_constraints = _to_dict(frame.get("hard_constraints"))
+        filters = _to_dict(frame.get("filters"))
+        ranking_signals = _to_dict(frame.get("ranking_signals"))
+        candidate_limit = frame.get("candidate_limit")
+        try:
+            candidate_limit = int(candidate_limit or 0)
+        except Exception:
+            candidate_limit = 0
+        if self.preserve_hard_constraints:
+            frame["hard_constraints"] = dict(hard_constraints)
+        if self.preserve_filters:
+            frame["filters"] = dict(filters)
+        if self.preserve_sort_by and ranking_signals.get("sort_by") is not None:
+            ranking_signals["sort_by"] = list(ranking_signals.get("sort_by") or [])
+        frame["ranking_signals"] = ranking_signals
+        frame["candidate_limit"] = max(candidate_limit, self.extra_candidate_limit)
+        return frame
 
 
 def _to_dict(value: Any) -> dict[str, Any]:
@@ -161,10 +211,29 @@ def _risk_penalty(candidate: dict[str, Any]) -> float:
     return 0.0
 
 
+def _hard_constraint_violations(candidate: dict[str, Any], preferences: dict[str, Any]) -> list[str]:
+    violations: list[str] = []
+    hard_constraints = _to_dict(preferences.get("hard_constraints"))
+    if not hard_constraints:
+        return violations
+    candidate_text = _candidate_text(candidate)
+    category = str(hard_constraints.get("category", "") or "").strip().lower()
+    if category and category not in candidate_text:
+        violations.append("category_mismatch")
+    location = str(hard_constraints.get("location", "") or "").strip().lower()
+    if location and location not in candidate_text and location not in str(candidate.get("address", "") or "").lower():
+        violations.append("location_mismatch")
+    open_now = hard_constraints.get("open_now")
+    if open_now is True and str(candidate.get("open_status", "")).lower() != "open":
+        violations.append("open_now_required")
+    return violations
+
+
 def score_candidate(candidate: dict[str, Any], preferences: dict[str, Any]) -> dict[str, Any]:
     """Assign a deterministic score and traceable reason codes."""
     candidate = _to_dict(candidate)
     preferences = _to_dict(preferences)
+    hard_constraint_violations = _hard_constraint_violations(candidate, preferences)
 
     component_scores = {
         "category_match": _category_match_score(preferences, candidate),
@@ -185,6 +254,8 @@ def score_candidate(candidate: dict[str, Any], preferences: dict[str, Any]) -> d
         + component_scores["tag_match_score"] * 10
         - component_scores["risk_penalty"]
     )
+    if hard_constraint_violations:
+        total_score -= 1000.0
 
     reason_codes: list[str] = []
     degradation_notes: list[str] = []
@@ -224,6 +295,9 @@ def score_candidate(candidate: dict[str, Any], preferences: dict[str, Any]) -> d
         degradation_notes.append("coupon_unknown")
     if component_scores["risk_penalty"]:
         reason_codes.append("risk_penalty")
+    if hard_constraint_violations:
+        reason_codes.extend(hard_constraint_violations)
+        degradation_notes.extend(hard_constraint_violations)
 
     return {
         **candidate,
@@ -233,6 +307,12 @@ def score_candidate(candidate: dict[str, Any], preferences: dict[str, Any]) -> d
         "reason_codes": reason_codes,
         "degradation_notes": degradation_notes,
         "evidence_refs": evidence_refs,
+        "failed_constraints": hard_constraint_violations,
+        "provenance": {
+            "hard_constraints": _to_dict(preferences.get("hard_constraints")),
+            "filters": _to_dict(preferences.get("filters")),
+            "sort_by": list(preferences.get("sort_by") or []),
+        },
         "score_breakdown": {
             "category_match": round(component_scores["category_match"] * 30, 4),
             "open_status_score": round(component_scores["open_status_score"] * 25, 4),
@@ -248,6 +328,20 @@ def score_candidate(candidate: dict[str, Any], preferences: dict[str, Any]) -> d
 def rank_candidates(candidates: list, preferences: dict) -> list:
     """Rank shop candidates by the fixed scoring formula."""
     scored = [score_candidate(candidate, preferences) for candidate in candidates or []]
+    surviving = [
+        item
+        for item in scored
+        if not item.get("failed_constraints")
+        and str(item.get("open_status", "")).lower() != "closed"
+        and not item.get("detail_failed")
+    ]
+    if not surviving:
+        surviving = [
+            item
+            for item in scored
+            if not item.get("failed_constraints")
+            and not item.get("detail_failed")
+        ]
     scored.sort(
         key=lambda item: (
             -float(item.get("total_score", 0.0) or 0.0),
@@ -256,4 +350,111 @@ def rank_candidates(candidates: list, preferences: dict) -> list:
             str(item.get("shop_id", "")),
         )
     )
-    return scored[:RECOMMENDATION_FINAL_TOP_K]
+    surviving.sort(
+        key=lambda item: (
+            -float(item.get("total_score", 0.0) or 0.0),
+            -float(item.get("rating", 0.0) or 0.0),
+            float(item.get("distance_km", 9999.0) or 9999.0),
+            str(item.get("shop_id", "")),
+        )
+    )
+    return surviving[:RECOMMENDATION_FINAL_TOP_K]
+
+
+def _comparison_rank_key(row: dict[str, Any]) -> tuple[float, float, float, float]:
+    return (
+        -float(row.get("overall_score", row.get("total_score", row.get("score", 0.0))) or 0.0),
+        -float(row.get("known_dimensions", 0) or 0.0),
+        -float(row.get("rating", 0.0) or 0.0),
+        float(row.get("distance_km", 9999.0) or 9999.0),
+    )
+
+
+def derive_comparison_winner(rows: list[dict[str, Any]] | None) -> dict[str, Any]:
+    """Derive a strong comparison winner from scored comparison rows.
+
+    The winner is only exposed when the evidence-based ordering is strictly
+    better than the runner-up. Pure tie-breakers such as shop_id never create
+    a winner.
+    """
+
+    ranked = [_to_dict(item) for item in (rows or []) if _to_dict(item)]
+    ranked = [
+        item
+        for item in ranked
+        if str(item.get("shop_id", "") or item.get("shop_name", "") or "").strip()
+    ]
+    provenance = {
+        "source": "comparison_matrix",
+        "ranking_basis": ["overall_score", "known_dimensions", "rating", "distance_km"],
+        "tie_breaker": "shop_id",
+        "ranked_shop_ids": [str(item.get("shop_id", "") or "").strip() for item in ranked if str(item.get("shop_id", "") or "").strip()],
+    }
+    if len(ranked) < 2:
+        return {
+            "statistical_winner": None,
+            "winner_provenance": provenance,
+            "winner_uncertainty_note": "比较候选不足，无法确认唯一赢家",
+        }
+
+    ranked = sorted(ranked, key=_comparison_rank_key)
+    top = ranked[0]
+    runner_up = ranked[1]
+    top_key = _comparison_rank_key(top)
+    runner_up_key = _comparison_rank_key(runner_up)
+    if top_key == runner_up_key:
+        return {
+            "statistical_winner": None,
+            "winner_provenance": {
+                **provenance,
+                "top_candidate": {
+                    "shop_id": str(top.get("shop_id", "") or "").strip(),
+                    "shop_name": str(top.get("shop_name", "") or "").strip(),
+                    "score": round(float(top.get("overall_score", top.get("total_score", top.get("score", 0.0))) or 0.0), 4),
+                },
+                "runner_up": {
+                    "shop_id": str(runner_up.get("shop_id", "") or "").strip(),
+                    "shop_name": str(runner_up.get("shop_name", "") or "").strip(),
+                    "score": round(float(runner_up.get("overall_score", runner_up.get("total_score", runner_up.get("score", 0.0))) or 0.0), 4),
+                },
+            },
+            "winner_uncertainty_note": "比较证据并列，暂时无法确认唯一赢家",
+        }
+
+    top_score = round(float(top.get("overall_score", top.get("total_score", top.get("score", 0.0))) or 0.0), 4)
+    runner_up_score = round(float(runner_up.get("overall_score", runner_up.get("total_score", runner_up.get("score", 0.0))) or 0.0), 4)
+    winner = {
+        "shop_id": str(top.get("shop_id", "") or "").strip(),
+        "shop_name": str(top.get("shop_name", "") or "").strip(),
+        "score": top_score,
+        "score_gap": round(top_score - runner_up_score, 4),
+        "known_dimensions": int(top.get("known_dimensions", 0) or 0),
+        "reason": f"综合得分 {top_score} 高于 {runner_up_score}",
+        "reason_codes": list(top.get("reason_codes") or []),
+        "evidence_refs": list(top.get("evidence_refs") or []),
+        "component_scores": dict(top.get("component_scores") or {}),
+        "score_breakdown": dict(top.get("score_breakdown") or {}),
+        "provenance": dict(top.get("provenance") or {}),
+    }
+    return {
+        "statistical_winner": winner,
+        "winner_provenance": {
+            **provenance,
+            "top_candidate": {
+                "shop_id": winner["shop_id"],
+                "shop_name": winner["shop_name"],
+                "score": winner["score"],
+                "known_dimensions": winner["known_dimensions"],
+            },
+            "runner_up": {
+                "shop_id": str(runner_up.get("shop_id", "") or "").strip(),
+                "shop_name": str(runner_up.get("shop_name", "") or "").strip(),
+                "score": runner_up_score,
+                "known_dimensions": int(runner_up.get("known_dimensions", 0) or 0),
+            },
+            "score_gap": winner["score_gap"],
+            "winner_rank_key": list(top_key),
+            "runner_up_rank_key": list(runner_up_key),
+        },
+        "winner_uncertainty_note": "",
+    }
