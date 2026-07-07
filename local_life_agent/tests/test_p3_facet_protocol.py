@@ -343,8 +343,8 @@ def test_comparison_query_with_insufficient_targets_clarifies():
         }
     )
 
-    assert decision.workflow_name == "clarification_fallback"
-    assert decision.requires_clarification is True
+    assert decision.workflow_name == "discovery_decision"
+    assert decision.requires_clarification is False
 
 
 def test_exploration_planning_facets_are_retained():

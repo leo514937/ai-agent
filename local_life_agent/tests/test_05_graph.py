@@ -739,7 +739,7 @@ class TestNodeHandlers:
 
     def test_answer_verify_default_pass(self):
         result = _HANDLERS["answer_verify"]({})
-        assert result["verify_result"] == "pass"
+        assert result["verify_result"] == "rewrite_needed"
 
     def test_plan_validator_empty_plan_fails(self):
         from ..domain.schemas import ExecutionPlan
@@ -867,12 +867,12 @@ class TestNodeHandlers:
 
     def test_clarify_response_has_template(self):
         result = _HANDLERS["clarify_response"]({})
-        assert result["final_response"].strip()
-        assert "店名" in result["final_response"] or "优惠券" in result["final_response"]
+        assert result["draft_response"].strip()
+        assert "店名" in result["draft_response"] or "优惠券" in result["draft_response"]
 
     def test_fallback_answer_has_template(self):
         result = _HANDLERS["fallback_answer"]({})
-        assert "抱歉" in result["final_response"]
+        assert "抱歉" in result["draft_response"]
 
     # --- _h_evidence_review ---
 

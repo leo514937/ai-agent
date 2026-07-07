@@ -197,4 +197,5 @@ def test_workflow_runner_graph_contract_includes_runner():
     assert _route_workflow_runner({"workflow_name": "clarification_fallback", "workflow_run_status": "dispatched"}) == "response_subgraph"
     assert _route_workflow_runner({"workflow_name": "direct_response", "workflow_run_status": "dispatched"}) == "response_subgraph"
     assert _route_workflow_runner({"workflow_name": "exploration_planning", "workflow_run_status": "dispatched"}) == "response_subgraph"
+    assert _route_workflow_runner({"workflow_name": "complex_orchestrator_workflow", "workflow_run_status": "dispatched", "response_mode": "exploration_plan"}) == "response_subgraph"
     assert _WORKFLOW_RUNNER_ROUTES["planning_subgraph"] == "planning_subgraph"

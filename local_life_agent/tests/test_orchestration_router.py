@@ -65,6 +65,24 @@ def test_orchestration_router_prefers_exploration_planning_for_trip_plan():
     assert decision.response_mode == "exploration_plan"
 
 
+def test_orchestration_router_prefers_complex_orchestrator_for_super_complex_tasks():
+    decision = build_orchestration_decision(
+        {
+            "top_intent": "local_life",
+            "task_type": "super_complex",
+            "semantic_frame": {"confidence": 0.55, "task_complexity": "super_complex", "workflow_hint": "complex_orchestrator_workflow"},
+            "pending_clarification": None,
+            "raw_text": "请帮我做一个跨多个阶段的复杂本地生活规划",
+        }
+    )
+
+    assert decision.orchestration_pattern == "complex_orchestrator_workflow"
+    assert decision.workflow_name == "complex_orchestrator_workflow"
+    assert decision.task_complexity == "super_complex"
+    assert decision.requires_tool is True
+    assert decision.response_mode == "exploration_plan"
+
+
 def test_orchestration_router_falls_back_when_single_shop_anchor_missing():
     state = {
         "top_intent": "local_life",

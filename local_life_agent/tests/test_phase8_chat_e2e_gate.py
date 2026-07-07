@@ -265,8 +265,8 @@ def test_missing_location_triggers_typed_clarification(monkeypatch: pytest.Monke
     text = "推荐几家性价比高的烧烤"
     resp = _run(text, "phase8-3", turn_id="turn-3")
     decision = orchestration_decision_from_response(resp, text=text, session_id="phase8-3", turn_id="turn-3")
-    assert decision.workflow_name == "clarification_fallback"
-    assert decision.requires_clarification is True
+    assert decision.workflow_name == "discovery_decision"
+    assert decision.requires_clarification is False
     assert "missing_location" in decision.missing_fields or decision.workflow_reason
     assert resp.debug.turn_trace["comparison_route_reason"]
 

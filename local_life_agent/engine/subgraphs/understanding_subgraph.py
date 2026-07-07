@@ -14,10 +14,10 @@ from pydantic import ValidationError
 
 from .._compat import (
     _log,
+    _user_location,
     _run_steps,
     _state_delta,
     _to_dict,
-    _unwrap_resolve_shop_result,
     _OUTER_WRAPPER_EXCLUDE_FIELDS,
 )
 from .._routes import (
@@ -25,14 +25,130 @@ from .._routes import (
     _OUTER_ROUTE_PROCEED,
 )
 from ...domain.graph_state import GraphState
+from ...domain.contextualized_turn import ContextualizedTurn
+from ...domain.focus_context import FocusContext
+from ...domain.freshness import FreshnessMeta
+from ...domain.location_context import LocationContext
 from ...domain.schemas import SemanticFrame
 from ...planning.goal.goal_planner import _infer_explicit_mentions_from_text
 from ...semantic.frame_validator import validate_frame
 from ...semantic.intent_parser import parse_semantic_frame
+from ...target.focus_resolver import build_contextualized_turn as build_focus_contextualized_turn
+from ...target.focus_resolver import resolve_focus_context
 from ... import config
 from ...observability.file_logger import get_python_service_logger, log_kv
 
 _LOGGER = get_python_service_logger()
+
+
+def _location_fingerprint(location: dict[str, Any]) -> str:
+    name = str(location.get("location_name", "") or location.get("name", "") or "").strip()
+    lat = location.get("lat")
+    lng = location.get("lng")
+    status = str(location.get("location_status", "") or "").strip()
+    source = str(location.get("location_source", "") or "").strip()
+    return "|".join([
+        name,
+        "" if lat is None else str(lat),
+        "" if lng is None else str(lng),
+        status,
+        source,
+    ]).strip("|")
+
+
+def _build_location_context(state: GraphState) -> LocationContext:
+    location = _to_dict(_user_location(state))
+    if not location:
+        location = _to_dict(state.get("user_location"))
+    return LocationContext.from_trace(
+        location_name=str(location.get("location_name", "") or location.get("name", "") or ""),
+        lat=location.get("lat"),
+        lng=location.get("lng"),
+        location_status=str(location.get("location_status", "") or state.get("location_status", "") or ""),
+        location_source=str(location.get("location_source", "") or location.get("source", "") or ""),
+        location_fingerprint=_location_fingerprint(location),
+        radius_meters=location.get("radius_meters"),
+    )
+
+
+def _build_freshness_meta(state: GraphState, location_context: LocationContext) -> FreshnessMeta:
+    cache_hit = bool(state.get("evidence_cache_hit", False))
+    semantic_source = str(state.get("semantic_source", "") or "")
+    fallback_reason = str(state.get("fallback_reason", "") or state.get("answer_fallback_reason", "") or "")
+    freshness_class = "cached" if cache_hit else ("deterministic" if semantic_source in {"rule_based", "fallback_rules"} else "live")
+    if fallback_reason and freshness_class == "live":
+        freshness_class = "degraded"
+    return FreshnessMeta.from_trace(
+        freshness_class=freshness_class,
+        is_stale=bool(state.get("answer_source", "") == "fallback" and not cache_hit),
+        cache_hit=cache_hit,
+        location_fingerprint=location_context.location_fingerprint,
+        budget_context_snapshot=_to_dict(state.get("budget_context")),
+    )
+
+
+def _build_contextualized_turn(
+    state: GraphState,
+    recovered: dict[str, Any],
+    active_turn_result: dict[str, Any],
+) -> ContextualizedTurn:
+    raw_text = str(state.get("raw_text", "") or "")
+    semantic_frame = _to_dict(state.get("semantic_frame")) or _to_dict(recovered.get("semantic_frame"))
+    session_state = state.get("session_state_before") or state.get("session_state")
+    focus_turn = build_focus_contextualized_turn(
+        raw_text,
+        session_state=session_state,
+        semantic_frame=semantic_frame,
+        active_turn_result=active_turn_result,
+        top_intent=state.get("top_intent"),
+    )
+    context_used = list(focus_turn.context_used)
+    rewrite_type = focus_turn.rewrite_type
+    confidence = float(focus_turn.confidence or 0.0)
+
+    if semantic_frame.get("follow_up") or semantic_frame.get("constraint_update"):
+        if "semantic_frame.follow_up" not in context_used:
+            context_used.append("semantic_frame.follow_up")
+        if rewrite_type == "none":
+            rewrite_type = "semantic_follow_up"
+        confidence = max(confidence, float(semantic_frame.get("confidence", 0.0) or 0.0))
+
+    reference_source = str(recovered.get("reference_resolution_source", "") or "")
+    if reference_source:
+        context_used.append("context_recovery.reference_signal")
+    comparison_signal = _to_dict(recovered.get("comparison_reference_signal"))
+    if comparison_signal:
+        context_used.append("context_recovery.comparison_reference_signal")
+        if rewrite_type == "none":
+            rewrite_type = "comparison_reference"
+        confidence = max(confidence, 0.5)
+
+    return ContextualizedTurn.from_trace(
+        original_text=focus_turn.original_text or raw_text,
+        normalized_text=focus_turn.normalized_text or str(state.get("normalized_text", "") or raw_text),
+        contextualized_query=focus_turn.contextualized_query or str(state.get("normalized_text", "") or raw_text),
+        rewrite_type=rewrite_type,
+        mixed_intent=focus_turn.mixed_intent,
+        terminal_policy=focus_turn.terminal_policy,
+        context_used=context_used,
+        confidence=confidence,
+    )
+
+
+def _build_focus_context(
+    state: GraphState,
+    recovered: dict[str, Any],
+    active_turn_result: dict[str, Any],
+) -> FocusContext:
+    session_before = state.get("session_state_before") or state.get("session_state")
+    semantic_frame = _to_dict(state.get("semantic_frame")) or _to_dict(recovered.get("semantic_frame"))
+    focus_context = resolve_focus_context(
+        str(state.get("raw_text", "") or ""),
+        session_state=session_before,
+        semantic_frame=semantic_frame,
+        active_turn_result=active_turn_result,
+    )
+    return focus_context
 
 
 def h_understanding_subgraph(state: GraphState) -> dict:
@@ -94,6 +210,14 @@ def _h_semantic_parse(state: GraphState) -> dict:
     top_intent = state.get("top_intent")
     top_intent_value = str(getattr(top_intent, "value", top_intent or ""))
     session_state = state.get("session_state_before") or state.get("session_state")
+    contextualized_turn = build_focus_contextualized_turn(
+        str(txt or state.get("raw_text", "") or ""),
+        session_state=session_state,
+        semantic_frame=state.get("semantic_frame") or {},
+        active_turn_result=_to_dict(state.get("active_turn_result")),
+        top_intent=top_intent,
+    )
+    txt = contextualized_turn.contextualized_query or txt
     _ensure_llm_backend()
     try:
         parsed = parse_semantic_frame(
@@ -256,153 +380,35 @@ def _h_frame_validator(state: GraphState) -> dict:
 
 
 def _h_context_recovery(state: GraphState) -> dict:
-    from ...target.clarification import build_pending_clarification
     from ...target.context_recovery import recover_context
 
     sf = state.get("semantic_frame")
+    active_turn_result = _to_dict(state.get("active_turn_result"))
     recovered = recover_context(
         session_state=state.get("session_state_before") or state.get("session_state"),
         semantic_frame=state.get("semantic_frame"),
         text=str(state.get("raw_text", "") or ""),
     )
     updates: dict[str, Any] = {}
-    if recovered.get("resolved_target") is not None:
-        updates["resolved_target"] = recovered.get("resolved_target")
-    if recovered.get("comparison_targets") is not None:
-        updates["comparison_targets"] = recovered.get("comparison_targets")
-    if recovered.get("comparison_target_resolution") is not None:
-        updates["comparison_target_resolution"] = recovered.get("comparison_target_resolution")
+    location_context = _build_location_context(state)
+    freshness_meta = _build_freshness_meta(state, location_context)
+    contextualized_turn = _build_contextualized_turn(state, recovered, active_turn_result)
+    focus_context = _build_focus_context(state, recovered, active_turn_result)
+    updates["location_context"] = location_context
+    updates["freshness_meta"] = freshness_meta
+    updates["contextualized_turn"] = contextualized_turn
+    updates["focus_context"] = focus_context
+    frame_dict = sf.model_dump() if sf is not None and hasattr(sf, "model_dump") else _to_dict(sf)
+    raw_comparison_targets = list(frame_dict.get("comparison_targets", []) or [])
+    if raw_comparison_targets:
+        updates["comparison_targets"] = raw_comparison_targets
+    elif _to_dict(recovered.get("comparison_reference_signal")).get("comparison_targets"):
+        updates["comparison_targets"] = list(_to_dict(recovered.get("comparison_reference_signal")).get("comparison_targets") or [])
     if recovered.get("reference_resolution_source"):
         updates["reference_resolution_source"] = str(recovered.get("reference_resolution_source", "") or "")
     elif recovered.get("context_resolution") and isinstance(recovered.get("context_resolution"), dict):
         updates["reference_resolution_source"] = str(recovered.get("context_resolution", {}).get("resolution_source", "") or "")
-
-    comparison_resolution = _to_dict(recovered.get("comparison_target_resolution"))
-    comparison_status = str(comparison_resolution.get("status", "") or "").upper()
-    if comparison_status in {"NEED_CLARIFICATION", "NOT_FOUND", "TOO_MANY", "PARTIAL"}:
-        candidate_targets = list(recovered.get("comparison_targets") or [])
-        already_resolved_targets = list(candidate_targets)
-        unresolved_targets = list(comparison_resolution.get("unresolved_targets") or [])
-        explicit_candidates: list[dict[str, Any]] = []
-        try:
-            from ..graph_builder import resolve_shop as _resolve_shop
-        except Exception:
-            _resolve_shop = None
-        for unresolved in unresolved_targets:
-            unresolved_dict = _to_dict(unresolved)
-            if str(unresolved_dict.get("reference", "") or "").strip() != "explicit":
-                continue
-            query = str(unresolved_dict.get("query", "") or unresolved_dict.get("source_ref", "") or "").strip()
-            if not query or _resolve_shop is None:
-                continue
-            try:
-                resolved = _unwrap_resolve_shop_result(_to_dict(_resolve_shop(query, location={})))
-            except Exception:
-                resolved = {}
-            resolved_dict = _to_dict(resolved)
-            resolved_status = str(resolved_dict.get("status", "") or "").upper()
-            if resolved_status == "AMBIGUOUS":
-                for candidate in resolved_dict.get("candidates", []) or []:
-                    candidate_dict = _to_dict(candidate.get("shop") if isinstance(candidate, dict) else candidate)
-                    if candidate_dict.get("shop_id") or candidate_dict.get("shop_name"):
-                        explicit_candidates.append(candidate_dict)
-            elif resolved_status == "RESOLVED":
-                shop = resolved_dict.get("shop") or resolved_dict.get("resolved_shop") or {}
-                shop_dict = _to_dict(shop)
-                if shop_dict.get("shop_id") or shop_dict.get("shop_name"):
-                    explicit_candidates.append(shop_dict)
-        if explicit_candidates:
-            candidate_targets = explicit_candidates
-            resolved_target_ids = {
-                str(item.get("shop_id", "") or "").strip()
-                for item in explicit_candidates
-                if str(item.get("shop_id", "") or "").strip()
-            }
-            resolved_target_names = {
-                str(item.get("shop_name", "") or "").strip()
-                for item in explicit_candidates
-                if str(item.get("shop_name", "") or "").strip()
-            }
-            already_resolved_targets = [
-                _to_dict(item)
-                for item in list(recovered.get("comparison_targets") or [])
-                if str(_to_dict(item).get("shop_id", "") or "").strip() not in resolved_target_ids
-                and str(_to_dict(item).get("shop_name", "") or "").strip() not in resolved_target_names
-            ]
-        if not candidate_targets:
-            session_state = state.get("session_state_before") or state.get("session_state")
-            session_candidates = []
-            if session_state is not None:
-                if isinstance(session_state, dict):
-                    session_candidates = list(session_state.get("last_recommendation_list", []) or [])
-                else:
-                    session_candidates = list(getattr(session_state, "last_recommendation_list", []) or [])
-            candidate_targets = [
-                {
-                    "shop_id": str(item.get("shop_id", "")).strip(),
-                    "shop_name": str(item.get("shop_name", "")).strip(),
-                }
-                for item in session_candidates
-                if str(item.get("shop_id", "")).strip() and str(item.get("shop_name", "")).strip()
-            ]
-            already_resolved_targets = list(candidate_targets)
-        if candidate_targets:
-            pending = build_pending_clarification(
-                original_text=str(state.get("raw_text", "") or ""),
-                original_semantic_frame=sf.model_dump(mode="json") if hasattr(sf, "model_dump") else _to_dict(sf),
-                original_task_type=getattr(sf, "task_type", "") or state.get("task_type", "") or "comparison",
-                candidate_targets=candidate_targets,
-                reason=str(comparison_resolution.get("reason", "") or "comparison_targets_need_clarification"),
-                source_node="context_recovery",
-                already_resolved_targets=already_resolved_targets,
-            )
-            updates["pending_clarification"] = pending
-    frame_dict = sf.model_dump() if sf is not None and hasattr(sf, "model_dump") else _to_dict(sf)
-    raw_text = str(state.get("raw_text", "") or "")
-    task_type_value = str(getattr(getattr(sf, "task_type", None), "value", frame_dict.get("task_type", "")) or "")
-
-    if updates.get("pending_clarification") is None and updates.get("resolved_target") is None:
-        inferred_mentions = _infer_explicit_mentions_from_text(raw_text)
-        if len(inferred_mentions) == 1:
-            brand_like_mention = str(inferred_mentions[0] or "").strip()
-            if brand_like_mention and "(" not in brand_like_mention and "（" not in brand_like_mention and "店" not in brand_like_mention:
-                try:
-                    from ...target.shop_resolver import resolve_shop as _resolve_shop
-                except Exception:
-                    _resolve_shop = None
-                if _resolve_shop is not None and task_type_value in {"coupon_query", "single_shop_query", "recommendation"}:
-                    try:
-                        resolved = _unwrap_resolve_shop_result(_to_dict(_resolve_shop(brand_like_mention, location={})))
-                    except Exception:
-                        resolved = {}
-                    if str(resolved.get("status", "") or "").upper() == "AMBIGUOUS":
-                        candidate_targets = sorted(
-                            [
-                                {
-                                    "shop_id": str(item.get("shop_id", "") or "").strip(),
-                                    "shop_name": str(item.get("shop_name", "") or "").strip(),
-                                    "address": str(item.get("address", "") or "").strip(),
-                                }
-                                for item in (resolved.get("candidates") or [])
-                                if str(item.get("shop_id", "") or "").strip() and str(item.get("shop_name", "") or "").strip()
-                            ],
-                            key=lambda item: (-len(str(item.get("shop_id", "") or "")), str(item.get("shop_id", "") or ""), str(item.get("shop_name", "") or "")),
-                        )
-                        if candidate_targets:
-                            updates["pending_clarification"] = build_pending_clarification(
-                                original_text=raw_text,
-                                original_semantic_frame=frame_dict,
-                                original_task_type=task_type_value or "single_shop_query",
-                                candidate_targets=candidate_targets,
-                                reason=str(resolved.get("error_code", "") or "AMBIGUOUS_SHOP"),
-                                source_node="context_recovery",
-                            )
-
-    semantic_refs = {
-        "ordinal_references": list(frame_dict.get("ordinal_references", []) or []),
-        "deictic_references": list(frame_dict.get("deictic_references", []) or []),
-        "comparison_targets": list(frame_dict.get("comparison_targets", []) or []),
-    }
+    reference_signal = _to_dict(recovered.get("context_resolution", {}).get("reference_signal"))
     return {
         **updates,
         **_log(
@@ -410,8 +416,17 @@ def _h_context_recovery(state: GraphState) -> dict:
             "context_recovery",
             status=str((recovered.get("context_resolution") or {}).get("status", "")),
             context_recovery_input_text=str(state.get("raw_text", "") or ""),
-            context_recovery_used_semantic_refs=semantic_refs,
-            context_recovery_result=_to_dict(recovered.get("comparison_target_resolution") or recovered.get("context_resolution")),
+            context_recovery_used_semantic_refs={
+                "ordinal_references": list(frame_dict.get("ordinal_references", []) or []),
+                "deictic_references": list(frame_dict.get("deictic_references", []) or []),
+                "comparison_targets": list(frame_dict.get("comparison_targets", []) or []),
+            },
+            context_recovery_result=_to_dict(recovered.get("comparison_reference_signal") or recovered.get("context_resolution")),
             reference_resolution_source=str(recovered.get("reference_resolution_source") or (recovered.get("context_resolution") or {}).get("resolution_source", "") or ""),
+            reference_signal=reference_signal,
+            contextualized_turn=contextualized_turn.trace_dict(),
+            focus_context=focus_context.trace_dict(),
+            freshness_meta=freshness_meta.trace_dict(),
+            location_context=location_context.trace_dict(),
         ),
     }

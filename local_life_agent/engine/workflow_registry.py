@@ -14,18 +14,25 @@ from typing import Any, Callable, Mapping
 
 from ..domain.graph_state import GraphState
 from ..domain.schemas import OrchestrationDecision
+from .workflows.comparison_decision_workflow import run_comparison_decision_workflow
 from .workflows.clarification_fallback_workflow import run_clarification_fallback_workflow
+from .workflows.complex_orchestrator_workflow import run_complex_orchestrator_workflow
 from .workflows.deterministic_tool_workflow import run_deterministic_tool_workflow
 from .workflows.direct_response_workflow import run_direct_response_workflow
 from .workflows.exploration_planning_workflow import run_exploration_planning_workflow
+from .workflows.recommendation_decision_workflow import run_recommendation_decision_workflow
 
 WorkflowHandler = Callable[[GraphState, OrchestrationDecision], dict[str, Any]]
 
 LEGAL_WORKFLOW_NAMES: tuple[str, ...] = (
     "direct_response",
+    "single_shop_fact_workflow",
     "deterministic_tool",
     "discovery_decision",
+    "recommendation_decision_workflow",
+    "comparison_decision_workflow",
     "exploration_planning",
+    "complex_orchestrator_workflow",
     "clarification_fallback",
 )
 
@@ -136,17 +143,44 @@ def _build_dispatch_patch(
     return patch
 
 
-def _dispatch_discovery_decision(state: GraphState, decision: OrchestrationDecision) -> dict[str, Any]:
-    return _build_dispatch_patch(
+def _dispatch_planning_workflow(
+    state: GraphState,
+    decision: OrchestrationDecision,
+    *,
+    workflow_name: str,
+    response_mode: str,
+    workflow_reason: str,
+) -> dict[str, Any]:
+    patch = _build_dispatch_patch(
         state,
         decision,
         workflow_run_status="dispatched",
-        workflow_runner_reason=decision.workflow_reason or "dispatch discovery_decision to planning_subgraph",
+        workflow_runner_reason=decision.workflow_reason or workflow_reason,
         workflow_callable="planning_subgraph",
         workflow_registered=True,
-        response_mode=decision.response_mode,
+        response_mode=response_mode,
         next_action=decision.next_action,
     )
+    patch["workflow_name"] = workflow_name
+    return patch
+
+
+def _dispatch_discovery_decision(state: GraphState, decision: OrchestrationDecision) -> dict[str, Any]:
+    return _dispatch_planning_workflow(
+        state,
+        decision,
+        workflow_name="discovery_decision",
+        response_mode=decision.response_mode,
+        workflow_reason="dispatch discovery_decision to planning_subgraph",
+    )
+
+
+def _dispatch_recommendation_decision(state: GraphState, decision: OrchestrationDecision) -> dict[str, Any]:
+    return run_recommendation_decision_workflow(state, decision)
+
+
+def _dispatch_comparison_decision(state: GraphState, decision: OrchestrationDecision) -> dict[str, Any]:
+    return run_comparison_decision_workflow(state, decision)
 
 
 def build_default_workflow_registry() -> WorkflowRegistry:
@@ -164,6 +198,24 @@ def build_default_workflow_registry() -> WorkflowRegistry:
     )
     registry.register(
         WorkflowRegistration(
+            workflow_name="recommendation_decision_workflow",
+            handler=_dispatch_recommendation_decision,
+            status=WORKFLOW_STATUS_REGISTERED,
+            entry_node="planning_subgraph",
+            description="Recommendation decision workflow split from discovery_decision.",
+        )
+    )
+    registry.register(
+        WorkflowRegistration(
+            workflow_name="comparison_decision_workflow",
+            handler=_dispatch_comparison_decision,
+            status=WORKFLOW_STATUS_REGISTERED,
+            entry_node="planning_subgraph",
+            description="Comparison decision workflow split from discovery_decision.",
+        )
+    )
+    registry.register(
+        WorkflowRegistration(
             workflow_name="direct_response",
             handler=run_direct_response_workflow,
             status=WORKFLOW_STATUS_REGISTERED,
@@ -173,11 +225,20 @@ def build_default_workflow_registry() -> WorkflowRegistry:
     )
     registry.register(
         WorkflowRegistration(
+            workflow_name="single_shop_fact_workflow",
+            handler=run_deterministic_tool_workflow,
+            status=WORKFLOW_STATUS_REGISTERED,
+            entry_node="response_subgraph",
+            description="Phase 6 single-shop fact workflow (legacy deterministic_tool alias).",
+        )
+    )
+    registry.register(
+        WorkflowRegistration(
             workflow_name="deterministic_tool",
             handler=run_deterministic_tool_workflow,
             status=WORKFLOW_STATUS_REGISTERED,
             entry_node="response_subgraph",
-            description="Phase 6 deterministic single-shop tool workflow.",
+            description="Legacy alias for single_shop_fact_workflow.",
         )
     )
     registry.register(
@@ -196,6 +257,15 @@ def build_default_workflow_registry() -> WorkflowRegistry:
             status=WORKFLOW_STATUS_REGISTERED,
             entry_node="response_subgraph",
             description="Phase 8 exploration planning workflow.",
+        )
+    )
+    registry.register(
+        WorkflowRegistration(
+            workflow_name="complex_orchestrator_workflow",
+            handler=run_complex_orchestrator_workflow,
+            status=WORKFLOW_STATUS_REGISTERED,
+            entry_node="response_subgraph",
+            description="Phase 9 complex orchestrator workflow.",
         )
     )
     return registry

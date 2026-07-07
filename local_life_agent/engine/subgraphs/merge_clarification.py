@@ -19,7 +19,7 @@ from .._routes import (
 )
 from ...domain.graph_state import GraphState
 from ...observability.file_logger import get_python_service_logger, log_kv
-from ...target.clarification import handle_clarification_reply
+from ...target.clarification import build_clarification_request, handle_clarification_reply
 
 _LOGGER = get_python_service_logger()
 
@@ -69,6 +69,10 @@ def _h_check_pending(state: GraphState) -> dict:
     result = handle_clarification_reply(reply, pending, state.get("session_state"))
     action = str(result.get("status", "invalid"))
     pending_resume_strategy = _pending_resume_strategy(pending)
+    try:
+        clarification_request = build_clarification_request(pending, source_stage="merge_clarification")
+    except Exception:
+        clarification_request = None
 
     updates: dict[str, Any] = {
         "pending_check_result": action,
@@ -78,6 +82,7 @@ def _h_check_pending(state: GraphState) -> dict:
         "resume_strategy": str(result.get("resume_strategy", "") or pending_resume_strategy or ""),
         "missing_slot_type": str(result.get("missing_slot_type", "") or ""),
         "task_type_source": str(result.get("task_type_source", "") or ""),
+        "clarification_request": clarification_request,
     }
 
     if action == "restore":

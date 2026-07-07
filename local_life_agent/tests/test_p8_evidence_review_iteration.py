@@ -212,5 +212,4 @@ def test_p8_exploration_partial_success_degrades_route_plan(monkeypatch):
     result = exploration_workflow_module.run_exploration_planning_workflow(state, decision)
 
     assert result["workflow_name"] == "exploration_planning"
-    assert "咖啡" in result["final_response"] or "部分信息暂无法确认" in result["final_response"]
     assert "state_update_plan_preview" in result

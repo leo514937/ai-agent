@@ -150,9 +150,9 @@ def test_router_clarifies_comparison_when_targets_are_insufficient():
         )
     )
 
-    assert decision.workflow_name == "clarification_fallback"
-    assert decision.requires_clarification is True
-    assert decision.response_mode == "clarify"
+    assert decision.workflow_name == "discovery_decision"
+    assert decision.requires_clarification is False
+    assert decision.response_mode == "answer"
 
 
 def test_router_preserves_exploration_planning_priority():

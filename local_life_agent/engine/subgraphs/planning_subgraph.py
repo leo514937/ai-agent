@@ -54,8 +54,10 @@ from ...domain.schemas import (
     ToolResult,
 )
 from ...domain.shop_entity import ShopResolutionStatus
+from ...domain.shop_entity import ShopResolutionResult
 from ...domain.facets import build_target_resolution_result, normalize_query_facets
 from ...domain.state import SessionState
+from ...location_utils import normalize_location_payload
 from ...planning.plans.candidate_review import review_candidate_set
 from ...planning.evidence.evidence_planner import (
     plan_evidence as plan_evidence_from_candidates,
@@ -68,6 +70,7 @@ from ...planning.goal.goal_review import review_goal as p2_review_goal
 from ...planning.plans.plan_validator import ExecutionPlanValidator
 from ...planning.policies.replan_policy import increment_expand_search, increment_replan_evidence
 from ...planning.policies.review_policy import NextAction
+from ...target.candidate_resolver import CandidateResolver
 from ...target.clarification import build_pending_clarification, format_pending_prompt, handle_clarification_reply
 from ...target.reference_resolver import resolve_comparison_targets
 from ...target.shop_resolver import resolve_shop_entities, resolve_shop_entity
@@ -78,6 +81,21 @@ from ...core import PlanningCore
 _LOGGER = get_python_service_logger()
 _PLANNING_WRAPPER_EXCLUDE_FIELDS = _OUTER_WRAPPER_EXCLUDE_FIELDS - {"event_log"}
 _PLANNING_CORE = PlanningCore()
+_CANDIDATE_CORE: CandidateResolver | None = None
+
+
+def _get_candidate_core() -> CandidateResolver:
+    """Return the active candidate resolver, honoring test monkeypatches."""
+    global _CANDIDATE_CORE
+    if _CANDIDATE_CORE is not None:
+        return _CANDIDATE_CORE
+    try:
+        from .. import graph_builder as _graph_builder
+
+        resolver_cls = getattr(_graph_builder, "CandidateResolver", CandidateResolver)
+        return resolver_cls()
+    except Exception:
+        return CandidateResolver()
 
 
 def _enum_value(value: Any) -> str:
@@ -125,15 +143,124 @@ def _pending_candidate_targets(candidate_set: CandidateSet) -> list[dict[str, An
     return pending_candidates
 
 
+def _candidate_shop_dict(candidate: Any) -> dict[str, Any]:
+    """兼容 plain candidate dict 与嵌套 shop 字段两种候选结构。"""
+    item = _to_dict(candidate)
+    if not item:
+        return {}
+    shop = item.get("shop") or item.get("resolved_shop") or item
+    shop_dict = _to_dict(shop)
+    if not shop_dict:
+        return {}
+    if not shop_dict.get("address") and item.get("address"):
+        shop_dict["address"] = item.get("address")
+    if not shop_dict.get("alias") and item.get("alias"):
+        shop_dict["alias"] = item.get("alias")
+    return shop_dict
+
+
+def _collect_clarification_candidates(state: GraphState, working: dict[str, Any]) -> list[dict[str, Any]]:
+    """尽量从现有上下文里收集可用于澄清的候选店。"""
+    collected: list[dict[str, Any]] = []
+
+    def _append(candidate: Any) -> None:
+        shop_dict = _candidate_shop_dict(candidate)
+        if not shop_dict:
+            return
+        shop_id = str(shop_dict.get("shop_id", "") or "").strip()
+        shop_name = str(shop_dict.get("shop_name", "") or "").strip()
+        if not shop_id and not shop_name:
+            return
+        key = (shop_id, shop_name)
+        if any((str(item.get("shop_id", "") or "").strip(), str(item.get("shop_name", "") or "").strip()) == key for item in collected):
+            return
+        collected.append({
+            "shop_id": shop_id,
+            "shop_name": shop_name,
+            "address": str(shop_dict.get("address", "") or "").strip(),
+        })
+
+    for item in list(working.get("comparison_targets") or []):
+        _append(item)
+    _append(working.get("resolve_shop_result"))
+    _append(working.get("comparison_target_resolution"))
+    session_state = state.get("session_state_before") or state.get("session_state")
+    if session_state is not None:
+        if isinstance(session_state, dict):
+            for item in list(session_state.get("last_recommendation_list", []) or []):
+                _append(item)
+        else:
+            for item in list(getattr(session_state, "last_recommendation_list", []) or []):
+                _append(item)
+
+    semantic_frame = _to_dict(working.get("semantic_frame"))
+    explicit_mentions = [
+        str(item).strip()
+        for item in (
+            semantic_frame.get("merchant_mentions", [])
+            or semantic_frame.get("branch_mentions", [])
+            or semantic_frame.get("reference_mentions", [])
+        )
+        if str(item).strip()
+    ]
+    if explicit_mentions:
+        try:
+            from ..graph_builder import resolve_shop as _resolve_shop
+        except Exception:
+            _resolve_shop = None
+        if callable(_resolve_shop):
+            for mention in explicit_mentions:
+                try:
+                    resolved = _unwrap_resolve_shop_result(_to_dict(_resolve_shop(mention, location={})))
+                except Exception:
+                    resolved = {}
+                resolved_status = str(resolved.get("status", "") or "").upper()
+                if resolved_status == "RESOLVED":
+                    _append(resolved.get("shop") or resolved.get("resolved_shop") or {})
+                elif resolved_status == "AMBIGUOUS":
+                    for candidate in resolved.get("candidates", []) or []:
+                        _append(candidate)
+
+    if not collected:
+        raw_text = str(state.get("raw_text", "") or "").strip()
+        if raw_text:
+            stop_tokens = ("有券", "比呢", "比吧", "比", "对比", "比较", "怎么样", "好不好", "吗", "嘛", "呢", "吧")
+            prefix = raw_text
+            for token in stop_tokens:
+                idx = prefix.find(token)
+                if 0 < idx < len(prefix):
+                    prefix = prefix[:idx]
+                    break
+            prefix = prefix.strip(" ，,。！？?!~")
+            if prefix and prefix != raw_text:
+                try:
+                    from ..graph_builder import resolve_shop as _resolve_shop
+                except Exception:
+                    _resolve_shop = None
+                if callable(_resolve_shop):
+                    try:
+                        resolved = _unwrap_resolve_shop_result(_to_dict(_resolve_shop(prefix, location={})))
+                    except Exception:
+                        resolved = {}
+                    resolved_status = str(resolved.get("status", "") or "").upper()
+                    if resolved_status == "RESOLVED":
+                        _append(resolved.get("shop") or resolved.get("resolved_shop") or {})
+                    elif resolved_status == "AMBIGUOUS":
+                        for candidate in resolved.get("candidates", []) or []:
+                            _append(candidate)
+
+    return collected
+
+
 def _location_from_state(state: dict[str, Any]) -> dict[str, Any]:
-    semantic_frame = _to_dict(state.get("semantic_frame"))
+    semantic_frame = normalize_location_payload(state.get("semantic_frame"))
     for item in (
         state.get("location"),
         semantic_frame.get("location"),
         state.get("user_location"),
         state.get("user_context"),
     ):
-        location = _to_dict(item)
+        location = normalize_location_payload(item)
         if location.get("lat") is not None and location.get("lng") is not None:
             return {
                 "lat": location.get("lat"),
@@ -151,7 +278,7 @@ def _resolved_shop_location_from_state(state: dict[str, Any]) -> dict[str, Any]:
         state.get("current_shop"),
         state.get("target_resolution"),
     ):
-        item_dict = _to_dict(item)
+        item_dict = normalize_location_payload(item)
         shop = _to_dict(item_dict.get("resolved_shop") or item_dict.get("shop") or item_dict.get("current_shop") or item_dict)
         if shop.get("lat") is not None and shop.get("lng") is not None:
             return {
@@ -268,80 +395,21 @@ def h_planning_subgraph(state: GraphState) -> dict:
         log_kv(_LOGGER, logging.WARNING, "[ROUTE_DECISION]", tone="warn", subgraph="planning_subgraph", route=_OUTER_ROUTE_FALLBACK, response_mode=_OUTER_ROUTE_FALLBACK, next_action=next_action)
         return _state_delta(before, after, always_include={"planning_route", "response_mode"}, exclude=_PLANNING_WRAPPER_EXCLUDE_FIELDS)
 
+    task_type_value = _enum_value(state.get("task_type")) or _enum_value(_to_dict(working.get("semantic_frame")).get("task_type"))
+    semantic_frame = _to_dict(working.get("semantic_frame"))
+    prior_current_shop = _to_dict(state.get("current_shop"))
+    has_deictic_reference = bool(
+        semantic_frame.get("deictic_references")
+        or semantic_frame.get("reference_mentions")
+        or semantic_frame.get("comparison_targets")
+        or semantic_frame.get("ordinal_references")
+    )
     working = _run_steps(working, [_h_target_resolve])
     resolve_result = working.get("resolve_shop_result") or working.get("resolved_target")
     resolve_dict = _to_dict(resolve_result)
-    task_type_value = str(getattr(state.get("task_type"), "value", state.get("task_type")) or _to_dict(working.get("semantic_frame")).get("task_type", "") or "")
     comparison_resolution = _to_dict(working.get("comparison_target_resolution"))
     comparison_status = str(comparison_resolution.get("status", "") or "").upper()
-    if task_type_value == TaskType.comparison.value and comparison_status != "RESOLVED":
-        comparison_resolution = _to_dict(
-            resolve_comparison_targets(
-                str(state.get("raw_text", "") or ""),
-                state.get("session_state_before") or state.get("session_state"),
-                working.get("semantic_frame") or state.get("semantic_frame"),
-            )
-        )
-        comparison_status = str(comparison_resolution.get("status", "") or "").upper()
-        working = {
-            **working,
-            "comparison_target_resolution": comparison_resolution,
-        }
-    if task_type_value == TaskType.comparison.value and comparison_status in {"NEED_CLARIFICATION", "NOT_FOUND", "TOO_MANY", "PARTIAL"}:
-        semantic_frame_dict = _to_dict(working.get("semantic_frame") or state.get("semantic_frame"))
-        raw_text_for_recovery = str(state.get("raw_text", "") or "")
-        session_state = state.get("session_state_before") or state.get("session_state")
-        if session_state is not None:
-            if isinstance(session_state, dict):
-                session_candidates = [
-                    _to_dict(item)
-                    for item in list(session_state.get("last_recommendation_list", []) or [])
-                    if str(_to_dict(item).get("shop_id", "") or "").strip() and str(_to_dict(item).get("shop_name", "") or "").strip()
-                ]
-            else:
-                session_candidates = [
-                    _to_dict(item)
-                    for item in list(getattr(session_state, "last_recommendation_list", []) or [])
-                    if str(_to_dict(item).get("shop_id", "") or "").strip() and str(_to_dict(item).get("shop_name", "") or "").strip()
-                ]
-        else:
-            session_candidates = []
-        comparison_refs = list(semantic_frame_dict.get("comparison_targets") or [])
-        ordinal_refs = [str(item).strip() for item in (semantic_frame_dict.get("ordinal_references") or []) if str(item).strip()]
-        multi_target_hint = (
-            len(comparison_refs) >= 2
-            or len(ordinal_refs) >= 2
-            or any(token in raw_text_for_recovery for token in ("这三家", "这几家", "这两家", "第一家和第二家", "第一家第二家"))
-        )
-        if session_candidates and multi_target_hint:
-            recovered_targets = list(session_candidates)
-            if "这三家" in raw_text_for_recovery or "这几家" in raw_text_for_recovery:
-                recovered_targets = list(session_candidates[: min(3, len(session_candidates))])
-            elif "这两家" in raw_text_for_recovery or "第一家和第二家" in raw_text_for_recovery or "第一家第二家" in raw_text_for_recovery or len(ordinal_refs) >= 2:
-                recovered_targets = list(session_candidates[: min(2, len(session_candidates))])
-            elif comparison_refs:
-                recovered_targets = list(session_candidates[: max(2, len(comparison_refs))])
-            if len(recovered_targets) >= 2:
-                comparison_resolution = {
-                    "status": "RESOLVED",
-                    "targets": recovered_targets,
-                    "unresolved_targets": [],
-                    "ambiguous_target": None,
-                    "reason": "comparison_targets_resolved_from_session_context",
-                    "prompt": None,
-                }
-                comparison_status = "RESOLVED"
-                working = {
-                    **working,
-                    "comparison_target_resolution": comparison_resolution,
-                    "comparison_targets": list(recovered_targets),
-                }
-    if task_type_value == TaskType.comparison.value and comparison_status == "RESOLVED":
-        working = {
-            **working,
-            "comparison_targets": list(comparison_resolution.get("targets") or working.get("comparison_targets") or []),
-        }
-    comparison_needs_clarify = task_type_value == TaskType.comparison.value and comparison_status in {"NEED_CLARIFICATION", "NOT_FOUND", "TOO_MANY", "PARTIAL"}
+    comparison_needs_clarify = task_type_value == TaskType.comparison.value and comparison_status in {"NEED_CLARIFICATION", "NOT_FOUND", "TOO_MANY", "PARTIAL", "AMBIGUOUS"}
 
     if comparison_needs_clarify:
         pending = working.get("pending_clarification")
@@ -369,7 +437,7 @@ def h_planning_subgraph(state: GraphState) -> dict:
                 resolved_status = str(resolved_dict.get("status", "") or "").upper()
                 if resolved_status == "AMBIGUOUS":
                     for candidate in resolved_dict.get("candidates", []) or []:
-                        candidate_dict = _to_dict(candidate.get("shop") if isinstance(candidate, dict) else candidate)
+                        candidate_dict = _candidate_shop_dict(candidate)
                         if candidate_dict.get("shop_id") or candidate_dict.get("shop_name"):
                             explicit_candidates.append(candidate_dict)
                 elif resolved_status == "RESOLVED":
@@ -441,18 +509,46 @@ def h_planning_subgraph(state: GraphState) -> dict:
         )
         return _state_delta(before, after, always_include={"planning_route", "response_mode", "pending_clarification"}, exclude=_PLANNING_WRAPPER_EXCLUDE_FIELDS)
 
-    semantic_frame = _to_dict(working.get("semantic_frame"))
-    current_shop = _to_dict(working.get("current_shop") or state.get("current_shop"))
-    has_deictic_reference = bool(
-        semantic_frame.get("deictic_references")
-        or semantic_frame.get("reference_mentions")
-    )
     if (
         task_type_value in {TaskType.single_shop_query.value, TaskType.coupon_query.value}
         and has_deictic_reference
-        and not current_shop.get("shop_id")
-        and not current_shop.get("shop_name")
+        and not prior_current_shop.get("shop_id")
+        and not prior_current_shop.get("shop_name")
     ):
+        clarification_candidates = _collect_clarification_candidates(state, working)
+        if clarification_candidates:
+            pending = build_pending_clarification(
+                original_text=str(state.get("raw_text", "") or ""),
+                original_semantic_frame=semantic_frame,
+                original_task_type=task_type_value or TaskType.single_shop_query.value,
+                candidate_targets=clarification_candidates,
+                reason="deictic_reference_missing_current_shop",
+                source_node="planning_subgraph",
+            )
+            after = {
+                **working,
+                "pending_clarification": pending,
+                "planning_route": _OUTER_ROUTE_CLARIFY,
+                "response_mode": _OUTER_ROUTE_CLARIFY,
+                "final_response": format_pending_prompt(pending),
+            }
+            log_kv(
+                _LOGGER,
+                logging.WARNING,
+                "[ROUTE_DECISION]",
+                tone="warn",
+                subgraph="planning_subgraph",
+                route=_OUTER_ROUTE_CLARIFY,
+                response_mode=_OUTER_ROUTE_CLARIFY,
+                resolve_status=resolve_dict.get("status", ""),
+                reason="deictic_reference_missing_current_shop",
+            )
+            return _state_delta(
+                before,
+                after,
+                always_include={"planning_route", "response_mode", "final_response", "pending_clarification"},
+                exclude=_PLANNING_WRAPPER_EXCLUDE_FIELDS,
+            )
         after = {
             **working,
             "planning_route": _OUTER_ROUTE_CLARIFY,
@@ -479,6 +575,43 @@ def h_planning_subgraph(state: GraphState) -> dict:
 
     if working.get("pending_clarification") is not None:
         working = _run_steps(working, [_h_clarify_decide])
+        pending_after = _to_dict(working.get("pending_clarification"))
+        pending_reason = str(
+            pending_after.get("reason", "")
+            or pending_after.get("workflow_reason", "")
+            or pending_after.get("pending_reason", "")
+            or ""
+        ).lower()
+        if task_type_value == TaskType.comparison.value and (
+            (has_deictic_reference and not prior_current_shop.get("shop_id") and not prior_current_shop.get("shop_name"))
+            or "deictic" in pending_reason
+            or "current_shop" in pending_reason
+        ):
+            clarification_text = "请提供完整店名，或回复编号/店名。"
+            after = {
+                **working,
+                "pending_clarification": working.get("pending_clarification"),
+                "planning_route": _OUTER_ROUTE_CLARIFY,
+                "response_mode": _OUTER_ROUTE_CLARIFY,
+                "final_response": clarification_text,
+            }
+            log_kv(
+                _LOGGER,
+                logging.WARNING,
+                "[ROUTE_DECISION]",
+                tone="warn",
+                subgraph="planning_subgraph",
+                route=_OUTER_ROUTE_CLARIFY,
+                response_mode=_OUTER_ROUTE_CLARIFY,
+                resolve_status=comparison_status or resolve_dict.get("status", ""),
+                reason="comparison_deictic_missing_current_shop",
+            )
+            return _state_delta(
+                before,
+                after,
+                always_include={"planning_route", "response_mode", "final_response", "pending_clarification"},
+                exclude=_PLANNING_WRAPPER_EXCLUDE_FIELDS,
+            )
         if task_type_value in {TaskType.recommendation.value, TaskType.comparison.value}:
             working = {
                 **working,
@@ -704,56 +837,48 @@ def _h_target_resolve_candidate_set(state: GraphState, sf: Any) -> dict:
     shop_resolution_trace: list[dict[str, Any]] = []
     comparison_target_resolution: dict[str, Any] | None = None
     canonical_specific_shop_hint = False
+    canonical_mention = ""
 
     def _resolve_mentions_for_canonical() -> None:
-        nonlocal canonical_shop_entity, canonical_shop_entities, shop_resolution_trace, comparison_target_resolution, canonical_specific_shop_hint
+        nonlocal canonical_shop_entity, canonical_shop_entities, shop_resolution_trace, comparison_target_resolution, canonical_specific_shop_hint, canonical_mention
         if task_type_value == TaskType.comparison.value:
-            mentions = [
-                str(item).strip()
-                for item in (sf_dict.get("merchant_mentions", []) or [])
-                if str(item).strip()
+            comparison_target_resolution = _to_dict(
+                resolve_comparison_targets(
+                    str(state.get("raw_text", "") or ""),
+                    session_snapshot,
+                    sf_dict,
+                )
+            )
+            resolved_targets = [
+                _to_dict(item)
+                for item in (comparison_target_resolution.get("targets") or [])
+                if str(_to_dict(item).get("shop_id", "") or "").strip() or str(_to_dict(item).get("shop_name", "") or "").strip()
             ]
-            if not mentions:
-                for item in sf_dict.get("comparison_targets", []) or []:
-                    target = _to_dict(item)
-                    query = str(target.get("shop_name", "") or target.get("source_text", "") or "").strip()
-                    if query:
-                        mentions.append(query)
-            if mentions:
-                resolved_items = resolve_shop_entities(
-                    mentions,
-                    session_state=session_snapshot,
-                    current_shop=current_shop,
-                    user_location=user_location,
-                    semantic_frame=sf_dict,
-                )
-                canonical_shop_entities = [item.model_dump() for item in resolved_items]
-                shop_resolution_trace = [trace for item in resolved_items for trace in (item.trace or [])]
-                resolved_count = sum(
-                    1 for item in resolved_items
-                    if str(getattr(item.status, "value", item.status) or "").lower() == ShopResolutionStatus.resolved.value
-                )
+            if resolved_targets:
+                comparison_target_resolution["targets"] = resolved_targets
+                canonical_shop_entities = [
+                    {
+                        "shop_id": str(item.get("shop_id", "") or "").strip(),
+                        "shop_name": str(item.get("shop_name", "") or "").strip(),
+                    }
+                    for item in resolved_targets
+                    if str(item.get("shop_id", "") or "").strip() or str(item.get("shop_name", "") or "").strip()
+                ]
+                shop_resolution_trace = [
+                    {
+                        "source": "comparison_target_resolution",
+                        "shop_id": item.get("shop_id", ""),
+                        "shop_name": item.get("shop_name", ""),
+                    }
+                    for item in resolved_targets
+                ]
+            elif str(comparison_target_resolution.get("status", "") or "").upper() == "NOT_FOUND":
                 comparison_target_resolution = {
-                    "status": "RESOLVED" if resolved_count >= 2 else "NEED_CLARIFICATION",
-                    "targets": [
-                        {"shop_id": item.shop_id, "shop_name": item.shop_name, "resolved_shop": {"shop_id": item.shop_id, "shop_name": item.shop_name}}
-                        for item in resolved_items
-                        if str(getattr(item.status, "value", item.status) or "").lower() == ShopResolutionStatus.resolved.value and item.shop_id and item.shop_name
-                    ],
-                    "unresolved_targets": [
-                        {"shop_name": item.mention, "reason": item.resolution_reason, "status": item.status.value if hasattr(item.status, "value") else str(item.status)}
-                        for item in resolved_items
-                        if str(getattr(item.status, "value", item.status) or "").lower() != ShopResolutionStatus.resolved.value
-                    ],
-                    "reason": "comparison_targets_resolved" if resolved_count >= 2 else "comparison_targets_need_clarification",
+                    "status": "NOT_FOUND",
+                    "targets": [],
+                    "unresolved_targets": [],
+                    "reason": "comparison_targets_missing",
                 }
-                return
-            comparison_target_resolution = {
-                "status": "NOT_FOUND",
-                "targets": [],
-                "unresolved_targets": [],
-                "reason": "comparison_targets_missing",
-            }
             return
 
         if task_type_value == TaskType.recommendation.value:
@@ -796,6 +921,8 @@ def _h_target_resolve_candidate_set(state: GraphState, sf: Any) -> dict:
                         break
                 if mention:
                     break
+        if not mention and merchant_mentions:
+            mention = merchant_mentions[0]
         if not mention:
             for item in branch_mentions + reference_mentions + merchant_mentions:
                 if item:
@@ -805,6 +932,7 @@ def _h_target_resolve_candidate_set(state: GraphState, sf: Any) -> dict:
             text = str(state.get("raw_text", "") or state.get("normalized_text", "") or "").strip()
             mention = text[:40]
         canonical_specific_shop_hint = _looks_like_specific_shop_mention(mention)
+        canonical_mention = mention
         result = resolve_shop_entity(
             mention,
             session_state=session_snapshot,
@@ -835,6 +963,45 @@ def _h_target_resolve_candidate_set(state: GraphState, sf: Any) -> dict:
         canonical_status = _enum_value((canonical_shop_entity or {}).get("status")).lower()
         if canonical_status == "ambiguous" or (canonical_status in {"low_confidence", "not_found", "no_mention"} and not canonical_specific_shop_hint):
             canonical_result = ShopResolutionResult.model_validate(canonical_shop_entity)
+            if not list(canonical_result.candidates or []):
+                import sys
+
+                _graph_builder = sys.modules.get("local_life_agent.engine.graph_builder")
+                if _graph_builder is None:
+                    try:
+                        from .. import graph_builder as _graph_builder  # type: ignore[no-redef]
+                    except Exception:
+                        _graph_builder = None
+                _resolve_shop = getattr(_graph_builder, "resolve_shop", None) if _graph_builder is not None else None
+                mention = canonical_mention
+                if callable(_resolve_shop) and mention:
+                    try:
+                        legacy_raw = _unwrap_resolve_shop_result(_to_dict(_resolve_shop(mention, location={})))
+                    except Exception:
+                        legacy_raw = {}
+                    legacy_status = str(legacy_raw.get("status", "") or "").upper()
+                    if legacy_status in {"RESOLVED", "AMBIGUOUS"}:
+                        candidate_rows = [
+                            _candidate_shop_dict(candidate)
+                            for candidate in (legacy_raw.get("candidates") or [])
+                            if _candidate_shop_dict(candidate)
+                        ]
+                        if candidate_rows:
+                            canonical_result.candidates = [
+                                ShopCandidate(
+                                    shop_id=str(item.get("shop_id", "") or "").strip(),
+                                    shop_name=str(item.get("shop_name", "") or "").strip(),
+                                    canonical_name=str(item.get("canonical_name", "") or "").strip(),
+                                    branch_name=str(item.get("branch_name", "") or "").strip(),
+                                    alias=list(item.get("alias", []) or []),
+                                    score=float(item.get("score", 0.0) or 0.0),
+                                    source=ShopResolutionSource.reference,
+                                    match_reason=str(item.get("match_reason", "") or "legacy_resolve_shop"),
+                                    raw=dict(item),
+                                )
+                                for item in candidate_rows
+                                if str(item.get("shop_id", "") or "").strip() or str(item.get("shop_name", "") or "").strip()
+                            ]
             legacy_result = ResolveShopResult(
                 status=canonical_result.status.value.upper() if hasattr(canonical_result.status, "value") else str(canonical_result.status).upper(),
                 resolved_shop=ShopRef(shop_id=str(canonical_result.shop_id or ""), shop_name=str(canonical_result.shop_name or "")) if canonical_result.status == ShopResolutionStatus.resolved else None,
@@ -893,64 +1060,54 @@ def _h_target_resolve_candidate_set(state: GraphState, sf: Any) -> dict:
             **_log(state, "target_resolve", status="NOT_FOUND", reason="missing_goal_draft"),
         }
 
+    # Comparison follow-ups can carry ordinal references plus an explicit
+    # facet request such as "第二家有券吗". Keep that evidence signal alive
+    # only when we already have comparison context in session/state.
+    if (
+        hasattr(goal, "goal_type")
+        and goal.goal_type == GoalType.SINGLE_SHOP_QUERY
+        and (
+            bool(state.get("comparison_result"))
+            or bool(state.get("comparison_targets"))
+            or bool(_session_store_state(state).comparison_result)
+            or bool(_session_store_state(state).comparison_targets)
+        )
+    ):
+        raw_text = str(state.get("raw_text", "") or state.get("normalized_text", "") or "")
+        facet_tokens: list[tuple[str, tuple[str, ...]]] = [
+            ("coupon", ("有券", "优惠券", "coupon", "团购", "套餐")),
+            ("open_status", ("营业", "开门", "open")),
+            ("distance", ("距离", "多远", "多久", "eta")),
+            ("review_summary", ("评价", "口碑", "review")),
+            ("price", ("价格", "多少钱", "人均", "price")),
+        ]
+        inferred_facet = ""
+        for facet_name, tokens in facet_tokens:
+            if any(token in raw_text for token in tokens):
+                inferred_facet = facet_name
+                break
+        if inferred_facet:
+            session_state = _session_store_state(state)
+            existing_facets = {str(item) for item in (getattr(goal, "required_facets", []) or [])}
+            existing_facets.update(str(item) for item in (getattr(goal, "optional_facets", []) or []))
+            existing_facets.update(str(item) for item in (getattr(goal, "evidence_needs", []) or []))
+            if inferred_facet not in existing_facets:
+                goal.evidence_needs = list(getattr(goal, "evidence_needs", []) or []) + [inferred_facet]
+                if inferred_facet == "coupon":
+                    goal.required_facets = list(getattr(goal, "required_facets", []) or [])
+                    if inferred_facet not in goal.required_facets:
+                        goal.required_facets.append(inferred_facet)
+                else:
+                    goal.optional_facets = list(getattr(goal, "optional_facets", []) or [])
+                    if inferred_facet not in goal.optional_facets:
+                        goal.optional_facets.append(inferred_facet)
+
     # 2. Build candidate spec
     spec = build_candidate_spec(goal, sf, state)
 
     goal_type_value = str(getattr(goal.goal_type, "value", goal.goal_type) or "")
-    if goal_type_value == GoalType.RECOMMENDATION.value:
-        payload = {
-            "local_life_goal_draft": goal,
-            "candidate_spec": spec,
-            "target_resolution": target_resolution_seed,
-            "target_resolution_status": str(target_resolution_seed.status or "").upper(),
-            "canonical_shop_entity": canonical_shop_entity,
-            "canonical_shop_entities": canonical_shop_entities,
-            "shop_resolution_trace": shop_resolution_trace,
-            "comparison_target_resolution": comparison_target_resolution,
-            "comparison_targets": [
-                _to_dict(item)
-                for item in (
-                    (comparison_target_resolution or {}).get("targets")
-                    or state.get("comparison_targets", [])
-                    or []
-                )
-            ],
-            "session_state_after": session_snapshot,
-            **_log(
-                state,
-                "target_resolve",
-                status=str((build_target_resolution_result(sf_dict, session_state=session_snapshot, raw_text=str(state.get("raw_text", "") or ""))).status),
-                target_resolve_mode="recommendation_plan_only",
-                next_action="FINISH",
-            ),
-        }
-        return payload
-
-    # 3. Resolve candidates from already-grounded targets only.
-    grounded_candidates: list[dict[str, Any]] = []
-    if goal_type_value == GoalType.COMPARISON.value:
-        for item in (comparison_target_resolution or {}).get("targets", []) or []:
-            shop = _to_dict(item.get("resolved_shop") or item.get("shop") or item)
-            if shop.get("shop_id") or shop.get("shop_name"):
-                grounded_candidates.append(shop)
-    else:
-        if canonical_shop_entity and _enum_value(canonical_shop_entity.get("status")).lower() == ShopResolutionStatus.resolved.value:
-            grounded_shop = {
-                "shop_id": str(canonical_shop_entity.get("shop_id", "") or "").strip(),
-                "shop_name": str(canonical_shop_entity.get("shop_name", "") or "").strip(),
-                "confidence": float(canonical_shop_entity.get("confidence", 1.0) or 1.0),
-                "raw": _to_dict(canonical_shop_entity.get("selected_candidate") or canonical_shop_entity.get("resolved_shop") or canonical_shop_entity),
-            }
-            if grounded_shop["shop_id"] or grounded_shop["shop_name"]:
-                grounded_candidates.append(grounded_shop)
-
-    candidate_set = _candidate_set_from_shop_dicts(
-        source=CandidateSource.CONTEXT if goal_type_value == GoalType.COMPARISON.value else CandidateSource.EXPLICIT,
-        shops=grounded_candidates,
-        requested_count=max(int(goal.requested_count or 1), len(grounded_candidates) or 1),
-        min_required=int(goal.min_required or (2 if goal_type_value == GoalType.COMPARISON.value else 1)),
-        max_allowed=int(goal.max_allowed or max(5, len(grounded_candidates) or 1)),
-    )
+    candidate_core = _get_candidate_core()
+    candidate_set = candidate_core.resolve(goal, spec, state)
     candidate_set.requested_count = goal.requested_count
     candidate_set.min_required = goal.min_required
     candidate_set.max_allowed = goal.max_allowed
@@ -985,6 +1142,17 @@ def _h_target_resolve_candidate_set(state: GraphState, sf: Any) -> dict:
             )
         ],
     }
+    if goal.goal_type == GoalType.COMPARISON:
+        comparison_rows = [
+            {
+                "shop_id": str(item.get("shop_id", "") or "").strip(),
+                "shop_name": str(item.get("shop_name", "") or "").strip(),
+            }
+            for item in payload.get("comparison_targets", [])
+            if str(item.get("shop_id", "") or "").strip() or str(item.get("shop_name", "") or "").strip()
+        ]
+        if comparison_rows and not payload.get("comparison_result"):
+            payload["comparison_result"] = {"rows": comparison_rows}
 
     # P2: persist last_candidate_set/spec for multi-turn references
     ss = _session_store_state(state)
@@ -1221,7 +1389,18 @@ def _h_evidence_planner(state: GraphState) -> dict:
                   missing_goal=goal is None, missing_candidate_set=candidate_set is None,
                   reason="missing_goal"),
         }
-    if getattr(goal, "goal_type", None) == GoalType.RECOMMENDATION:
+    if candidate_set is None:
+        return {
+            "error_code": "SCHEMA_VALIDATION_FAILED",
+            "error_message": "effective_candidate_set is required",
+            "failed_stage": "evidence_planner",
+            **_log(state, "evidence_planner", status="failed", evidence_plan_source="strict",
+                  missing_goal=False, missing_candidate_set=True,
+                  reason="missing_effective_candidate_set"),
+        }
+    semantic_task_type = _enum_value(state.get("task_type")) or _enum_value(_to_dict(state.get("semantic_frame")).get("task_type"))
+    goal_type_value = str(getattr(getattr(goal, "goal_type", None), "value", getattr(goal, "goal_type", None)) or "")
+    if goal_type_value == GoalType.RECOMMENDATION.value:
         plan_payload = build_recommendation_execution_plan(
             state.get("semantic_frame") or {},
             location=_user_location(state),
@@ -1251,14 +1430,34 @@ def _h_evidence_planner(state: GraphState) -> dict:
                 candidate_count=0,
             ),
         }
-    if candidate_set is None:
+    if semantic_task_type == TaskType.comparison.value or goal_type_value == GoalType.COMPARISON.value:
+        plan = plan_evidence_from_candidates(
+            goal=goal,
+            candidate_set=candidate_set,
+            location=_user_location(state),
+        )
+        plan.plan_source = plan.plan_source or "deterministic_comparison_builder"
+        plan = _normalize_distance_tool_calls(plan, state)
         return {
-            "error_code": "SCHEMA_VALIDATION_FAILED",
-            "error_message": "effective_candidate_set is required",
-            "failed_stage": "evidence_planner",
-            **_log(state, "evidence_planner", status="failed", evidence_plan_source="strict",
-                  missing_goal=False, missing_candidate_set=True,
-                  reason="missing_effective_candidate_set"),
+            "execution_plan": plan,
+            "execution_plan_source": plan.plan_source,
+            "planning_llm_backend": "",
+            "planning_llm_called": False,
+            "planning_failure_code": "",
+            "task_type": plan.task_type,
+            "task_type_source": "evidence_planner",
+            "reference_resolution_source": "candidate_set",
+            **_log(
+                state,
+                "evidence_planner",
+                evidence_plan_source="deterministic_comparison_builder",
+                missing_goal=False,
+                missing_candidate_set=False,
+                tool_calls=len(plan.tool_calls),
+                task_type=plan.task_type,
+                planner_source=plan.plan_source or "deterministic_comparison_builder",
+                candidate_count=len(candidate_set.candidates or []),
+            ),
         }
     from ..graph_builder import call_llm as _call_llm, get_llm_backend_snapshot as _get_llm_backend_snapshot
     backend_snapshot = _get_llm_backend_snapshot()
@@ -1390,13 +1589,9 @@ def _h_expand_search(state: GraphState) -> dict:
     if isinstance(relaxed, CandidateSpec):
         old_limit = relaxed.limit or 3
         relaxed.limit = old_limit * 2 + 5
-        relaxed.filters = {}
-        relaxed.sort_by = []
     elif isinstance(relaxed, dict):
         old_limit = int(relaxed.get("limit", 3) or 3)
         relaxed["limit"] = old_limit * 2 + 5
-        relaxed["filters"] = {}
-        relaxed["sort_by"] = []
     else:
         old_limit = 3
     payload: dict[str, Any] = {

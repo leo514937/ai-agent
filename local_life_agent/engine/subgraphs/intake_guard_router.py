@@ -9,6 +9,7 @@ to response.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from .._compat import (
@@ -25,17 +26,57 @@ from .._routes import (
     _OUTER_ROUTE_TERMINAL,
 )
 from ...domain.enums import TopIntent
+from ...domain.focus_context import FocusContext
 from ...domain.graph_state import GraphState
+from ...domain.state import SessionState
 from ...input.hard_guard import check_hard_guard
 from ...input.normalizer import normalize_text as input_normalize_text
 from ...input.receiver import receive_input as assemble_turn_input
 from ...input.validator import validate_basic_input
 from .active_turn_resolver import _h_active_turn_resolver, _should_treat_as_topic_switch
 from ...semantic.intent_parser import parse_top_intent
+from ...target.focus_resolver import resolve_focus_context
+from ...target.clarification import build_clarification_request
 from ...session.store import get_session_store
+from ...answer.response_directive import build_early_response_directive
+from ...domain.schemas import ErrorEnvelope
 from ...observability.file_logger import get_python_service_logger, log_kv
 
 _LOGGER = get_python_service_logger()
+_LOCAL_LIFE_HINTS = ("推荐", "附近", "店", "券", "优惠", "团购", "营业", "开门", "对比", "比较", "哪家", "多少钱")
+_SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+
+
+def _has_local_life_signal(text: str) -> bool:
+    compact = str(text or "")
+    return any(token in compact for token in _LOCAL_LIFE_HINTS)
+
+
+def _should_keep_local_life_route(
+    *,
+    raw_text: str,
+    normalized_text: str,
+    top_intent: Any,
+    session_state: Any,
+    active_turn_result: dict[str, Any] | None,
+) -> bool:
+    intent_value = getattr(top_intent, "value", top_intent)
+    if intent_value == TopIntent.local_life.value:
+        return True
+    text = str(normalized_text or raw_text or "")
+    if not text.strip():
+        return False
+    focus_context = resolve_focus_context(
+        text,
+        session_state=session_state,
+        semantic_frame={},
+        active_turn_result=active_turn_result or {},
+    )
+    if focus_context.focus_type != "none":
+        return True
+    if focus_context.clarification_needed and _has_local_life_signal(text):
+        return True
+    return _has_local_life_signal(text)
 
 
 def h_intake_guard_router(state: GraphState) -> dict:
@@ -43,10 +84,29 @@ def h_intake_guard_router(state: GraphState) -> dict:
     before = dict(state)
     log_kv(_LOGGER, logging.INFO, "[SUBGRAPH_ENTER]", tone="route", subgraph="intake_guard_router", trace_id=state.get("trace_id", ""), raw_text=state.get("raw_text", ""))
     working = _run_step(state, _h_receive_input)
-    working = _run_step(working, _h_load_session)
     working = _run_step(working, _h_basic_validate)
+    if working.get("error_code"):
+        after = {
+            **working,
+            "intake_route": _OUTER_ROUTE_TERMINAL,
+            "response_mode": _OUTER_ROUTE_REJECT,
+        }
+        log_kv(
+            _LOGGER,
+            logging.INFO,
+            "[ROUTE_DECISION]",
+            tone="route",
+            subgraph="intake_guard_router",
+            route=_OUTER_ROUTE_TERMINAL,
+            response_mode=_OUTER_ROUTE_REJECT,
+            reason="basic_input_validate",
+        )
+        return _state_delta(before, after, always_include={"intake_route", "response_mode"})
+    working = _run_step(working, _h_load_session)
+    working = _run_step(working, _h_expand_session_context)
     working = _run_step(working, _h_normalize_text)
     working = _run_step(working, _h_hard_guard)
+    has_pending = bool(working.get("pending_clarification"))
     if str(working.get("guard_result", "") or "") not in {"safe", "ok"}:
         session_before = working.get("session_state_before") or working.get("session_state")
         has_pending = bool(
@@ -54,7 +114,7 @@ def h_intake_guard_router(state: GraphState) -> dict:
             if session_before is not None
             else False
         )
-        response_mode = _response_mode_for_top_intent(working.get("top_intent"))
+        response_mode = "reject" if working.get("response_directive") is not None else _response_mode_for_top_intent(working.get("top_intent"))
         if working.get("error_code"):
             response_mode = _OUTER_ROUTE_REJECT
             route = _OUTER_ROUTE_TERMINAL
@@ -102,21 +162,44 @@ def h_intake_guard_router(state: GraphState) -> dict:
                 "resolved_target": None,
                 "resolve_shop_result": None,
             }
-        else:
+        elif has_pending:
             response_mode = "answer"
             after = {
                 **working,
                 "intake_route": _OUTER_ROUTE_CLARIFICATION_REPLY,
                 "response_mode": response_mode,
             }
-            log_kv(_LOGGER, logging.INFO, "[ROUTE_DECISION]", tone="route", subgraph="intake_guard_router", route=_OUTER_ROUTE_CLARIFICATION_REPLY, response_mode=response_mode, active_turn_route=active_route, reason=str(active_turn_result.get("reason", "") or "active_turn_pending"))
+            log_kv(
+                _LOGGER,
+                logging.INFO,
+                "[ROUTE_DECISION]",
+                tone="route",
+                subgraph="intake_guard_router",
+                route=_OUTER_ROUTE_CLARIFICATION_REPLY,
+                response_mode=response_mode,
+                active_turn_route=active_route,
+                reason=str(active_turn_result.get("reason", "") or "active_turn_pending"),
+            )
             return _state_delta(before, after, always_include={"intake_route", "response_mode"})
+        else:
+            # No real pending clarification exists, so keep the turn in the
+            # normal local-life routing path. This lets ordinal references like
+            # "第二家有券吗" continue into planning instead of being short-circuited
+            # into a clarification-only response.
+            pass
 
     working = _run_step(working, _h_top_intent_router)
     session_before = working.get("session_state_before") or working.get("session_state")
     has_pending = bool(working.get("pending_clarification"))
     top_intent = working.get("top_intent")
     response_mode = "answer"
+    keep_local_life = _should_keep_local_life_route(
+        raw_text=str(working.get("raw_text", "") or ""),
+        normalized_text=str(working.get("normalized_text", "") or ""),
+        top_intent=top_intent,
+        session_state=session_before,
+        active_turn_result=active_turn_result,
+    )
     if working.get("error_code"):
         response_mode = _OUTER_ROUTE_REJECT
         route = _OUTER_ROUTE_TERMINAL
@@ -125,7 +208,7 @@ def h_intake_guard_router(state: GraphState) -> dict:
         route = _OUTER_ROUTE_TERMINAL
     elif has_pending:
         route = _OUTER_ROUTE_CLARIFICATION_REPLY
-    elif top_intent in (TopIntent.local_life, "local_life"):
+    elif keep_local_life:
         route = _OUTER_ROUTE_LOCAL_LIFE
     else:
         response_mode = _response_mode_for_top_intent(top_intent)
@@ -158,26 +241,31 @@ def _h_load_session(state: GraphState) -> dict:
     return {
         "session_state": existing,
         "session_state_before": snapshot,
-        "session_state_after": None,
-        "current_shop": existing.current_shop,
-        "last_recommendation_list": existing.last_recommendation_list,
-        "active_constraints": existing.active_constraints,
-        "comparison_result": existing.comparison_result,
-        "pending_clarification": existing.pending_clarification,
-        "clarification_request": existing.pending_clarification,
-        "active_turn_result": {},
-        "active_turn_route": "",
-        "restored_task": "",
-        "comparison_targets": existing.comparison_targets,
-        "recommendation_candidates": [],
-        "pending_check_result": "pass",
-        "merge_clarification_result": "",
-        "clarification_result": "",
         **_log(state, "load_session_state"),
     }
 
 
-def _h_basic_validate(state: GraphState) -> dict:
+def _validate_session_id(session_id: Any) -> dict[str, Any]:
+    text = str(session_id or "").strip()
+    if not text:
+        return {"valid": True, "error_code": "", "error_message": ""}
+    if len(text) > 128:
+        return {
+            "valid": False,
+            "error_code": "INVALID_SESSION_ID",
+            "error_message": "session_id exceeds 128 characters",
+        }
+    if not _SESSION_ID_PATTERN.fullmatch(text):
+        return {
+            "valid": False,
+            "error_code": "INVALID_SESSION_ID",
+            "error_message": "session_id contains unsupported characters",
+        }
+    return {"valid": True, "error_code": "", "error_message": ""}
+
+
+def validate_session_input(state: GraphState) -> dict[str, Any]:
+    """Pure input validation before any session I/O."""
     raw = state.get("raw_text", "")
     validation = validate_basic_input(raw)
     if not validation["valid"]:
@@ -185,14 +273,128 @@ def _h_basic_validate(state: GraphState) -> dict:
             "input_type": validation["input_type"],
             "error_code": validation["error_code"],
             "error_message": validation["error_message"],
-            "final_response": "璇锋彁渚涗竴鏉℃湁鏁堢殑鏂囨湰鍐呭銆?",
-            **_log(state, "basic_input_validate", valid=False, error_code=validation["error_code"]),
+            "final_response": "璇峰厛杈撳叆涓€鏉℃湁鏁堢殑闂銆?",
         }
+
+    session_validation = _validate_session_id(state.get("session_id", ""))
+    if not session_validation["valid"]:
+        return {
+            "input_type": "text",
+            "error_code": session_validation["error_code"],
+            "error_message": session_validation["error_message"],
+            "final_response": "璇锋彁渚涘悎娉曠殑 session_id 銆?",
+        }
+
     return {
         "input_type": "text",
         "error_code": "",
         "error_message": "",
+    }
+
+
+def _h_basic_validate(state: GraphState) -> dict:
+    validation = validate_session_input(state)
+    if validation.get("error_code"):
+        return {
+            **validation,
+            **_log(state, "basic_input_validate", valid=False, error_code=validation["error_code"]),
+        }
+    return {
+        **validation,
         **_log(state, "basic_input_validate", valid=True),
+    }
+
+
+def _session_state_dict(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump()
+        return dumped if isinstance(dumped, dict) else {}
+    return dict(getattr(value, "__dict__", {}) or {})
+
+
+def _expand_focus_context(session_state: Any) -> FocusContext | None:
+    if session_state is None:
+        return None
+
+    current_shop = _session_state_dict(getattr(session_state, "current_shop", None))
+    if current_shop.get("shop_id") or current_shop.get("shop_name"):
+        return FocusContext.from_trace(
+            focus_type="current_shop",
+            focus_object=current_shop,
+            focus_source="session_state.current_shop",
+            resolution_status="restored",
+            clarification_needed=False,
+            confidence=1.0,
+        )
+
+    comparison_targets = [
+        _session_state_dict(item)
+        for item in (getattr(session_state, "comparison_targets", None) or [])
+        if _session_state_dict(item)
+    ]
+    if comparison_targets:
+        return FocusContext.from_trace(
+            focus_type="comparison_targets",
+            focus_object=comparison_targets[0],
+            comparison_targets=comparison_targets,
+            focus_source="session_state.comparison_targets",
+            resolution_status="restored",
+            clarification_needed=False,
+            confidence=0.8,
+        )
+
+    recommendation_list = [
+        _session_state_dict(item)
+        for item in (getattr(session_state, "last_recommendation_list", None) or [])
+        if _session_state_dict(item)
+    ]
+    if recommendation_list:
+        return FocusContext.from_trace(
+            focus_type="recommendation_item",
+            focus_object=recommendation_list[0],
+            recommendation_item=recommendation_list[0],
+            focus_index=1,
+            focus_source="session_state.last_recommendation_list",
+            resolution_status="restored",
+            clarification_needed=False,
+            confidence=0.6,
+        )
+
+    return FocusContext.from_trace(
+        focus_type="none",
+        focus_source="session_state",
+        resolution_status="empty",
+        clarification_needed=False,
+        confidence=0.0,
+    )
+
+
+def _h_expand_session_context(state: GraphState) -> dict:
+    session_state = state.get("session_state")
+    if not isinstance(session_state, SessionState):
+        session_state = SessionState()
+    pending_request = None
+    if session_state.pending_clarification is not None:
+        try:
+            pending_request = build_clarification_request(session_state.pending_clarification, source_stage="session_load")
+        except Exception:
+            pending_request = None
+    focus_context = _expand_focus_context(session_state)
+    return {
+        "current_shop": session_state.current_shop,
+        "last_recommendation_list": session_state.last_recommendation_list,
+        "active_constraints": session_state.active_constraints,
+        "comparison_result": session_state.comparison_result,
+        "pending_clarification": session_state.pending_clarification,
+        "clarification_request": pending_request,
+        "comparison_targets": session_state.comparison_targets,
+        "focus_context": focus_context,
+        **_log(state, "expand_session_context"),
     }
 
 
@@ -210,9 +412,36 @@ def _h_hard_guard(state: GraphState) -> dict:
     guard_result = result.get("label", "invalid")
     if guard_result == "safe":
         guard_result = "ok"
+    error_envelope = None
+    response_directive = None
+    if not result.get("passed", False):
+        error_envelope = ErrorEnvelope(
+            error_code=str(result.get("reason", "") or result.get("label", "") or "hard_guard_reject"),
+            message=str(result.get("reply", "") or ""),
+            severity="warning" if result.get("label") in {"greeting", "capability"} else "error",
+            recoverable=False,
+            source_stage="hard_guard",
+            trace_id=str(state.get("trace_id", "") or ""),
+            details={
+                "label": str(result.get("label", "") or ""),
+                "reason": str(result.get("reason", "") or ""),
+            },
+        )
+        response_directive = build_early_response_directive(
+            answer_text=str(result.get("reply", "") or ""),
+            answer_type=str(state.get("task_type", "") or ""),
+            response_mode="reject",
+            reason=str(result.get("reason", "") or ""),
+            fallback_reason=str(result.get("reason", "") or ""),
+            trace_id=str(state.get("trace_id", "") or ""),
+            answer_source="hard_guard",
+            error_envelope=error_envelope,
+        )
     return {
         "guard_result": guard_result,
         "final_response": result.get("reply", "") if not result.get("passed", False) else state.get("final_response", ""),
+        "error_envelope": error_envelope,
+        "response_directive": response_directive,
         **_log(state, "hard_guard"),
     }
 

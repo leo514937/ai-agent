@@ -10,10 +10,12 @@ import pytest
 
 from .. import agent
 from ..agent import run_agent_graph
+from ..answer.composers.deterministic import compose_deterministic_response
 from ..answer.evidence_builder import build_evidence
 from ..answer.generator import generate_answer
 from ..answer.verifier import verify_answer
 from ..engine import graph_builder
+from ..domain.schemas import DecisionPlan
 from ..llm.client import _default_llm_backend, clear_llm_backend, set_llm_backend
 from ..session.store import get_session_store, reset_session_store
 from ..domain.state import SessionState
@@ -757,3 +759,73 @@ def test_comparison_flow_does_not_enter_single_shop_flow(monkeypatch: pytest.Mon
     assert response.debug.execution_plan.get("task_type") == "comparison"
     assert len(response.debug.session_state_after.get("comparison_targets", [])) >= 2
     assert response.debug.session_state_after.get("current_shop") in (None, {})
+
+
+def test_comparison_statistical_winner_is_structured_and_supported():
+    evidence = {
+        "comparison_matrix": {
+            "status": "ok",
+            "rows": [
+                {"shop_id": "s1", "shop_name": "川味轩(知春路店)", "overall_score": 98, "known_dimensions": 4, "rating": 4.9, "distance_km": 1.2},
+                {"shop_id": "s2", "shop_name": "海底捞(牡丹园店)", "overall_score": 88, "known_dimensions": 4, "rating": 4.7, "distance_km": 1.6},
+            ],
+            "overall_ranked": [
+                {"shop_id": "s1", "shop_name": "川味轩(知春路店)", "overall_score": 98, "known_dimensions": 4},
+                {"shop_id": "s2", "shop_name": "海底捞(牡丹园店)", "overall_score": 88, "known_dimensions": 4},
+            ],
+            "statistical_winner": {
+                "shop_id": "s1",
+                "shop_name": "川味轩(知春路店)",
+                "score": 98,
+                "score_gap": 10,
+                "reason": "综合得分 98 高于 88",
+            },
+            "winner_provenance": {
+                "source": "comparison_matrix",
+                "ranking_basis": ["overall_score", "known_dimensions", "rating", "distance_km"],
+            },
+        },
+        "ranking_snapshot": {
+            "status": "ok",
+            "ranked": [
+                {"shop_id": "s1", "shop_name": "川味轩(知春路店)", "total_score": 98},
+                {"shop_id": "s2", "shop_name": "海底捞(牡丹园店)", "total_score": 88},
+            ],
+        },
+        "forbidden_claims": [],
+    }
+
+    result = verify_answer("综合当前已知信息，整体更适合的是川味轩(知春路店)。", evidence, "comparison")
+
+    assert result["passed"] is True
+    comparison_claims = [claim for claim in result["expected_claims"] if claim["claim_type"] == "comparison_winner"]
+    assert comparison_claims
+    assert any(claim["source"] == "statistical_winner" for claim in comparison_claims)
+
+
+def test_comparison_without_unique_winner_keeps_tradeoff_without_forced_winner():
+    plan = DecisionPlan(
+        answer_type="comparison",
+        selected_targets=[
+            {"shop_id": "s1", "shop_name": "川味轩(知春路店)"},
+            {"shop_id": "s2", "shop_name": "海底捞(牡丹园店)"},
+        ],
+        overall_ranking=[
+            {"shop_id": "s1", "shop_name": "川味轩(知春路店)"},
+            {"shop_id": "s2", "shop_name": "海底捞(牡丹园店)"},
+        ],
+        best_for={
+            "评分": {"shop_id": "s1", "shop_name": "川味轩(知春路店)", "reason": "评分更高"},
+            "距离": {"shop_id": "s2", "shop_name": "海底捞(牡丹园店)", "reason": "距离更近"},
+        },
+        uncertainty_notes=["当前证据并列，暂时无法确认唯一赢家"],
+        comparison_support_status="grounded",
+        ranking_preserved=True,
+        winner_uncertainty_note="当前证据并列，暂时无法确认唯一赢家",
+    )
+
+    directive = compose_deterministic_response(plan, trace_id="trace_cmp")
+
+    assert "唯一赢家" in directive.answer_text
+    assert "整体赢家" not in directive.answer_text
+    assert "维度结论" in directive.answer_text

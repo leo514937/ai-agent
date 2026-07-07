@@ -47,7 +47,9 @@ from ...planning.evidence.evidence_review import (
     review_evidence as review_evidence_sufficiency,
     review_evidence_with_llm,
 )
+from ...planning.budget.execution_budget import execution_budget_from_state
 from ...planning.policies.replan_policy import increment_expand_search, increment_replan_evidence
+from ...planning.policies.review_policy import review_policy_from_state
 from ... import config
 from ...observability.file_logger import get_python_service_logger, log_kv
 
@@ -112,8 +114,42 @@ def _h_tool_execute(state: GraphState) -> dict:
     from .._compat import _resolve_recommendation_spec, _to_dict
     from ...domain.enums import TaskType
     from ..graph_builder import dispatch_tool_call as _dispatch_tool_call
+    from ...planning.evidence.stage_tool_executor import StageToolExecutor
 
     plan = state.get("validated_plan") or state.get("execution_plan")
+    raw_text = str(state.get("raw_text", "") or state.get("normalized_text", "") or "")
+    if plan is not None and getattr(plan, "task_type", "") == TaskType.single_shop_query.value:
+        tool_calls = list(getattr(plan, "tool_calls", []) or [])
+        if tool_calls:
+            facet_tokens: list[tuple[str, tuple[str, ...]]] = [
+                ("coupon", ("有券", "优惠券", "coupon", "团购", "套餐")),
+                ("open_status", ("营业", "开门", "open")),
+                ("distance", ("距离", "多远", "多久", "eta")),
+                ("review_summary", ("评价", "口碑", "review")),
+                ("price", ("价格", "多少钱", "人均", "price")),
+            ]
+            inferred_facet = ""
+            for facet_name, tokens in facet_tokens:
+                if any(token in raw_text for token in tokens):
+                    inferred_facet = facet_name
+                    break
+    if plan is not None and getattr(plan, "stages", None) and str(getattr(plan, "task_type", "") or "") != TaskType.recommendation.value:
+        stage_executor = StageToolExecutor(call_fn=_dispatch_tool_call)
+        stage_result = stage_executor.execute(plan)
+        results = {
+            call_id: ToolResult.model_validate(payload)
+            for call_id, payload in (stage_result.results or {}).items()
+        }
+        failed_calls = [
+            call_id for call_id, result in results.items()
+            if str(getattr(result, "result_status", _to_dict(result).get("result_status", ""))).lower() in {"failed", "unknown", "circuit_open"}
+        ]
+        return {
+            "tool_results": results,
+            "tool_result_set": results,
+            "tool_result_cache_hit_count": stage_result.cache_hits,
+            **_log(state, "tool_execute", tool_call_count=len(results), tool_failures=failed_calls, tool_calls=list(results.keys())),
+        }
     results: dict[str, ToolResult] = {}
     if plan is not None:
         tool_calls = getattr(plan, "tool_calls", []) or []
@@ -228,15 +264,14 @@ def _h_evidence_build(state: GraphState) -> dict:
         },
     )
     pack = EvidencePack.model_validate(evidence_payload)
-    updates: dict[str, Any] = {}
     if "last_recommendation_list" in evidence_payload:
-        updates["last_recommendation_list"] = evidence_payload.get("last_recommendation_list", [])
+        last_recommendation_list = evidence_payload.get("last_recommendation_list", [])
     ranking_snapshot = _to_dict(pack.ranking_snapshot if hasattr(pack, "ranking_snapshot") else evidence_payload.get("ranking_snapshot"))
     comparison_matrix = _to_dict(pack.comparison_matrix if hasattr(pack, "comparison_matrix") else evidence_payload.get("comparison_matrix"))
     candidate_count = len(ranking_snapshot.get("ranked") or ranking_snapshot.get("ranked_shops") or comparison_matrix.get("rows") or [])
     return {
         "evidence_pack": pack,
-        **updates,
+        **({"last_recommendation_list": last_recommendation_list} if "last_recommendation_list" in evidence_payload else {}),
         **_log(state, "evidence_build", candidate_count=candidate_count,
                decision_type="comparison" if comparison_matrix.get("rows") else ("recommendation" if ranking_snapshot else "")),
     }
@@ -359,9 +394,12 @@ def _h_decision_review(state: GraphState) -> dict:
     esc = int(ss.replan_counters.get("expand_search", 0))
     rec = int(ss.replan_counters.get("replan_evidence", 0))
 
+    review_policy = review_policy_from_state(state)
+    execution_budget = execution_budget_from_state(state)
     review = p2_review_decision(
         decision_plan=dp, goal_plan=gp, evidence_review=ev,
         candidate_review=cr, expand_search_count=esc, replan_evidence_count=rec,
+        review_policy=review_policy, execution_budget=execution_budget,
     )
     updated_rr = dict(rr) if isinstance(rr, dict) else {}
     updated_rr["decision_review"] = review

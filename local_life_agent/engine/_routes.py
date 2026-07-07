@@ -310,12 +310,13 @@ def _route_response_subgraph(state: GraphState) -> str:
 
 def _route_workflow_runner(state: GraphState) -> str:
     workflow_name = str(state.get("workflow_name", "") or "")
+    workflow_entry_name = str(state.get("workflow_entry_name", "") or "")
     workflow_callable = str(state.get("workflow_callable", "") or "")
     response_mode = str(state.get("response_mode", "") or "")
     # discovery_decision 是主链路入口，但部分状态在经过 workflow_runner 后
     # 只会稳定保留 workflow_callable / response_mode。这里做三重判定，避免
     # 比较流因为单字段透传丢失被错误送回 response_subgraph。
-    if workflow_name == "discovery_decision" or workflow_callable == "planning_subgraph" or response_mode == "comparison":
+    if workflow_name in {"discovery_decision", "recommendation_decision_workflow", "comparison_decision_workflow"} or workflow_entry_name in {"recommendation_decision_workflow", "comparison_decision_workflow"} or workflow_callable == "planning_subgraph" or response_mode == "comparison":
         return "planning_subgraph"
     return "response_subgraph"
 

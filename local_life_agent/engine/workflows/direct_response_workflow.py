@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from ...answer.response_directive import build_response_directive
 from ...domain.graph_state import GraphState
 from ...domain.schemas import AnswerPlan, OrchestrationDecision
 from ...engine._compat import _log, _to_dict
@@ -139,6 +140,16 @@ def run_direct_response_workflow(
     policy = _DIRECT_RESPONSE_POLICY.get(policy_key, _DIRECT_RESPONSE_POLICY["out_of_scope"])
     answer_plan = _build_answer_plan(policy_key)
     final_response = str(policy["response_text"])
+    response_directive = build_response_directive(
+        answer_text=final_response,
+        answer_type=str(policy.get("answer_type", "general") or "general"),
+        response_mode="direct_response",
+        fallback_reason=policy_key,
+        trace_id=str(state.get("trace_id", "") or ""),
+        preview_text=final_response,
+        answer_source="direct_response_workflow",
+        fallback_template_type="direct_response",
+    )
     timestamp = _utc_now_iso()
 
     patch: dict[str, Any] = {
@@ -156,8 +167,8 @@ def run_direct_response_workflow(
         "response_mode": "direct_response",
         "next_action": "run_workflow",
         "answer_plan": answer_plan,
-        "final_response": final_response,
         "draft_response": final_response,
+        "response_directive": response_directive,
         "answer_source": "direct_response_workflow",
         "verifier_result": "pass",
         "answer_verify_passed": True,
@@ -181,8 +192,8 @@ def run_direct_response_workflow(
             "response_mode",
             "next_action",
             "answer_plan",
-            "final_response",
             "draft_response",
+            "response_directive",
             "answer_source",
             "verifier_result",
             "answer_verify_passed",

@@ -106,17 +106,28 @@ def _h_state_update_plan(state: GraphState) -> dict:
         "tool_result_set": state.get("tool_result_set") or state.get("tool_results", {}),
         "execution_plan": state.get("validated_plan") or state.get("execution_plan"),
     }
-    if task_type_value == TaskType.comparison.value and turn_context.get("comparison_result") is None and turn_context.get("pending_clarification") is None:
-        turn_context["comparison_result"] = {
-            "rows": [
-                {
-                    "shop_id": str(item.get("shop_id", "")).strip(),
-                    "shop_name": str(item.get("shop_name", "")).strip(),
-                }
-                for item in (comparison_targets or [])
-                if str(item.get("shop_id", "")).strip() or str(item.get("shop_name", "")).strip()
-            ]
-        }
+    comparison_result = turn_context.get("comparison_result")
+    has_comparison_hint = bool(
+        comparison_targets
+        or comparison_result
+        or _to_dict(turn_context.get("semantic_frame")).get("comparison_intent")
+        or any(token in str(turn_context.get("raw_text", "") or "") for token in ("对比", "比较", "比一比", "哪个好", "谁更好"))
+    )
+    if turn_context.get("comparison_result") is None and turn_context.get("pending_clarification") is None and has_comparison_hint:
+        synthesized_comparison_rows = [
+            {
+                "shop_id": str(item.get("shop_id", "")).strip(),
+                "shop_name": str(item.get("shop_name", "")).strip(),
+            }
+            for item in (
+                comparison_targets
+                if comparison_targets
+                else turn_context.get("last_recommendation_list", [])
+            )
+            if str(item.get("shop_id", "")).strip() or str(item.get("shop_name", "")).strip()
+        ]
+        if synthesized_comparison_rows:
+            turn_context["comparison_result"] = {"rows": synthesized_comparison_rows}
     plan_dict = _STATE_CORE.plan_state_update(
         turn_context,
         task_type_value,
@@ -157,6 +168,21 @@ def _h_persist_session(state: GraphState) -> dict:
             elif isinstance(default_value, (list, dict, set)):
                 default_value = type(default_value)(default_value)
             setattr(session_state, field_name, default_value)
+    if not getattr(session_state, "last_recommendation_list", None) and state.get("task_type") == TaskType.recommendation.value:
+        evidence_dict = _to_dict(state.get("evidence_pack"))
+        ranking_snapshot = _to_dict(evidence_dict.get("ranking_snapshot"))
+        fallback_recommendations = [
+            _to_dict(item)
+            for item in (ranking_snapshot.get("ranked") or ranking_snapshot.get("ranked_shops") or evidence_dict.get("last_recommendation_list") or [])
+            if _to_dict(item)
+        ]
+        if fallback_recommendations:
+            session_state.last_recommendation_list = fallback_recommendations
+            if not getattr(session_state, "last_recommendation_list_meta", None):
+                session_state.last_recommendation_list_meta = SessionValueMeta(
+                    source="evidence_pack",
+                    evidence_ref=str(ranking_snapshot.get("snapshot_id", "") or ""),
+                )
     comparison_resolution = _to_dict(state.get("comparison_target_resolution"))
     if str(comparison_resolution.get("status", "") or "").upper() == "RESOLVED":
         resolved_targets = [
@@ -175,6 +201,9 @@ def _h_persist_session(state: GraphState) -> dict:
         ]
         if comparison_rows and not state.get("pending_clarification"):
             session_state.comparison_targets = comparison_rows
+    comparison_result = _to_dict(state.get("comparison_result"))
+    if comparison_result:
+        session_state.comparison_result = comparison_result
     store = get_session_store()
     store.save(str(state.get("session_id", "") or ""), session_state)
     return {

@@ -43,10 +43,6 @@ def main():
             path = os.path.join(SUBDIR, fname)
             if fix_file(path):
                 fixed.append(fname)
-    if fixed:
-        print(f"Fixed: {', '.join(fixed)}")
-    else:
-        print("No changes needed.")
 
 if __name__ == "__main__":
     main()

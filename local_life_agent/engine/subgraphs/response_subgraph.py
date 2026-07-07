@@ -7,6 +7,7 @@ rewrites if needed, and handles clarification / fallback responses.
 from __future__ import annotations
 
 import logging
+import inspect
 from typing import Any
 
 from .._compat import (
@@ -29,14 +30,20 @@ from .._routes import (
     _OUTER_ROUTE_PASS,
     _OUTER_ROUTE_REJECT,
 )
+from ...domain.enums import ResponseMode, normalize_response_mode
 from ...domain.graph_state import GraphState
 from ...domain.schemas import AnswerPlan
 from ...domain.decision import decision_to_answer_plan
 from ...answer.verifier import verify_answer
+from ...answer.response_directive import ResponseDirective, build_early_response_directive, build_response_directive
+from ...answer.response_contract import ResponseContractV1, ResponseContractV2
+from ...answer.rewrite_instruction import RewriteInstruction
 from ...domain.state import SessionState
+from ...planning.budget.execution_budget import execution_budget_from_state
 from ...planning.budget.budget_context import budget_context_from_state
 from ...streaming.preview_policy import sanitize_preview_text
 from ...observability.file_logger import get_python_service_logger, log_kv
+from ...target.clarification import build_clarification_request
 
 _LOGGER = get_python_service_logger()
 
@@ -58,6 +65,8 @@ def _compose_single_shop_response(evidence: dict[str, Any], draft_text: str) -> 
     coupon_text = ""
     open_text = ""
     distance_text = ""
+    rating_text = ""
+    price_text = ""
     uncertain_notes: list[str] = []
 
     for item in facet_results:
@@ -105,6 +114,19 @@ def _compose_single_shop_response(evidence: dict[str, Any], draft_text: str) -> 
                     distance_text += f"，预计时间 {eta_minutes} 分钟"
             else:
                 uncertain_notes.append("距离暂时无法确认")
+        elif facet == "rating":
+            if status == "ok" and value is not None:
+                rating_text = f"评分为 {value}"
+            else:
+                uncertain_notes.append("评分暂时无法确认")
+        elif facet in {"avg_price", "price"}:
+            price_value = value
+            if isinstance(price_value, dict):
+                price_value = price_value.get("avg_price", price_value.get("price", price_value.get("value", "")))
+            if status == "ok" and price_value is not None:
+                price_text = f"人均约 {price_value} 元"
+            else:
+                uncertain_notes.append("人均价格暂时无法确认")
 
     parts: list[str] = []
     if open_text:
@@ -113,6 +135,10 @@ def _compose_single_shop_response(evidence: dict[str, Any], draft_text: str) -> 
         parts.append(coupon_text)
     if distance_text:
         parts.append(distance_text)
+    if rating_text:
+        parts.append(rating_text)
+    if price_text:
+        parts.append(price_text)
 
     if parts:
         response = f"{shop_name}: {'; '.join(parts)}"
@@ -125,36 +151,309 @@ def _compose_single_shop_response(evidence: dict[str, Any], draft_text: str) -> 
     return response
 
 
+def _rewrite_strategy_from_instruction(
+    answer_plan: AnswerPlan,
+    rewrite_instruction: RewriteInstruction | dict[str, Any] | None,
+    *,
+    rewrite_count: int,
+    rewrite_limit: int,
+) -> str:
+    if rewrite_count >= rewrite_limit:
+        return "trusted_fallback"
+    instruction = rewrite_instruction
+    if isinstance(instruction, dict):
+        try:
+            instruction = RewriteInstruction.model_validate(instruction)
+        except Exception:
+            instruction = None
+    if instruction is None:
+        return "llm_rewrite"
+    fallback_mode = str(getattr(instruction, "fallback_mode", "") or "").strip()
+    if fallback_mode in {"fallback", "system_fallback"}:
+        return "trusted_fallback"
+    answer_type = str(getattr(answer_plan, "answer_type", "") or "").strip()
+    violation_codes = {str(item).strip() for item in (getattr(instruction, "violation_codes", []) or []) if str(item).strip()}
+    ranking_sensitive = bool(
+        violation_codes
+        & {
+            "ranking_changed_by_llm",
+            "unsupported_comparison_winner",
+            "missing_comparison_targets",
+            "missing_recommendation_targets",
+        }
+    )
+    if answer_type in {"single_shop", "single_shop_query", "clarification", "general", "chat", "capability", "out_of_scope", "unsafe", "invalid", "forbidden", "error"}:
+        return "deterministic_composer"
+    if ranking_sensitive:
+        return "deterministic_composer"
+    if getattr(instruction, "unsupported_claims", None) or getattr(instruction, "contradicted_claims", None):
+        return "deterministic_composer"
+    if violation_codes & {"empty_evidence_or_draft", "template_fallback", "llm_disabled", "llm_client_unavailable", "llm_call_failed", "llm_verbalizer_error", "prompt_load_failed"}:
+        return "trusted_fallback"
+    return "llm_rewrite"
+
+
+def _rewrite_route_from_instruction(
+    answer_plan: AnswerPlan,
+    rewrite_instruction: RewriteInstruction | dict[str, Any] | None,
+    *,
+    rewrite_count: int,
+    rewrite_limit: int,
+) -> str:
+    """Compute the next rewrite route from the verifier instruction."""
+
+    if rewrite_count >= rewrite_limit:
+        return "trusted_fallback"
+    return _rewrite_strategy_from_instruction(
+        answer_plan,
+        rewrite_instruction,
+        rewrite_count=rewrite_count,
+        rewrite_limit=rewrite_limit,
+    )
+
+
+def _to_response_directive(value: Any) -> ResponseDirective | None:
+    if value is None:
+        return None
+    if isinstance(value, ResponseDirective):
+        return value
+    if isinstance(value, dict):
+        try:
+            return ResponseDirective.model_validate(value)
+        except Exception:
+            return None
+    return None
+
+
+def _as_list_of_dicts(value: Any) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [dict(item) for item in value if isinstance(item, dict)]
+    if isinstance(value, tuple):
+        return [dict(item) for item in value if isinstance(item, dict)]
+    if hasattr(value, "model_dump"):
+        try:
+            dumped = value.model_dump()
+            if isinstance(dumped, dict):
+                return [dumped]
+        except Exception:
+            return []
+    if isinstance(value, dict):
+        return [dict(value)]
+    return []
+
+
+def _build_response_trace_summary(state: GraphState, *, answer_source: str, fallback_reason: str, directive: ResponseDirective | None) -> dict[str, Any]:
+    evidence = _to_dict(state.get("evidence_pack"))
+    tool_results = _to_dict(state.get("tool_results") or state.get("tool_result_set"))
+    tool_call_count = len(tool_results) if isinstance(tool_results, dict) else 0
+    trace_spans = state.get("trace_spans") or []
+    stage_names: list[str] = []
+    for item in trace_spans:
+        item_dict = _to_dict(item)
+        name = str(item_dict.get("span_name") or item_dict.get("stage") or "").strip()
+        if name and name not in stage_names:
+            stage_names.append(name)
+    return {
+        "trace_id": str(state.get("trace_id", "") or ""),
+        "session_id": str(state.get("session_id", "") or ""),
+        "turn_id": str(state.get("turn_id", "") or ""),
+        "workflow_name": str(state.get("workflow_name", "") or ""),
+        "response_mode": str(state.get("response_mode", "") or ""),
+        "task_type": str(state.get("task_type", "") or ""),
+        "answer_source": str(answer_source or ""),
+        "fallback_reason": str(fallback_reason or ""),
+        "llm_called": bool(state.get("llm_called", False) or state.get("planning_llm_called", False) or state.get("llm_verbalizer_called", False)),
+        "tool_called": bool(tool_call_count > 0),
+        "tool_call_count": tool_call_count,
+        "rewrite_count": int(state.get("rewrite_count", 0) or 0),
+        "fallback_used": bool(state.get("fallback_used", False)),
+        "answer_verify_passed": bool(state.get("answer_verify_passed", True)),
+        "answer_verify_violations": list(state.get("answer_verify_violations") or []),
+        "stage_names": stage_names,
+        "has_evidence_pack": bool(evidence),
+        "directive_kind": str(getattr(directive, "directive_kind", "") or ""),
+    }
+
+
+def _build_response_policy(answer_plan: AnswerPlan | None, state: GraphState) -> dict[str, Any]:
+    return {
+        "response_mode": str(state.get("response_mode", "") or ""),
+        "workflow_name": str(state.get("workflow_name", "") or ""),
+        "task_type": str(state.get("task_type", "") or ""),
+        "answer_type": str(getattr(answer_plan, "answer_type", "") or ""),
+        "fallback_template_type": str(getattr(answer_plan, "fallback_template_type", "") or ""),
+        "verifier_result": str(state.get("verifier_result", "") or ""),
+        "final_safety_status": str(state.get("final_safety_status", "") or ""),
+    }
+
+
+def _build_response_contract_v2(
+    state: GraphState,
+    directive: ResponseDirective | None,
+    *,
+    answer_text: str,
+    preview_text: str,
+    fallback_reason: str,
+) -> ResponseContractV2:
+    answer_plan = state.get("answer_plan")
+    evidence_pack = _to_dict(state.get("evidence_pack"))
+    claims = _as_list_of_dicts(state.get("answer_claim_results")) or _as_list_of_dicts(evidence_pack.get("claims"))
+    citations = _as_list_of_dicts(evidence_pack.get("citations"))
+    cards = _as_list_of_dicts(state.get("cards") or evidence_pack.get("cards"))
+    clarification = _to_dict(state.get("clarification_request") or state.get("pending_clarification"))
+    safety_notice = [
+        str(item).strip()
+        for item in (
+            (getattr(answer_plan, "uncertainty_notes", []) if answer_plan is not None else [])
+            or state.get("answer_verify_violations")
+            or []
+        )
+        if str(item).strip()
+    ]
+    confidence_band = str(getattr(answer_plan, "confidence_band", "") or evidence_pack.get("confidence_band", "") or "")
+    trace_summary = _build_response_trace_summary(
+        state,
+        answer_source=str(state.get("answer_source", "") or ""),
+        fallback_reason=fallback_reason,
+        directive=directive,
+    )
+    return ResponseContractV2.from_response_directive(
+        directive,
+        verifier_result=str(state.get("verifier_result", "") or ""),
+        fallback_reason=fallback_reason,
+        uncertainty_notices=safety_notice,
+        metadata={
+            "workflow_name": str(state.get("workflow_name", "") or ""),
+            "answer_source": str(state.get("answer_source", "") or ""),
+            "response_mode": str(state.get("response_mode", "") or ""),
+            "trace_summary": trace_summary,
+        },
+        claims=claims,
+        citations=citations,
+        cards=cards,
+        confidence_band=confidence_band,
+        response_policy=_build_response_policy(answer_plan if isinstance(answer_plan, AnswerPlan) else None, state),
+        clarification=clarification,
+        safety_notice=safety_notice,
+        trace_summary=trace_summary,
+    ).model_copy(update={"answer_text": answer_text, "preview_text": preview_text, "final_response": answer_text})
+
+
+def _response_text_from_state(state: GraphState) -> str:
+    for key in ("final_response", "draft_response", "preview_text"):
+        text = str(state.get(key, "") or "").strip()
+        if text:
+            return text
+    directive = _to_response_directive(state.get("response_directive"))
+    if directive is not None:
+        for text in (directive.answer_text, directive.final_response, directive.preview_text):
+            if str(text or "").strip():
+                return str(text).strip()
+    return ""
+
+
 def h_response_subgraph(state: GraphState) -> dict:
     """Outer wrapper: handle response mode → generate / clarify / fallback."""
     before = dict(state)
-    response_mode = str(state.get("response_mode", "") or "")
-    log_kv(_LOGGER, logging.INFO, "[SUBGRAPH_ENTER]", tone="route", subgraph="response_subgraph", trace_id=state.get("trace_id", ""), response_mode=response_mode)
-    if response_mode in {_OUTER_ROUTE_DIRECT, _OUTER_ROUTE_REJECT, "direct_response", "exploration_plan"}:
-        after = {**state, "response_route": _OUTER_ROUTE_PASS}
+    response_mode_raw = state.get("response_mode", "")
+    normalized_mode = normalize_response_mode(response_mode_raw)
+    response_mode = str(getattr(normalized_mode, "value", "") or response_mode_raw or "")
+    semantic_frame = _to_dict(state.get("semantic_frame"))
+    prior_current_shop = _to_dict(state.get("current_shop"))
+    task_type_value = str(state.get("task_type", "") or semantic_frame.get("task_type", "") or "")
+    has_deictic_reference = bool(semantic_frame.get("deictic_references") or semantic_frame.get("reference_mentions"))
+    log_kv(
+        _LOGGER,
+        logging.INFO,
+        "[SUBGRAPH_ENTER]",
+        tone="route",
+        subgraph="response_subgraph",
+        trace_id=state.get("trace_id", ""),
+        response_mode=response_mode,
+    )
+    if (
+        task_type_value == "comparison"
+        and has_deictic_reference
+        and not prior_current_shop.get("shop_id")
+        and not prior_current_shop.get("shop_name")
+    ):
+        working = {
+            **state,
+            "workflow_name": "clarification_fallback",
+            "response_mode": "clarify",
+            "error_message": "请提供完整店名，或回复编号/店名。",
+            "final_response": "请提供完整店名，或回复编号/店名。",
+        }
+        working = _run_step(working, _h_clarify_response)
+        after = {**working, "response_route": _OUTER_ROUTE_CLARIFY_READY}
+        log_kv(
+            _LOGGER,
+            logging.INFO,
+            "[ROUTE_DECISION]",
+            tone="route",
+            subgraph="response_subgraph",
+            route=_OUTER_ROUTE_CLARIFY_READY,
+            response_mode="clarify",
+            reason="comparison_deictic_missing_current_shop",
+        )
+        return _state_delta(before, after, always_include={"response_route"})
+    if normalized_mode in {ResponseMode.DIRECT, ResponseMode.DIRECT_RESPONSE, ResponseMode.REJECT, ResponseMode.EXPLORATION_PLAN} or response_mode in {_OUTER_ROUTE_DIRECT, _OUTER_ROUTE_REJECT, "direct_response", "exploration_plan"}:
+        working = dict(state)
+        if not str(working.get("final_response", "") or "").strip():
+            if _response_text_from_state(working):
+                working = {**working, **_h_final_response(working)}
+            else:
+                working = {**working, **_h_final_response(working)}
+        after = {**working, "response_route": _OUTER_ROUTE_PASS}
         log_kv(_LOGGER, logging.INFO, "[ROUTE_DECISION]", tone="route", subgraph="response_subgraph", route=_OUTER_ROUTE_PASS, response_mode=response_mode)
         return _state_delta(before, after, always_include={"response_route"})
-    if response_mode in {_OUTER_ROUTE_CLARIFY} or state.get("pending_clarification") is not None:
+    if normalized_mode == ResponseMode.CLARIFY or response_mode in {_OUTER_ROUTE_CLARIFY} or state.get("pending_clarification") is not None:
         if not str(state.get("final_response", "") or "").strip():
-            working = _run_step(state, _h_clarify_response)
+            if _response_text_from_state(state):
+                working = _run_step(state, _h_final_response)
+            else:
+                working = _run_step(state, _h_clarify_response)
+                if not str(working.get("final_response", "") or "").strip():
+                    working = {**working, **_h_final_response(working)}
         else:
             working = dict(state)
         after = {**working, "response_route": _OUTER_ROUTE_CLARIFY_READY}
         log_kv(_LOGGER, logging.INFO, "[ROUTE_DECISION]", tone="route", subgraph="response_subgraph", route=_OUTER_ROUTE_CLARIFY_READY, response_mode=response_mode or _OUTER_ROUTE_CLARIFY)
         return _state_delta(before, after, always_include={"response_route"})
-    if response_mode in {_OUTER_ROUTE_FALLBACK}:
+    if normalized_mode == ResponseMode.FALLBACK or response_mode in {_OUTER_ROUTE_FALLBACK}:
         if not str(state.get("final_response", "") or "").strip():
-            working = _run_step(state, _h_fallback_answer)
+            if _response_text_from_state(state):
+                working = _run_step(state, _h_final_response)
+            else:
+                working = _run_step(state, _h_fallback_answer)
+                if not str(working.get("final_response", "") or "").strip():
+                    working = {**working, **_h_final_response(working)}
         else:
             working = dict(state)
         after = {**working, "response_route": _OUTER_ROUTE_FALLBACK_READY}
         log_kv(_LOGGER, logging.WARNING, "[ROUTE_DECISION]", tone="warn", subgraph="response_subgraph", route=_OUTER_ROUTE_FALLBACK_READY, response_mode=response_mode)
         return _state_delta(before, after, always_include={"response_route"})
+    if normalized_mode is None and response_mode:
+        log_kv(_LOGGER, logging.WARNING, "[ROUTE_DECISION]", tone="warn", subgraph="response_subgraph", route=_OUTER_ROUTE_FALLBACK_READY, response_mode=response_mode, reason="invalid_response_mode")
+        after = {**state, "response_route": _OUTER_ROUTE_FALLBACK_READY, "fallback_reason": str(state.get("fallback_reason", "") or "invalid_response_mode")}
+        if not str(state.get("final_response", "") or "").strip():
+            if _response_text_from_state(state):
+                working = _run_step(state, _h_final_response)
+            else:
+                working = _run_step(state, _h_fallback_answer)
+                if not str(working.get("final_response", "") or "").strip():
+                    working = {**working, **_h_final_response(working)}
+            after = {**working, "response_route": _OUTER_ROUTE_FALLBACK_READY}
+        return _state_delta(before, after, always_include={"response_route"})
 
     working = _run_step(state, _h_answer_plan_build)
     budget = budget_context_from_state(state)
+    execution_budget = execution_budget_from_state(state)
     rewrite_budget = budget.remaining("rewrite_budget")
-    rewrite_limit = max(0, min(int(_GRAPH_REWRITE_LIMIT or 0), int(rewrite_budget)))
+    rewrite_limit = max(0, min(int(_GRAPH_REWRITE_LIMIT or 0), int(rewrite_budget), int(execution_budget.max_rewrite_rounds or 0)))
+    working = {**working, "rewrite_limit": rewrite_limit}
     while True:
         working = _run_step(working, _h_answer_generate)
         working = _run_step(working, _h_answer_verify)
@@ -164,6 +463,11 @@ def h_response_subgraph(state: GraphState) -> dict:
             after = {**working, "response_route": _OUTER_ROUTE_PASS}
             log_kv(_LOGGER, logging.INFO, "[ROUTE_DECISION]", tone="route", subgraph="response_subgraph", route=_OUTER_ROUTE_PASS, verify_result=verify_result)
             return _state_delta(before, after, always_include={"response_route"})
+        if not bool(working.get("rewrite_needed", True)) or not bool(working.get("verifier_recoverable", True)):
+            working = _run_step(working, _h_fallback_answer)
+            after = {**working, "response_route": _OUTER_ROUTE_FALLBACK_READY}
+            log_kv(_LOGGER, logging.WARNING, "[ROUTE_DECISION]", tone="warn", subgraph="response_subgraph", route=_OUTER_ROUTE_FALLBACK_READY, verify_result=verify_result, rewrite_needed=working.get("rewrite_needed", False), verifier_recoverable=working.get("verifier_recoverable", False))
+            return _state_delta(before, after, always_include={"response_route"})
         rewrite_count = int(working.get("rewrite_count", 0) or 0)
         if rewrite_count >= rewrite_limit:
             working = _run_step(working, _h_fallback_answer)
@@ -171,6 +475,22 @@ def h_response_subgraph(state: GraphState) -> dict:
             log_kv(_LOGGER, logging.WARNING, "[ROUTE_DECISION]", tone="warn", subgraph="response_subgraph", route=_OUTER_ROUTE_FALLBACK_READY, verify_result=verify_result, rewrite_count=rewrite_count)
             return _state_delta(before, after, always_include={"response_route"})
         working = _run_step(working, _h_rewrite)
+        rewrite_route = str(working.get("rewrite_route", working.get("rewrite_mode", "")) or "")
+        if rewrite_route == "trusted_fallback":
+            working = _run_step(working, _h_fallback_answer)
+            after = {**working, "response_route": _OUTER_ROUTE_FALLBACK_READY}
+            log_kv(
+                _LOGGER,
+                logging.WARNING,
+                "[ROUTE_DECISION]",
+                tone="warn",
+                subgraph="response_subgraph",
+                route=_OUTER_ROUTE_FALLBACK_READY,
+                verify_result=verify_result,
+                rewrite_count=rewrite_count,
+                rewrite_route=rewrite_route,
+            )
+            return _state_delta(before, after, always_include={"response_route"})
 
 
 # ---------------------------------------------------------------------------
@@ -208,6 +528,8 @@ def _h_answer_generate(state: GraphState) -> dict:
         metadata_out=metadata,
         rewrite_count=rc,
         previous_violations=violations,
+        rewrite_instruction=state.get("rewrite_instruction"),
+        rewrite_mode=str(state.get("rewrite_mode", "") or ""),
         in_graph=True,
         conversation_continuity=cc,
     )
@@ -225,9 +547,21 @@ def _h_answer_generate(state: GraphState) -> dict:
     preview_text = sanitize_preview_text(txt, verified=False)
     fallback_reason = str(state.get("fallback_reason", "") or metadata.get("fallback_reason", "") or "")
     answer_fallback_reason = str(state.get("answer_fallback_reason", "") or metadata.get("answer_fallback_reason", "") or "")
+    response_directive = build_response_directive(
+        answer_text=txt,
+        answer_type=answer_type,
+        response_mode=str(state.get("response_mode", "") or ""),
+        fallback_reason=answer_fallback_reason or fallback_reason,
+        trace_id=str(state.get("trace_id", "") or ""),
+        preview_text=preview_text,
+        answer_source=metadata.get("answer_source", "llm_verbalizer"),
+        fallback_template_type=str(getattr(answer_plan, "fallback_template_type", "") or ""),
+        metadata=metadata,
+    )
     return {
         "answer_plan": answer_plan,
         "draft_response": txt,
+        "response_directive": response_directive,
         "preview_text": preview_text,
         "preview_policy_result": {
             "verified": False,
@@ -241,6 +575,7 @@ def _h_answer_generate(state: GraphState) -> dict:
         "answer_fallback_reason": answer_fallback_reason,
         "llm_verbalizer_error": metadata.get("llm_verbalizer_error"),
         "generated_llm_answer_before_fallback": metadata.get("generated_llm_answer_before_fallback", ""),
+        "llm_structured_claims": metadata.get("llm_structured_claims", []),
         "llm_verbalizer_violation": metadata.get("violation"),
         "llm_verbalizer_called": metadata.get("llm_verbalizer_called", True),
         "llm_backend": metadata.get("llm_backend", ""),
@@ -265,12 +600,81 @@ def _h_answer_generate(state: GraphState) -> dict:
     }
 
 
+def _verify_answer_with_context(
+    answer: str,
+    evidence: Any,
+    task_type: str,
+    *,
+    answer_source: str,
+    extracted_claims: list[dict[str, Any]],
+) -> dict:
+    try:
+        signature = inspect.signature(verify_answer)
+        supports_kwargs = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values())
+        supports_l3 = "answer_source" in signature.parameters and "extracted_claims" in signature.parameters
+    except (TypeError, ValueError):
+        supports_kwargs = False
+        supports_l3 = False
+    if supports_kwargs or supports_l3:
+        return verify_answer(
+            answer,
+            evidence,
+            task_type,
+            answer_source=answer_source,
+            extracted_claims=extracted_claims,
+        )
+    return verify_answer(answer, evidence, task_type)
+
+
 def _h_answer_verify(state: GraphState) -> dict:
     evidence = state.get("evidence_pack") or {}
     evidence_dict = _to_dict(evidence)
+    answer_plan = state.get("answer_plan")
     task_type = getattr(state.get("execution_plan"), "task_type", "") or (
         state.get("execution_plan", {}).get("task_type", "") if isinstance(state.get("execution_plan"), dict) else ""
     )
+    if not evidence or not str(state.get("draft_response", "") or "").strip():
+        report = _verify_answer_with_context(
+            str(state.get("draft_response", "") or ""),
+            evidence,
+            task_type,
+            answer_source=str(state.get("answer_source", "") or ""),
+            extracted_claims=_as_list_of_dicts(state.get("llm_structured_claims")),
+        )
+        recoverable = bool(report.get("recoverable", False))
+        violation_codes = list(report.get("issues") or [])
+        rewrite_instruction = RewriteInstruction.from_verifier_report(
+            report,
+            plan=answer_plan if isinstance(answer_plan, AnswerPlan) else None,
+            fallback_mode="rewrite" if recoverable else "fallback",
+            tone="neutral",
+        )
+        return {
+            "verify_result": "rewrite_needed" if recoverable else "fallback",
+            "error_code": "ANSWER_VERIFIER_FAILED",
+            "error_message": report.get("suggested_fix", ""),
+            "answer_verify_passed": False,
+            "answer_verify_violations": violation_codes,
+            "rewrite_needed": recoverable,
+            "rewrite_reason": str(report.get("failure_code") or (violation_codes or ["empty_evidence_or_draft"])[0]),
+            "rewrite_instruction": rewrite_instruction,
+            "rewrite_mode": "trusted_fallback" if not recoverable else _rewrite_route_from_instruction(
+                answer_plan if isinstance(answer_plan, AnswerPlan) else AnswerPlan(),
+                rewrite_instruction,
+                rewrite_count=int(state.get("rewrite_count", 0) or 0),
+                rewrite_limit=int(state.get("rewrite_limit", 0) or 0) or 1,
+            ),
+            "verifier_result": "fail",
+            "verifier_failure_code": str(report.get("failure_code") or (report.get("issues") or ["empty_evidence_or_draft"])[0]),
+            "verifier_unknown_fields": report.get("verifier_unknown_fields", report.get("unknown_fields", [])),
+            "verifier_unsupported_claims": report.get("verifier_unsupported_claims", report.get("unsupported_claims", [])),
+            "verifier_false_fields": report.get("verifier_false_fields", report.get("false_fields", [])),
+            "verifier_recoverable": recoverable,
+            "answer_claim_results": report.get("claim_results", []),
+            "answer_expected_claims": report.get("expected_claims", []),
+            "answer_claim_extractor": report.get("claim_extractor", ""),
+            **_log(state, "answer_verify", passed=False, failure_code=report.get("failure_code", "empty_evidence_or_draft")),
+        }
     if str(state.get("answer_source", "") or "") in {"template_fallback", "llm_disabled"}:
         return {
             "verify_result": "pass",
@@ -287,18 +691,29 @@ def _h_answer_verify(state: GraphState) -> dict:
             "verifier_recoverable": True,
             **_log(state, "answer_verify", passed=True, skipped_reason="template_fallback"),
         }
-    if not evidence or not state.get("draft_response", ""):
-        return {
-            "verify_result": "pass", "error_code": "", "error_message": "",
-            "answer_verify_passed": True, "answer_verify_violations": [],
-            "rewrite_needed": False, "verifier_result": "pass", "verifier_failure_code": "",
-            "verifier_unknown_fields": [], "verifier_unsupported_claims": [],
-            "verifier_false_fields": [], "verifier_recoverable": True,
-            **_log(state, "answer_verify"),
-        }
-    report = verify_answer(state.get("draft_response", ""), evidence, task_type)
+    report = _verify_answer_with_context(
+        state.get("draft_response", ""),
+        evidence,
+        task_type,
+        answer_source=str(state.get("answer_source", "") or ""),
+        extracted_claims=_as_list_of_dicts(state.get("llm_structured_claims")),
+    )
     passed = report.get("passed", False)
     violations = report.get("issues", [])
+    rewrite_instruction = RewriteInstruction.from_verifier_report(
+        report,
+        plan=answer_plan if isinstance(answer_plan, AnswerPlan) else None,
+        fallback_mode="rewrite" if bool(report.get("recoverable", not passed)) else "fallback",
+        tone="neutral",
+    )
+    rewrite_count = int(state.get("rewrite_count", 0) or 0)
+    rewrite_limit = int(state.get("rewrite_limit", 0) or 0) or 1
+    rewrite_mode = _rewrite_strategy_from_instruction(
+        answer_plan if isinstance(answer_plan, AnswerPlan) else AnswerPlan(),
+        rewrite_instruction,
+        rewrite_count=rewrite_count,
+        rewrite_limit=rewrite_limit,
+    )
 
     snapshot = evidence_dict.get("ranking_snapshot") or {}
     ranked = snapshot.get("ranked") or snapshot.get("ranked_shops") or snapshot.get("shops") or []
@@ -325,12 +740,17 @@ def _h_answer_verify(state: GraphState) -> dict:
         "answer_verify_violations": violations,
         "rewrite_needed": not passed,
         "rewrite_reason": violations[0] if violations else "",
+        "rewrite_instruction": rewrite_instruction,
+        "rewrite_mode": rewrite_mode,
         "verifier_result": "pass" if passed else "fail",
         "verifier_failure_code": report.get("failure_code") or (violations[0] if violations else ""),
         "verifier_unknown_fields": report.get("verifier_unknown_fields", report.get("unknown_fields", [])),
         "verifier_unsupported_claims": report.get("verifier_unsupported_claims", report.get("unsupported_claims", [])),
         "verifier_false_fields": report.get("verifier_false_fields", report.get("false_fields", [])),
         "verifier_recoverable": bool(report.get("recoverable", not passed)),
+        "answer_claim_results": report.get("claim_results", []),
+        "answer_expected_claims": report.get("expected_claims", []),
+        "answer_claim_extractor": report.get("claim_extractor", ""),
         **_log(state, "answer_verify", passed=passed, violations=violations,
               final_safety_status="safe" if passed else "violated"),
     }
@@ -338,15 +758,81 @@ def _h_answer_verify(state: GraphState) -> dict:
 
 def _h_rewrite(state: GraphState) -> dict:
     rc = state.get("rewrite_count", 0) + 1
-    txt = state.get("draft_response", "")
-    return {"draft_response": txt, "rewrite_count": rc, **_log(state, "rewrite", rewrite_count=rc)}
+    answer_plan = state.get("answer_plan")
+    rewrite_limit = int(state.get("rewrite_limit", 0) or 0) or _GRAPH_REWRITE_LIMIT
+    rewrite_instruction = state.get("rewrite_instruction")
+    rewrite_mode = _rewrite_route_from_instruction(
+        answer_plan if isinstance(answer_plan, AnswerPlan) else AnswerPlan(),
+        rewrite_instruction,
+        rewrite_count=rc,
+        rewrite_limit=int(rewrite_limit or 0) or 1,
+    )
+    txt = str(state.get("draft_response", "") or "").strip()
+    if not txt:
+        directive = _to_response_directive(state.get("response_directive"))
+        if directive is not None:
+            txt = str(directive.answer_text or directive.preview_text or directive.final_response or "").strip()
+    patch: dict[str, Any] = {
+        "draft_response": txt,
+        "rewrite_count": rc,
+        "rewrite_mode": rewrite_mode,
+        "rewrite_strategy": rewrite_mode,
+        "rewrite_route": rewrite_mode,
+    }
+    if rewrite_instruction is not None:
+        patch["rewrite_instruction"] = rewrite_instruction
+    patch["rewrite_reason"] = str(state.get("rewrite_reason", "") or state.get("verifier_failure_code", "") or state.get("error_message", "") or "")
+    patch.update(_log(state, "rewrite", rewrite_count=rc))
+    return patch
 
 
 def _h_final_response(state: GraphState) -> dict:
-    txt = state.get("draft_response", "")
+    txt = _response_text_from_state(state)
+    directive = _to_response_directive(state.get("response_directive"))
+    if directive is not None and not str(directive.final_response or "").strip():
+        directive = directive.model_copy(update={"final_response": txt, "preview_text": directive.preview_text or txt})
+    elif directive is None:
+        directive = build_response_directive(
+            answer_text=txt,
+            answer_type=str(getattr(state.get("answer_plan"), "answer_type", "") or ""),
+            response_mode=str(state.get("response_mode", "") or ""),
+            fallback_reason=str(state.get("fallback_reason", "") or ""),
+            trace_id=str(state.get("trace_id", "") or ""),
+            final_response=txt,
+            preview_text=txt,
+            answer_source=str(state.get("answer_source", "") or ""),
+            fallback_template_type=str(getattr(state.get("answer_plan"), "fallback_template_type", "") or ""),
+        )
+    fallback_reason = str(state.get("fallback_reason", "") or directive.fallback_reason or "")
+    contract_v2 = _build_response_contract_v2(
+        state,
+        directive,
+        answer_text=txt,
+        preview_text=txt,
+        fallback_reason=fallback_reason,
+    )
+    contract = contract_v2.to_v1(
+        verifier_result=str(state.get("verifier_result", "") or ""),
+        fallback_reason=fallback_reason,
+        uncertainty_notices=[
+            str(item).strip()
+            for item in (
+                getattr(state.get("answer_plan"), "uncertainty_notes", []) or []
+            )
+            if str(item).strip()
+        ],
+        metadata={
+            "workflow_name": str(state.get("workflow_name", "") or ""),
+            "answer_source": str(state.get("answer_source", "") or ""),
+            "response_contract_v2": contract_v2.model_dump(),
+        },
+    )
     return {
         "final_response": txt,
         "preview_text": txt,
+        "response_directive": directive,
+        "response_contract_v1": contract,
+        "response_contract_v2": contract_v2,
         "preview_policy_result": {
             "verified": True,
             "allowed": True,
@@ -359,7 +845,7 @@ def _h_final_response(state: GraphState) -> dict:
 
 def _clarify_answer_source(state: GraphState) -> str:
     workflow_name = str(state.get("workflow_name", "") or "")
-    if workflow_name == "clarification_fallback":
+    if workflow_name == "clarification_fallback" or str(state.get("response_mode", "") or "") == "clarify":
         return "clarification_fallback_workflow"
     pending = state.get("pending_clarification")
     pending_source = ""
@@ -373,47 +859,183 @@ def _clarify_answer_source(state: GraphState) -> str:
 
 
 def _h_clarify_response(state: GraphState) -> dict:
-    from ...target.clarification import format_pending_prompt
+    from ...target.clarification import build_pending_clarification, format_pending_prompt
 
     answer_source = _clarify_answer_source(state)
     pending_result = str(state.get("pending_check_result", "") or "")
     if pending_result in {"expired", "invalid", "out_of_range"} and str(state.get("final_response", "") or "").strip():
+        error_envelope = {
+            "error_code": f"pending_{pending_result}",
+            "message": str(state.get("final_response", "") or ""),
+            "severity": "warning",
+            "recoverable": True,
+            "source_stage": "response_subgraph",
+            "trace_id": str(state.get("trace_id", "") or ""),
+        }
         return {
-            "final_response": state.get("final_response", ""),
+            "draft_response": state.get("final_response", ""),
+            "response_directive": build_early_response_directive(
+                answer_text=str(state.get("final_response", "") or ""),
+                answer_type="clarification",
+                response_mode="clarify",
+                reason=pending_result,
+                fallback_reason="expired_pending_clarification",
+                trace_id=str(state.get("trace_id", "") or ""),
+                answer_source=answer_source,
+                error_envelope=error_envelope,
+            ),
             "answer_source": answer_source, "template_degraded": True,
             "fallback_used": True, "template_fallback_used": False,
             **_log(state, "clarify_response"),
         }
     pending = state.get("pending_clarification")
+    if pending is None:
+        candidate_targets: list[dict[str, Any]] = []
+
+        def _append_candidate(source: Any) -> None:
+            if not source:
+                return
+            if isinstance(source, dict):
+                source = source.get("candidate_targets") or source.get("targets") or source.get("candidates") or []
+            if not isinstance(source, list):
+                return
+            for item in source:
+                item_dict = _to_dict(item)
+                shop = _to_dict(item_dict.get("resolved_shop") or item_dict.get("shop") or item_dict)
+                shop_id = str(shop.get("shop_id", "") or "").strip()
+                shop_name = str(shop.get("shop_name", "") or "").strip()
+                if not shop_id and not shop_name:
+                    continue
+                key = (shop_id, shop_name)
+                if any((str(existing.get("shop_id", "") or "").strip(), str(existing.get("shop_name", "") or "").strip()) == key for existing in candidate_targets):
+                    continue
+                candidate_targets.append(
+                    {
+                        "shop_id": shop_id,
+                        "shop_name": shop_name,
+                        "address": str(shop.get("address", "") or item_dict.get("address", "") or "").strip(),
+                    }
+                )
+
+        _append_candidate(state.get("comparison_target_resolution"))
+        _append_candidate(state.get("resolve_shop_result"))
+        _append_candidate(state.get("comparison_targets"))
+        _append_candidate(_to_dict(state.get("semantic_frame")).get("comparison_targets"))
+        _append_candidate(state.get("last_recommendation_list"))
+        if candidate_targets:
+            task_type_value = str(state.get("task_type", "") or _to_dict(state.get("semantic_frame")).get("task_type", "") or "")
+            reason = "response_subgraph_clarify"
+            source_node = "response_subgraph"
+            if str(state.get("comparison_target_resolution") and _to_dict(state.get("comparison_target_resolution")).get("status", "") or "").upper() in {"NEED_CLARIFICATION", "PARTIAL", "AMBIGUOUS", "NOT_FOUND", "TOO_MANY"}:
+                reason = str(_to_dict(state.get("comparison_target_resolution")).get("reason", "") or "comparison_targets_need_clarification")
+                task_type_value = "comparison"
+            elif str(getattr(state.get("resolve_shop_result"), "status", "") or _to_dict(state.get("resolve_shop_result")).get("status", "") or "").upper() in {"AMBIGUOUS", "LOW_CONFIDENCE"}:
+                reason = str(getattr(state.get("resolve_shop_result"), "reason", "") or _to_dict(state.get("resolve_shop_result")).get("reason", "") or "shop_resolution_need_clarification")
+            try:
+                pending = build_pending_clarification(
+                    original_text=str(state.get("raw_text", "") or state.get("normalized_text", "") or ""),
+                    original_semantic_frame=_to_dict(state.get("semantic_frame")),
+                    original_task_type=task_type_value or "single_shop_query",
+                    candidate_targets=candidate_targets,
+                    reason=reason,
+                    source_node=source_node,
+                )
+            except Exception:
+                pending = None
     if pending is not None:
         try:
             prompt = format_pending_prompt(pending)
         except Exception:
             prompt = "店名有点模糊，请提供完整店名。"
+        clarification_request = None
+        try:
+            clarification_request = build_clarification_request(pending, question=prompt, source_stage="response_subgraph")
+        except Exception:
+            clarification_request = None
         if prompt.strip():
             return {
-                "final_response": prompt, "answer_source": answer_source,
+                "draft_response": prompt,
+                "pending_clarification": pending,
+                "response_directive": build_early_response_directive(
+                    answer_text=prompt,
+                    answer_type="clarification",
+                    response_mode="clarify",
+                    reason=str(getattr(pending, "reason", "") or ""),
+                    fallback_reason="pending_clarification",
+                    trace_id=str(state.get("trace_id", "") or ""),
+                    answer_source=answer_source,
+                    clarification_request=clarification_request,
+                ),
+                "answer_source": answer_source,
                 "template_degraded": True, "fallback_used": True, "template_fallback_used": False,
                 **_log(state, "clarify_response"),
             }
     rs = state.get("resolve_shop_result")
     if rs is not None and getattr(rs, "status", "") in ("AMBIGUOUS", "LOW_CONFIDENCE"):
+        error_envelope = {
+            "error_code": "ambiguous_shop",
+            "message": "店名有点模糊，请提供完整店名。",
+            "severity": "warning",
+            "recoverable": True,
+            "source_stage": "response_subgraph",
+            "trace_id": str(state.get("trace_id", "") or ""),
+        }
         return {
-            "final_response": "店名有点模糊，请提供完整店名。",
-            "answer_source": answer_source, "template_degraded": True,
+            "draft_response": "店名有点模糊，请提供完整店名。",
+            "response_directive": build_early_response_directive(
+                answer_text="店名有点模糊，请提供完整店名。",
+                answer_type="clarification",
+                response_mode="clarify",
+                reason="ambiguous_shop",
+                fallback_reason="ambiguous_shop",
+                trace_id=str(state.get("trace_id", "") or ""),
+                answer_source=answer_source,
+                error_envelope=error_envelope,
+            ),
+            "answer_source": answer_source,
+            "template_degraded": True,
             "fallback_used": True, "template_fallback_used": False,
             **_log(state, "clarify_response"),
         }
     clarification = (state.get("error_message", "") or "").strip()
     if clarification:
+        error_envelope = {
+            "error_code": str(state.get("error_code", "") or "clarification_needed"),
+            "message": clarification,
+            "severity": "warning",
+            "recoverable": True,
+            "source_stage": "response_subgraph",
+            "trace_id": str(state.get("trace_id", "") or ""),
+        }
         return {
-            "final_response": clarification, "answer_source": answer_source,
+            "draft_response": clarification,
+            "response_directive": build_early_response_directive(
+                answer_text=clarification,
+                answer_type="clarification",
+                response_mode="clarify",
+                reason=str(state.get("error_code", "") or "error_message"),
+                fallback_reason="error_message",
+                trace_id=str(state.get("trace_id", "") or ""),
+                answer_source=answer_source,
+                error_envelope=error_envelope,
+            ),
+            "answer_source": answer_source,
             "template_degraded": True, "fallback_used": True, "template_fallback_used": False,
             **_log(state, "clarify_response"),
         }
     return {
-        "final_response": "请提供完整店名。",
-        "answer_source": answer_source, "template_degraded": True,
+        "draft_response": "请提供完整店名。",
+        "response_directive": build_early_response_directive(
+            answer_text="请提供完整店名。",
+            answer_type="clarification",
+            response_mode="clarify",
+            reason="missing_shop_name",
+            fallback_reason="missing_shop_name",
+            trace_id=str(state.get("trace_id", "") or ""),
+            answer_source=answer_source,
+        ),
+        "answer_source": answer_source,
+        "template_degraded": True,
         "fallback_used": True, "template_fallback_used": False,
         **_log(state, "clarify_response"),
     }
@@ -484,7 +1106,15 @@ def _h_fallback_answer(state: GraphState) -> dict:
     elif status in {"unknown", "unsupported"}:
         response = "暂时无法确认相关信息，请稍后再试。"
     return {
-        "final_response": response, "answer_source": "trusted_failure_message",
+        "draft_response": response,
+        "response_directive": build_response_directive(
+            answer_text=response,
+            response_mode="fallback",
+            fallback_reason="trusted_failure_message",
+            trace_id=str(state.get("trace_id", "") or ""),
+            answer_source="trusted_failure_message",
+        ),
+        "answer_source": "trusted_failure_message",
         "template_degraded": True, "fallback_used": True, "template_fallback_used": False,
         "final_safety_status": "fallback",
         **_log(state, "fallback_answer"),

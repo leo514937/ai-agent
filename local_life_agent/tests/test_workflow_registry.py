@@ -48,9 +48,14 @@ def test_registry_can_register_discovery_decision():
 def test_default_registry_covers_all_legal_workflow_names():
     assert set(WORKFLOW_REGISTRY.names()) == set(LEGAL_WORKFLOW_NAMES)
     assert WORKFLOW_REGISTRY.lookup("discovery_decision").is_real is True
+    assert WORKFLOW_REGISTRY.lookup("recommendation_decision_workflow").is_real is True
+    assert WORKFLOW_REGISTRY.lookup("comparison_decision_workflow").is_real is True
     assert WORKFLOW_REGISTRY.lookup("direct_response").is_real is True
     assert WORKFLOW_REGISTRY.lookup("clarification_fallback").is_real is True
     assert WORKFLOW_REGISTRY.lookup("exploration_planning").is_real is True
+    assert WORKFLOW_REGISTRY.lookup("complex_orchestrator_workflow").is_real is True
+    assert WORKFLOW_REGISTRY.lookup("single_shop_fact_workflow").is_real is True
+    assert WORKFLOW_REGISTRY.lookup("deterministic_tool").is_real is True
 
 
 def test_illegal_workflow_is_rejected():

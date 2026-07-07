@@ -62,9 +62,10 @@ def test_shop_status_uses_open_status_tool():
     result = run_deterministic_tool_workflow(state, dispatch_tool_call=fake_dispatch)
 
     assert calls[0][0] == "check_open_status"
-    assert result["workflow_name"] == "deterministic_tool"
+    assert result["workflow_name"] == "single_shop_fact_workflow"
     assert result["workflow_run_status"] in {"dispatched", "success", "completed"}
-    assert result["final_response"]
+    assert result["draft_response"]
+    assert result["response_directive"].answer_text
 
 
 def test_missing_target_falls_back_without_tool_call():
@@ -123,5 +124,5 @@ def test_runner_dispatches_deterministic_tool():
     state["workflow_name"] = "direct_response"
     state["orchestration_pattern"] = "direct_response"
     result = h_workflow_runner(state)
-    assert result["workflow_name"] == "deterministic_tool"
+    assert result["workflow_name"] == "single_shop_fact_workflow"
     assert result["response_mode"] == "direct"

@@ -44,6 +44,7 @@ from ..planning.policies.replan_policy import increment_expand_search, increment
 _TRACE_STAGE_MAP: dict[str, str] = {
     "receive_input": "input_received",
     "load_session_state": "input_received",
+    "expand_session_context": "input_received",
     "check_pending_clarification": "pending_clarification_checked",
     "basic_input_validate": "input_received",
     "normalize_text": "input_received",

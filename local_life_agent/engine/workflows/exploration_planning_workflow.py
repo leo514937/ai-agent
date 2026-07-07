@@ -18,6 +18,7 @@ from typing import Any
 from ...domain.graph_state import GraphState
 from ...domain.schemas import AnswerPlan, EvidencePack, ExplorationPlan, ExplorationSubgoal, ExecutionPlan, OrchestrationDecision, ToolResult
 from ...engine._compat import _log, _to_dict
+from ...answer.response_directive import build_response_directive
 from ...observability.file_logger import get_python_service_logger, log_kv
 from ...planning.shared.evidence_adapter import (
     apply_state_update_plan,
@@ -212,6 +213,16 @@ def _build_fallback_patch(
         final_response = format_pending_prompt(pending_clarification)
     elif not final_response:
         final_response = str(policy.get("response_text", "") or "抱歉，暂时无法处理您的请求，请稍后再试。")
+    response_directive = build_response_directive(
+        answer_text=final_response,
+        answer_type=str(policy.get("answer_type", "clarification") or "clarification"),
+        response_mode=response_mode,
+        fallback_reason=policy_key,
+        trace_id=str(state.get("trace_id", "") or ""),
+        preview_text=final_response,
+        answer_source="clarification_fallback_workflow",
+        fallback_template_type=response_mode,
+    )
 
     patch: dict[str, Any] = {
         "workflow_name": "clarification_fallback",
@@ -230,8 +241,8 @@ def _build_fallback_patch(
         "workflow_result_status": "clarify" if response_mode == "clarify" else "fallback",
         "workflow_clarification_request": pending_clarification,
         "answer_plan": answer_plan,
-        "final_response": final_response,
         "draft_response": final_response,
+        "response_directive": response_directive,
         "answer_source": "clarification_fallback_workflow",
         "verifier_result": "pass",
         "answer_verify_passed": True,
@@ -258,8 +269,8 @@ def _build_fallback_patch(
             "workflow_result_status",
             "workflow_clarification_request",
             "answer_plan",
-            "final_response",
             "draft_response",
+            "response_directive",
             "answer_source",
             "verifier_result",
             "answer_verify_passed",
@@ -804,6 +815,16 @@ def _build_success_patch(
 ) -> dict[str, Any]:
     timestamp = _utc_now_iso()
     passed = bool(verifier_result.get("passed", False))
+    response_directive = build_response_directive(
+        answer_text=final_response,
+        answer_type=str(getattr(answer_plan, "answer_type", "") or ""),
+        response_mode="exploration_plan" if passed else "fallback",
+        fallback_reason="" if passed else "exploration_verifier_rejected",
+        trace_id=str(state.get("trace_id", "") or ""),
+        preview_text=final_response,
+        answer_source="exploration_planning_workflow",
+        fallback_template_type=str(getattr(answer_plan, "fallback_template_type", "") or ""),
+    )
     return {
         "workflow_name": "exploration_planning",
         "orchestration_pattern": "exploration_planning",
@@ -821,8 +842,8 @@ def _build_success_patch(
         "exploration_plan": plan,
         "evidence_pack": evidence,
         "answer_plan": answer_plan,
-        "final_response": final_response,
         "draft_response": final_response,
+        "response_directive": response_directive,
         "answer_source": "exploration_planning_workflow",
         "verifier_result": "pass" if passed else "fallback",
         "answer_verify_passed": passed,
@@ -1094,7 +1115,6 @@ def run_exploration_planning_workflow(
     patch["next_action"] = "run_workflow"
     patch["evidence_pack"] = evidence
     patch["answer_plan"] = answer_plan
-    patch["final_response"] = final_response
     patch["draft_response"] = final_response
     patch["answer_source"] = "exploration_planning_workflow"
     patch["preview_text"] = final_response

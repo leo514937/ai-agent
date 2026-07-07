@@ -188,10 +188,10 @@ def test_p11_preview_never_counts_as_final():
 
 
 def test_p11_no_multi_workflow_stream_merge():
+    base = Path(__file__).resolve().parent.parent
     files = [
-        Path("local_life_agent/engine/workflow_runner.py"),
-        Path("local_life_agent/engine/graph_builder.py"),
-        Path("local_life_agent/app.py"),
+        base / "engine/graph_builder.py",
+        base / "app.py",
     ]
     forbidden = ["trace_A", "trace_B", "trace_merge", "workflow_names", "final_responses", "state_update_plans"]
 

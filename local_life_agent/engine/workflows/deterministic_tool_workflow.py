@@ -18,6 +18,7 @@ import re
 from typing import Any
 
 from ...answer.answer_plan_builder import build_answer_plan
+from ...answer.response_directive import build_response_directive
 from ...answer.verifier import verify_answer
 from ... import config
 from ...domain.schemas import AnswerPlan, EvidencePack, ExecutionPlan, OrchestrationDecision, ResolveShopResult, ShopRef, ToolCallSpec, ToolResult
@@ -172,8 +173,6 @@ def _task_to_tool(task_type: str, semantic_frame: dict[str, Any]) -> tuple[str, 
 
     if any(token in primary_task for token in ("coupon", "券", "团购", "套餐", "deal")):
         return "get_coupon_list", "coupon"
-    if any(token in primary_task for token in ("distance", "eta", "距离", "多远")):
-        return "calculate_distance_km", "distance"
     if any(token in primary_task for token in ("status", "open", "营业", "开门")):
         return "check_open_status", "open_status"
     if any(token in primary_task for token in ("review", "summary", "评价", "口碑")):
@@ -246,7 +245,8 @@ def _route_info_from_raw_text(raw_text: str) -> tuple[str, str] | None:
         return "check_open_status", "open_status"
     if "有券" in text or "优惠券" in text or "团购" in text or "coupon" in lowered:
         return "get_coupon_list", "coupon"
-    if "距离" in text or "多远" in text or "多久" in text or "eta" in lowered:
+    # “多久”更接近时长/ETA 语义，避免在未显式识别 facet 时误压成距离工具。
+    if "距离" in text or "多远" in text or "eta" in lowered:
         return "calculate_distance_km", "distance"
     if "评价" in text or "review" in lowered:
         return "get_shop_review_summary", "review_summary"
@@ -293,7 +293,8 @@ def _single_target_from_resolution(resolution: dict[str, Any]) -> dict[str, Any]
 def _resolve_single_shop_target(state: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str]:
     semantic_frame = _to_dict(state.get("semantic_frame"))
     raw_text = str(state.get("raw_text", "") or state.get("normalized_text", "") or "")
-    session_state = state.get("session_state") or state.get("session_state_before")
+    # 优先用上一轮落盘前的会话快照，避免当前 turn 的临时 session 状态覆盖推荐列表。
+    session_state = state.get("session_state_before") or state.get("session_state")
     current_shop = _to_dict(_session_value(state, "current_shop"))
     merchant_mentions = [str(item).strip() for item in (semantic_frame.get("merchant_mentions") or []) if str(item).strip()]
     branch_mentions = [str(item).strip() for item in (semantic_frame.get("branch_mentions") or []) if str(item).strip()]
@@ -846,6 +847,176 @@ def _tool_result_to_text(task_type: str, evidence: dict[str, Any], tool_result: 
     return f"{shop_name}的信息我已经整理好了。"
 
 
+def _facet_result_to_text(shop_name: str, facet: str, tool_result: ToolResult) -> str:
+    data = tool_result.data if isinstance(tool_result.data, dict) else {}
+    status = _enum_value(tool_result.result_status).lower()
+    if facet == "coupon":
+        if status in {"ok", "partial"}:
+            items = data.get("items") or []
+            titles = [str(item.get("title", "")).strip() for item in items if isinstance(item, dict) and str(item.get("title", "")).strip()]
+            if titles:
+                return f"{shop_name}有券，当前可用优惠券有：{'、'.join(titles[:3])}。"
+            return f"{shop_name}有券，但当前暂无可用优惠券明细。"
+        if status == "empty":
+            return f"{shop_name}当前暂无可用优惠券。"
+        return f"{shop_name}暂时无法确认优惠券情况。"
+    if facet == "open_status":
+        open_status = str(data.get("open_status", "") or data.get("status", "") or data.get("value", "") or "").lower()
+        if status in {"ok", "partial"} and open_status in {"open", "opened", "open_now", "营业中"}:
+            return f"{shop_name}目前营业中。"
+        if status in {"ok", "partial"} and open_status in {"closed", "close", "closed_now", "已打烊"}:
+            return f"{shop_name}当前不营业。"
+        if status == "ok" and not open_status:
+            return f"{shop_name}目前营业中。"
+        if status == "empty":
+            return f"{shop_name}当前不营业。"
+        return f"{shop_name}暂时无法确认营业状态。"
+    if facet == "distance":
+        distance = data.get("distance_km", data.get("distance", data.get("value")))
+        if distance is not None and str(distance).strip():
+            return f"{shop_name}距离你约{distance}公里。"
+        return f"{shop_name}暂时无法确认距离。"
+    if facet == "review_summary":
+        if status in {"ok", "partial"} and isinstance(data, dict):
+            items = data.get("items") or []
+            first = items[0] if items and isinstance(items[0], dict) else {}
+            summary = str(first.get("summary", "") or "").strip()
+            rating = first.get("rating")
+            highlights = [str(item).strip() for item in first.get("highlights", []) or [] if str(item).strip()]
+            parts = [f"{shop_name}的评价摘要："]
+            if rating is not None:
+                parts.append(f"评分约 {rating} 分")
+            if summary:
+                parts.append(summary)
+            if highlights:
+                parts.append(f"亮点：{'、'.join(highlights[:3])}")
+            if len(parts) > 1:
+                return " ".join(parts) + "。"
+        return f"{shop_name}的评价摘要暂时无法确认。"
+    if facet == "price":
+        if status == "ok" and isinstance(data, dict):
+            avg_price = data.get("avg_price")
+            price_level = data.get("price_level")
+            if avg_price is not None:
+                level_text = f"，价格档位偏{price_level}" if price_level else ""
+                return f"{shop_name}的人均约 {avg_price} 元{level_text}。"
+        return f"{shop_name}的人均价格暂时无法确认。"
+    if facet in _DEAL_TASK_NAMES:
+        if status in {"ok", "partial"} and isinstance(data, dict):
+            items = data.get("items") or []
+            titles = [str(item.get("title", "")).strip() for item in items if isinstance(item, dict) and str(item.get("title", "")).strip()]
+            if titles:
+                return f"{shop_name}当前可选团购/套餐有：{'、'.join(titles[:3])}。"
+            return f"{shop_name}当前暂无可用团购/套餐。"
+        if status == "empty":
+            return f"{shop_name}当前暂无可用团购/套餐。"
+        return f"{shop_name}的团购/套餐信息暂时无法确认。"
+    return _tool_result_to_text(_presentation_task_type("single_shop_query", facet), {"resolved_target": {"resolved_shop": {"shop_name": shop_name}}}, tool_result)
+
+
+def _facet_record_to_text(shop_name: str, record: dict[str, Any]) -> str:
+    facet = str(record.get("facet", "") or "").strip()
+    status = str(record.get("status", "") or record.get("result_status", "") or "").lower()
+    if facet == "coupon":
+        value = record.get("value")
+        items = record.get("items") or []
+        titles = [str(item.get("title", "")).strip() for item in items if isinstance(item, dict) and str(item.get("title", "")).strip()]
+        if titles:
+            return f"{shop_name}有券，当前可用优惠券有：{'、'.join(titles[:3])}。"
+        if isinstance(value, (int, float)) and value > 0:
+            return f"{shop_name}有券。"
+        if status == "empty":
+            return f"{shop_name}当前暂无可用优惠券。"
+        if status in {"ok", "partial"}:
+            return f"{shop_name}有券。"
+        return f"{shop_name}暂时无法确认优惠券情况。"
+    if facet == "open_status":
+        open_status = str(record.get("open_status") or record.get("value") or "").lower()
+        if open_status in {"open", "opened", "open_now", "营业中"}:
+            return f"{shop_name}目前营业中。"
+        if open_status in {"closed", "close", "closed_now", "已打烊"}:
+            return f"{shop_name}已打烊，当前不营业。"
+        if status == "empty":
+            return f"{shop_name}当前不营业。"
+        if status in {"ok", "partial"}:
+            return f"{shop_name}目前营业中。"
+        return f"{shop_name}暂时无法确认营业状态。"
+    if facet == "distance":
+        distance = record.get("distance_km", record.get("distance", record.get("value")))
+        if distance is not None and str(distance).strip():
+            return f"{shop_name}距离你约{distance}公里。"
+        if status == "failed":
+            return f"{shop_name}暂时无法确认距离。"
+        return f"{shop_name}暂时无法确认距离。"
+    if facet == "review_summary":
+        summary = str(record.get("summary", "") or "").strip()
+        rating = record.get("rating")
+        highlights = [str(item).strip() for item in record.get("highlights", []) or [] if str(item).strip()]
+        parts = [f"{shop_name}的评价摘要："]
+        if rating is not None:
+            parts.append(f"评分约 {rating} 分")
+        if summary:
+            parts.append(summary)
+        if highlights:
+            parts.append(f"亮点：{'、'.join(highlights[:3])}")
+        if len(parts) > 1:
+            return " ".join(parts) + "。"
+        return f"{shop_name}的评价摘要暂时无法确认。"
+    if facet == "price":
+        avg_price = record.get("avg_price", record.get("value"))
+        price_level = record.get("price_level")
+        if avg_price is not None:
+            level_text = f"，价格档位偏{price_level}" if price_level else ""
+            return f"{shop_name}的人均约 {avg_price} 元{level_text}。"
+        return f"{shop_name}的人均价格暂时无法确认。"
+    if facet in _DEAL_TASK_NAMES:
+        items = record.get("items") or []
+        titles = [str(item.get("title", "")).strip() for item in items if isinstance(item, dict) and str(item.get("title", "")).strip()]
+        if titles:
+            return f"{shop_name}当前可选团购/套餐有：{'、'.join(titles[:3])}。"
+        if status == "empty":
+            return f"{shop_name}当前暂无可用团购/套餐。"
+        if status in {"ok", "partial"}:
+            return f"{shop_name}当前可选团购/套餐有。"
+        return f"{shop_name}的团购/套餐信息暂时无法确认。"
+    return ""
+
+
+def _compose_multi_facet_answer(
+    *,
+    shop_name: str,
+    execution_plan: ExecutionPlan,
+    tool_results: dict[str, ToolResult],
+    primary_tool_result: ToolResult,
+    evidence: EvidencePack,
+    facet: str,
+) -> str:
+    ordered_parts: list[str] = []
+    evidence_dict = evidence.model_dump()
+    facet_results = [item for item in (evidence_dict.get("facet_results") or []) if isinstance(item, dict)]
+    if facet_results:
+        for item in facet_results:
+            text = _facet_record_to_text(shop_name, item)
+            if text:
+                ordered_parts.append(text)
+    else:
+        seen_facets: set[str] = set()
+        for call in list(getattr(execution_plan, "tool_calls", []) or []):
+            call_dict = _to_dict(call)
+            facet_name = str(call_dict.get("facet", "") or "").strip()
+            call_id = str(call_dict.get("call_id", "") or "").strip()
+            if not facet_name or facet_name in seen_facets:
+                continue
+            seen_facets.add(facet_name)
+            tool_result = tool_results.get(call_id) or primary_tool_result
+            ordered_parts.append(_facet_result_to_text(shop_name, facet_name, tool_result))
+
+    if len(ordered_parts) <= 1:
+        return _tool_result_to_text(_presentation_task_type("single_shop_query", facet), evidence_dict, primary_tool_result)
+
+    return f"{shop_name}：" + "；".join(part.rstrip("。") for part in ordered_parts if part) + "。"
+
+
 def _build_success_patch(
     *,
     state: dict[str, Any],
@@ -885,13 +1056,34 @@ def _build_success_patch(
         confidence=1.0,
         reason="deterministic_target_resolved",
     )
-    answer_text = _tool_result_to_text(presentation_task_type, evidence.model_dump(), primary_tool_result)
+    answer_text = _compose_multi_facet_answer(
+        shop_name=str(target.get("shop_name", "") or ""),
+        execution_plan=execution_plan,
+        tool_results=tool_results,
+        primary_tool_result=primary_tool_result,
+        evidence=evidence,
+        facet=facet,
+    )
     verify = verify_answer(answer_text, evidence.model_dump(), presentation_task_type)
     if not verify.get("passed", False):
         answer_text = _tool_result_to_text(presentation_task_type, evidence.model_dump(), primary_tool_result)
+    response_directive = build_response_directive(
+        answer_text=answer_text,
+        answer_type=str(getattr(answer_plan, "answer_type", "") or ""),
+        response_mode="direct",
+        fallback_reason="" if verify.get("passed", False) else "deterministic_verifier_rejected",
+        trace_id=str(state.get("trace_id", "") or ""),
+        preview_text=answer_text,
+        answer_source="deterministic_tool_workflow",
+        fallback_template_type=str(getattr(answer_plan, "fallback_template_type", "") or ""),
+        metadata={
+            "workflow_name": "single_shop_fact_workflow",
+            "verifier_result": "pass" if verify.get("passed", False) else "rewrite_needed",
+        },
+    )
     timestamp = datetime.now(timezone.utc).isoformat()
     return {
-        "workflow_name": "deterministic_tool",
+        "workflow_name": "single_shop_fact_workflow",
         "orchestration_pattern": "deterministic_tool",
         "task_type": state_task_type,
         "workflow_reason": str(decision.workflow_reason or f"deterministic tool for {presentation_task_type}"),
@@ -930,8 +1122,8 @@ def _build_success_patch(
         "shop_resolution_trace": list(canonical_shop_entity.get("trace", []) or []),
         "evidence_pack": evidence,
         "answer_plan": answer_plan,
-        "final_response": answer_text,
         "draft_response": answer_text,
+        "response_directive": response_directive,
         "answer_source": "deterministic_tool_workflow",
         "preview_text": answer_text,
         "preview_policy_result": {"verified": True, "allowed": True, "reason": "verified"},
@@ -1025,8 +1217,17 @@ def _build_clarify_patch(state: dict[str, Any], decision: OrchestrationDecision,
             "unresolved_reason": reason,
             "comparison_targets": candidate_targets,
         },
-        "final_response": prompt,
         "draft_response": prompt,
+        "response_directive": build_response_directive(
+            answer_text=prompt,
+            answer_type="clarification",
+            response_mode="clarify",
+            fallback_reason=reason,
+            trace_id=str(state.get("trace_id", "") or ""),
+            preview_text=prompt,
+            answer_source="clarification_fallback_workflow",
+            fallback_template_type="clarify",
+        ),
         "answer_source": "clarification_fallback_workflow",
         "answer_verify_passed": False,
         "answer_verify_violations": [],
@@ -1077,18 +1278,7 @@ def run_deterministic_tool_workflow(
         route_info = _route_info_from_raw_text(str(state.get("raw_text", "") or state.get("normalized_text", "") or ""))
     else:
         raw_route_info = _route_info_from_raw_text(str(state.get("raw_text", "") or state.get("normalized_text", "") or ""))
-        has_context_reference = bool(
-            semantic_frame.get("ordinal_references")
-            or semantic_frame.get("deictic_references")
-            or semantic_frame.get("comparison_targets")
-        )
-        has_session_anchor = bool(_to_dict(_session_value(state, "current_shop")).get("shop_id") or _to_dict(_session_value(state, "current_shop")).get("shop_name"))
-        has_explicit_mentions = bool(semantic_frame.get("merchant_mentions"))
-        if raw_route_info is not None and raw_route_info != route_info and (
-            task_type == "recommendation"
-            or has_context_reference
-            or (has_session_anchor and not has_explicit_mentions)
-        ):
+        if raw_route_info is not None and raw_route_info != route_info:
             route_info = raw_route_info
     log_kv(
         _LOGGER,

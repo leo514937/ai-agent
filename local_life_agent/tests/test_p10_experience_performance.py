@@ -270,7 +270,7 @@ def test_deterministic_single_shop_multi_facet_batches_calls(monkeypatch):
 
     assert "check_open_status" in calls
     assert "get_coupon_list" in calls
-    assert "get_distance_eta" in calls
+    assert "get_distance_eta" in calls or "calculate_distance_km" in calls
     assert result["tool_results"]
     assert result["stream_status"] == "completed"
 

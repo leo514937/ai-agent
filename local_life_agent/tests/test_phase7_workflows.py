@@ -54,13 +54,18 @@ def test_direct_response_workflow_stays_template_only(top_intent: str, task_type
     assert result["workflow_name"] == "direct_response"
     assert result["workflow_run_status"] == "completed"
     assert result["response_mode"] == "direct_response"
-    assert expected_fragment in result["final_response"]
+    assert expected_fragment in result["draft_response"]
+    assert result["response_directive"].answer_text == result["draft_response"]
     assert result["verifier_result"] == "pass"
     assert result["answer_verify_passed"] is True
     assert "tool_results" not in result
     assert "evidence_pack" not in result
     assert "last_recommendation_list" not in result
     assert "comparison_targets" not in result
+
+    routed = h_response_subgraph(result)
+    assert routed["response_route"] == "pass"
+    assert expected_fragment in routed["final_response"]
 
 
 @pytest.mark.parametrize(
@@ -96,8 +101,9 @@ def test_clarification_fallback_workflow_handles_clarify_and_fallback(task_type:
 
     assert result["workflow_name"] == "clarification_fallback"
     assert result["response_mode"] == expected_mode
-    assert result["final_response"]
-    assert expected_fragment in result["final_response"]
+    assert result["draft_response"]
+    assert expected_fragment in result["draft_response"]
+    assert result["response_directive"].answer_text == result["draft_response"]
     assert result["verifier_result"] == "pass"
     assert result["answer_verify_passed"] is True
     assert "tool_results" not in result
@@ -106,6 +112,10 @@ def test_clarification_fallback_workflow_handles_clarify_and_fallback(task_type:
         assert "pending_clarification" in result
     else:
         assert "pending_clarification" not in result
+
+    routed = h_response_subgraph(result)
+    assert routed["response_route"] in {"clarify_ready", "fallback_ready"}
+    assert expected_fragment in routed["final_response"]
 
 
 @pytest.mark.parametrize(
@@ -142,12 +152,18 @@ def test_response_subgraph_treats_direct_response_as_pass_through():
         {
             "trace_id": "trace_direct",
             "response_mode": "direct_response",
-            "final_response": "你好，我可以帮你查商家营业状态。",
+            "draft_response": "你好，我可以帮你查商家营业状态。",
+            "response_directive": {
+                "answer_text": "你好，我可以帮你查商家营业状态。",
+                "answer_type": "general",
+                "response_mode": "direct_response",
+                "answer_source": "direct_response_workflow",
+            },
             "event_log": [],
         }
     )
 
     assert result["response_route"] == "pass"
     assert "answer_plan" not in result
-    assert "draft_response" not in result
+    assert result["final_response"] == "你好，我可以帮你查商家营业状态。"
     assert "verify_result" not in result
