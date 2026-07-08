@@ -294,9 +294,9 @@ class RecommendationComposer:
     def compose(self, plan: DecisionPlan, *, trace_id: str = "", fallback_reason: str = "", context: dict[str, Any] | None = None) -> ResponseDirective:
         context = context or {}
         ranking_items = _extract_ordered_items(plan, keys=("overall_ranking", "selected_targets", "candidate_summaries"))
-        ranking_lines = _format_ranked_shop_lines(ranking_items, limit=3)
+        ranking_lines = _format_ranked_shop_lines(ranking_items, limit=5)
         if not ranking_lines and getattr(plan, "selected_targets", None):
-            ranking_lines = _format_ranked_shop_lines(list(getattr(plan, "selected_targets", []) or []), limit=3)
+            ranking_lines = _format_ranked_shop_lines(list(getattr(plan, "selected_targets", []) or []), limit=5)
         best_for = _to_dict(getattr(plan, "best_for", {}) or {})
         uncertainty_notes = [str(item).strip() for item in (getattr(plan, "uncertainty_notes", []) or []) if str(item).strip()]
         factual_points = [str(item).strip() for item in (getattr(plan, "factual_points", []) or []) if str(item).strip()]

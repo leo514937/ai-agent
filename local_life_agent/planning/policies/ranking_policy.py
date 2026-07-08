@@ -325,6 +325,40 @@ def score_candidate(candidate: dict[str, Any], preferences: dict[str, Any]) -> d
     }
 
 
+def _extract_brand(shop_name: str | None) -> str:
+    """Extract brand name from a Chinese shop name (text before first parenthesis).
+
+    '海底捞(牡丹园店)' -> '海底捞'
+    '永和大王(北师大店)' -> '永和大王'
+    '金谷园饺子馆' -> '金谷园饺子馆'
+    None or '' -> ''
+    """
+    name = (shop_name or "").strip()
+    if not name:
+        return ""
+    for sep in ("（", "(", " "):
+        if sep in name:
+            return name.split(sep)[0].strip()
+    return name
+
+
+def _dedup_by_brand(candidates: list[dict], max_per_brand: int = 1) -> list[dict]:
+    """Brand-level diversity dedup: keep at most max_per_brand per brand, preserve order."""
+    seen: dict[str, int] = {}
+    result: list[dict] = []
+    for item in candidates:
+        brand = _extract_brand(item.get("shop_name", ""))
+        if not brand:
+            result.append(item)
+            continue
+        count = seen.get(brand, 0)
+        if count >= max_per_brand:
+            continue
+        seen[brand] = count + 1
+        result.append(item)
+    return result
+
+
 def rank_candidates(candidates: list, preferences: dict) -> list:
     """Rank shop candidates by the fixed scoring formula."""
     scored = [score_candidate(candidate, preferences) for candidate in candidates or []]
@@ -358,7 +392,28 @@ def rank_candidates(candidates: list, preferences: dict) -> list:
             str(item.get("shop_id", "")),
         )
     )
-    return surviving[:RECOMMENDATION_FINAL_TOP_K]
+    # Brand-level diversity dedup with backfill
+    deduped = _dedup_by_brand(surviving, max_per_brand=1)
+    target_k = RECOMMENDATION_FINAL_TOP_K
+
+    if len(deduped) >= target_k:
+        return deduped[:target_k]
+
+    # Backfill from remaining survivors by original rank order
+    seen_ids: set = {d.get("shop_id") for d in deduped if d.get("shop_id")}
+    for item in surviving:
+        if len(deduped) >= target_k:
+            break
+        if item.get("shop_id") in seen_ids:
+            continue
+        if not item.get("shop_id"):
+            # fallback: use shop_name for items without shop_id
+            if any(d.get("shop_name") == item.get("shop_name") for d in deduped):
+                continue
+        seen_ids.add(item.get("shop_id"))
+        deduped.append(item)
+
+    return deduped
 
 
 def _comparison_rank_key(row: dict[str, Any]) -> tuple[float, float, float, float]:

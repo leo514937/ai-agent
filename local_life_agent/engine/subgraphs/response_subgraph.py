@@ -398,7 +398,7 @@ def _build_recommendation_refine_text(state: GraphState) -> str:
     if not items:
         return "我会按更便宜的方向继续帮你看。"
     lines: list[str] = ["我按更便宜的方向继续看了上轮推荐，先给你这几家："]
-    for idx, item in enumerate(items[:3], 1):
+    for idx, item in enumerate(items[:5], 1):
         shop_name = str(item.get("shop_name", "") or "").strip() or f"第{idx}家"
         extra_parts: list[str] = []
         open_status = str(item.get("open_status", "") or "").strip()

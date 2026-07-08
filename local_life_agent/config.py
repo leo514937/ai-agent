@@ -44,7 +44,7 @@ MAX_TOOL_CALLS = 40
 # --- Search & Recommendation ---
 SEARCH_LIMIT = 20
 RECOMMENDATION_CANDIDATE_TOP_K = 8
-RECOMMENDATION_FINAL_TOP_K = 3
+RECOMMENDATION_FINAL_TOP_K = 5
 RECOMMENDATION_ENRICH_TOOLS = [
     "get_shop_detail",
     "check_open_status",
