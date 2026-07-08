@@ -460,8 +460,17 @@ def search_shops(
     if not query or not query.strip():
         return {"success": True, "result_status": "ok", "data": []}
 
-    matched = db_client.query_shops_by_keyword(query, limit=limit)
     resolved_location = geocode_location(location)
+    if not resolved_location and any(token in str(query or "") for token in ("附近", "周边", "周围", "离我", "多远", "距离", "多久到", "多久能到")):
+        return {
+            "success": False,
+            "result_status": "failed",
+            "error_code": "LOCATION_REQUIRED",
+            "error_message": "Nearby search requires a location, city, district, landmark, or origin.",
+            "data": None,
+        }
+
+    matched = db_client.query_shops_by_keyword(query, limit=limit)
 
     # Prefer same-city / same-district results when the location can be geocoded.
     location_hints = [

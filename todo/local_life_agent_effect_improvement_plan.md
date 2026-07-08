@@ -1,139 +1,217 @@
-# 本地生活 Agent 效果增强改造建议总结
+# local_life_agent 效果提升改造计划
 
-## 1. 总体结论
+## 1. 调研结论
 
-你的项目当前架构更工程化、更可信：
+基于当前仓库实际情况，这个项目已经不是“只有工具结果拼回答”的早期原型了，而是一个已经具备较完整主链的本地生活 Agent：
 
 ```text
-SemanticFrame
-→ ToolPlan / DecisionPlan
-→ ToolCallGateway
-→ ToolResult
-→ EvidencePack
-→ Review / Verifier
-→ Answer
+Input
+-> SemanticFrame
+-> Goal / Plan
+-> ToolCallGateway
+-> ToolResult
+-> EvidencePack
+-> DecisionPlan / AnswerPlan
+-> Review / Verifier
+-> Response
 ```
 
-MCP Travel Planner 更强的地方在于：
+因此，效果提升的正确方向不是重写架构，而是继续在现有主链里补“默认证据完整性、决策表达质量、推荐解释能力、多轮偏好承接、结果展示结构化”。
+
+一句话总结：
 
 ```text
-用户输入
-→ 主动补齐住宿 / 距离 / 时间 / 价格 / 餐饮 / 景点 / 预算 / 实用信息
-→ 输出完整可执行旅行方案
-```
-
-所以推荐路线是：
-
-```text
-不重写架构
-不引入 MCP
-不拆多 Agent Team
-先把推荐 / 对比输出从“工具结果回答”升级成“证据驱动的本地生活决策方案”
+不推翻 LangGraph 主图
+不改成 Prompt-first demo agent
+不引入 MCP 依赖作为当前主修复
+先把现有可信 ToolCall 架构里的推荐 / 对比能力做深、做完整、做像顾问
 ```
 
 ---
 
-## 2. 是否需要架构层修改
+## 2. 当前真实现状
 
-### 简短判断
+### 2.1 已经具备的能力
 
-大部分建议 **不需要架构级重构**，属于现有主链路上的效果增强。
+当前仓库里已经有这些基础，不需要重复建设：
 
-真正属于架构级或接近架构级的改动只有：
+- `SemanticFrame`、`ExecutionPlan`、`EvidencePack`、`AnswerPlan` 等结构化协议
+- `ToolRegistry` / `ToolCallGateway` / typed `ToolResult`
+- recommendation / comparison / single-shop 三条主链
+- deterministic ranking policy
+- evidence review / answer verify
+- clarification / fallback / response mode 机制
+- recommendation 品牌级多样性裁剪
+- recommendation 动态数量 `candidate_limit`
+- nearby/location 缺失前置澄清
 
-1. 接 MCP / 外部地图 / 外部 POI 工具生态
-2. 把本地生活从“推荐 / 对比”升级成完整“场景规划 Agent”
+也就是说，很多“应该有”的东西现在并不是从 0 开始做，而是要在已有骨架上补强。
 
-当前阶段不建议优先做这些。
+### 2.2 已经解决的近期问题
+
+这些问题已经在当前分支里被解决或部分解决：
+
+- 缺位置的“附近推荐”不再继续空跑 `Plan -> Execute -> Review`
+- `search_shops(location=None/{})` 不再静默 empty，而是 `LOCATION_REQUIRED`
+- `semantic` 对 `ranking_policy=""`、`preferences=dict/list[str]` 的 normalize 已补齐
+- recommendation 默认展示数量已从 3 调整为 5
+- recommendation 已支持用户显式说“推荐 3 家 / 5 家”
+- recommendation 已增加品牌级去重与补位逻辑
+
+所以这份计划不再把这些当成“待修复核心”，而是把它们视为当前基础能力。
+
+### 2.3 当前仍然真实存在的效果短板
+
+基于仓库与测试现状，当前更值得做的效果问题主要是：
+
+1. recommendation / comparison 默认补证据策略还不够明确
+2. 最终回答仍然偏“结果列举”，不够像顾问式决策输出
+3. 排序解释和备选方案表达不够结构化
+4. recommendation refine follow-up 目前仍偏轻量展示，不是真正的二次决策
+5. 前端展示层如果要提升产品感，还缺卡片化 / 偏好 chip / 比较表格这些承接
 
 ---
 
-## 3. 改动量分级表
+## 3. 架构判断
 
-| 改动建议 | 改动量 | 是否架构级修改 | 优先级 |
-|---|---:|---:|---:|
-| 推荐 / 对比默认补齐距离、营业、券、评价、人均 | 中 | 否 | P0 |
-| 增加 `EvidenceCompletenessPolicy` | 中 | 否，但属于框架增强 | P0 |
-| 增加 `DecisionCard`，让结果更像决策方案 | 中 | 否 | P0 |
-| 增加 `RankingExplanation` | 中 | 否 | P0 |
-| Verbalizer 改成顾问式表达 | 小 ~ 中 | 否 | P0 |
-| 推荐排序加入 ETA、有券、场景适配、价格等综合分 | 中 | 否 | P0 |
-| 前端增加偏好 chip / 快捷筛选 | 小 ~ 中 | 否 | P1 |
-| 前端结果卡片化展示 | 中 | 否 | P1 |
-| 增加 `ScenarioPlan`，支持“吃饭 + 逛街 + 路线 + 备选” | 中 ~ 大 | 轻架构增强 | P1 / P2 |
-| 接 MCP 工具适配器 | 大 | 是 | P2 |
+### 3.1 当前不建议做的事
+
+当前不建议优先做：
+
+- 重写 `graph_builder`
+- 拆成多 Agent team
+- 引入新的平行 workflow runner
+- 让 LLM 直接负责最终事实回答
+- 用 MCP / 外部地图平台重构当前工具体系
+
+原因很简单：
+
+- 现有问题更多是“效果层”和“证据层”不够完整，不是主编排已经失效
+- 当前仓库已有较多 typed contract，不适合为了“更聪明”去丢掉可信边界
+- 多 Agent / MCP 接入会显著增加状态同步、工具协议和调试复杂度
+
+### 3.2 当前建议做的事
+
+建议走“现有架构上的能力包增强”：
+
+```text
+Semantic / Plan 不重写
+ToolCall 不绕开
+EvidencePack 更完整
+DecisionPlan 更像决策
+Answer 更像顾问
+```
 
 ---
 
-## 4. 最值得优先做的 P0 改动
+## 4. 优先级总表
 
-## 4.1 增加 EvidenceCompletenessPolicy
+| 项目 | 是否建议做 | 优先级 | 说明 |
+|---|---|---:|---|
+| recommendation/comparison 默认补齐核心证据 | 是 | P0 | 当前最值得做 |
+| 增加 EvidenceCompletenessPolicy | 是 | P0 | 效果提升的主抓手 |
+| 增加 DecisionCard / RankingExplanation | 是 | P0 | 把“列结果”变成“给方案” |
+| 优化 verbalizer 为顾问式表达 | 是 | P0 | 用户体感提升明显 |
+| recommendation refine 变成真正的二次筛选 | 是 | P1 | 当前只是轻量承接 |
+| 前端偏好 chip / 卡片化 / 比较表 | 是 | P1 | 产品感增强 |
+| 增加 ScenarioPlan | 可做 | P2 | 适合 recommendation/comparison 稳定后 |
+| 接入 MCP / 外部地图 | 暂不优先 | P2 | 架构成本高 |
+| 多 Agent team | 不建议 | - | 当前收益远低于成本 |
 
-### 目标
+---
 
-不同类型 query 默认补齐不同证据，避免推荐 / 对比只查到部分信息就回答。
+## 5. P0 方案：优先做什么
+
+## 5.1 EvidenceCompletenessPolicy
+
+### 为什么值得先做
+
+当前 recommendation / comparison 虽然已经有 evidence build，但“默认至少该补齐哪些证据”并没有被独立收紧成一个显式策略层。
+
+这会带来两个问题：
+
+- 不同推荐场景下证据要求不稳定
+- review 能判断“不够”，但 planner/executor 不一定提前知道“必须补什么”
+
+### 当前仓库里可复用的基础
+
+已存在的相关能力：
+
+- `planning/evidence/evidence_builder.py`
+- `planning/evidence/evidence_review.py`
+- `planning/plans/execution_plan_builder.py`
+- `planning/policies/ranking_policy.py`
+- `facet_statuses / grounded_facts / missing_inputs`
+
+所以不需要新造大层，只需要新增一个轻量策略模块，把 recommendation / comparison 的最低证据标准显式化。
+
+### 建议落点
+
+建议新增：
+
+```text
+local_life_agent/planning/evidence/evidence_completeness_policy.py
+```
 
 ### 建议策略
 
-```text
-单店问答：
-- shop_detail
-- 用户显式问到的 facet，例如券、营业状态、环境、距离
+#### single_shop
 
-推荐：
-- shop_detail
-- open_status
-- coupon_list
-- distance_eta
-- price / rating / tags
-- scene_fit
+- 默认只要求用户明确问到的 facet
+- 不强制补齐 recommendation 风格的全量证据
 
-对比：
-- 所有对比商家的 shop_detail
-- 同一组 facet 横向补齐
-- 缺失项显式标注
-```
+#### recommendation
 
-### 建议新增模块
+默认至少要求：
 
-```text
-local_life_agent/planning/evidence_policy.py
-```
+- `get_shop_detail`
+- `check_open_status`
+- coupon 状态
+- distance / ETA
+- rating / price / tags
+- scene fit 所需字段
+
+#### comparison
+
+默认至少要求：
+
+- 所有候选商家横向补齐同一组 facet
+- 显式标注 unknown / missing / failed
+- 不允许 A 有价格、B 没价格时还直接输出强结论且不说明缺口
 
 ### 接入点
 
-```text
-planner / decision planner:
-  根据 intent 选择 evidence policy
+- planning：根据 task_type 产出 completeness policy
+- execution plan builder：按 policy 补工具
+- review：按 policy 判断是否“足够回答”
 
-executor:
-  根据 policy 扩展工具调用
+### 预期收益
 
-review:
-  判断 EvidencePack 是否满足最低证据要求
-```
-
-### 价值
-
-这是效果提升的核心。  
-它能保证推荐 / 对比时默认综合考虑：
-
-```text
-距离
-营业状态
-优惠券
-价格
-评价
-场景适配
-```
+- recommendation 输出更稳定
+- comparison 输出更公平
+- answer 层不再被迫自己猜哪些信息该讲
 
 ---
 
-## 4.2 增加 DecisionCard
+## 5.2 DecisionCard
 
-### 目标
+### 为什么值得做
 
-不要让最终回答直接从散乱工具结果生成，而是先形成结构化决策对象。
+当前 recommendation 的输出虽然已经比纯工具结果更好，但仍然偏“排序列表 + 若干 facet”。
+
+如果想更像本地生活顾问，应该先形成结构化“决策卡”，再 verbalize。
+
+### 当前仓库现状
+
+仓库里已经有：
+
+- `DecisionPlan`
+- `best_for`
+- `overall_ranking`
+- `ranking_snapshot`
+- `uncertainty_notes`
+
+这意味着完全可以不新建庞大协议，而是在 decision / answer 之间增加一个轻量决策对象。
 
 ### 建议结构
 
@@ -142,7 +220,7 @@ DecisionCard:
 - shop_id
 - shop_name
 - rank
-- recommendation_type: primary / alternative / budget / nearby / coupon
+- recommendation_type
 - distance_eta
 - open_status
 - coupon_summary
@@ -155,38 +233,27 @@ DecisionCard:
 - evidence_refs
 ```
 
-### 推荐链路
+### 实现建议
 
-```text
-ToolResult
-→ EvidencePack
-→ DecisionCard
-→ Answer
-```
+先不必把它做成新的强 schema 层级，也可以先在 `DecisionPlan.response_sections` 或 `metadata` 中结构化生成，再逐步收敛成独立模型。
 
-### 价值
+### 预期收益
 
-让回答从：
-
-```text
-附近推荐这三家：A、B、C。
-```
-
-升级为：
-
-```text
-我更建议你优先看 A。它离你最近，现在营业，而且有券，比较符合“约会 + 火锅 + 不想太远”的条件。
-
-如果你更看重便宜，B 更合适；如果你更看重环境，C 可以作为备选。
-```
+- recommendation 回答从“列结果”升级成“给建议”
+- comparison 可以更自然地输出“首推 / 备选 / 更便宜 / 更近 / 更稳妥”
 
 ---
 
-## 4.3 增加 RankingExplanation
+## 5.3 RankingExplanation
 
-### 目标
+### 为什么值得做
 
-让排序可解释，而不是黑盒列表。
+现在 recommendation 已经有排序逻辑，但“为什么第一名是它”这件事没有被单独固化成可消费结构。
+
+这导致：
+
+- verbalizer 要从散乱证据里拼理由
+- 用户追问“为什么这家排第一”时，可解释性不稳定
 
 ### 建议结构
 
@@ -199,513 +266,286 @@ RankingExplanation:
 - missing_or_uncertain_facts
 ```
 
-### 价值
+### 建议落点
 
-用户问：
+建议在：
 
-```text
-附近有没有适合约会、现在营业、最好有券的火锅？
-```
+- `planning/evidence/evidence_builder.py`
+- 或 `planning/decision/decision_planner.py`
 
-回答应该明确：
+中把 explanation 作为 recommendation / comparison 的结构化附属产物生成。
 
-```text
-为什么第一家排第一
-为什么第二家只是备选
-哪家更便宜
-哪家更近
-哪家券更多
-哪家环境更适合约会
-哪些信息缺失或不确定
-```
+### 预期收益
+
+- recommendation 更可解释
+- comparison 的胜负结论更透明
+- answer 层更容易做到顾问式表达
 
 ---
 
-## 4.4 顾问式 Verbalizer
+## 5.4 顾问式 Verbalizer
 
-### 目标
+### 为什么值得做
 
-在不放松事实约束的前提下，让回答更像“本地生活顾问”，而不是模板拼接。
+当前 deterministic + LLM verbalizer 已经存在，但表达风格仍偏：
 
-### 改动点
+- 结果列举
+- facet 罗列
+- 解释不够“像建议”
 
-```text
-answer/verbalizer prompt
-few-shot examples
-AnswerContract
-AnswerVerifier
-```
+### 当前约束
 
-### 表达风格
+这里必须坚持：
 
-不要只说：
+- LLM 只负责表达和组织
+- 事实必须来自 `EvidencePack`
+- 不允许 LLM 自行补距离、营业、券、评分
 
-```text
-推荐 A、B、C。
-```
+### 建议改造点
 
-而要说：
+- `answer/composers/deterministic.py`
+- verbalizer prompt / few-shot
+- verifier 对顾问式表达做轻约束
 
-```text
-我会优先推荐 A，因为它最符合你提到的“近一点、现在营业、有券、适合约会”。
+### 建议风格
 
-如果你更看重便宜，可以选 B；如果你更看重环境，可以把 C 作为备选。
-```
-
-### 注意事项
-
-LLM 可以负责：
+把：
 
 ```text
-语气
-组织方式
-取舍解释
-自然语言表达
+推荐这几家：A、B、C
 ```
 
-但不能负责：
+升级成：
 
 ```text
-编造距离
-编造营业状态
-编造优惠券
-编造评分
-编造商家信息
+我会优先推荐 A，因为它最符合你提到的条件：离得更近、现在营业、而且有券。
+如果你更看重便宜，B 更合适；如果你更看重环境，C 可以作为备选。
 ```
 
-所有事实必须来自 `EvidencePack / ToolResult`。
+### 预期收益
+
+- 不改主架构，体感提升明显
+- recommendation / comparison 的“决策感”更强
 
 ---
 
-## 4.5 推荐排序加入综合特征
+## 5.5 Recommendation / Comparison 默认证据补齐
 
-### 目标
+### 当前真实情况
 
-把距离、营业、券、价格、评价、场景适配变成排序核心，而不是回答时临时提一下。
+仓库现在已经有：
 
-### 推荐排序特征
+- ranking policy
+- coupon / open / detail 的 enrichment
+- location / distance 相关处理
 
-```text
-score =
-  hard_constraint_score
-  + distance_eta_score
-  + open_status_score
-  + coupon_score
-  + price_match_score
-  + rating_review_score
-  + scene_fit_score
-```
+但“默认补齐哪些字段”仍没有被系统性收紧成一个稳定合同。
 
-### 示例
+### 推荐的最小执行集
 
-对于 query：
+#### recommendation
 
-```text
-附近有没有适合约会、现在营业、最好有券的火锅？
-```
+- detail
+- open_status
+- coupon
+- distance / ETA
+- rating
+- price
+- scene-related tags
 
-排序不能只按评分，而要综合：
+#### comparison
 
-```text
-是否火锅
-是否现在营业
-是否距离近
-是否有券
-是否适合约会
-价格是否合适
-评价是否稳定
-```
+- 两边必须尽量同维度对齐
+- unknown / failed 要显式写出来
+- 不够支持唯一赢家时，不强行宣称唯一最优
+
+### 说明
+
+这条本质上和 `EvidenceCompletenessPolicy` 是同一方向，只是这里强调“业务效果”。
 
 ---
 
-## 5. P1 改动：产品体验增强
+## 6. P1 方案：产品体验增强
 
-## 5.1 前端偏好 chip
+## 6.1 Recommendation refine 从“轻展示”升级成“二次筛选”
 
-### 目标
+### 当前真实情况
 
-降低用户表达成本，让用户快速补充偏好。
+当前 `response_subgraph.py` 里已经支持 recommendation refine follow-up，例如：
 
-### 建议 chip
+- “便宜一点的呢”
+
+但它更偏基于上轮结果的轻量重排 / 轻展示，并不总是触发真正的新一轮检索与结构化比较。
+
+### 建议方向
+
+- 对明确的偏好更新，优先触发二次 ranking
+- 对证据不足的偏好更新，允许触发补工具
+- 保持不破坏现有短路路径
+
+### 优先级
+
+P1，比 P0 稍后，因为当前已有可用承接，不是完全缺失。
+
+---
+
+## 6.2 前端偏好 chip
+
+### 建议项
 
 ```text
 [现在营业]
 [有券]
 [近一点]
 [便宜]
-[环境好]
 [适合约会]
-[适合带长辈]
-[不排队]
 [评分高]
 ```
 
-### 后端处理
+### 原则
 
-前端可以把 chip 作为结构化偏好传给后端：
-
-```text
-message + selected_preferences
-```
-
-后端注入：
-
-```text
-SemanticFrame.constraints
-SemanticFrame.preferences
-```
+- 前端传结构化偏好
+- 后端注入 `SemanticFrame.preferences / soft_preferences / ranking_signals`
+- 不绕开现有 semantic schema
 
 ---
 
-## 5.2 结果卡片化展示
+## 6.3 结果卡片化 / 比较表
 
-### 目标
+### 当前价值
 
-把 `DecisionCard` 展示为可感知的商家决策卡。
+如果前端需要更强产品感，这一层非常值得做，但它主要是承接已有 `DecisionCard` / `RankingExplanation`。
 
 ### 建议字段
 
-```text
-店名
-推荐标签
-距离 / ETA
-是否营业
-是否有券
-人均 / 券后价
-适合原因
-风险提示
-操作按钮：查券 / 导航 / 对比 / 换一家
-```
+#### 推荐卡片
 
-### 价值
+- 店名
+- 推荐标签
+- 距离 / ETA
+- 是否营业
+- 是否有券
+- 人均 / 评分
+- 适合原因
+- 风险提示
 
-用户会感觉 Agent 不只是“回答问题”，而是真的在帮他做决策。
+#### 比较表
 
----
-
-## 5.3 对比表格
-
-### 目标
-
-多店对比时，优先用结构化表格展示。
-
-### 示例字段
-
-```text
-商家
-距离
-营业状态
-优惠券
-人均
-适合场景
-优点
-缺点
-推荐结论
-```
-
-### 注意
-
-对比表格必须来自 `EvidencePack`，缺失字段要显式标注：
-
-```text
-暂无数据
-工具未返回
-需要进一步查询
-```
-
-不能让 LLM 补齐。
+- 商家
+- 距离
+- 营业状态
+- 券
+- 人均
+- 场景适配
+- 优点
+- 缺点
+- 推荐结论
 
 ---
 
-## 6. P2 改动：轻架构增强与后期扩展
+## 7. P2 方案：更大的能力扩展
 
-## 6.1 增加 ScenarioPlan
+## 7.1 ScenarioPlan
 
-### 目标
+### 什么时候值得做
 
-支持更复杂的本地生活场景规划。
+等 recommendation / comparison 的主效果稳定后，再做“吃饭 + 逛街 + 路线 + 备选”这类场景规划。
 
-例如：
+### 当前判断
 
-```text
-今晚约会吃火锅，吃完想附近逛逛，别太贵
-```
-
-不要只推荐火锅店，而是输出：
-
-```text
-18:30 出发
-18:45 到店
-推荐 A 火锅
-吃完可以去附近商场 / 公园
-如果排队，备选 B
-```
-
-### 建议结构
-
-```text
-ScenarioPlan:
-- intent_scene: dating / family / friends / solo / elder
-- time_window
-- route_start
-- primary_shop
-- backup_shops
-- after_meal_options
-- estimated_timeline
-- risks
-```
-
-### 改动性质
-
-这属于轻架构增强。  
-可以等推荐 / 对比稳定后再做。
+这是“从问答 Agent 升级成场景决策 Agent”的方向，但不该抢在 P0/P1 前面。
 
 ---
 
-## 6.2 MCPToolAdapter
+## 7.2 MCP / 外部地图工具
 
-### 目标
+### 当前判断
 
-未来如果要接 Google Maps、外部搜索、POI、第三方点评数据，可以通过 MCP 适配进现有工具体系。
+这属于架构级扩展，不适合现在优先推进。
 
-### 正确接法
+原因：
 
-不要让 LLM 直接调 MCP：
-
-```text
-LLM 直接调 MCP
-```
-
-而应该是：
-
-```text
-LLM 产 ToolPlan
-→ Validator 校验
-→ Gateway 调 MCPToolAdapter
-→ 标准 ToolResult
-→ EvidencePack
-→ Review
-→ Answer
-```
-
-### 建议结构
-
-```text
-MCP Server
-→ MCP Client
-→ MCPToolAdapter
-→ ToolRegistry
-→ ToolCallGateway
-→ ToolResult
-```
-
-### 改动性质
-
-这是架构级增强，当前不建议优先做。
+- 鉴权与超时复杂度会明显上升
+- 现有 `ToolResult` / `EvidencePack` 适配要做完整
+- 当前主要问题不是“没有外部平台”，而是“已有能力的效果没打满”
 
 ---
 
-## 7. 不建议当前做的事情
+## 8. 分阶段落地顺序
 
-## 7.1 不建议重构成多 Agent Team
+## 阶段 1：不动主架构，提升回答质量
 
-不要现在拆成：
+1. 增加 `EvidenceCompletenessPolicy`
+2. recommendation / comparison 默认补齐核心证据
+3. 增加 `DecisionCard`
+4. 增加 `RankingExplanation`
+5. verbalizer 改成顾问式表达
 
-```text
-推荐 Agent
-距离 Agent
-优惠 Agent
-评价 Agent
-对比 Agent
-回答 Agent
-```
+### 验收标准
 
-这样会增加：
+- recommendation 能说明首推理由
+- comparison 能说明胜出理由和不确定性
+- unknown / missing 会显式表达
+- 不编造工具未返回事实
 
-```text
-状态同步成本
-工具权限边界复杂度
-证据合并复杂度
-调试复杂度
-LLM 调用成本
-错误传播风险
-```
+## 阶段 2：多轮筛选与前端体验增强
 
-更好的方式是：
+1. recommendation refine 做成二次筛选
+2. 偏好 chip
+3. 推荐卡片化
+4. 比较表格化
 
-```text
-一个主图
-多个 capability / policy / node
-统一 EvidencePack
-统一 Review
-统一 Answer
-```
+### 验收标准
 
-也就是：
+- “便宜一点 / 近一点 / 有券的呢”可稳定承接
+- 多轮结果变化原因可解释
+- 展示层不只是平铺文本
 
-```text
-能力包化，不是多 Agent 化
-```
+## 阶段 3：复杂场景规划
 
----
+1. `ScenarioPlan`
+2. 时间窗口 / 备选路径 / 吃完去哪
 
-## 7.2 不建议让 LLM 直接生成最终事实答案
+### 验收标准
 
-MCP Travel Planner 的问题在于它允许 LLM 直接输出完整 Markdown。  
-旅行 demo 可以接受，但本地生活事实更敏感：
+- 不只推荐单店，而是能给组合方案
 
-```text
-营业状态
-距离
-优惠券
-团购
-评分
-人均
-商家是否存在
-```
+## 阶段 4：外部工具生态
 
-这些都不能让 LLM 猜。
+1. MCPToolAdapter
+2. 外部地图 / 搜索 / POI 能力接入
+
+### 验收标准
+
+- 仍然走 ToolResult -> EvidencePack -> Review 的可信路径
 
 ---
 
-## 7.3 不建议缺信息时用 general knowledge fallback
+## 9. 建议的最小可行改造
 
-本地生活场景中，工具查不到时应该：
+如果当前只想用最小改动换最大效果，建议先只做这四件事：
 
-```text
-明确说明缺失
-请求澄清
-补工具查询
-可信失败
-```
+1. `EvidenceCompletenessPolicy`
+2. `DecisionCard`
+3. `RankingExplanation`
+4. 顾问式 verbalizer
 
-不应该：
+这是当前最值得做的 P0 组合。
 
-```text
-LLM 根据常识补齐事实
-```
+原因：
 
----
-
-## 8. 推荐落地顺序
-
-## 阶段一：效果增强，不动架构
-
-```text
-1. 增加 EvidenceCompletenessPolicy
-2. 推荐 / 对比默认补齐详情、券、营业、距离、评价 / 价格
-3. 增加 DecisionCard
-4. 增加 RankingExplanation
-5. Verbalizer 改成顾问式表达
-6. Verifier 检查回答是否引用 EvidencePack 外事实
-```
-
-### 预期收益
-
-```text
-推荐更综合
-对比更清晰
-回答更像顾问
-用户感知明显提升
-不破坏现有架构
-```
+- 不用推翻架构
+- 不依赖新平台
+- 直接改善 recommendation / comparison 体感
+- 最符合现在仓库的成熟度
 
 ---
 
-## 阶段二：前端体验增强
+## 10. 验收建议
 
-```text
-1. 增加偏好 chip
-2. 推荐结果卡片化
-3. 对比表格化
-4. 增加一键继续追问：
-   - 便宜一点
-   - 近一点
-   - 有券的
-   - 和第一个比
-   - 换一家
-```
+## 10.1 recommendation
 
-### 预期收益
-
-```text
-用户操作成本下降
-产品感增强
-多轮追问更自然
-```
-
----
-
-## 阶段三：场景规划
-
-```text
-1. 新增 ScenarioPlan
-2. 支持“吃饭 + 逛街 + 路线 + 备选”
-3. 支持时间窗口、路线、备选店
-```
-
-### 预期收益
-
-```text
-从本地生活问答升级为本地生活决策 Agent
-```
-
----
-
-## 阶段四：外部工具 / MCP
-
-```text
-1. 设计 MCPToolAdapter
-2. 接地图 / 搜索 / POI
-3. 统一转成 ToolResult
-4. 接入 EvidencePack
-```
-
-### 预期收益
-
-```text
-工具生态更开放
-外部实时能力更强
-```
-
-### 风险
-
-```text
-依赖复杂
-鉴权复杂
-超时和错误分类复杂
-工具 schema 对齐复杂
-```
-
----
-
-## 9. 最小可行改造方案
-
-如果只想用较小改动快速提升效果，建议只做以下四件事：
-
-```text
-1. EvidenceCompletenessPolicy
-2. DecisionCard
-3. RankingExplanation
-4. 顾问式 Verbalizer
-```
-
-这四个不需要推翻架构，但能显著提升：
-
-```text
-推荐质量
-回答完整度
-对比清晰度
-用户感知
-```
-
----
-
-## 10. 验收标准建议
-
-## 10.1 推荐场景验收
-
-输入：
+输入示例：
 
 ```text
 附近有没有适合约会、现在营业、最好有券的火锅？
@@ -713,22 +553,17 @@ LLM 根据常识补齐事实
 
 期望：
 
-```text
-必须查候选商家
-必须查营业状态
-必须查距离 ETA
-必须查优惠券
-必须说明首推理由
-必须说明备选理由
-必须说明不满足条件或缺失信息
-不能编造工具未返回的事实
-```
+- 查到候选商家
+- 查营业状态
+- 查距离 / ETA
+- 查券
+- 说明首推理由
+- 给出备选理由
+- 明确指出缺失或不确定信息
 
----
+## 10.2 comparison
 
-## 10.2 对比场景验收
-
-输入：
+输入示例：
 
 ```text
 海底捞和山城一锅哪个更适合约会？
@@ -736,77 +571,53 @@ LLM 根据常识补齐事实
 
 期望：
 
-```text
-必须绑定两个 shop_id
-必须横向补齐相同 facet
-必须输出明确推荐结论
-必须说明各自优缺点
-缺失信息必须显式标注
-不能默认选择第一个
-```
+- 绑定两个明确对象
+- 横向补齐同维度证据
+- 输出明确比较结论
+- 显式说明 unknown / failed / missing
 
----
+## 10.3 多轮 refine
 
-## 10.3 多轮场景验收
-
-输入：
+输入示例：
 
 ```text
 附近推荐几家火锅
 便宜一点的呢
-和第一个比呢
+和第一家比呢
 ```
 
 期望：
 
-```text
-必须继承上一轮候选
-必须解析“便宜一点”
-必须解析“第一个”
-必须绑定 shop_id
-必须重新计算或复用证据
-必须说明推荐变化原因
-```
+- 承接上轮 recommendation context
+- 解析“便宜一点”“第一家”
+- 说明排序或推荐变化原因
 
----
-
-## 10.4 事实约束验收
+## 10.4 事实约束
 
 期望：
 
-```text
-回答中的距离必须来自 get_distance_eta
-回答中的券必须来自 get_coupon_list
-回答中的营业状态必须来自 check_open_status
-回答中的商家详情必须来自 get_shop_detail 或候选召回结果
-缺失时不得编造
-```
+- 距离来自 distance tool / grounded evidence
+- 券来自 coupon tool
+- 营业状态来自 open status tool
+- 缺失时允许说不确定，不允许编造
 
 ---
 
 ## 11. 最终建议
 
-当前最优路线不是重构，而是增强：
+当前最优路径不是“重构成本地生活 MCP Planner”，而是：
 
 ```text
-保留：
-LangGraph
-ToolCallGateway
-EvidencePack
-Review / Verifier
-
-新增：
-EvidenceCompletenessPolicy
-DecisionCard
-RankingExplanation
-顾问式 Verbalizer
-前端偏好 chip
-结果卡片
+保留现有可信 ToolCall 架构
+把 recommendation / comparison 的证据默认补齐
+把 decision 结构化
+把 verbalizer 做成顾问式表达
+再逐步升级前端承接和场景规划
 ```
 
-一句话总结：
+换句话说：
 
 ```text
-不要把系统改成 MCP Travel Planner 那种轻量 Prompt Agent；
-要把它的“完整方案感、主动补证据、顾问式表达”吸收到你现有的可信 ToolCall 架构里。
+先把现有系统从“会答”升级到“会给可解释的本地生活建议”
+再考虑更大的场景规划和外部工具生态
 ```

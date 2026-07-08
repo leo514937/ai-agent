@@ -122,6 +122,51 @@ def _parse_source_for_backend(semantic_source: str) -> SemanticParseSource:
         return SemanticParseSource.unknown
 
 
+def _normalize_preference_items(value: Any) -> list[dict[str, Any]]:
+    if value is None:
+        return []
+
+    items = value if isinstance(value, list) else [value]
+    normalized: list[dict[str, Any]] = []
+    for item in items:
+        if item is None:
+            continue
+        if isinstance(item, dict):
+            if "type" not in item and len(item) == 1:
+                only_key, only_value = next(iter(item.items()))
+                key_text = str(only_key).strip()
+                if key_text:
+                    normalized.append({"type": key_text, "value": only_value})
+                    continue
+            payload = {str(key): val for key, val in item.items() if str(key).strip()}
+            if payload:
+                normalized.append(payload)
+            continue
+        if isinstance(item, str):
+            text = item.strip()
+            if text:
+                normalized.append({"type": text})
+            continue
+        normalized.append({"type": str(item).strip() or "unknown"})
+    return normalized
+
+
+def _normalize_ranking_policy(value: Any) -> dict[str, Any] | None:
+    if value in (None, "", [], ()):
+        return None
+    if isinstance(value, dict):
+        return dict(value) or None
+    return None
+
+
+def _normalize_candidate_limit(value: Any) -> int | None:
+    try:
+        limit = int(value)
+    except Exception:
+        return None
+    return limit if limit > 0 else None
+
+
 def _normalize_semantic_payload(payload: Any, *, top_intent: str) -> dict[str, Any]:
     if isinstance(payload, dict):
         wrapped_content = payload.get("content")
@@ -182,12 +227,12 @@ def _normalize_semantic_payload(payload: Any, *, top_intent: str) -> dict[str, A
         if not str(normalized.get("missing_slot_type") or "").strip() and not normalized.get("location"):
             normalized["missing_slot_type"] = MissingSlotType.missing_exploration_location.value
 
-    if "preferences" in normalized and isinstance(normalized["preferences"], list):
-        normalized["preferences"] = [item for item in normalized["preferences"] if item is not None]
+    normalized["preferences"] = _normalize_preference_items(normalized.get("preferences"))
     if "soft_preferences" not in normalized or not isinstance(normalized.get("soft_preferences"), dict):
         normalized["soft_preferences"] = dict(normalized.get("soft_preferences") or {})
     if "ranking_signals" not in normalized or not isinstance(normalized.get("ranking_signals"), dict):
         normalized["ranking_signals"] = dict(normalized.get("ranking_signals") or {})
+    normalized["ranking_policy"] = _normalize_ranking_policy(normalized.get("ranking_policy"))
 
     if not normalized.get("location_reference") and isinstance(normalized.get("location"), dict):
         location = normalized.get("location") or {}
@@ -557,6 +602,22 @@ def _merge_semantic_mentions(payload: dict[str, Any]) -> dict[str, Any]:
     merged["merchant_mentions"] = combined
     merged["brand_mentions"] = brand_mentions
     merged["branch_mentions"] = branch_mentions
+    return merged
+
+
+def _merge_slot_hints(payload: dict[str, Any], slot_hints: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(payload)
+    hinted_limit = _normalize_candidate_limit(slot_hints.get("candidate_limit"))
+    current_limit = _normalize_candidate_limit(merged.get("candidate_limit"))
+    if current_limit is None and hinted_limit is not None:
+        merged["candidate_limit"] = hinted_limit
+
+    ranking_signals = merged.get("ranking_signals")
+    if not isinstance(ranking_signals, dict):
+        ranking_signals = {}
+    if hinted_limit is not None and not _normalize_candidate_limit(ranking_signals.get("requested_count")):
+        ranking_signals["requested_count"] = hinted_limit
+    merged["ranking_signals"] = ranking_signals
     return merged
 
 
@@ -1204,8 +1265,20 @@ def parse_semantic_frame(
                     payload = {}
             else:
                 payload = {}
-        payload = _merge_semantic_mentions(payload)
+        slot_hints = _safe_extract_slots(normalised_text, top_intent)
+        payload = _merge_slot_hints(_merge_semantic_mentions(payload), slot_hints)
         normalized_payload = _normalize_semantic_payload(payload, top_intent=top_intent)
+        if normalized_payload.get("task_type") == TaskType.recommendation:
+            hinted_limit = _normalize_candidate_limit(slot_hints.get("candidate_limit"))
+            current_limit = _normalize_candidate_limit(normalized_payload.get("candidate_limit"))
+            if current_limit is None and hinted_limit is not None:
+                normalized_payload["candidate_limit"] = hinted_limit
+            ranking_signals = normalized_payload.get("ranking_signals")
+            if not isinstance(ranking_signals, dict):
+                ranking_signals = {}
+            if hinted_limit is not None and not _normalize_candidate_limit(ranking_signals.get("requested_count")):
+                ranking_signals["requested_count"] = hinted_limit
+            normalized_payload["ranking_signals"] = ranking_signals
         llm_backend = str(result.get("llm_backend", "real_llm") or "real_llm")
         # Map backend kinds to semantic source taxonomy.
         #   rule_based → rule_based (pure offline rules, no LLM)

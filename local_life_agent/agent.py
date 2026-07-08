@@ -16,6 +16,7 @@ from . import config
 from .observability.file_logger import get_python_service_logger, log_kv, reset_log_context, set_log_context
 from .observability.metrics import record_turn_metric
 from .observability.trace import build_turn_trace
+from .location_utils import normalize_location_payload
 
 
 _GRAPH_CACHE: Any = None
@@ -222,6 +223,8 @@ def run_agent_graph(
     *,
     trace_id: str | None = None,
     turn_id: str | None = None,
+    user_context: Any | None = None,
+    user_location: dict[str, Any] | None = None,
 ) -> AgentResponse:
     """Execute one full turn via ``StateGraph`` (todo/05 LangGraph entry).
 
@@ -309,6 +312,8 @@ def run_agent_graph(
         "rewrite_reason": "",
         "final_safety_status": "safe",
         "recommendation_query": "",
+        "user_context": normalize_location_payload(user_context),
+        "user_location": normalize_location_payload(user_location or user_context),
     }
     # Some valid multi-turn paths exceed LangGraph's default recursion limit
     # of 25 because every node transition counts as a step.

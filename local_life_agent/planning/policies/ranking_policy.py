@@ -359,7 +359,7 @@ def _dedup_by_brand(candidates: list[dict], max_per_brand: int = 1) -> list[dict
     return result
 
 
-def rank_candidates(candidates: list, preferences: dict) -> list:
+def rank_candidates(candidates: list, preferences: dict, *, top_k: int | None = None) -> list:
     """Rank shop candidates by the fixed scoring formula."""
     scored = [score_candidate(candidate, preferences) for candidate in candidates or []]
     surviving = [
@@ -394,7 +394,10 @@ def rank_candidates(candidates: list, preferences: dict) -> list:
     )
     # Brand-level diversity dedup with backfill
     deduped = _dedup_by_brand(surviving, max_per_brand=1)
-    target_k = RECOMMENDATION_FINAL_TOP_K
+    try:
+        target_k = max(int(top_k or 0), 1)
+    except Exception:
+        target_k = RECOMMENDATION_FINAL_TOP_K
 
     if len(deduped) >= target_k:
         return deduped[:target_k]

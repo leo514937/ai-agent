@@ -46,6 +46,23 @@ from ...observability.file_logger import get_python_service_logger, log_kv
 from ...target.clarification import build_clarification_request
 
 _LOGGER = get_python_service_logger()
+_DIAGNOSTIC_FALLBACK_REASONS = {"LLM_ENUM_OUT_OF_RANGE", "LLM_JSON_PARSE_ERROR", "semantic_frame_validation_failed"}
+
+
+def _recommendation_limit_from_state(state: GraphState) -> int:
+    semantic_frame = _to_dict(state.get("semantic_frame"))
+    ranking_snapshot = _to_dict(_to_dict(state.get("evidence_pack")).get("ranking_snapshot"))
+    for raw_value in (
+        semantic_frame.get("candidate_limit"),
+        ranking_snapshot.get("candidate_limit"),
+    ):
+        try:
+            value = int(raw_value)
+        except Exception:
+            continue
+        if value > 0:
+            return value
+    return 5
 
 
 def _compose_single_shop_response(evidence: dict[str, Any], draft_text: str) -> str:
@@ -398,7 +415,7 @@ def _build_recommendation_refine_text(state: GraphState) -> str:
     if not items:
         return "我会按更便宜的方向继续帮你看。"
     lines: list[str] = ["我按更便宜的方向继续看了上轮推荐，先给你这几家："]
-    for idx, item in enumerate(items[:5], 1):
+    for idx, item in enumerate(items[:_recommendation_limit_from_state(state)], 1):
         shop_name = str(item.get("shop_name", "") or "").strip() or f"第{idx}家"
         extra_parts: list[str] = []
         open_status = str(item.get("open_status", "") or "").strip()
@@ -640,6 +657,15 @@ def _h_answer_generate(state: GraphState) -> dict:
     preview_text = sanitize_preview_text(txt, verified=False)
     fallback_reason = str(state.get("fallback_reason", "") or metadata.get("fallback_reason", "") or "")
     answer_fallback_reason = str(state.get("answer_fallback_reason", "") or metadata.get("answer_fallback_reason", "") or "")
+    if (
+        answer_type == "clarification"
+        or str(state.get("response_mode", "") or "") == ResponseMode.CLARIFY.value
+        or state.get("pending_clarification") is not None
+    ):
+        if fallback_reason in _DIAGNOSTIC_FALLBACK_REASONS:
+            fallback_reason = ""
+        if answer_fallback_reason in _DIAGNOSTIC_FALLBACK_REASONS:
+            answer_fallback_reason = ""
     response_directive = build_response_directive(
         answer_text=txt,
         answer_type=answer_type,

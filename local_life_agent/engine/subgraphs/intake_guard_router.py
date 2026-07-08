@@ -232,10 +232,12 @@ def h_intake_guard_router(state: GraphState) -> dict:
 
 def _h_receive_input(state: GraphState) -> dict:
     raw = state.get("raw_text", "")
-    received = assemble_turn_input(raw)
+    received = assemble_turn_input(raw, user_context=state.get("user_context"))
     return {
         "normalized_text": raw,
         "input_type": received.get("input_type", "text"),
+        "turn_input": received,
+        "user_context": received.get("user_context") or state.get("user_context") or {},
         "turn_id": state.get("turn_id", ""),
         **_log(state, "receive_input"),
     }

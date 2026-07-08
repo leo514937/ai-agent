@@ -42,7 +42,7 @@
   "soft_preferences": {},
   "hard_constraints": {},
   "ranking_signals": {},
-  "ranking_policy": "",
+  "ranking_policy": null,
 
   "comparison_intent": false,
   "comparison_structure": "unknown",

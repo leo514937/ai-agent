@@ -306,11 +306,30 @@ class TestConditionalRouting:
         assert "emit_response" in nodes
 
     def test_plan_validator_ok_to_tool(self):
-        """SpyBackend 提供 local_life intent + recommendation task_type，
-           使推荐流程到达 tool_execute 节点。"""
+        """SpyBackend provides a recommendation task and reaches tool_execute."""
         spy = SpyRealLLMBackend()
         set_llm_backend(spy)
-        resp = run_agent_graph("附近推荐火锅", "route_plan_ok")
+
+        original_run_agent_graph = run_agent_graph
+
+        def _run_with_location(*args, **kwargs):
+            kwargs.setdefault(
+                "user_location",
+                {
+                    "location_name": "\u5317\u4eac\u90ae\u7535\u5927\u5b66",
+                    "lat": 39.9609,
+                    "lng": 116.3581,
+                    "location_status": "test_mock",
+                    "location_source": "test_mock",
+                },
+            )
+            return original_run_agent_graph(*args, **kwargs)
+
+        globals()["run_agent_graph"] = _run_with_location
+        try:
+            resp = run_agent_graph("\u9644\u8fd1\u63a8\u8350\u706b\u9505", "route_plan_ok")
+        finally:
+            globals()["run_agent_graph"] = original_run_agent_graph
         nodes = _update_coverage(resp, edge="plan_validator->tool_execute")
         assert resp.debug is not None
 
@@ -354,7 +373,7 @@ class TestConditionalRouting:
         assert resp.answer_text
 
     def test_final_response_build_pass_path(self, monkeypatch: pytest.MonkeyPatch):
-        """最小 deterministic 场景：只验证 final_response_build 可达。"""
+        """Minimal deterministic case: verify final_response_build remains reachable."""
         from local_life_agent.engine.subgraphs import response_subgraph as response_subgraph_module
 
         monkeypatch.setattr(
@@ -374,7 +393,26 @@ class TestConditionalRouting:
 
         spy = SpyRealLLMBackend()
         set_llm_backend(spy)
-        resp = run_agent_graph("附近推荐火锅", "route_final_response_pass")
+        original_run_agent_graph = run_agent_graph
+
+        def _run_with_location(*args, **kwargs):
+            kwargs.setdefault(
+                "user_location",
+                {
+                    "location_name": "??????",
+                    "lat": 39.9609,
+                    "lng": 116.3581,
+                    "location_status": "test_mock",
+                    "location_source": "test_mock",
+                },
+            )
+            return original_run_agent_graph(*args, **kwargs)
+
+        globals()["run_agent_graph"] = _run_with_location
+        try:
+            resp = run_agent_graph("\u9644\u8fd1\u63a8\u8350\u706b\u9505", "route_final_response_pass")
+        finally:
+            globals()["run_agent_graph"] = original_run_agent_graph
         nodes = _update_coverage(resp, edge="answer_verify->final_response_build")
         assert "final_response_build" in nodes
         assert resp.debug is not None

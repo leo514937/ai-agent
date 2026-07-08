@@ -264,6 +264,15 @@ def build_recommendation_execution_plan(
     frame = _to_dict(semantic_frame)
     query = infer_recommendation_query(frame) or str(fallback_query or "").strip()
     preferences = _recommendation_preferences(frame)
+    raw_requested_count = frame.get("candidate_limit")
+    if raw_requested_count in (None, "", 0, "0"):
+        requested_count = config.RECOMMENDATION_FINAL_TOP_K
+    else:
+        try:
+            requested_count = min(config.SEARCH_LIMIT, max(int(raw_requested_count), 1))
+        except Exception:
+            requested_count = config.RECOMMENDATION_FINAL_TOP_K
+    enrichment_top_k = min(config.SEARCH_LIMIT, max(config.RECOMMENDATION_CANDIDATE_TOP_K, requested_count))
     facet_set = normalize_query_facets(frame, raw_text=fallback_query or query)
     planner_result = build_evidence_planner_result(
         task_type=TaskType.recommendation.value,
@@ -283,7 +292,7 @@ def build_recommendation_execution_plan(
             "args": {
                 "query": query,
                 "location": location,
-                "limit": config.SEARCH_LIMIT,
+                "limit": max(config.SEARCH_LIMIT, requested_count),
             },
             "target_shop_id": "",
             "required": True,
@@ -299,7 +308,7 @@ def build_recommendation_execution_plan(
 
     task_type = str(_to_dict(frame).get("task_type", TaskType.recommendation.value))
 
-    for idx in range(1, config.RECOMMENDATION_CANDIDATE_TOP_K + 1):
+    for idx in range(1, enrichment_top_k + 1):
         tool_calls.extend(
             [
                 {
@@ -380,6 +389,7 @@ def build_recommendation_execution_plan(
             "open_now_preferred": preferences["open_now_preferred"],
             "coupon_preferred": preferences["coupon_preferred"],
             "nearby_preferred": preferences["nearby_preferred"],
+            "candidate_limit": requested_count,
             "facet_candidates": [item.model_dump() for item in planner_result.facet_candidates],
             "facet_validation_result": planner_result.validation_result.model_dump() if planner_result.validation_result else None,
             "facet_budget_plan": planner_result.budget_plan.model_dump() if planner_result.budget_plan else None,
@@ -388,10 +398,12 @@ def build_recommendation_execution_plan(
             "missing_inputs": planner_result.missing_inputs,
             "planning_warnings": planner_result.planning_warnings,
             "evidence_planner_result": planner_result.model_dump(),
+            "evidence_enrichment_top_k": enrichment_top_k,
             "timeout_policy": {"default_timeout_ms": TOOL_DEFAULT_TIMEOUT_MS, "max_parallelism": config.MAX_CONCURRENCY},
             "degradation_policy": {"empty_results": "degrade_answer", "partial_results": "partial_answer", "tool_failure": "retry_or_degrade"},
         },
         "recommendation_query": query,
         "query_terms": preferences["query_terms"],
         "scene_terms": preferences["scene_terms"],
+        "candidate_limit": requested_count,
     }

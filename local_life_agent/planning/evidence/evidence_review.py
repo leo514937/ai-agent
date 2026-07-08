@@ -216,6 +216,20 @@ def _normalise_str_list(values: Any) -> list[str]:
     return result
 
 
+def _has_location_required_failure(tool_results: dict[str, Any] | None) -> bool:
+    if not isinstance(tool_results, dict):
+        return False
+    for result in tool_results.values():
+        if isinstance(result, dict):
+            result_dict = result
+        else:
+            model_dump = getattr(result, "model_dump", None)
+            result_dict = model_dump() if callable(model_dump) else {}
+        if str(result_dict.get("error_code", "") or "").strip().upper() == "LOCATION_REQUIRED":
+            return True
+    return False
+
+
 def _semantic_snapshot_from_pack(evidence_pack: dict[str, Any]) -> dict[str, Any]:
     semantic_frame = dict(evidence_pack.get("semantic_frame") or {})
     exploration_stages = [
@@ -465,6 +479,9 @@ def review_evidence(
     disclaimer_facets = _normalise_str_list(evidence_pack.get("disclaimer_facets"))
     missing_input = [str(item).strip() for item in (evidence_pack.get("missing_input") or []) if str(item).strip()]
     clarification_needed = bool(evidence_pack.get("clarification_needed", False))
+    location_required_failure = _has_location_required_failure(tool_results)
+    if location_required_failure and "need_user_location" not in missing_input:
+        missing_input.append("need_user_location")
 
     # Classify required facets
     answerable_facets: list[str] = []

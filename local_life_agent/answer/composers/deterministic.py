@@ -87,6 +87,24 @@ def _extract_ordered_items(plan: DecisionPlan, *, keys: tuple[str, ...] = ("over
     return []
 
 
+def _recommendation_limit(plan: DecisionPlan, context: dict[str, Any] | None = None) -> int:
+    context = context or {}
+    semantic_frame = _to_dict(getattr(plan, "semantic_frame", {}) or {})
+    ranking_snapshot = _to_dict(context.get("ranking_snapshot") or {})
+    for raw_value in (
+        context.get("desired_recommendation_count"),
+        semantic_frame.get("candidate_limit"),
+        ranking_snapshot.get("candidate_limit"),
+    ):
+        try:
+            value = int(raw_value)
+        except Exception:
+            continue
+        if value > 0:
+            return value
+    return 5
+
+
 def _format_ranked_shop_lines(items: list[Any], *, limit: int = 3) -> list[str]:
     lines: list[str] = []
     for index, item in enumerate(items[:limit], start=1):
@@ -293,10 +311,11 @@ class SingleShopFactComposer:
 class RecommendationComposer:
     def compose(self, plan: DecisionPlan, *, trace_id: str = "", fallback_reason: str = "", context: dict[str, Any] | None = None) -> ResponseDirective:
         context = context or {}
+        desired_limit = _recommendation_limit(plan, context)
         ranking_items = _extract_ordered_items(plan, keys=("overall_ranking", "selected_targets", "candidate_summaries"))
-        ranking_lines = _format_ranked_shop_lines(ranking_items, limit=5)
+        ranking_lines = _format_ranked_shop_lines(ranking_items, limit=desired_limit)
         if not ranking_lines and getattr(plan, "selected_targets", None):
-            ranking_lines = _format_ranked_shop_lines(list(getattr(plan, "selected_targets", []) or []), limit=5)
+            ranking_lines = _format_ranked_shop_lines(list(getattr(plan, "selected_targets", []) or []), limit=desired_limit)
         best_for = _to_dict(getattr(plan, "best_for", {}) or {})
         uncertainty_notes = [str(item).strip() for item in (getattr(plan, "uncertainty_notes", []) or []) if str(item).strip()]
         factual_points = [str(item).strip() for item in (getattr(plan, "factual_points", []) or []) if str(item).strip()]
@@ -343,7 +362,7 @@ class RecommendationComposer:
             metadata={
                 "policy_key": "recommendation",
                 "ranking_preserved": bool(getattr(plan, "ranking_preserved", True)),
-                "ranking_order": _unique_names(ranking_items, limit=5),
+                "ranking_order": _unique_names(ranking_items, limit=desired_limit),
                 "fallback_reason": str(fallback_reason or ""),
                 "requested_mode": str(context.get("response_mode") or ""),
             },

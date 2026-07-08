@@ -6,8 +6,12 @@ and session state inspection as expected by the Java backend.
 
 from __future__ import annotations
 
-import nest_asyncio
-nest_asyncio.apply()
+try:
+    import nest_asyncio
+except ModuleNotFoundError:  # pragma: no cover - optional runtime dependency
+    nest_asyncio = None
+else:  # pragma: no branch
+    nest_asyncio.apply()
 
 import json
 import queue
@@ -18,6 +22,8 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from local_life_agent.agent import run_agent_graph
+from local_life_agent.domain.schemas import UserContext
+from local_life_agent.location_utils import normalize_location_payload
 from local_life_agent.observability.file_logger import get_python_service_logger
 from local_life_agent.streaming.runtime import (
     TurnControl,
@@ -59,6 +65,60 @@ class ChatCancelRequest(BaseModel):
     reason: str = Field(default="user_stop")
 
 
+def _location_payload_from_client_context(client_context: dict[str, Any] | None) -> dict[str, Any]:
+    payload = dict(client_context or {})
+    for key in ("user_location", "location", "geo", "position"):
+        nested = normalize_location_payload(payload.get(key))
+        if nested:
+            merged = dict(payload)
+            merged.update(nested)
+            payload = merged
+            break
+
+    location_name = str(
+        payload.get("location_name")
+        or payload.get("name")
+        or payload.get("label")
+        or payload.get("text")
+        or payload.get("poi")
+        or payload.get("address")
+        or payload.get("district")
+        or payload.get("business_area")
+        or payload.get("city")
+        or ""
+    ).strip()
+    if location_name and not payload.get("location_name"):
+        payload["location_name"] = location_name
+    return normalize_location_payload(payload)
+
+
+def _user_context_from_client_context(client_context: dict[str, Any] | None) -> tuple[UserContext | None, dict[str, Any]]:
+    location = _location_payload_from_client_context(client_context)
+    if not location:
+        return None, {}
+
+    lat = location.get("lat")
+    lng = location.get("lng")
+    has_coordinates = lat is not None and lng is not None
+    if has_coordinates:
+        status = str(location.get("location_status") or location.get("status") or "provided").strip() or "provided"
+        missing_reason = ""
+    else:
+        status = str(location.get("location_status") or location.get("status") or "provided").strip() or "provided"
+        missing_reason = ""
+
+    user_context = UserContext(
+        location_name=str(location.get("location_name") or location.get("name") or location.get("label") or ""),
+        lat=float(lat) if has_coordinates else None,
+        lng=float(lng) if has_coordinates else None,
+        location_status=status,
+        location_source=str(location.get("location_source") or "client_context"),
+        requires_location=False,
+        location_missing_reason=missing_reason,
+    )
+    return user_context, location
+
+
 @app.get("/health")
 async def health():
     return {
@@ -97,9 +157,18 @@ def _stream_chat_events(request: ChatRequest):
 
     def _runner() -> None:
         control = TurnControl(registry=registry, session_id=session_id, turn_id=turn_id, trace_id=trace_id)
+        user_context, user_location = _user_context_from_client_context(request.client_context)
         try:
             with bind_turn_control(control), bind_stream_handler(delta_queue.put):
-                result_box["response"] = run_agent_graph(request.message, session_id=request.session_id, trace_id=request.trace_id, turn_id=request.turn_id)
+                kwargs: dict[str, Any] = {
+                    "session_id": request.session_id,
+                    "trace_id": request.trace_id,
+                    "turn_id": request.turn_id,
+                }
+                if user_context is not None:
+                    kwargs["user_context"] = user_context
+                    kwargs["user_location"] = user_location
+                result_box["response"] = run_agent_graph(request.message, **kwargs)
             registry.mark_finished(session_id, turn_id, getattr(result_box.get("response"), "answer_text", ""))
         except Exception as exc:  # pragma: no cover - safety net for stream lifecycle
             result_box["error"] = exc

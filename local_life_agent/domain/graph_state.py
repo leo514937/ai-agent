@@ -56,6 +56,9 @@ class GraphState(TypedDict, total=False):
     raw_text: str
     normalized_text: str
     input_type: str
+    turn_input: dict
+    client_context: dict
+    user_context: dict
 
     # === 顶层意图 (Top Intent) — write: top_intent_router, read: semantic_parse/response_builder ===
     top_intent: Optional[TopIntent]

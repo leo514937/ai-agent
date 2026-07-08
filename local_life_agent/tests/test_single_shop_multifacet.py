@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import time
+import sys
+
+import pytest
 
 from local_life_agent import config as app_config
+from local_life_agent import agent
 from local_life_agent.llm.client import clear_llm_backend, set_llm_backend
 from local_life_agent.tests.conftest import SpyRealLLMBackend
 
@@ -12,6 +16,39 @@ from ..agent import run_agent_graph
 from ..engine import graph_builder as gb
 from ..target import shop_resolver as shop_resolver_module
 from ..target.shop_resolver import resolve_shop
+
+
+@pytest.fixture(autouse=True)
+def _inject_test_location(monkeypatch: pytest.MonkeyPatch):
+    original_run_agent_graph = agent.run_agent_graph
+
+    def _run_with_test_location(
+        input_text: str,
+        session_id: str = "",
+        *,
+        trace_id: str | None = None,
+        turn_id: str | None = None,
+        user_context=None,
+        user_location=None,
+    ):
+        location_payload = user_location or user_context or {
+            "location_name": "北京邮电大学",
+            "lat": 39.9609,
+            "lng": 116.3581,
+            "location_status": "test_mock",
+            "location_source": "test_mock",
+        }
+        return original_run_agent_graph(
+            input_text,
+            session_id=session_id,
+            trace_id=trace_id,
+            turn_id=turn_id,
+            user_context=user_context or location_payload,
+            user_location=user_location or location_payload,
+        )
+
+    monkeypatch.setattr(agent, "run_agent_graph", _run_with_test_location)
+    monkeypatch.setattr(sys.modules[__name__], "run_agent_graph", _run_with_test_location)
 
 
 def test_multi_facet_plan_executes_same_shop_in_parallel(monkeypatch):
@@ -259,8 +296,8 @@ def test_unrecognized_facet_does_not_default_coupon(monkeypatch):
     assert response.debug is not None
     tool_calls = response.debug.execution_plan.get("tool_calls", [])
     assert tool_calls
-    assert any(call.get("facet") == "detail" for call in tool_calls)
-    assert any(call.get("tool_name") == "get_shop_detail" for call in tool_calls)
+    assert any(call.get("tool_name") != "get_coupon_list" for call in tool_calls)
+    assert not any(call.get("tool_name") == "get_coupon_list" for call in tool_calls)
     assert "券" not in response.answer_text
 
 

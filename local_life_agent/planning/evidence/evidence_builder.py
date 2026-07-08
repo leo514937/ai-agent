@@ -1687,8 +1687,20 @@ def _build_recommendation_evidence(
         "query_terms": _as_list(plan_dict.get("query_terms")),
         "scene_terms": _as_list(plan_dict.get("scene_terms")),
     }
-    ranked = rank_candidates(surviving_candidates, preferences)
-    top_ranked = ranked[: config.RECOMMENDATION_FINAL_TOP_K]
+    raw_requested_count = (
+        plan_dict.get("candidate_limit")
+        or _to_dict(semantic_frame).get("candidate_limit")
+        or preferences.get("requested_count")
+    )
+    if raw_requested_count in (None, "", 0, "0"):
+        requested_count = config.RECOMMENDATION_FINAL_TOP_K
+    else:
+        try:
+            requested_count = min(config.SEARCH_LIMIT, max(int(raw_requested_count), 1))
+        except Exception:
+            requested_count = config.RECOMMENDATION_FINAL_TOP_K
+    ranked = rank_candidates(surviving_candidates, preferences, top_k=requested_count)
+    top_ranked = ranked[:requested_count]
     ranked_snapshot = []
     for idx, item in enumerate(top_ranked, start=1):
         ranked_snapshot.append(
@@ -1720,6 +1732,7 @@ def _build_recommendation_evidence(
         "ranked_shops": ranked_snapshot,
         "query_terms": plan_dict.get("query_terms", []),
         "scene_terms": plan_dict.get("scene_terms", []),
+        "candidate_limit": requested_count,
         "candidate_count": len(surviving_candidates or recommendation_candidates or search_result_candidates),
     }
 

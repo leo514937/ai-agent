@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from typing import Any
 
 import pytest
@@ -226,6 +227,35 @@ def _comparison_llm_backend(monkeypatch: pytest.MonkeyPatch):
     agent._GRAPH_CACHE = None
     set_llm_backend(_comparison_llm_backend_impl)
     monkeypatch.setattr(graph_builder, "call_llm", _comparison_llm_backend_impl)
+    original_run_agent_graph = agent.run_agent_graph
+
+    def _run_with_test_location(
+        input_text: str,
+        session_id: str = "",
+        *,
+        trace_id: str | None = None,
+        turn_id: str | None = None,
+        user_context: Any | None = None,
+        user_location: dict[str, Any] | None = None,
+    ):
+        location_payload = user_location or user_context or {
+            "location_name": "北京邮电大学",
+            "lat": 39.9609,
+            "lng": 116.3581,
+            "location_status": "test_mock",
+            "location_source": "test_mock",
+        }
+        return original_run_agent_graph(
+            input_text,
+            session_id=session_id,
+            trace_id=trace_id,
+            turn_id=turn_id,
+            user_context=user_context or location_payload,
+            user_location=user_location or location_payload,
+        )
+
+    monkeypatch.setattr(agent, "run_agent_graph", _run_with_test_location)
+    monkeypatch.setattr(sys.modules[__name__], "run_agent_graph", _run_with_test_location)
     try:
         yield
     finally:

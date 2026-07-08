@@ -185,6 +185,7 @@ _STAGE_EVIDENCE_MAP = {
     "entertainment": ["detail", "distance", "open_status"],
     "rest": ["detail", "distance", "open_status"],
 }
+_RECOMMENDATION_COUNT_RE = re.compile(r"(?:推荐|推[一1]?下|帮我推荐|给我推荐)\s*([1-9]\d{0,2})\s*家")
 
 
 def _dedupe(items: list[str]) -> list[str]:
@@ -368,6 +369,17 @@ def _recommendation_query_terms(text: str) -> list[str]:
 
 def _recommendation_scene_terms(text: str) -> list[str]:
     return _extract_hints(text, _SCENE_HINTS)
+
+
+def extract_recommendation_count(text: str) -> int | None:
+    match = _RECOMMENDATION_COUNT_RE.search(text)
+    if not match:
+        return None
+    try:
+        value = int(match.group(1))
+    except Exception:
+        return None
+    return value if value > 0 else None
 
 
 def _detect_cancel_intent(text: str) -> bool:
@@ -603,6 +615,7 @@ def extract_slots(text: str, top_intent: str) -> dict:
     unsupported_facets, unsupported_reasons = _unsupported_facets(simplified)
     query_terms = _recommendation_query_terms(simplified)
     scene_terms = _recommendation_scene_terms(simplified)
+    recommendation_count = extract_recommendation_count(simplified)
     scene = _extract_scene(simplified)
     time_label = _extract_time(simplified)
     cancel_intent = _detect_cancel_intent(simplified)
@@ -684,6 +697,8 @@ def extract_slots(text: str, top_intent: str) -> dict:
         if query_terms:
             ranking_signals["query_terms"] = query_terms
             ranking_signals["category"] = query_terms[0]
+        if recommendation_count:
+            ranking_signals["requested_count"] = recommendation_count
         if _has_open_preference(simplified):
             soft_preferences["open_now_preferred"] = True
             ranking_signals["open_now_preferred"] = True
@@ -789,6 +804,7 @@ def extract_slots(text: str, top_intent: str) -> dict:
         "hard_constraints": {},
         "soft_preferences": soft_preferences,
         "ranking_signals": ranking_signals,
+        "candidate_limit": recommendation_count if recommendation else None,
         "surface_hints": surface_hints,
         "alias_hints": alias_hints,
         "follow_up": {"is_follow_up": True, "refine_action": "restart"} if new_task_override else ({"is_follow_up": True, "refine_action": "other"} if cancel_intent else None),

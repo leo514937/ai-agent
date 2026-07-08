@@ -273,6 +273,81 @@ def _location_from_state(state: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _location_hint_from_state(state: dict[str, Any]) -> dict[str, Any]:
+    semantic_frame = _to_dict(state.get("semantic_frame"))
+    for item in (
+        state.get("location"),
+        semantic_frame.get("location"),
+        state.get("user_location"),
+        state.get("user_context"),
+    ):
+        location = normalize_location_payload(item)
+        if not location:
+            continue
+        name = str(
+            location.get("location_name")
+            or location.get("name")
+            or location.get("label")
+            or location.get("text")
+            or location.get("city")
+            or location.get("district")
+            or ""
+        ).strip()
+        if name or (location.get("lat") is not None and location.get("lng") is not None):
+            return location
+    return {}
+
+
+def _recommendation_requires_location(state: dict[str, Any], goal: Any) -> bool:
+    semantic_frame = _to_dict(state.get("semantic_frame"))
+    missing_slot_type = str(semantic_frame.get("missing_slot_type") or state.get("missing_slot_type") or "").strip().lower()
+    if missing_slot_type in {"missing_location", "missing_exploration_location"}:
+        return True
+
+    raw_text = str(state.get("raw_text", "") or state.get("normalized_text", "") or "")
+    if any(token in raw_text for token in ("附近", "周边", "周围", "离我", "多远", "距离", "多久到", "多久能到")):
+        return True
+
+    soft_preferences = _to_dict(semantic_frame.get("soft_preferences"))
+    ranking_signals = _to_dict(semantic_frame.get("ranking_signals"))
+    if soft_preferences.get("nearby_preferred") or ranking_signals.get("nearby_preferred"):
+        return True
+
+    facet_names: set[str] = set()
+    for item in semantic_frame.get("facets") or []:
+        item_dict = _to_dict(item)
+        name = str(item_dict.get("name", "") or item_dict.get("facet", "") or "").strip()
+        if name:
+            facet_names.add(name)
+    required_facets = [str(item).strip() for item in (getattr(goal, "required_facets", None) or []) if str(item).strip()]
+    facet_names.update(required_facets)
+    return bool(facet_names & {"nearby", "distance", "travel_time", "business_area"})
+
+
+def _nearby_location_precondition_patch(state: dict[str, Any], reason: str) -> dict[str, Any]:
+    semantic_frame = state.get("semantic_frame")
+    pending = build_pending_clarification(
+        original_text=str(state.get("raw_text", "") or state.get("normalized_text", "") or ""),
+        original_semantic_frame=semantic_frame.model_dump(mode="json") if hasattr(semantic_frame, "model_dump") else _session_state_dict(semantic_frame),
+        original_task_type=str(state.get("task_type", "") or _to_dict(semantic_frame).get("task_type", "") or ""),
+        candidate_targets=[],
+        reason=reason,
+        source_node="planning_subgraph",
+    )
+    prompt = format_pending_prompt(pending)
+    return {
+        "pending_clarification": pending,
+        "clarification_request": pending,
+        "final_response": prompt,
+        "draft_response": prompt,
+        "response_mode": _OUTER_ROUTE_CLARIFY,
+        "fallback_reason": "",
+        "answer_fallback_reason": "",
+        "planning_failure_code": "",
+        "location_status": "missing",
+    }
+
+
 def _resolved_shop_location_from_state(state: dict[str, Any]) -> dict[str, Any]:
     for item in (
         state.get("resolved_target"),
@@ -409,6 +484,22 @@ def h_planning_subgraph(state: GraphState) -> dict:
         after = {**working, "planning_route": _OUTER_ROUTE_FALLBACK, "response_mode": _OUTER_ROUTE_FALLBACK}
         log_kv(_LOGGER, logging.WARNING, "[ROUTE_DECISION]", tone="warn", subgraph="planning_subgraph", route=_OUTER_ROUTE_FALLBACK, response_mode=_OUTER_ROUTE_FALLBACK, next_action=next_action)
         return _state_delta(before, after, always_include={"planning_route", "response_mode"}, exclude=_PLANNING_WRAPPER_EXCLUDE_FIELDS)
+
+    goal = working.get("goal_plan") or working.get("local_life_goal_draft")
+    goal_type_value = str(getattr(getattr(goal, "goal_type", None), "value", getattr(goal, "goal_type", None)) or "")
+    location_hint = _location_hint_from_state(working)
+    if goal_type_value == GoalType.RECOMMENDATION.value and _recommendation_requires_location(working, goal) and not location_hint:
+        reason = "need_user_location"
+        patch = _nearby_location_precondition_patch(working, reason)
+        after = {
+            **working,
+            **patch,
+            "planning_route": _OUTER_ROUTE_CLARIFY,
+            "response_mode": _OUTER_ROUTE_CLARIFY,
+            **_log(working, "planning_subgraph", status="NEED_CLARIFICATION", next_action="CLARIFY", reason=reason),
+        }
+        log_kv(_LOGGER, logging.WARNING, "[ROUTE_DECISION]", tone="warn", subgraph="planning_subgraph", route=_OUTER_ROUTE_CLARIFY, response_mode=_OUTER_ROUTE_CLARIFY, next_action="CLARIFY", reason=reason)
+        return _state_delta(before, after, always_include={"planning_route", "response_mode"})
 
     task_type_value = _enum_value(state.get("task_type")) or _enum_value(_to_dict(working.get("semantic_frame")).get("task_type"))
     semantic_frame = _to_dict(working.get("semantic_frame"))
@@ -1414,6 +1505,7 @@ def _h_clarify_decide(state: GraphState) -> dict:
 def _h_evidence_planner(state: GraphState) -> dict:
     goal = state.get("local_life_goal_draft")
     candidate_set = state.get("effective_candidate_set") or state.get("candidate_set")
+    planning_location = _location_hint_from_state(state)
     if goal is None:
         return {
             "error_code": "SCHEMA_VALIDATION_FAILED",
@@ -1437,7 +1529,7 @@ def _h_evidence_planner(state: GraphState) -> dict:
     if goal_type_value == GoalType.RECOMMENDATION.value:
         plan_payload = build_recommendation_execution_plan(
             state.get("semantic_frame") or {},
-            location=_user_location(state),
+            location=planning_location,
             fallback_query=str(state.get("raw_text", "") or ""),
         )
         plan = ExecutionPlan.model_validate(plan_payload.get("plan") or {})
@@ -1468,7 +1560,7 @@ def _h_evidence_planner(state: GraphState) -> dict:
         plan = plan_evidence_from_candidates(
             goal=goal,
             candidate_set=candidate_set,
-            location=_user_location(state),
+            location=planning_location,
         )
         plan.plan_source = plan.plan_source or "deterministic_comparison_builder"
         plan = _normalize_distance_tool_calls(plan, state)
@@ -1499,7 +1591,7 @@ def _h_evidence_planner(state: GraphState) -> dict:
     plan, meta = plan_evidence_with_llm(
         goal=goal,
         candidate_set=candidate_set,
-        location=_user_location(state),
+        location=planning_location,
         semantic_frame=state.get("semantic_frame"),
         raw_text=str(state.get("raw_text", "") or ""),
         llm_call=_call_llm,
@@ -1515,7 +1607,7 @@ def _h_evidence_planner(state: GraphState) -> dict:
         fallback_plan = plan_evidence_from_candidates(
             goal=goal,
             candidate_set=candidate_set,
-            location=_user_location(state),
+            location=planning_location,
         )
         fallback_plan.plan_source = fallback_plan.plan_source or "deterministic_evidence_planner"
         fallback_plan.planning_notes = list(fallback_plan.planning_notes or [])
