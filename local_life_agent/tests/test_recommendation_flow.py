@@ -175,6 +175,7 @@ def _fake_shop(
     eta_minutes: int | None = 10,
     open_status: str = "open",
     tags: list[str] | None = None,
+    address: str | None = None,
 ) -> dict:
     payload = {
         "shop_id": shop_id,
@@ -184,6 +185,8 @@ def _fake_shop(
         "tags": tags or ["约会", "聚餐"],
         "open_status": open_status,
     }
+    if address is not None:
+        payload["address"] = address
     if rating is not None:
         payload["rating"] = rating
     if distance_km is not None:
@@ -441,6 +444,36 @@ def test_recommendation_outputs_exactly_top_3_when_enough_candidates():
     ranked = response.debug.evidence_pack.get("ranking_snapshot", {}).get("ranked", [])
     assert len(ranked) <= 3
     assert len(_shop_names_from_snapshot(response.debug.evidence_pack.get("ranking_snapshot") or {})) <= 3
+
+
+def test_recommendation_dedupes_same_shop_identity():
+    shops = [
+        _fake_shop("dup_a", "明光桥炭火烧烤", address="北京市海淀区明光桥街道1号", rating=4.8),
+        _fake_shop("dup_b", "明光桥炭火烧烤", address="北京市海淀区明光桥街道1号", rating=4.6),
+        _fake_shop("uniq_c", "远方烧烤(清河店)", address="北京市海淀区清河中街3号", rating=4.7),
+    ]
+
+    from ..planning.evidence.evidence_builder import _build_recommendation_evidence
+
+    evidence = _build_recommendation_evidence(
+        [],
+        {
+            "call_search": {
+                "tool_name": "search_shops",
+                "result_status": "ok",
+                "data": [dict(item) for item in shops],
+            }
+        },
+        {},
+        {"plan_id": "dedup_identity", "query_terms": ["烧烤"], "scene_terms": []},
+    )
+    ranked = evidence.get("ranking_snapshot", {}).get("ranked", [])
+    names = [item["shop_name"] for item in ranked]
+    shop_ids = [item["shop_id"] for item in ranked]
+
+    assert len(ranked) == 2
+    assert names.count("明光桥炭火烧烤") == 1
+    assert len(shop_ids) == len(set(shop_ids))
 
 
 def test_closed_shop_is_removed(monkeypatch: pytest.MonkeyPatch):

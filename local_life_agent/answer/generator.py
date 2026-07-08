@@ -97,6 +97,24 @@ def _to_dict(value: Any) -> dict[str, Any]:
     return dict(getattr(value, "__dict__", {}) or {})
 
 
+def _to_location_dict(value: Any) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump()
+        return dumped if isinstance(dumped, dict) else {}
+    if isinstance(value, str):
+        text = value.strip()
+        return {"location_name": text} if text else {}
+    try:
+        return dict(value)
+    except Exception:
+        return {}
+
+
 def _normalize_coupon_phrase(text: str) -> str:
     if not text:
         return text
@@ -242,7 +260,8 @@ def _build_decision_plan(
         # 5. Build candidate plan
         forbidden_claims = list(ap.get("forbidden_claims", []))
         must_mention_unknowns = list(ap.get("must_mention_unknowns", []))
-        location = str(ap.get("location") or ev.get("location") or "").strip()
+        location = _to_location_dict(ap.get("location") or ev.get("location") or semantic_frame.get("location"))
+        location_label = str(location.get("location_name") or location.get("label") or "").strip()
         user_goal = ap.get("user_goal") or ""
         if not user_goal and preferences["query_terms"]:
             user_goal = " ".join(preferences["query_terms"])
@@ -250,7 +269,7 @@ def _build_decision_plan(
         candidate_plan = build_candidate_decision_plan(
             decision_type=decision_type,
             user_goal=user_goal,
-            location=location,
+            location=location_label,
             evidences=evidences,
             evaluations=evaluations,
             forbidden_claims=forbidden_claims,

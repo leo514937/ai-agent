@@ -98,6 +98,42 @@ def test_invalid_llm_fallback_cjk_goes_to_local_life():
     assert result["error_code"] == "LLM_JSON_PARSE_ERROR"
 
 
+def test_invalid_llm_fallback_capability_stays_capability():
+    def fake_call_llm(prompt, **kwargs):
+        return {
+            "ok": False,
+            "content": None,
+            "raw": "not json",
+            "confidence": 0.0,
+            "error_code": "LLM_JSON_PARSE_ERROR",
+            "error_message": "bad json",
+            "attempts": 2,
+        }
+
+    result = TopIntentRouter(llm_call=fake_call_llm).route("你能帮我做什么？")
+
+    assert result["top_intent"] == TopIntent.capability
+    assert result["error_code"] == "LLM_JSON_PARSE_ERROR"
+
+
+def test_invalid_llm_fallback_unsafe_stays_unsafe():
+    def fake_call_llm(prompt, **kwargs):
+        return {
+            "ok": False,
+            "content": None,
+            "raw": "not json",
+            "confidence": 0.0,
+            "error_code": "LLM_JSON_PARSE_ERROR",
+            "error_message": "bad json",
+            "attempts": 2,
+        }
+
+    result = TopIntentRouter(llm_call=fake_call_llm).route("帮我下单并支付")
+
+    assert result["top_intent"] == TopIntent.unsafe
+    assert result["error_code"] == "LLM_JSON_PARSE_ERROR"
+
+
 def test_extra_fields_trigger_retry_and_are_not_kept():
     attempts = []
 

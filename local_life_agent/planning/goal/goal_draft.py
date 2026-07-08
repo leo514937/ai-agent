@@ -21,6 +21,7 @@ from ...domain.candidate import (
     GoalType,
     LocalLifeGoalDraft,
 )
+from ...domain.contextualized_turn import build_contextual_follow_up
 from ...domain.enums import Facet, TaskType
 from ...domain.schemas import SemanticFrame
 
@@ -193,6 +194,18 @@ def build_local_life_goal_draft(
         except Exception:
             frame = None
     if frame is None:
+        contextual_follow_up = build_contextual_follow_up(
+            semantic_frame={},
+            session_state=state,
+            raw_text=str((state or {}).get("raw_text", "") or ""),
+        )
+        if contextual_follow_up is not None and contextual_follow_up.kind == "recommendation_refine":
+            if list((state or {}).get("last_recommendation_list", []) or []):
+                return LocalLifeGoalDraft(
+                    goal_type=GoalType.RECOMMENDATION,
+                    candidate_source=CandidateSource.CONTEXT,
+                    source_origin="fallback_follow_up",
+                )
         return LocalLifeGoalDraft(
             goal_type=GoalType.UNSUPPORTED,
             candidate_source=CandidateSource.DISCOVERY,
@@ -201,6 +214,15 @@ def build_local_life_goal_draft(
 
     goal_type = _goal_type_from_task_type(frame.task_type)
     candidate_source = _candidate_source_from_frame(frame)
+    contextual_follow_up = build_contextual_follow_up(
+        semantic_frame=frame.model_dump(mode="json") if hasattr(frame, "model_dump") else frame,
+        session_state=state,
+        raw_text=str((state or {}).get("raw_text", "") or ""),
+    )
+    if contextual_follow_up is not None and contextual_follow_up.kind == "recommendation_refine":
+        if list((state or {}).get("last_recommendation_list", []) or []):
+            goal_type = GoalType.RECOMMENDATION
+            candidate_source = CandidateSource.CONTEXT
     candidate_category = ""
     if isinstance(frame.hard_constraints, dict):
         candidate_category = _stringify_category(frame.hard_constraints.get("category", ""))

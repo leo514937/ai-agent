@@ -54,27 +54,33 @@ class SubTaskDAG:
         return [node for node in self.nodes.values() if task_id in self.edges.get(node.task_id, ())]
 
     def topological_sort(self) -> list[SubTaskSpec]:
-        ordered: list[SubTaskSpec] = []
+        return [node for level in self.topological_levels() for node in level]
+
+    def topological_levels(self) -> list[list[SubTaskSpec]]:
+        levels: list[list[SubTaskSpec]] = []
         pending = {task_id: set(deps) for task_id, deps in self.edges.items()}
-        ready = [task_id for task_id, deps in pending.items() if not deps]
-        seen: set[str] = set()
+        remaining = set(self.nodes)
+        ready = [task_id for task_id in self.nodes if not pending.get(task_id)]
 
         while ready:
-            task_id = ready.pop(0)
-            if task_id in seen:
-                continue
-            seen.add(task_id)
-            ordered.append(self.nodes[task_id])
+            current_level_ids = [task_id for task_id in self.nodes if task_id in ready]
+            current_level = [self.nodes[task_id] for task_id in current_level_ids if task_id in remaining]
+            if not current_level:
+                break
+            levels.append(current_level)
+            for task_id in current_level_ids:
+                remaining.discard(task_id)
+                pending.pop(task_id, None)
             for child_id, deps in pending.items():
-                if task_id in deps:
-                    deps.remove(task_id)
-                    if not deps and child_id not in seen and child_id not in ready:
-                        ready.append(child_id)
+                for task_id in current_level_ids:
+                    deps.discard(task_id)
+                if not deps and child_id in remaining and child_id not in ready:
+                    ready.append(child_id)
+            ready = [task_id for task_id in self.nodes if task_id in ready and task_id in remaining]
 
-        if len(ordered) != len(self.nodes):
-            missing = [task_id for task_id in self.nodes if task_id not in {node.task_id for node in ordered}]
-            raise ValueError(f"subtask dag contains a cycle or missing dependency: {missing}")
-        return ordered
+        if remaining:
+            raise ValueError(f"subtask dag contains a cycle or missing dependency: {sorted(remaining)}")
+        return levels
 
     def to_dict(self) -> dict[str, Any]:
         return {

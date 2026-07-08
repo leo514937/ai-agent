@@ -13,6 +13,7 @@ from ..config import LLM_TIMEOUT_MS
 from ..llm.client import call_llm, load_prompt
 from ..llm.json_parser import LLMJSONParseError, parse_json_response
 from ..observability.file_logger import get_python_service_logger, log_kv
+from .model_policy import get_prompt_model_profile
 
 _PLAN_LOG = get_python_service_logger()
 
@@ -67,6 +68,22 @@ def normalize_structured_content(content: Any) -> dict[str, Any]:
     return {}
 
 
+def _resolve_llm_policy(prompt_name: str, timeout_ms: int, max_retries: int) -> tuple[int, int, str]:
+    profile = get_prompt_model_profile(prompt_name)
+    if profile is None:
+        return timeout_ms, max_retries, ""
+
+    effective_timeout_ms = timeout_ms
+    if timeout_ms == LLM_TIMEOUT_MS and profile.timeout_ms > 0:
+        effective_timeout_ms = profile.timeout_ms
+
+    effective_max_retries = max_retries
+    if max_retries == 0 and profile.max_retries > 0:
+        effective_max_retries = profile.max_retries
+
+    return effective_timeout_ms, effective_max_retries, profile.node_name
+
+
 def invoke_structured_llm(
     *,
     prompt_name: str,
@@ -80,6 +97,8 @@ def invoke_structured_llm(
     system_prompt, user_template = load_two_part_prompt(prompt_name)
     user_prompt = render_prompt(user_template, replacements)
     call = llm_call or call_llm
+    timeout_ms, max_retries, node_name = _resolve_llm_policy(prompt_name, timeout_ms, max_retries)
+    profile = get_prompt_model_profile(prompt_name)
 
     validator_name = getattr(response_validator, "__name__", type(response_validator).__name__)
     log_kv(
@@ -88,9 +107,11 @@ def invoke_structured_llm(
         "[PLAN_LLM_INVOKE]",
         tone="llm",
         prompt_name=prompt_name,
+        node_name=node_name,
         validator=validator_name,
         timeout_ms=timeout_ms,
         max_retries=max_retries,
+        model_profile=profile.model_dump() if profile is not None else {},
         replacement_keys=list(replacements.keys()),
         user_prompt_hash=_hash_text(user_prompt),
         system_prompt_hash=_hash_text(system_prompt),
@@ -114,6 +135,7 @@ def invoke_structured_llm(
         tone="llm" if ok else "warn",
         prompt_name=prompt_name,
         ok=ok,
+        node_name=node_name,
         error_code=result.get("error_code", ""),
         llm_backend=result.get("llm_backend", ""),
         payload_preview=payload,

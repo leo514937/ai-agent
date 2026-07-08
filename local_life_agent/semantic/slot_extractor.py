@@ -37,6 +37,27 @@ _DISTANCE_HINTS = (
     "\u79bb\u8fd9",
     "\u79bb\u6211",
     "\u9644\u8fd1",
+    "\u591a\u4e45\u80fd\u5230",
+    "\u591a\u4e45\u5230",
+)
+_UNSUPPORTED_SERVICE_HINTS = (
+    "\u5bc4\u5b58",
+    "\u5ba0\u7269",
+    "\u505c\u8f66",
+    "\u5305\u95f4",
+    "\u5305\u53a2",
+    "\u505c\u8f66\u4f4d",
+    "\u5145\u7535",
+    "\u65e0\u969c\u788d",
+    "\u513f\u7ae5\u6905",
+    "\u513f\u7ae5\u5ea7\u6905",
+    "\u513f\u7ae5\u9910\u6905",
+    "\u540c\u6b65\u96f6\u552e",
+    "\u54a8\u8be2\u670d\u52a1",
+    "\u670d\u52a1\u9879",
+    "\u914d\u5957\u670d\u52a1",
+    "\u65e0\u969c\u788d\u901a\u9053",
+    "\u65e0\u969c\u788d\u8bbe\u65bd",
 )
 _OPTIONAL_HINTS = (
     "\u987a\u4fbf",
@@ -243,6 +264,15 @@ def _build_facets(text: str) -> list[dict[str, object]]:
 
 def _extract_hints(text: str, hints: tuple[str, ...]) -> list[str]:
     return _dedupe([hint for hint in hints if hint in text])
+
+
+def _unsupported_facets(text: str) -> tuple[list[str], list[str]]:
+    normalized = normalize_text(text)
+    service_cues = ("有没有", "是否", "能不能", "能否", "可不可以", "提供", "支持", "服务", "设施")
+    matched = [hint for hint in _UNSUPPORTED_SERVICE_HINTS if hint and hint in normalized]
+    if not matched or not any(cue in normalized for cue in service_cues):
+        return [], []
+    return ["service_feature"], _dedupe([f"unsupported_service:{hint}" for hint in matched])
 
 
 def _surface_hints(text: str) -> list[str]:
@@ -570,6 +600,7 @@ def extract_slots(text: str, top_intent: str) -> dict:
     facets = _build_facets(simplified)
     surface_hints = _surface_hints(simplified)
     alias_hints = mentions
+    unsupported_facets, unsupported_reasons = _unsupported_facets(simplified)
     query_terms = _recommendation_query_terms(simplified)
     scene_terms = _recommendation_scene_terms(simplified)
     scene = _extract_scene(simplified)
@@ -631,6 +662,7 @@ def extract_slots(text: str, top_intent: str) -> dict:
             )
             primary_task = "coupon_query" if task_type == TaskType.coupon_query else "single_shop_query"
             workflow_hint = task_type.value
+            focused_facets = [str(facet.get("name", "") or "").strip() for facet in facets if str(facet.get("name", "") or "").strip()]
             need_context = not bool(mentions or ordinal_references or deictic_references)
         elif mentions:
             task_type = TaskType.single_shop_query
@@ -751,6 +783,8 @@ def extract_slots(text: str, top_intent: str) -> dict:
         "ordinal_references": ordinal_references,
         "deictic_references": deictic_references,
         "focused_facets": focused_facets,
+        "unsupported_facets": unsupported_facets,
+        "unsupported_reasons": unsupported_reasons,
         "comparison_focus": comparison_focus,
         "hard_constraints": {},
         "soft_preferences": soft_preferences,

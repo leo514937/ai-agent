@@ -7,6 +7,7 @@ from local_life_agent.planning.budget.execution_budget import (
     ExecutionBudget,
     execution_budget_from_state,
 )
+from local_life_agent.planning.orchestrator.orchestrator_budget import OrchestratorBudget
 
 
 def test_execution_budget_defaults_are_stable() -> None:
@@ -49,3 +50,22 @@ def test_execution_budget_explicit_state_value_wins() -> None:
     assert budget.max_llm_calls == 4
     assert budget.max_review_rounds == 3
     assert budget.max_rewrite_rounds == 2
+
+
+def test_orchestrator_budget_derives_parallelism_and_timeout_from_state() -> None:
+    budget = OrchestratorBudget.from_state(
+        {
+            "execution_budget": {
+                "max_tool_calls": 6,
+                "max_llm_calls": 4,
+                "max_review_rounds": 2,
+                "max_rewrite_rounds": 1,
+            },
+            "orchestrator_subtask_timeout_ms": 321,
+        }
+    )
+
+    assert budget.max_subtask_count == 6
+    assert budget.max_parallelism == 3
+    assert budget.subtask_timeout_ms == 321
+    assert budget.max_failed_subtasks == 2

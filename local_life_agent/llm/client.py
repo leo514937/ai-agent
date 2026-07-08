@@ -59,6 +59,19 @@ def _invalidate_graph_cache() -> None:
         pass
 
 
+def _close_backend(backend: LLMBackend | None) -> None:
+    """Best-effort cleanup for backends that manage HTTP clients."""
+    if backend is None:
+        return
+    close = getattr(backend, "close", None)
+    if not callable(close):
+        return
+    try:
+        close()
+    except Exception:
+        pass
+
+
 class _TopIntentProbe(BaseModel):
     top_intent: str = Field(...)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
@@ -68,13 +81,20 @@ class _TopIntentProbe(BaseModel):
 def set_llm_backend(backend: LLMBackend | None) -> None:
     """Register a fake/mock backend for tests."""
     global _LLM_BACKEND
+    previous = _LLM_BACKEND
     _LLM_BACKEND = backend
+    if previous is not backend:
+        _close_backend(previous)
     _invalidate_graph_cache()
 
 
 def clear_llm_backend() -> None:
     """Clear the injected backend."""
-    set_llm_backend(None)
+    global _LLM_BACKEND
+    previous = _LLM_BACKEND
+    _LLM_BACKEND = None
+    _close_backend(previous)
+    _invalidate_graph_cache()
 
 
 def ensure_real_llm_backend() -> bool:

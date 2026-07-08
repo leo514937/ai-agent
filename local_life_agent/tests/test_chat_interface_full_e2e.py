@@ -81,6 +81,16 @@ def _run(text: str, session_id: str, *, trace_id: str = "", turn_id: str = ""):
     return agent.run_agent_graph(text, session_id=session_id, trace_id=trace_id, turn_id=turn_id)
 
 
+def _tool_names(response) -> list[str]:
+    debug = getattr(response, "debug", None)
+    if debug is None:
+        return []
+    tool_results = getattr(debug, "tool_results", None) or {}
+    if isinstance(tool_results, dict):
+        return sorted({str(item.get("tool_name", "") or "") for item in tool_results.values() if isinstance(item, dict) and item.get("tool_name")})
+    return []
+
+
 def _assert_decision(response, *, text: str, session_id: str, expected_workflow: str) -> None:
     decision = orchestration_decision_from_response(response, text=text, session_id=session_id)
     assert decision.workflow_name == expected_workflow
@@ -242,6 +252,127 @@ def test_recommendation_then_ordinal_coupon_reference(monkeypatch: pytest.Monkey
     _assert_decision(second, text=second_text, session_id="chat-e2e-5", expected_workflow="deterministic_tool")
     assert second.debug.session_state_after.get("current_shop")
     assert second.debug.session_state_after.get("pending_clarification") is None
+
+
+def test_recommendation_refine_follow_up_prefers_history_not_clarification(monkeypatch: pytest.MonkeyPatch):
+    _install_default_dispatch(monkeypatch)
+    backend = SpyRealLLMBackend(
+        scenario_payloads={
+            "附近推荐火锅": {
+                "top_intent": "local_life",
+                "task_type": "recommendation",
+                "primary_task": "recommendation",
+                "workflow_hint": "recommendation",
+                "merchant_mentions": [],
+                "reference_mentions": [],
+                "comparison_targets": [],
+                "ordinal_references": [],
+                "deictic_references": [],
+                "facets": [{"name": "category", "required": True}],
+                "hard_constraints": {"category": ["火锅"]},
+                "soft_preferences": {},
+                "ranking_signals": {},
+                "confidence": 0.9,
+                "need_context": False,
+                "grounding_status": "grounded",
+                "semantic_parse_source": "spy_real_llm",
+            },
+            "便宜一点的呢": {
+                "top_intent": "local_life",
+                "task_type": "recommendation",
+                "primary_task": "recommendation_refine",
+                "workflow_hint": "recommendation",
+                "merchant_mentions": [],
+                "reference_mentions": [],
+                "comparison_targets": [],
+                "ordinal_references": [],
+                "deictic_references": [],
+                "facets": [],
+                "follow_up": {"is_follow_up": True, "refine_action": "cheaper"},
+                "soft_preferences": {"price_preference": "lower_price"},
+                "ranking_signals": {"price_preference": "lower_price"},
+                "confidence": 0.2,
+                "need_context": True,
+                "grounding_status": "unknown",
+                "semantic_parse_source": "spy_real_llm",
+            }
+        }
+    )
+    set_llm_backend(backend)
+
+    first = _run("附近推荐火锅", "chat-e2e-5b")
+    assert first.debug.session_state_after.get("last_recommendation_list")
+
+    second_text = "便宜一点的呢"
+    second = _run(second_text, "chat-e2e-5b")
+
+    _assert_decision(second, text=second_text, session_id="chat-e2e-5b", expected_workflow="discovery_decision")
+    assert "你想查哪一家" not in second.answer_text
+    assert second.debug.session_state_after.get("last_recommendation_list")
+    assert second.debug.semantic_frame.get("primary_task") == "recommendation_refine"
+    assert second.debug.semantic_frame.get("follow_up", {}).get("refine_action") == "cheaper"
+
+
+def test_comparison_follow_up_second_item_coupon_uses_comparison_context(monkeypatch: pytest.MonkeyPatch):
+    _install_default_dispatch(monkeypatch)
+    backend = SpyRealLLMBackend(
+        scenario_payloads={
+            "海底捞(牡丹园店)和川味轩(知春路店)哪个好？": {
+                "top_intent": "local_life",
+                "task_type": "comparison",
+                "primary_task": "comparison",
+                "workflow_hint": "comparison",
+                "merchant_mentions": ["海底捞(牡丹园店)", "川味轩(知春路店)"],
+                "reference_mentions": [],
+                "comparison_targets": [
+                    {"shop_id": "900007", "shop_name": "海底捞(牡丹园店)"},
+                    {"shop_id": "900016", "shop_name": "川味轩(知春路店)"},
+                ],
+                "ordinal_references": [],
+                "deictic_references": [],
+                "facets": [],
+                "comparison_intent": True,
+                "comparison_structure": "multi_target",
+                "confidence": 0.95,
+                "need_context": False,
+                "grounding_status": "grounded",
+                "semantic_parse_source": "spy_real_llm",
+            },
+            "第二家有券吗": {
+                "top_intent": "local_life",
+                "task_type": "coupon_query",
+                "primary_task": "coupon_query",
+                "workflow_hint": "single_shop_query",
+                "merchant_mentions": [],
+                "reference_mentions": ["第二家"],
+                "comparison_targets": [],
+                "ordinal_references": ["第二家"],
+                "deictic_references": [],
+                "facets": [{"name": "coupon", "required": True}],
+                "follow_up": {"is_follow_up": True, "refine_action": "coupon_lookup"},
+                "soft_preferences": {},
+                "ranking_signals": {},
+                "confidence": 0.23,
+                "need_context": True,
+                "grounding_status": "unknown",
+                "semantic_parse_source": "spy_real_llm",
+            },
+        }
+    )
+    set_llm_backend(backend)
+
+    first = _run("海底捞(牡丹园店)和川味轩(知春路店)哪个好？", "chat-e2e-5c")
+    _assert_decision(first, text="海底捞(牡丹园店)和川味轩(知春路店)哪个好？", session_id="chat-e2e-5c", expected_workflow="discovery_decision")
+    assert first.debug.session_state_after.get("comparison_result")
+    assert len(first.debug.session_state_after.get("comparison_targets") or []) >= 2
+
+    second = _run("第二家有券吗", "chat-e2e-5c")
+
+    _assert_decision(second, text="第二家有券吗", session_id="chat-e2e-5c", expected_workflow="deterministic_tool")
+    assert "get_coupon_list" in _tool_names(second)
+    assert second.debug.session_state_after.get("current_shop", {}).get("shop_id") == "900016"
+    assert second.debug.session_state_after.get("pending_clarification") is None
+    assert second.debug.semantic_frame.get("follow_up", {}).get("refine_action") == "coupon_lookup"
 
 
 def test_current_shop_reference_uses_current_shop_anchor(monkeypatch: pytest.MonkeyPatch):

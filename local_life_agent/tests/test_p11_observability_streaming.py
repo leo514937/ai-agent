@@ -6,6 +6,7 @@ import re
 
 import pytest
 
+from ..domain.schemas import ExecutionPlan
 from ..observability.metrics import aggregate_quality_metrics, build_turn_metrics
 from ..observability.trace import build_turn_trace, record_span, reset_trace_store
 from ..streaming.events import (
@@ -152,6 +153,44 @@ def test_p11_turn_metrics_derived_without_changing_state():
     assert metrics.cache_miss_count == 0
     assert metrics.batch_size == 2
     assert metrics.parallelism == 3
+
+
+def test_p11_turn_metrics_accepts_execution_plan_model():
+    execution_plan = ExecutionPlan.model_validate(
+        {
+            "plan_id": "plan_p11_model",
+            "task_type": "recommendation",
+            "tool_calls": [{"call_id": "call_1", "tool_name": "search_shops", "args": {"query": "烧烤"}}],
+            "facet_validation_result": {"budget_exceeded": False},
+            "blocked_tool_calls": [],
+            "facet_candidates": [{"name": "烧烤"}],
+            "stages": [{"stage_id": "stage_1", "max_parallelism": 1}],
+        }
+    )
+    final_state = {
+        "trace_id": "trace_p11_model",
+        "session_id": "session_p11_model",
+        "turn_id": "turn_p11_model",
+        "raw_text": "推荐几家性价比高的烧烤",
+        "workflow_name": "discovery_decision",
+        "route_task": "recommendation",
+        "response_mode": "final",
+        "task_type": "recommendation",
+        "semantic_frame": {"task_type": "recommendation", "category": "烧烤"},
+        "execution_plan": execution_plan,
+        "answer_plan": {"facets": ["评分", "价格"]},
+        "evidence_pack": {"evidence_items": [{"evidence_id": "e1"}]},
+        "state_update_plan": {"set_fields": {}},
+        "answer_verify_passed": True,
+        "event_log": [],
+    }
+
+    metrics = build_turn_metrics(final_state)
+
+    assert metrics.tool_call_count == 1
+    assert metrics.facet_candidates_count == 1
+    assert metrics.parallelism == 1
+    assert metrics.workflow_name == "discovery_decision"
 
 
 def test_p11_stream_events_carry_trace_id_and_single_final():

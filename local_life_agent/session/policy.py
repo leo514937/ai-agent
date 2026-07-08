@@ -24,6 +24,7 @@ SESSION_FIELD_PARTITION_MAP: dict[str, str] = {
     "last_recommendation_list": SESSION_PARTITION_RECOMMENDATION_CONTEXT,
     "last_recommendation_list_meta": SESSION_PARTITION_RECOMMENDATION_CONTEXT,
     "active_constraints": SESSION_PARTITION_USER_PREFERENCE_SUMMARY,
+    "active_preferences": SESSION_PARTITION_USER_PREFERENCE_SUMMARY,
     "pending_clarification": SESSION_PARTITION_PENDING_CLARIFICATION,
     "pending_clarification_meta": SESSION_PARTITION_PENDING_CLARIFICATION,
     "comparison_targets": SESSION_PARTITION_COMPARISON_CONTEXT,

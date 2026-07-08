@@ -1,8 +1,9 @@
 """Hard guard filters.
 
 The guard only intercepts pure greetings, pure capability questions,
-and pure invalid or punctuation-only inputs. If the utterance contains
-any local-life business intent, it should be passed through as ``safe``.
+pure unsafe requests, and pure invalid or punctuation-only inputs. If
+the utterance contains any local-life business intent, it should be
+passed through as ``safe``.
 """
 
 from __future__ import annotations
@@ -19,7 +20,12 @@ _GREETING_PATTERNS = (
 )
 
 _CAPABILITY_PATTERNS = (
-    r"^(你有什么作用|你能做什么|你可以做什么|你是谁|你是做什么的|你能干嘛|你的功能|你有什么功能)$",
+    r"^(你有什么作用|你能做什么|你可以做什么|你能帮我做什么|你有什么用|你有什么功能|你是谁|你是做什么的|你能干嘛|你能帮我干嘛|你的功能|我能做什么|我可以做什么)$",
+)
+
+_UNSAFE_PATTERNS = (
+    r"(帮我)?(下单|支付|付款|代付|代买|订座|订餐|订位|预约|代订座|代订餐|直接下单|直接支付)",
+    r"(帮我)?(买单|结账|点单|点餐)",
 )
 
 _BUSINESS_PATTERNS = (
@@ -114,6 +120,14 @@ def check_hard_guard(text: Any) -> dict:
             "label": "capability",
             "reason": "pure_capability_question",
             "reply": "我可以帮你查附近门店、优惠、距离和营业状态。",
+        }
+
+    if _matches_any(_UNSAFE_PATTERNS, compact):
+        return {
+            "passed": False,
+            "label": "unsafe",
+            "reason": "pure_unsafe_request",
+            "reply": "出于安全考虑，我不能帮你代下单、代支付或代订座。你可以继续让我帮你查商家、优惠券、营业状态或距离。",
         }
 
     if len(compact) <= 2:

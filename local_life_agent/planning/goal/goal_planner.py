@@ -23,6 +23,7 @@ from enum import Enum
 from typing import Any, Callable
 
 from ...domain.candidate import GoalType as _GoalType
+from ...domain.contextualized_turn import build_contextual_follow_up
 from ...domain.enums import Facet
 from ...domain.goal import GoalPlan, GoalSource
 from ...domain.schemas import SemanticFrame
@@ -395,9 +396,33 @@ def _plan_goal_rules(
         A ``GoalPlan`` with goal type, candidate directives, evidence needs,
         and unsupported status.
     """
+    frame_dict = _to_dict(semantic_frame)
     # --- 1. Determine goal_type ---
     task_type_str = _get_task_type(semantic_frame)
     goal_type_str = _map_goal_type(task_type_str)
+    session_dict = _to_dict(session_state)
+    cheaper_cues = ("便宜一点", "便宜点", "更便宜", "更便宜点", "便宜些", "比较便宜", "便宜一点的呢")
+    preference_signal_values = [
+        str(item.get("preference_type", "") or "").strip() + " " + str(item.get("value", "") or "").strip()
+        if isinstance(item, dict)
+        else str(getattr(item, "preference_type", "") or "") + " " + str(getattr(item, "value", "") or "")
+        for item in (frame_dict.get("preference_signals", []) or [])
+    ]
+    has_price_signal = any(
+        token in " ".join(preference_signal_values) or token in str(frame_dict.get("soft_preferences", {}))
+        for token in ("relative_price_preference", "price_preference", "lower_price", "cheaper")
+    )
+    recommendation_refine_follow_up = bool(
+        list(session_dict.get("last_recommendation_list", []) or [])
+        and (
+            bool(frame_dict.get("constraint_update"))
+            or bool(frame_dict.get("follow_up"))
+            or has_price_signal
+            or (raw_text and any(token in raw_text for token in cheaper_cues))
+        )
+    )
+    if recommendation_refine_follow_up:
+        goal_type_str = "recommendation"
 
     # --- 2. Detect unsupported intents ---
     unsupported, unsupported_reason = _detect_unsupported_intent(
@@ -406,6 +431,8 @@ def _plan_goal_rules(
 
     # --- 3. Derive candidate_source ---
     candidate_source = _get_candidate_source(semantic_frame)
+    if recommendation_refine_follow_up:
+        candidate_source = "context"
 
     # --- 4. Extract candidate metadata ---
     candidate_category: str | None = None

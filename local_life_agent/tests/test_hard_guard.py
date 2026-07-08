@@ -40,6 +40,13 @@ def test_pure_capability_question_is_blocked():
     assert result["label"] == "capability"
 
 
+def test_broad_capability_question_is_blocked():
+    result = check_hard_guard("\u4f60\u80fd\u5e2e\u6211\u505a\u4ec0\u4e48")
+
+    assert result["passed"] is False
+    assert result["label"] == "capability"
+
+
 def test_store_name_keeps_guard_open():
     result = check_hard_guard("\u6d77\u5e95\u635e\u6709\u4ec0\u4e48\u4f5c\u7528")
 
@@ -52,3 +59,10 @@ def test_function_rich_mall_question_is_safe():
 
     assert result["passed"] is True
     assert result["label"] == "safe"
+
+
+def test_pure_unsafe_request_is_blocked():
+    result = check_hard_guard("\u5e2e\u6211\u4e0b\u5355\u5e76\u652f\u4ed8")
+
+    assert result["passed"] is False
+    assert result["label"] == "unsafe"

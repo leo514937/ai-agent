@@ -111,6 +111,7 @@ class SessionState(BaseModel):
     last_recommendation_list: list[dict] = Field(default_factory=list)
     last_recommendation_list_meta: SessionValueMeta = Field(default_factory=SessionValueMeta)
     active_constraints: dict[str, Any] = Field(default_factory=dict)
+    active_preferences: list[dict[str, Any]] = Field(default_factory=list)
     pending_clarification: dict | None = None
     pending_clarification_meta: SessionValueMeta = Field(default_factory=SessionValueMeta)
     comparison_targets: list[dict] = Field(default_factory=list)

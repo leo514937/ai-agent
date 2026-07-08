@@ -89,6 +89,8 @@ class _SemanticFrameRouterResponse(BaseModel):
     ordinal_references: list[str] = Field(default_factory=list)
     deictic_references: list[str] = Field(default_factory=list)
     focused_facets: list[str] = Field(default_factory=list)
+    unsupported_facets: list[str] = Field(default_factory=list)
+    unsupported_reasons: list[str] = Field(default_factory=list)
     comparison_focus: str = ""
     hard_constraints: dict[str, Any] = Field(default_factory=dict)
     soft_preferences: dict[str, Any] = Field(default_factory=dict)
@@ -420,6 +422,46 @@ def _normalize_refine_action(action: str) -> str:
     return RefineAction.other.value
 
 
+_CAPABILITY_HINTS = (
+    "你能帮我做什么",
+    "能帮我做什么",
+    "你可以帮我做什么",
+    "可以帮我做什么",
+    "你会什么",
+    "能做什么",
+    "有什么作用",
+    "怎么帮我",
+    "帮我做什么",
+)
+
+_UNSAFE_HINTS = (
+    "下单",
+    "支付",
+    "付款",
+    "代付",
+    "代买",
+    "订座",
+    "订餐",
+    "帮我买",
+    "直接下单",
+    "直接支付",
+)
+
+
+def _looks_like_capability_query(text: str) -> bool:
+    compact = str(text or "").strip()
+    return any(hint in compact for hint in _CAPABILITY_HINTS)
+
+
+def _looks_like_unsafe_query(text: str) -> bool:
+    compact = str(text or "").strip()
+    if not compact:
+        return False
+    if any(hint in compact for hint in _UNSAFE_HINTS):
+        return True
+    return any(token in compact for token in ("代下单", "代支付", "代订座", "代订餐", "帮我付款"))
+
+
 def _fallback_intent(normalised_text: str, error_code: str = "") -> TopIntent:
     compact = normalised_text.strip()
     if not compact:
@@ -428,6 +470,10 @@ def _fallback_intent(normalised_text: str, error_code: str = "") -> TopIntent:
         # When LLM fails, still classify based on content rather than
         # blindly returning out_of_scope.  Check business keywords and
         # CJK characters before giving up.
+        if _looks_like_capability_query(compact):
+            return TopIntent.capability
+        if _looks_like_unsafe_query(compact):
+            return TopIntent.unsafe
         if any(
             hint in compact
             for hint in (
@@ -452,6 +498,10 @@ def _fallback_intent(normalised_text: str, error_code: str = "") -> TopIntent:
         if any("\u4e00" <= ch <= "\u9fff" for ch in compact):
             return TopIntent.local_life
         return TopIntent.out_of_scope
+    if _looks_like_capability_query(compact):
+        return TopIntent.capability
+    if _looks_like_unsafe_query(compact):
+        return TopIntent.unsafe
     if any(
         hint in compact
         for hint in (
@@ -546,6 +596,7 @@ def _fallback_semantic_frame(
             "filters",
             "soft_preferences",
             "ranking_signals",
+            "unsupported_facets",
         )
     )
     if structured_signals:
@@ -590,7 +641,7 @@ def _build_recovery_frame(
     for key in ("comparison_targets", "ordinal_references", "deictic_references", "merchant_mentions", "brand_mentions", "branch_mentions"):
         if not normalized.get(key) and recovery_hints.get(key):
             normalized[key] = recovery_hints.get(key)
-    for key in ("comparison_intent", "workflow_hint", "task_type", "primary_task", "comparison_facets", "comparison_focus", "need_context", "missing_slots", "soft_preferences", "ranking_signals", "location", "category", "reference", "exploration_stages", "scene", "time"):
+    for key in ("comparison_intent", "workflow_hint", "task_type", "primary_task", "comparison_facets", "comparison_focus", "need_context", "missing_slots", "soft_preferences", "ranking_signals", "location", "category", "reference", "exploration_stages", "scene", "time", "unsupported_facets", "unsupported_reasons"):
         if not normalized.get(key) and recovery_hints.get(key) not in (None, [], {}, ""):
             normalized[key] = recovery_hints.get(key)
     if recovery_hints.get("location_reference") and not normalized.get("location_reference"):
@@ -617,6 +668,64 @@ def _build_recovery_frame(
     return frame, normalized, ""
 
 
+def _apply_session_follow_up_context(frame: SemanticFrame, text: str, summary: Any) -> None:
+    """补齐会话续问的轻量语义，不改写明确的新任务。"""
+    normalized = normalize_text(text)
+    if not normalized:
+        return
+
+    # 只在明确有推荐上下文、且没有明显的商家/对比/序数引用时，
+    # 才把“便宜一点”类表达收敛为推荐续问。
+    has_recommendation_context = bool(
+        getattr(summary, "last_recommendation_present", False)
+        or getattr(summary, "last_recommendation_count", 0)
+        or getattr(summary, "active_constraints", None)
+    )
+    if not has_recommendation_context:
+        return
+
+    has_explicit_target = bool(
+        (frame.merchant_mentions or [])
+        or (frame.brand_mentions or [])
+        or (frame.branch_mentions or [])
+        or (frame.reference_mentions or [])
+        or (frame.comparison_targets or [])
+        or (frame.ordinal_references or [])
+        or (frame.deictic_references or [])
+    )
+    if has_explicit_target:
+        return
+
+    cheaper_cues = ("便宜一点", "便宜点", "更便宜", "更便宜点", "便宜些", "比较便宜", "便宜一点的呢")
+    if not any(token in normalized for token in cheaper_cues):
+        return
+
+    task_type_value = _enum_value(frame.task_type)
+    if task_type_value and task_type_value not in {"recommendation", "single_shop_query", "invalid", "out_of_scope"}:
+        return
+
+    frame.task_type = TaskType.recommendation
+    frame.primary_task = "recommendation_refine"
+    if not _enum_value(frame.workflow_hint) or _enum_value(frame.workflow_hint) in {"follow_up", "single_shop_query"}:
+        frame.workflow_hint = "recommendation"
+    follow_up = dict(frame.follow_up or {})
+    follow_up.update({"is_follow_up": True, "refine_action": "cheaper"})
+    frame.follow_up = follow_up
+
+    soft_preferences = dict(frame.soft_preferences or {})
+    soft_preferences.setdefault("price_preference", "lower_price")
+    frame.soft_preferences = soft_preferences
+
+    ranking_signals = dict(frame.ranking_signals or {})
+    ranking_signals.setdefault("price_preference", "lower_price")
+    frame.ranking_signals = ranking_signals
+
+    if not frame.focused_facets:
+        frame.focused_facets = ["price"]
+    frame.need_context = True
+    frame.confidence = max(float(frame.confidence or 0.0), 0.85)
+
+
 def _safe_extract_slots(text: str, top_intent: str) -> dict[str, Any]:
     try:
         payload = extract_slots(text, top_intent)
@@ -633,8 +742,16 @@ def _safe_extract_slots(text: str, top_intent: str) -> dict[str, Any]:
             focused_facets.append("coupon")
         if "营业" in normalized or "开门" in normalized or "打烊" in normalized:
             focused_facets.append("open_status")
-        if "距离" in normalized or "多远" in normalized or "公里" in normalized or "几分钟" in normalized:
+        if "距离" in normalized or "多远" in normalized or "公里" in normalized or "几分钟" in normalized or "多久能到" in normalized or "多久到" in normalized:
             focused_facets.append("distance")
+
+        unsupported_facets: list[str] = []
+        unsupported_reasons: list[str] = []
+        service_cues = ("有没有", "是否", "能不能", "能否", "可不可以", "提供", "支持", "服务", "设施")
+        unsupported_keywords = ("寄存", "宠物", "停车", "包间", "包厢", "充电", "无障碍", "儿童椅", "洗手间")
+        if any(cue in normalized for cue in service_cues) and any(keyword in normalized for keyword in unsupported_keywords):
+            unsupported_facets.append("service_feature")
+            unsupported_reasons.extend([f"unsupported_service:{keyword}" for keyword in unsupported_keywords if keyword in normalized])
 
         for ref in ("第一家", "第二家", "第三家", "第一个", "第二个", "第三个"):
             if ref in normalized:
@@ -671,6 +788,8 @@ def _safe_extract_slots(text: str, top_intent: str) -> dict[str, Any]:
             "ordinal_references": ordinal_references,
             "deictic_references": deictic_references,
             "focused_facets": focused_facets,
+            "unsupported_facets": unsupported_facets,
+            "unsupported_reasons": unsupported_reasons,
             "comparison_focus": "",
             "hard_constraints": {},
             "soft_preferences": {},
@@ -1119,6 +1238,7 @@ def parse_semantic_frame(
             frame.semantic_parse_retry_count = parse_retry_count
             frame.semantic_parse_attempts = parse_attempts
             frame.semantic_parse_reason = parse_reason
+            _apply_session_follow_up_context(frame, normalised_text, summary)
             schema_validation_result = _schema_validation_result(
                 status=parse_status,
                 source="llm",

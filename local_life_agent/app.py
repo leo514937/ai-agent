@@ -26,6 +26,7 @@ from local_life_agent.streaming.runtime import (
     bind_turn_control,
     get_turn_registry,
 )
+from local_life_agent.streaming.cancellation_policy import decide_cancellation_action
 from local_life_agent.streaming.preview_policy import sanitize_preview_text
 from local_life_agent.streaming.status_events import (
     make_preview_block,
@@ -263,6 +264,7 @@ async def cancel_chat(request: ChatCancelRequest):
     return {
         "status": "ok",
         "turn_status": record.status.value if record is not None else TurnStatus.USER_CANCELLED.value,
+        "cancel_action": decide_cancellation_action("user_cancel"),
         "session_id": session_id,
         "turn_id": turn_id,
         "reason": request.reason or "user_stop",

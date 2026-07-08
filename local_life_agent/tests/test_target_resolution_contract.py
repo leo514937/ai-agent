@@ -44,6 +44,27 @@ def test_target_resolution_status_is_observable_for_reference_sources() -> None:
     assert comparison.status == "resolved"
 
 
+def test_target_resolution_prefers_comparison_context_for_ordinal_coupon_followup() -> None:
+    result = build_target_resolution_result(
+        {"ordinal_references": ["第二家"], "task_type": "coupon_query"},
+        session_state={
+            "comparison_result": {
+                "rows": [
+                    {"shop_id": "shop_1", "shop_name": "第一家"},
+                    {"shop_id": "shop_2", "shop_name": "第二家"},
+                ]
+            }
+        },
+        raw_text="第二家有券吗",
+    )
+
+    assert result.resolved is True
+    assert result.status == "resolved"
+    assert result.source == "comparison_targets"
+    assert result.reference_type == "ordinal_reference"
+    assert result.target_shop == {"shop_id": "shop_2", "shop_name": "第二家", "address": "", "alias": []}
+
+
 def test_target_resolution_status_exposes_graph_state_field() -> None:
     model = GraphStateModel.model_validate(
         {

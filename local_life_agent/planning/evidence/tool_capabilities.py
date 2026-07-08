@@ -308,6 +308,8 @@ def build_tool_call_dict(
     target_index: int | None = None,
     group_id: str = "",
 ) -> dict[str, Any]:
+    from .tool_governance import get_tool_governance
+
     args: dict[str, Any]
     if tool_name == "search_shops":
         args = {
@@ -337,6 +339,7 @@ def build_tool_call_dict(
             args["from_location"] = location
     else:
         args = {"shop_id": target_shop_id}
+    governance = get_tool_governance(tool_name)
     return {
         "call_id": call_id,
         "tool_name": tool_name,
@@ -351,4 +354,5 @@ def build_tool_call_dict(
         "group_id": group_id,
         "max_parallelism": 1,
         "priority": 100 if target_index is None else int(target_index),
+        "governance": governance.model_dump() if governance is not None else {},
     }

@@ -129,6 +129,28 @@ class TestGoalDraftCandidateSource:
         # Let's add a deictic ref to trigger MIXED
         pass
 
+    def test_recommendation_refine_follow_up_uses_session_history(self):
+        frame = _frame(
+            task_type=None,
+            merchant_mentions=[],
+            ordinal_references=[],
+            deictic_references=[],
+            soft_preferences={},
+            ranking_signals={},
+        )
+        draft = build_local_life_goal_draft(
+            frame,
+            state={
+                "raw_text": "便宜一点的呢",
+                "last_recommendation_list": [
+                    {"shop_id": "shop_1", "shop_name": "第一家火锅"},
+                    {"shop_id": "shop_2", "shop_name": "第二家火锅"},
+                ],
+            },
+        )
+        assert draft.goal_type == GoalType.RECOMMENDATION
+        assert draft.candidate_source == CandidateSource.CONTEXT
+
 
 # ===================================================================
 # build_local_life_goal_draft — evidence needs

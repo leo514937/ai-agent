@@ -58,6 +58,7 @@ from ...domain.shop_entity import ShopResolutionResult
 from ...domain.facets import build_target_resolution_result, normalize_query_facets
 from ...domain.state import SessionState
 from ...location_utils import normalize_location_payload
+from ...domain.contextualized_turn import build_contextual_follow_up
 from ...planning.plans.candidate_review import review_candidate_set
 from ...planning.evidence.evidence_planner import (
     plan_evidence as plan_evidence_from_candidates,
@@ -335,6 +336,20 @@ def _looks_like_specific_shop_mention(mention: str) -> bool:
     if any(token in text for token in ("(", "（", ")", "）")):
         return True
     return any(token in text for token in ("店", "馆", "轩", "居", "坊", "楼", "城", "中心", "广场"))
+
+
+def _raw_text_shop_prefix(raw_text: str) -> str:
+    text = str(raw_text or "").strip()
+    if not text:
+        return ""
+    stop_tokens = ("有券", "比呢", "比吧", "比", "对比", "比较", "怎么样", "好不好", "多久能到", "多久到", "多久", "吗", "嘛", "呢", "吧", "想查", "查下", "查一下")
+    prefix = text
+    for token in stop_tokens:
+        idx = prefix.find(token)
+        if 0 < idx < len(prefix):
+            prefix = prefix[:idx]
+            break
+    return prefix.strip(" ，,。！？?!~")
 
 
 def _candidate_set_from_shop_dicts(
@@ -901,11 +916,17 @@ def _h_target_resolve_candidate_set(state: GraphState, sf: Any) -> dict:
         merchant_mentions = [str(item).strip() for item in (sf_dict.get("merchant_mentions", []) or []) if str(item).strip()]
         branch_mentions = [str(item).strip() for item in (sf_dict.get("branch_mentions", []) or []) if str(item).strip()]
         reference_mentions = [str(item).strip() for item in (sf_dict.get("reference_mentions", []) or []) if str(item).strip()]
-        mention = ""
-        for item in merchant_mentions:
-            if _looks_like_specific_shop_mention(item):
-                mention = item
-                break
+        shop_target = _to_dict(sf_dict.get("shop_target"))
+        shop_target_name = str(shop_target.get("shop_name", "") or "").strip()
+        if shop_target_name and shop_target_name not in merchant_mentions:
+            merchant_mentions = [shop_target_name] + merchant_mentions
+        raw_text_prefix = _raw_text_shop_prefix(str(state.get("raw_text", "") or state.get("normalized_text", "") or ""))
+        mention = raw_text_prefix
+        if not mention:
+            for item in merchant_mentions:
+                if _looks_like_specific_shop_mention(item):
+                    mention = item
+                    break
         if not mention and merchant_mentions and branch_mentions:
             for merchant in merchant_mentions:
                 merchant = str(merchant).strip()
@@ -1051,6 +1072,19 @@ def _h_target_resolve_candidate_set(state: GraphState, sf: Any) -> dict:
     goal = state.get("local_life_goal_draft")
     if goal is None:
         goal = build_local_life_goal_draft(sf, state)
+    if goal is None or (hasattr(goal, "goal_type") and (goal.goal_type is None or goal.goal_type.value == "unsupported")):
+        contextual_follow_up = build_contextual_follow_up(
+            semantic_frame=sf or {},
+            session_state=state,
+            raw_text=str(state.get("raw_text", "") or ""),
+        )
+        if contextual_follow_up is not None and contextual_follow_up.kind == "recommendation_refine":
+            if list(state.get("last_recommendation_list", []) or []):
+                goal = LocalLifeGoalDraft(
+                    goal_type=GoalType.RECOMMENDATION,
+                    candidate_source=CandidateSource.CONTEXT,
+                    source_origin="fallback_follow_up",
+                )
     if goal is None or (hasattr(goal, "goal_type") and (goal.goal_type is None or goal.goal_type.value == "unsupported")):
         return {
             "resolve_shop_result": ResolveShopResult(status="NOT_FOUND", confidence=0.0, reason="missing_goal_draft"),

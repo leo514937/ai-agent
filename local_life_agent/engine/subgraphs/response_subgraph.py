@@ -354,6 +354,72 @@ def _response_text_from_state(state: GraphState) -> str:
     return ""
 
 
+def _is_recommendation_refine_follow_up(state: GraphState) -> bool:
+    last_recommendation_list = list(state.get("last_recommendation_list") or [])
+    if not last_recommendation_list:
+        return False
+    semantic_frame = _to_dict(state.get("semantic_frame"))
+    pending = _to_dict(state.get("pending_clarification"))
+    if not semantic_frame:
+        semantic_frame = _to_dict(pending.get("original_semantic_frame"))
+    if not semantic_frame:
+        return False
+    if not bool(semantic_frame.get("constraint_update")):
+        return False
+    preference_signals = semantic_frame.get("preference_signals") or []
+    signal_text = " ".join(
+        [
+            " ".join(
+                str(part).strip()
+                for part in (
+                    item.get("preference_type", "") if isinstance(item, dict) else getattr(item, "preference_type", ""),
+                    item.get("value", "") if isinstance(item, dict) else getattr(item, "value", ""),
+                    item.get("text", "") if isinstance(item, dict) else getattr(item, "text", ""),
+                )
+                if str(part or "").strip()
+            )
+            for item in preference_signals
+        ]
+    )
+    raw_text = str(
+        state.get("raw_text", "")
+        or state.get("normalized_text", "")
+        or pending.get("original_text", "")
+        or semantic_frame.get("raw_text", "")
+        or semantic_frame.get("normalized_text", "")
+        or ""
+    )
+    cues = ("便宜一点", "便宜点", "更便宜", "更便宜点", "便宜些", "比较便宜", "relative_price_preference", "lower_price", "cheaper")
+    return any(token in raw_text for token in cues) or any(token in signal_text for token in cues)
+
+
+def _build_recommendation_refine_text(state: GraphState) -> str:
+    items = [item for item in (state.get("last_recommendation_list") or []) if isinstance(item, dict)]
+    if not items:
+        return "我会按更便宜的方向继续帮你看。"
+    lines: list[str] = ["我按更便宜的方向继续看了上轮推荐，先给你这几家："]
+    for idx, item in enumerate(items[:3], 1):
+        shop_name = str(item.get("shop_name", "") or "").strip() or f"第{idx}家"
+        extra_parts: list[str] = []
+        open_status = str(item.get("open_status", "") or "").strip()
+        if open_status:
+            extra_parts.append("营业中" if open_status not in {"closed", "close", "0"} else "当前未营业")
+        coupon_count = item.get("coupon_count")
+        if coupon_count is not None:
+            try:
+                coupon_num = int(coupon_count)
+            except Exception:
+                coupon_num = 0
+            extra_parts.append(f"有{coupon_num}张券" if coupon_num > 0 else "暂无券")
+        score = item.get("score")
+        if score is not None:
+            extra_parts.append(f"综合分 {score}")
+        suffix = f"（{'；'.join(extra_parts)}）" if extra_parts else ""
+        lines.append(f"{idx}. {shop_name}{suffix}")
+    lines.append("如果你想，我可以继续按券、营业状态或距离再筛一轮。")
+    return "\n".join(lines)
+
+
 def h_response_subgraph(state: GraphState) -> dict:
     """Outer wrapper: handle response mode → generate / clarify / fallback."""
     before = dict(state)
@@ -410,6 +476,33 @@ def h_response_subgraph(state: GraphState) -> dict:
         log_kv(_LOGGER, logging.INFO, "[ROUTE_DECISION]", tone="route", subgraph="response_subgraph", route=_OUTER_ROUTE_PASS, response_mode=response_mode)
         return _state_delta(before, after, always_include={"response_route"})
     if normalized_mode == ResponseMode.CLARIFY or response_mode in {_OUTER_ROUTE_CLARIFY} or state.get("pending_clarification") is not None:
+        if _is_recommendation_refine_follow_up(state):
+            response = _build_recommendation_refine_text(state)
+            working = {
+                **state,
+                "workflow_name": "discovery_decision",
+                "response_mode": "answer",
+                "draft_response": response,
+                "final_response": response,
+                "answer_source": "template_fallback",
+                "template_degraded": False,
+                "fallback_used": False,
+                "template_fallback_used": True,
+                "response_directive": build_response_directive(
+                    answer_text=response,
+                    answer_type="recommendation",
+                    response_mode="answer",
+                    reason="recommendation_refine_follow_up",
+                    fallback_reason="recommendation_refine_follow_up",
+                    trace_id=str(state.get("trace_id", "") or ""),
+                    final_response=response,
+                    preview_text=response,
+                    answer_source="template_fallback",
+                ),
+            }
+            working = _run_step(working, _h_final_response)
+            after = {**working, "response_route": _OUTER_ROUTE_PASS}
+            return _state_delta(before, after, always_include={"response_route"})
         if not str(state.get("final_response", "") or "").strip():
             if _response_text_from_state(state):
                 working = _run_step(state, _h_final_response)

@@ -630,6 +630,21 @@ def _build_conversation_continuity(state: GraphState) -> dict[str, Any]:
     if isinstance(active_raw, dict) and active_raw:
         cc["inherited_constraints"] = dict(active_raw)
 
+    from ..planning.context_packing import build_context_packing_plan
+
+    packing_plan = build_context_packing_plan(
+        session_state,
+        conversation_continuity=cc,
+        evidence_pack=_to_dict(state.get("evidence_pack")),
+    )
+    cc["context_packing"] = {
+        "session_summary": packing_plan.session_summary.model_dump(),
+        "prompt_fields": packing_plan.prompt_fields,
+        "session_only_fields": list(packing_plan.session_only_fields),
+        "evidence_refs": list(packing_plan.evidence_refs),
+        "dropped_fields": list(packing_plan.dropped_fields),
+    }
+
     return cc
 
 

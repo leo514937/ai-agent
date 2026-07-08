@@ -5,6 +5,40 @@ from __future__ import annotations
 from ..domain.enums import Facet, TaskType
 
 
+_UNSUPPORTED_FACET_HINTS = (
+    "服务",
+    "设施",
+    "宠物",
+    "寄存",
+    "停车",
+    "包间",
+    "座位",
+    "储物",
+    "储存",
+    "洗手间",
+    "wifi",
+    "WIFI",
+    "充电",
+)
+
+_SUPPORTED_FACET_HINTS = (
+    "券",
+    "优惠",
+    "营业",
+    "开门",
+    "关门",
+    "打烊",
+    "距离",
+    "多远",
+    "多久能到",
+    "评分",
+    "人均",
+    "评价",
+    "推荐",
+    "对比",
+)
+
+
 def validate_frame(frame: dict) -> dict:
     """Check that a semantic frame is valid and actionable.
 
@@ -35,7 +69,13 @@ def validate_frame(frame: dict) -> dict:
 
     if task_type is None:
         issues.append("missing_task_type")
-        clarification = "请补充你要查的店名和优惠券需求。"
+        text = str(frame.get("text", "") or frame.get("raw_text", "") or "")
+        mentions = list(mentions)
+        if mentions and any(token in text for token in _UNSUPPORTED_FACET_HINTS) and not any(token in text for token in _SUPPORTED_FACET_HINTS):
+            clarification = "当前暂时无法确认这个服务项，请换一个更具体的问题；如果你想查优惠券、营业状态、距离或评价，也可以继续问我。"
+            issues.append("unsupported_facet")
+        else:
+            clarification = "请补充你要查的店名或具体问题。"
     elif isinstance(task_type, TaskType):
         has_coupon = any(
             f.get("name") == Facet.coupon.value or (hasattr(f, "name") and getattr(f, "name") == Facet.coupon)

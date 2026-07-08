@@ -22,6 +22,7 @@ from .._compat import (
 from ...domain.enums import TaskType
 from ...domain.graph_state import GraphState
 from ...domain.state import SessionState, SessionValueMeta, SessionWriteDirective
+from ...memory.preferences import build_preference_memories_from_semantic_frame, merge_preference_memory_summaries
 from ...observability.file_logger import get_python_service_logger, log_kv
 from ...core import StateCore
 from ...planning.plans.state_update_planner import plan_state_update
@@ -168,6 +169,20 @@ def _h_persist_session(state: GraphState) -> dict:
             elif isinstance(default_value, (list, dict, set)):
                 default_value = type(default_value)(default_value)
             setattr(session_state, field_name, default_value)
+    semantic_frame = state.get("semantic_frame")
+    user_id = str(state.get("user_id", "") or getattr(session_state, "user_id", "") or "").strip()
+    session_identifier = str(state.get("session_id", "") or "").strip()
+    preference_memories = build_preference_memories_from_semantic_frame(
+        semantic_frame,
+        user_id=user_id or session_identifier,
+        session_id=session_identifier,
+        evidence_ref=str(state.get("trace_id", "") or state.get("turn_id", "") or session_identifier),
+    )
+    if preference_memories:
+        session_state.active_preferences = merge_preference_memory_summaries(
+            getattr(session_state, "active_preferences", []),
+            preference_memories,
+        )
     if not getattr(session_state, "last_recommendation_list", None) and state.get("task_type") == TaskType.recommendation.value:
         evidence_dict = _to_dict(state.get("evidence_pack"))
         ranking_snapshot = _to_dict(evidence_dict.get("ranking_snapshot"))

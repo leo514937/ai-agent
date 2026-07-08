@@ -294,6 +294,8 @@ class SemanticFrame(BaseModel):
     ordinal_references: list[str] = Field(default_factory=list)
     deictic_references: list[str] = Field(default_factory=list)
     focused_facets: list[str] = Field(default_factory=list)
+    unsupported_facets: list[str] = Field(default_factory=list)
+    unsupported_reasons: list[str] = Field(default_factory=list)
     comparison_focus: str = ""
     hard_constraints: dict[str, Any] = Field(default_factory=dict)
     soft_preferences: dict[str, Any] = Field(default_factory=dict)

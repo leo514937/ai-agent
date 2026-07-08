@@ -57,6 +57,7 @@ _MISSING_SLOT_PROMPTS: dict[str, str] = {
     "missing_comparison_targets": "请说明要比较哪几家店。",
     "missing_exploration_location": "请提供出发地、位置或行程起点。",
     "low_confidence_semantic_parse": "我没完全理解你的意思，请换一种说法。",
+    "unsupported_facet": "当前暂时无法确认这个服务项，请换一个更具体的查询，或改查优惠券、营业状态、距离等已支持信息。",
     "cancel": "已取消当前问题。",
     "new_task_override": "请直接说明新的需求。",
     "constraint_update": "请补充你想调整的条件。",
@@ -243,6 +244,39 @@ def _infer_missing_slot_type(
         return "unresolved_ordinal_reference"
     if frame.get("reference_mentions") or frame.get("ordinal_references") or frame.get("deictic_references"):
         return "unresolved_reference"
+    supported_facet_hints = (
+        "券",
+        "优惠",
+        "营业",
+        "开门",
+        "关门",
+        "打烊",
+        "距离",
+        "多远",
+        "多久能到",
+        "评分",
+        "人均",
+        "评价",
+        "推荐",
+        "对比",
+    )
+    unsupported_service_cues = (
+        "有没有",
+        "是否",
+        "能不能",
+        "能否",
+        "可不可以",
+        "提供",
+        "支持",
+        "服务",
+        "设施",
+    )
+    if (
+        (has_candidate_targets or task_type in {"single_shop_query", "coupon_query"} or any(token in text for token in ("店", "店铺", "门店")))
+        and any(token in text for token in unsupported_service_cues)
+        and not any(token in text for token in supported_facet_hints)
+    ):
+        return "unsupported_facet"
     if frame.get("comparison_targets") and len(candidate_targets) < 2:
         return "missing_comparison_targets"
     if has_candidate_targets and len(candidate_targets) > 1:

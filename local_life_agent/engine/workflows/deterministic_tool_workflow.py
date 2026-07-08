@@ -238,6 +238,20 @@ def _looks_like_specific_shop_mention(mention: str) -> bool:
     return any(token in text for token in ("店", "馆", "轩", "居", "坊", "楼", "城", "中心", "广场"))
 
 
+def _raw_text_shop_prefix(raw_text: str) -> str:
+    text = str(raw_text or "").strip()
+    if not text:
+        return ""
+    stop_tokens = ("有券", "比呢", "比吧", "比", "对比", "比较", "怎么样", "好不好", "多久能到", "多久到", "多久", "吗", "嘛", "呢", "吧", "想查", "查下", "查一下")
+    prefix = text
+    for token in stop_tokens:
+        idx = prefix.find(token)
+        if 0 < idx < len(prefix):
+            prefix = prefix[:idx]
+            break
+    return prefix.strip(" ，,。！？?!~")
+
+
 def _route_info_from_raw_text(raw_text: str) -> tuple[str, str] | None:
     text = str(raw_text or "")
     lowered = text.lower()
@@ -246,7 +260,7 @@ def _route_info_from_raw_text(raw_text: str) -> tuple[str, str] | None:
     if "有券" in text or "优惠券" in text or "团购" in text or "coupon" in lowered:
         return "get_coupon_list", "coupon"
     # “多久”更接近时长/ETA 语义，避免在未显式识别 facet 时误压成距离工具。
-    if "距离" in text or "多远" in text or "eta" in lowered:
+    if "距离" in text or "多远" in text or "多久能到" in text or "多久到" in text or "eta" in lowered:
         return "calculate_distance_km", "distance"
     if "评价" in text or "review" in lowered:
         return "get_shop_review_summary", "review_summary"
@@ -299,6 +313,11 @@ def _resolve_single_shop_target(state: dict[str, Any]) -> tuple[dict[str, Any] |
     merchant_mentions = [str(item).strip() for item in (semantic_frame.get("merchant_mentions") or []) if str(item).strip()]
     branch_mentions = [str(item).strip() for item in (semantic_frame.get("branch_mentions") or []) if str(item).strip()]
     reference_mentions = [str(item).strip() for item in (semantic_frame.get("reference_mentions") or []) if str(item).strip()]
+    shop_target = _to_dict(semantic_frame.get("shop_target"))
+    shop_target_name = str(shop_target.get("shop_name", "") or "").strip()
+    if shop_target_name and shop_target_name not in merchant_mentions:
+        merchant_mentions = [shop_target_name] + merchant_mentions
+    raw_text_prefix = _raw_text_shop_prefix(raw_text)
     specific_shop_hint = any(_looks_like_specific_shop_mention(item) for item in merchant_mentions) or bool(branch_mentions)
     canonical = _to_dict(state.get("canonical_shop_entity"))
     if canonical:
@@ -350,11 +369,12 @@ def _resolve_single_shop_target(state: dict[str, Any]) -> tuple[dict[str, Any] |
                 source_node="deterministic_tool_workflow",
             )
             return None, pending.model_dump(), str(canonical.get("resolution_reason", "") or canonical_status or "shop_resolution_need_clarification")
-    mention = ""
-    for item in merchant_mentions:
-        if _looks_like_specific_shop_mention(item):
-            mention = item
-            break
+    mention = raw_text_prefix
+    if not mention:
+        for item in merchant_mentions:
+            if _looks_like_specific_shop_mention(item):
+                mention = item
+                break
     if not mention and merchant_mentions and branch_mentions:
         for merchant in merchant_mentions:
             merchant = str(merchant).strip()
@@ -1306,10 +1326,28 @@ def run_deterministic_tool_workflow(
         patch.update(_log(state, "deterministic_tool_workflow", workflow_name="deterministic_tool", task_type=task_type, status="clarify", reason="deterministic_task_unsupported"))
         return patch
 
+    tool_name, facet = route_info
     target, pending, reason = _resolve_single_shop_target(state)
     if target is None or pending is not None:
         patch = _build_clarify_patch(state, decision, pending or {}, reason)
         patch.update(_log(state, "deterministic_tool_workflow", workflow_name="deterministic_tool", task_type=task_type, status="clarify", reason=reason))
+        return patch
+
+    if facet == "distance" and not _extract_user_location(state):
+        pending = build_pending_clarification(
+            original_text=str(state.get("raw_text", "") or ""),
+            original_semantic_frame=semantic_frame,
+            original_task_type=task_type,
+            candidate_targets=[target],
+            reason="missing_exploration_location",
+            missing_slot_type="missing_exploration_location",
+            source_node="deterministic_tool_workflow",
+        ).model_dump()
+        patch = _build_clarify_patch(state, decision, pending, "missing_exploration_location")
+        patch["workflow_name"] = "clarification_fallback"
+        patch["workflow_run_status"] = "fallback"
+        patch["response_mode"] = "fallback"
+        patch.update(_log(state, "deterministic_tool_workflow", workflow_name="deterministic_tool", task_type=task_type, status="fallback", reason="missing_exploration_location"))
         return patch
 
     budget = budget_context_from_state(state)
@@ -1329,7 +1367,6 @@ def run_deterministic_tool_workflow(
         patch.update(_log(state, "deterministic_tool_workflow", workflow_name="deterministic_tool", task_type=task_type, status="fallback", reason="budget_exhausted:tool_round_budget"))
         return patch
 
-    tool_name, facet = route_info
     args = _tool_args_for_task(task_type, target["shop_id"], state)
     semantic_frame = _to_dict(state.get("semantic_frame"))
     extra_facets = _budgeted_extra_facets(state, _batch_facets_for_task(task_type, semantic_frame, facet))

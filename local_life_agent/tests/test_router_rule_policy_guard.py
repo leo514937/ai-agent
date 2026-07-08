@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from local_life_agent.planning.orchestration_router import build_orchestration_decision, normalize_route_task
+from local_life_agent.semantic.frame_validator import validate_frame
 from local_life_agent.target.clarification import build_pending_clarification, format_pending_prompt
 
 
@@ -249,6 +250,20 @@ def test_location_hint_pending_clarification_uses_location_prompt():
 
     assert pending.missing_slot_type == "missing_location"
     assert format_pending_prompt(pending) == "请提供位置、商圈或附近范围。"
+
+
+def test_frame_validator_uses_neutral_clarification_for_missing_task_type():
+    result = validate_frame(
+        {
+            "text": "附近有什么服务项",
+            "merchant_mentions": ["测试店"],
+            "task_type": None,
+        }
+    )
+
+    assert result["valid"] is False
+    assert result["clarification"].startswith("当前暂时无法确认这个服务项")
+    assert "优惠券、营业状态、距离或评价" in result["clarification"]
 
 
 def test_comparison_pending_clarification_is_typed():

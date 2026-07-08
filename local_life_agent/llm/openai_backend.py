@@ -36,6 +36,7 @@ class OpenAICompatibleBackend:
         self.endpoint = endpoint or config.LLM_ENDPOINT
         self._api_key = api_key
         self.timeout_seconds = timeout_seconds or config.LLM_TIMEOUT_SECONDS
+        self._client: httpx.Client | None = None
 
         # Construct the llm_backend kind identifier
         p = self.provider or "real"
@@ -53,6 +54,18 @@ class OpenAICompatibleBackend:
             "LLM API key not found. Set it in config/llm.json (api_key field) "
             "or via the LLM_API_KEY environment variable."
         )
+
+    def _get_client(self) -> httpx.Client:
+        """Reuse one HTTP client so connection pooling can work across calls."""
+        if self._client is None:
+            self._client = httpx.Client()
+        return self._client
+
+    def close(self) -> None:
+        """Release the underlying HTTP client explicitly when the backend is discarded."""
+        if self._client is not None:
+            self._client.close()
+            self._client = None
 
     def __call__(
         self,
@@ -147,44 +160,44 @@ class OpenAICompatibleBackend:
             **call_metadata,
         )
 
+        client = self._get_client()
         try:
-            with httpx.Client(timeout=timeout_sec) as client:
-                if stream_handler is None:
-                    response = client.post(url, headers=headers, json=payload)
+            if stream_handler is None:
+                response = client.post(url, headers=headers, json=payload, timeout=timeout_sec)
+                response.raise_for_status()
+                res_data = response.json()
+                transport = "httpx"
+            else:
+                raw_chunks: list[str] = []
+                with client.stream("POST", url, headers=headers, json=payload, timeout=timeout_sec) as response:
                     response.raise_for_status()
-                    res_data = response.json()
-                    transport = "httpx"
-                else:
-                    raw_chunks: list[str] = []
-                    with client.stream("POST", url, headers=headers, json=payload) as response:
-                        response.raise_for_status()
-                        for line in response.iter_lines():
-                            raise_if_turn_cancelled()
-                            if not line:
-                                continue
-                            if isinstance(line, bytes):
-                                line = line.decode("utf-8", errors="ignore")
-                            if not str(line).startswith("data:"):
-                                continue
-                            data = str(line)[5:].strip()
-                            if not data or data == "[DONE]":
-                                continue
-                            try:
-                                chunk = json.loads(data)
-                            except Exception:
-                                continue
-                            choices = chunk.get("choices", []) if isinstance(chunk, dict) else []
-                            if not choices:
-                                continue
-                            delta = choices[0].get("delta", {}) if isinstance(choices[0], dict) else {}
-                            content_delta = delta.get("content", "")
-                            if not content_delta:
-                                continue
-                            raw_chunks.append(str(content_delta))
-                            stream_handler(str(content_delta))
-                            raise_if_turn_cancelled()
-                    res_data = {"choices": [{"message": {"content": "".join(raw_chunks)}}]}
-                    transport = "httpx_stream"
+                    for line in response.iter_lines():
+                        raise_if_turn_cancelled()
+                        if not line:
+                            continue
+                        if isinstance(line, bytes):
+                            line = line.decode("utf-8", errors="ignore")
+                        if not str(line).startswith("data:"):
+                            continue
+                        data = str(line)[5:].strip()
+                        if not data or data == "[DONE]":
+                            continue
+                        try:
+                            chunk = json.loads(data)
+                        except Exception:
+                            continue
+                        choices = chunk.get("choices", []) if isinstance(chunk, dict) else []
+                        if not choices:
+                            continue
+                        delta = choices[0].get("delta", {}) if isinstance(choices[0], dict) else {}
+                        content_delta = delta.get("content", "")
+                        if not content_delta:
+                            continue
+                        raw_chunks.append(str(content_delta))
+                        stream_handler(str(content_delta))
+                        raise_if_turn_cancelled()
+                res_data = {"choices": [{"message": {"content": "".join(raw_chunks)}}]}
+                transport = "httpx_stream"
         except (httpx.HTTPError, RuntimeError, ValueError) as exc:
             if not self._should_fallback_to_requests(exc):
                 _emit_llm_error(

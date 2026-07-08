@@ -21,7 +21,7 @@ import pytest
 
 from ..domain.candidate import CandidateSource, GoalType, LocalLifeGoalDraft
 from ..domain.graph_state import GraphState
-from ..domain.schemas import SemanticFrame, TaskType
+from ..domain.schemas import ResolveShopResult, SemanticFrame, ShopRef, TaskType
 from ..engine.graph_builder import (
     _h_target_resolve,
     _h_target_resolve_candidate_set,
@@ -257,3 +257,48 @@ class TestDirectInvocation:
         assert "local_life_goal_draft" in result
         assert "candidate_set" in result
         assert "review_results" in result
+
+    def test_explicit_shop_target_uses_brand_branch_prefix(self, monkeypatch: pytest.MonkeyPatch):
+        calls: list[str] = []
+
+        class _FakeResolveResult:
+            def __init__(self, payload: dict[str, Any], trace: list[dict[str, Any]] | None = None):
+                self._payload = dict(payload)
+                self.trace = list(trace or [])
+
+            def model_dump(self) -> dict[str, Any]:
+                return dict(self._payload)
+
+        def fake_resolve_shop_entity(mention: str, **kwargs):
+            calls.append(mention)
+            if mention == "海底捞水晶城店":
+                return _FakeResolveResult(
+                    {
+                        "status": "RESOLVED",
+                        "shop_id": "shop_900",
+                        "shop_name": "海底捞水晶城店",
+                        "resolved_shop": {"shop_id": "shop_900", "shop_name": "海底捞水晶城店"},
+                        "confidence": 0.99,
+                        "reason": "resolved",
+                    },
+                    trace=[{"mention": mention, "result": "resolved"}],
+                )
+            return _FakeResolveResult({"status": "NOT_FOUND", "confidence": 0.0, "reason": "not_found"}, trace=[{"mention": mention, "result": "not_found"}])
+
+        monkeypatch.setattr(
+            "local_life_agent.engine.subgraphs.planning_subgraph.resolve_shop_entity",
+            fake_resolve_shop_entity,
+        )
+
+        sf = SemanticFrame(
+            task_type=TaskType.single_shop_query,
+            candidate_source=CandidateSource.EXPLICIT.value,
+            shop_target={"shop_name": "水晶城店", "text": "水晶城店"},
+            merchant_mentions=["水晶城店", "海底捞"],
+        )
+        result = _h_target_resolve_candidate_set(_state(sf, raw_text="海底捞水晶城店多久能到？"), sf)
+
+        assert calls[0] == "海底捞水晶城店"
+        resolve_result = result["resolve_shop_result"]
+        assert getattr(resolve_result, "status", "") == "RESOLVED"
+        assert result.get("target_resolution_status") == "RESOLVED"

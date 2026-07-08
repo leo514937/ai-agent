@@ -26,6 +26,7 @@ from .._routes import (
     _OUTER_ROUTE_TERMINAL,
 )
 from ...domain.enums import TopIntent
+from ...domain.contextualized_turn import build_contextual_follow_up
 from ...domain.focus_context import FocusContext
 from ...domain.graph_state import GraphState
 from ...domain.state import SessionState
@@ -73,6 +74,13 @@ def _should_keep_local_life_route(
         active_turn_result=active_turn_result or {},
     )
     if focus_context.focus_type != "none":
+        return True
+    contextual_follow_up = build_contextual_follow_up(
+        semantic_frame={},
+        session_state=session_state,
+        raw_text=text,
+    )
+    if contextual_follow_up is not None:
         return True
     if focus_context.clarification_needed and _has_local_life_signal(text):
         return True

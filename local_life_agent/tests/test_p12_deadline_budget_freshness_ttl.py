@@ -17,6 +17,8 @@ from local_life_agent.planning.freshness.freshness_policy import (
     compute_location_fingerprint,
     freshness_policy_for_facet,
 )
+from local_life_agent.planning.orchestrator.orchestrator_cache_key import build_orchestrator_cache_inputs
+from local_life_agent.planning.orchestrator.sub_task_dag import SubTaskSpec
 
 
 def test_p12_budget_context_defaults_are_bounded():
@@ -92,6 +94,35 @@ def test_p12_same_turn_cache_reuse_is_allowed_and_traceable():
     assert second_meta["cache_hit"] is True
     assert first["evidence_cache_key"] == second["evidence_cache_key"]
     assert second["evidence_cache_hit"] is True
+
+
+def test_p12_orchestrator_cache_inputs_include_required_dimensions():
+    scope, payload = build_orchestrator_cache_inputs(
+        {
+            "session_id": "session-1",
+            "trace_id": "trace-1",
+            "location": {"lat": 39.9, "lng": 116.3},
+            "freshness": "location_bound",
+        },
+        SubTaskSpec(
+            task_id="task_a",
+            workflow_name="exploration_planning",
+            depends_on=("task_root",),
+            payload={"query": "附近推荐"},
+            description="explore",
+        ),
+        workflow_name="exploration_planning",
+        tool_version="v1",
+    )
+
+    assert scope["session_id"] == "session-1"
+    assert scope["trace_id"] == "trace-1"
+    assert scope["workflow_name"] == "exploration_planning"
+    assert scope["location"]
+    assert scope["freshness"] == "location_bound"
+    assert scope["tool_version"] == "v1"
+    assert payload["task_id"] == "task_a"
+    assert payload["payload"]["query"] == "附近推荐"
 
 
 def test_p12_strong_dynamic_stale_evidence_cannot_be_claimed_as_fresh():
@@ -302,4 +333,3 @@ def test_p12_budget_and_freshness_metrics_are_observable_only():
     assert metrics.cache_hit_count == 1
     assert metrics.budget_exceeded_count == 0 or metrics.budget_exceeded_count == 1
     assert metrics.stream_event_count == 0
-

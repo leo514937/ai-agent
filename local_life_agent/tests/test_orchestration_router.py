@@ -48,6 +48,75 @@ def test_orchestration_router_prefers_deterministic_tool_for_single_shop_query()
     assert decision.response_mode == "tool_answer"
 
 
+def test_orchestration_router_routes_eta_style_distance_query_to_distance_tool():
+    decision = build_orchestration_decision(
+        {
+            "top_intent": "local_life",
+            "task_type": "single_shop_query",
+            "semantic_frame": {"confidence": 0.84, "focused_facets": ["distance"], "merchant_mentions": ["海底捞(牡丹园店)"]},
+            "current_shop": {"shop_id": "shop_1", "shop_name": "海底捞(牡丹园店)"},
+            "pending_clarification": None,
+            "raw_text": "海底捞水晶城店多久能到？",
+        }
+    )
+
+    assert decision.orchestration_pattern == "deterministic_tool"
+    assert decision.workflow_name == "deterministic_tool"
+    assert decision.response_mode == "tool_answer"
+    assert decision.requires_clarification is False
+
+
+def test_orchestration_router_routes_unsupported_service_facets_to_clarification():
+    decision = build_orchestration_decision(
+        {
+            "top_intent": "local_life",
+            "task_type": "single_shop_query",
+            "semantic_frame": {
+                "confidence": 0.84,
+                "merchant_mentions": ["海底捞(牡丹园店)"],
+                "unsupported_facets": ["service_feature"],
+            },
+            "current_shop": {"shop_id": "shop_1", "shop_name": "海底捞(牡丹园店)"},
+            "pending_clarification": None,
+            "raw_text": "海底捞(牡丹园店)有没有宠物寄存服务？",
+        }
+    )
+
+    assert decision.orchestration_pattern == "clarification_fallback"
+    assert decision.workflow_name == "clarification_fallback"
+    assert decision.requires_tool is False
+    assert decision.requires_clarification is True
+    assert decision.response_mode == "clarify"
+
+
+def test_orchestration_router_prefers_unsupported_over_exploration_plan():
+    decision = build_orchestration_decision(
+        {
+            "top_intent": "local_life",
+            "task_type": "recommendation",
+            "semantic_frame": {
+                "confidence": 0.86,
+                "merchant_mentions": ["海底捞(牡丹园店)"],
+                "unsupported_facets": ["service_feature"],
+                "unsupported_reasons": ["unsupported_service:儿童座椅"],
+                "workflow_hint": "exploration_planning",
+                "exploration_stages": [
+                    {"stage_id": "stage_1", "stage_type": "parent_child_activity", "candidate_query": "亲子活动"},
+                ],
+            },
+            "current_shop": {"shop_id": "shop_1", "shop_name": "海底捞(牡丹园店)"},
+            "pending_clarification": None,
+            "raw_text": "海底捞(牡丹园店)有没有儿童座椅？",
+        }
+    )
+
+    assert decision.orchestration_pattern == "clarification_fallback"
+    assert decision.workflow_name == "clarification_fallback"
+    assert decision.requires_tool is False
+    assert decision.requires_clarification is True
+    assert decision.response_mode == "clarify"
+
+
 def test_orchestration_router_prefers_exploration_planning_for_trip_plan():
     decision = build_orchestration_decision(
         {
@@ -81,6 +150,44 @@ def test_orchestration_router_prefers_complex_orchestrator_for_super_complex_tas
     assert decision.task_complexity == "super_complex"
     assert decision.requires_tool is True
     assert decision.response_mode == "exploration_plan"
+
+
+def test_orchestration_router_does_not_route_normal_workloads_to_complex_orchestrator():
+    recommendation = build_orchestration_decision(
+        {
+            "top_intent": "local_life",
+            "task_type": "recommendation",
+            "semantic_frame": {"confidence": 0.82},
+            "pending_clarification": None,
+            "raw_text": "附近推荐火锅",
+        }
+    )
+    comparison = build_orchestration_decision(
+        {
+            "top_intent": "local_life",
+            "task_type": "comparison",
+            "semantic_frame": {"confidence": 0.81},
+            "pending_clarification": None,
+            "raw_text": "海底捞和巴奴哪个好",
+        }
+    )
+    single_shop = build_orchestration_decision(
+        {
+            "top_intent": "local_life",
+            "task_type": "single_shop_query",
+            "semantic_frame": {"confidence": 0.84, "primary_task": "shop_coupon"},
+            "current_shop": {"shop_id": "shop_1", "shop_name": "测试店"},
+            "pending_clarification": None,
+            "raw_text": "这家有券吗",
+        }
+    )
+
+    assert recommendation.workflow_name != "complex_orchestrator_workflow"
+    assert comparison.workflow_name != "complex_orchestrator_workflow"
+    assert single_shop.workflow_name != "complex_orchestrator_workflow"
+    assert recommendation.task_complexity != "super_complex"
+    assert comparison.task_complexity != "super_complex"
+    assert single_shop.task_complexity != "super_complex"
 
 
 def test_orchestration_router_falls_back_when_single_shop_anchor_missing():

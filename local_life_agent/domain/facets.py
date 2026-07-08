@@ -450,11 +450,25 @@ def build_target_resolution_result(
         for item in (_session_value(session_state, "last_recommendation_list") or [])
         if _to_dict(item)
     ]
+    session_comparison_targets = [
+        _to_dict(item)
+        for item in (_session_value(session_state, "comparison_targets") or [])
+        if _to_dict(item)
+    ]
+    comparison_result = _to_dict(_session_value(session_state, "comparison_result"))
     comparison_targets = [
         _to_dict(item)
         for item in (frame.get("comparison_targets") or [])
         if _to_dict(item)
     ]
+    if not comparison_targets and session_comparison_targets:
+        comparison_targets = list(session_comparison_targets)
+    if not comparison_targets and isinstance(comparison_result, dict):
+        comparison_targets = [
+            _to_dict(item)
+            for item in (comparison_result.get("comparison_targets") or comparison_result.get("targets") or comparison_result.get("rows") or [])
+            if _to_dict(item)
+        ]
     ordinal_refs = [str(item).strip() for item in (frame.get("ordinal_references") or []) if str(item).strip()]
     deictic_refs = [str(item).strip() for item in (frame.get("deictic_references") or []) if str(item).strip()]
     reference_mentions = [str(item).strip() for item in (frame.get("reference_mentions") or []) if str(item).strip()]
@@ -521,6 +535,29 @@ def build_target_resolution_result(
 
     if comparison_targets:
         cleaned_targets = [_clean_shop(item) for item in comparison_targets if _clean_shop(item).get("shop_id") or _clean_shop(item).get("shop_name")]
+        if has_ordinal_hint and cleaned_targets:
+            index = 1
+            match = re.search(r"第\s*([1-9一二三四五六七八九十])\s*(个|家|间|店)?", text)
+            if match:
+                token = match.group(1)
+                chinese_to_int = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
+                if token.isdigit():
+                    index = int(token)
+                else:
+                    index = chinese_to_int.get(token, 1)
+            if 1 <= index <= len(cleaned_targets):
+                target = cleaned_targets[index - 1]
+                if target.get("shop_id") or target.get("shop_name"):
+                    return _build_result(
+                        resolved=True,
+                        status="resolved",
+                        target_shop=target,
+                        source="comparison_targets",
+                        confidence=0.95,
+                        resolution_reason="comparison_ordinal_reference",
+                        reference_type="ordinal_reference",
+                        comparison_targets=cleaned_targets,
+                    )
         if len(cleaned_targets) >= 2:
             return _build_result(
                 resolved=True,

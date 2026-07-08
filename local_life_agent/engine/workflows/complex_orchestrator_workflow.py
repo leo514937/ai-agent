@@ -10,6 +10,7 @@ from ...answer.response_directive import build_response_directive
 from ...domain.schemas import AnswerPlan, OrchestrationDecision
 from ...observability.file_logger import log_kv
 from ...planning.orchestrator import DecisionReducer, EvidenceReducer, SubTaskDAG, WorkerResult
+from ...planning.orchestrator.dag_executor import execute_subtask_dag
 from .._compat import _to_dict
 
 _LOGGER = __import__("logging").getLogger(__name__)
@@ -208,7 +209,15 @@ def run_complex_orchestrator_workflow(
     task_type = _normalize_text(state.get("task_type") or semantic_frame.get("task_type") or "super_complex")
     subtask_specs = _default_subtask_specs(state, decision)
     dag = SubTaskDAG.from_specs(subtask_specs)
-    worker_results = [_execute_worker(dict(state), spec.to_dict(), decision) for spec in dag.topological_sort()]
+    from ...engine import workflow_registry as workflow_registry_module
+
+    execution_bundle = execute_subtask_dag(
+        dict(state),
+        decision,
+        dag,
+        registry_lookup=lambda workflow_name: workflow_registry_module.WORKFLOW_REGISTRY.lookup(workflow_name),
+    )
+    worker_results = execution_bundle.worker_results
     evidence_summary = EvidenceReducer.reduce(worker_results)
     decision_summary = DecisionReducer.reduce(worker_results)
     response_answer_type = _normalize_text(decision_summary.get("answer_type") or task_type or "general")
@@ -226,6 +235,8 @@ def run_complex_orchestrator_workflow(
         metadata={
             "worker_results": [result.to_dict() for result in worker_results],
             "sub_task_dag": dag.to_dict(),
+            "orchestrator_execution_report": [report.to_dict() for report in execution_bundle.execution_reports],
+            "partial_events": list(execution_bundle.partial_events),
             "decision_summary": decision_summary,
             "evidence_summary": evidence_summary,
         },
@@ -240,6 +251,8 @@ def run_complex_orchestrator_workflow(
             "answer_source": "complex_orchestrator_workflow",
             "worker_results": [result.to_dict() for result in worker_results],
             "sub_task_dag": dag.to_dict(),
+            "orchestrator_execution_report": [report.to_dict() for report in execution_bundle.execution_reports],
+            "partial_events": list(execution_bundle.partial_events),
             "decision_summary": decision_summary,
             "evidence_summary": evidence_summary,
         },
@@ -258,6 +271,8 @@ def run_complex_orchestrator_workflow(
             "workflow_name": "complex_orchestrator_workflow",
             "subtask_count": len(worker_results),
             "dag": dag.to_dict(),
+            "orchestrator_execution_report": [report.to_dict() for report in execution_bundle.execution_reports],
+            "partial_events": list(execution_bundle.partial_events),
             "conflict_summary": evidence_summary.get("conflict_summary") or {},
         },
     )
@@ -305,6 +320,8 @@ def run_complex_orchestrator_workflow(
         "llm_backend": "deterministic",
         "worker_results": [result.to_dict() for result in worker_results],
         "sub_task_dag": dag.to_dict(),
+        "orchestrator_execution_report": [report.to_dict() for report in execution_bundle.execution_reports],
+        "partial_events": list(execution_bundle.partial_events),
         "evidence_pack": evidence_summary,
         "decision_plan": decision_summary,
         "decision_summary": decision_summary,
@@ -313,6 +330,8 @@ def run_complex_orchestrator_workflow(
             "workflow_name": "complex_orchestrator_workflow",
             "subtask_count": len(worker_results),
             "dag": dag.to_dict(),
+            "orchestrator_execution_report": [report.to_dict() for report in execution_bundle.execution_reports],
+            "partial_events": list(execution_bundle.partial_events),
             "conflict_summary": evidence_summary.get("conflict_summary") or {},
         },
         "state_keys_changed": [

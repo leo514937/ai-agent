@@ -7,7 +7,8 @@ from local_life_agent.domain.enums import TaskType
 from local_life_agent.engine.subgraphs.intake_guard_router import _h_hard_guard
 from local_life_agent.engine.subgraphs.response_subgraph import _h_clarify_response
 from local_life_agent.engine.subgraphs.understanding_subgraph import _h_slot_extractor
-from local_life_agent.target.clarification import build_clarification_request, build_pending_clarification
+from local_life_agent.target.clarification import build_clarification_request, build_pending_clarification, format_pending_prompt
+from local_life_agent.semantic.frame_validator import validate_frame
 
 
 def test_error_envelope_and_early_response_directive_roundtrip():
@@ -140,3 +141,35 @@ def test_clarify_response_uses_unified_request():
     assert directive.clarification_request is not None
     assert directive.clarification_request.clarification_type == "missing_comparison_targets"
     assert directive.final_response == ""
+
+
+def test_unsupported_facet_uses_unsupported_clarification_text():
+    frame = {
+        "text": "海底捞(牡丹园店)有没有宠物寄存服务？",
+        "task_type": None,
+        "merchant_mentions": ["海底捞(牡丹园店)"],
+        "branch_mentions": [],
+        "brand_mentions": [],
+        "facets": [],
+    }
+    validated = validate_frame(frame)
+
+    assert validated["valid"] is False
+    assert "unsupported_facet" in validated["issues"]
+    assert "服务项" in validated["clarification"] or "已支持信息" in validated["clarification"]
+
+    pending = build_pending_clarification(
+        original_text="海底捞(牡丹园店)有没有宠物寄存服务？",
+        original_semantic_frame=frame,
+        original_task_type="single_shop_query",
+        candidate_targets=[
+            {"shop_id": "s1", "shop_name": "海底捞(牡丹园店)"},
+            {"shop_id": "s2", "shop_name": "海底捞(水晶城店)"},
+        ],
+        reason="unsupported_facet",
+        source_node="test",
+    )
+    prompt = format_pending_prompt(pending)
+
+    assert "服务项" in prompt or "已支持信息" in prompt
+    assert "你想查哪一家" not in prompt

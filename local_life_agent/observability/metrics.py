@@ -79,6 +79,16 @@ class TurnMetrics(BaseModel):
         return self.model_dump(mode="json")
 
 
+def _coerce_dict(value: Any) -> dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump()
+        return dumped if isinstance(dumped, dict) else {}
+    return {}
+
+
 _METRIC_LOCK = Lock()
 _TOOL_CALL_METRICS: list[ToolCallMetricRecord] = []
 _TURN_METRICS: list[TurnMetricRecord] = []
@@ -134,13 +144,13 @@ def build_turn_metrics(
 ) -> TurnMetrics:
     """Derive P11 turn metrics without changing business state."""
     final_state = final_state or {}
-    semantic_frame = final_state.get("semantic_frame") or {}
-    evidence_pack = final_state.get("evidence_pack") or {}
-    budget_context = final_state.get("budget_context") or {}
-    execution_plan = final_state.get("execution_plan") or final_state.get("validated_plan") or {}
-    answer_plan = final_state.get("answer_plan") or {}
-    state_update_plan = final_state.get("state_update_plan") or {}
-    tool_results = final_state.get("tool_result_set") or final_state.get("tool_results") or {}
+    semantic_frame = _coerce_dict(final_state.get("semantic_frame"))
+    evidence_pack = _coerce_dict(final_state.get("evidence_pack"))
+    budget_context = _coerce_dict(final_state.get("budget_context"))
+    execution_plan = _coerce_dict(final_state.get("execution_plan") or final_state.get("validated_plan"))
+    answer_plan = _coerce_dict(final_state.get("answer_plan"))
+    state_update_plan = _coerce_dict(final_state.get("state_update_plan"))
+    tool_results = _coerce_dict(final_state.get("tool_result_set") or final_state.get("tool_results"))
     stream_events = list(stream_events or [])
     facets = _derive_facets(final_state, evidence_pack, answer_plan, semantic_frame)
     facet_validation_result = execution_plan.get("facet_validation_result") or {}

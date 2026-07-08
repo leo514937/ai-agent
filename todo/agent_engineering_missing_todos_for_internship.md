@@ -178,6 +178,8 @@ P18-P26 不改变现有 P0-P17 的优先级，不重写 `graph_builder`，不引
 
 ## P18 Tool Governance / Permission / Idempotency
 
+**状态更新：** 这项已经从“纯文档设想”推进到“有最小可用治理 schema 和 registry”的阶段。当前仓库里已经可以为现有只读工具生成治理元数据，后续更多是完善集成和策略细化，而不是从零实现。
+
 **背景问题：** 当前 `ToolCapabilitySpec` 更偏向描述 `supported_facets`、`required_inputs`、`timeout`、`failure`、`retryable`，但还不足以表达工具是否只读、是否可重试、是否需要确认、是否允许预览、是否允许并行、是否包含敏感字段等治理语义。对 Agent 来说，这类元数据不是“锦上添花”，而是工具编排能否安全扩展的基础。
 
 **为什么对 Agent 开发重要：** Agent 的核心风险不只在“能不能调用工具”，还在“该不该调用、能不能重复调、能不能并行调、能不能在预览里调、失败后是否能自动重试”。治理协议越清晰，planner、validator、reviewer 的职责越清楚，Agent 才能在不依赖硬编码规则的情况下扩展工具集。
@@ -196,11 +198,15 @@ P18-P26 不改变现有 P0-P17 的优先级，不重写 `graph_builder`，不引
 
 ## P19 Tool Call Cassette / Replay Harness
 
+**状态更新：** 已补最小 replay cassette schema，可把一次 run 的关键输入输出串起来；现阶段还可以继续补更完整的离线回放入口，但基础协议已经不再是空白。
+
 **背景问题：** 复杂 Agent 问题最难复现的部分不是单步逻辑，而是“LLM 决策 + 工具 I/O + 状态写回 + 证据合成”这一整条链路。没有 record-replay 夹具，很多回归只能靠线上偶现或手工重跑，调试成本会非常高。
 
 **为什么对 Agent 开发重要：** Agent 的正确性经常依赖时序和状态。Cassette 可以把工具返回固定住，让我们验证“同一输入在固定工具结果下是否得到稳定决策”，这对回归测试、调试、面试展示都很关键。
 
 **当前项目可能的缺口：** 目前已有 golden trace，但它更偏状态演化验证；还缺一种能固定 `tool_results` 的离线回放夹具，也缺对 `orchestration_decision`、`execution_plan`、`tool_calls`、`tool_results`、`evidence_pack`、`decision_plan`、`answer_plan`、`state_update_plan`、`final_response` 的整体串联记录。
+
+**当前已有基础能力：** 仓库里已经存在 trace / snapshot / E2E 辅助工具，能够把一次 run 的关键状态切片拿出来做验证；因此这一项的真实缺口不是“完全没有回放语义”，而是还没有把这些离散快照收敛成可复用、可离线回放的 cassette 规范。
 
 **建议的最小实现范围：** 只做测试夹具，不接真实线上录制系统。定义 cassette JSON 结构，能记录 query、session_state_before、orchestration_decision、execution_plan、tool_calls、tool_results、evidence_pack、decision_plan、answer_plan、state_update_plan、final_response，并支持离线回放。
 
@@ -214,11 +220,15 @@ P18-P26 不改变现有 P0-P17 的优先级，不重写 `graph_builder`，不引
 
 ## P20 Structured Output Recovery
 
+**状态更新：** 已有 `RewriteInstruction`、verifier 接口和 verabalizer/generator 的消费链路，说明结构化输出恢复已经不是纯设计稿；当前更接近“统一恢复协议继续扩面”的阶段。
+
 **背景问题：** LLM 的结构化输出在真实环境中经常出错，常见问题包括 JSON parse error、schema validation error、missing required field、invalid enum、wrong type、extra hallucinated field、partial output。只要关键节点一处解析失败，就可能把整条 graph 卡死。
 
 **为什么对 Agent 开发重要：** Agent 依赖很多结构化对象协作运行，比如 OrchestrationDecision、SemanticFrame、GoalPlan、ExecutionPlan、DecisionPlan、AnswerPlan、StateUpdatePlan。若没有统一恢复策略，LLM 稳定性问题会直接变成系统级不可用问题。
 
 **当前项目可能的缺口：** 当前还没有把“parse → schema validate → normalize/coerce → repair once → fallback rule template → clarification/direct fallback”固化成明确协议，也没有把 parse_error_type 和 fallback_reason 做结构化记录。
+
+**当前已有基础能力：** `RewriteInstruction` 已经单独成型，`answer/generator.py` 和 `answer/llm_verbalizer.py` 也已经能消费它；`answer/verifier.py` 侧已经具备把部分失败场景转成重写指令的入口。也就是说，这一项不是“从零开始”，真正缺的是把同一套恢复协议推广到更多结构化对象，并统一记录失败类型与回退原因。
 
 **建议的最小实现范围：** 不让解析异常直接中断 graph；对关键 LLM 输出对象统一加恢复链路；每类对象都走同一套恢复流程，并在失败时结构化记录原因和 fallback 路径。
 
@@ -232,11 +242,15 @@ P18-P26 不改变现有 P0-P17 的优先级，不重写 `graph_builder`，不引
 
 ## P21 Model Routing / Fallback / Cost Control
 
+**状态更新：** 已补节点级 model profile schema，能把 timeout / retry / fallback strategy 统一表达；后续更多是和具体节点接线，而不是先定义再说。
+
 **背景问题：** Agent 的不同节点对模型能力和延迟的需求并不一样。路由器、语义解析、规划器、回答器、验证器，不应该都默认同一个 model profile，否则要么成本过高，要么速度过慢，要么弱节点用强模型浪费资源。
 
 **为什么对 Agent 开发重要：** 节点级 model routing 是把“能跑”变成“可长期运营”的关键一步。简单节点可以走 fast_model，复杂决策或验证节点可以走 strong_model，节点失败后还能通过 fallback strategy 降级到规则模板或澄清。
 
 **当前项目可能的缺口：** 现有文档已经有 prompt 版本管理和预算概念，但还没有单独定义 `primary_model`、`fallback_model`、`timeout_ms`、`max_retries`、`fallback_strategy` 这种节点级模型策略，也没有对 hard_guard、top_intent_router、semantic_parse、goal_planner、decision_planner、answer_generate、answer_verify 做建议 profile。
+
+**当前已有基础能力：** `planning/llm_utils.py` 和 `invoke_structured_llm()` 已经支持按节点记录 `timeout_ms`、`max_retries`、prompt hash 和 backend 信息，也就是说“调用层能记录并约束模型参数”这件事已经存在；缺的不是记录能力，而是把这些分散参数整理成统一的节点级 profile 约定。
 
 **建议的最小实现范围：** 只在文档和测试建议层定义节点级 profile，不接真实多模型平台。先写清楚每个节点推荐用什么 profile，再决定后续是否需要配置化。
 
@@ -250,11 +264,15 @@ P18-P26 不改变现有 P0-P17 的优先级，不重写 `graph_builder`，不引
 
 ## P22 Agent Run Snapshot / Debug Bundle
 
+**状态更新：** 已补最小 debug bundle schema，可从 response / state 快速拼出可导出的 run 快照；后续继续补字段和导出格式即可。
+
 **背景问题：** 复杂 query 的调试常常需要同时查看 query、normalized_query、session_state_before、semantic_frame、orchestration_decision、workflow_name、execution_plan、tool_calls、tool_results、evidence_pack、decision_plan、answer_plan、verification_result、state_update_plan、session_state_after、final_response、trace_spans、errors。如果这些信息散落在多个日志和 trace 里，排查成本会很高。
 
 **为什么对 Agent 开发重要：** 一键 debug bundle 是把 Agent 开发从“看日志猜问题”升级到“拿一个完整 run 包快速定位问题”的关键工具，也很适合面试展示，能直接体现工程化能力。
 
 **当前项目可能的缺口：** 现有 trace / metrics 更偏在线可观测性，还缺一个面向本地调试与展示的完整 run 快照导出能力，并且需要注意隐藏敏感字段。
+
+**当前已有基础能力：** 仓库里已经有面向测试和 E2E 的快照辅助函数与 trace 输出字段，说明“抓一段 run 的状态切片”这件事并非空白；但这些现有能力更偏验证与排障片段，还没有整理成一个可直接导出的、字段稳定的 debug bundle 规范。
 
 **建议的最小实现范围：** 定义 debug bundle JSON schema，支持导出一次复杂 query 的完整快照；包含全部关键阶段对象；对敏感字段做脱敏或裁剪；示例中展示一个复杂 query 的完整 bundle。
 
@@ -268,11 +286,15 @@ P18-P26 不改变现有 P0-P17 的优先级，不重写 `graph_builder`，不引
 
 ## P23 Agent Evaluation Rubric
 
+**状态更新：** 已补基础 rubric schema，当前测试矩阵也能映射成评估维度；后续工作主要是把现有 case 归一化到这份 schema 下。
+
 **背景问题：** 现在很多测试只回答“对不对”，但 Agent 开发需要更细的评估维度，例如路由是否正确、facet 是否找全、目标是否解析对、工具计划是否合理、证据是否扎实、是否有不支持的断言、澄清是否恰当、状态写回是否正确、答案是否有帮助、延迟是否落在可接受区间。
 
 **为什么对 Agent 开发重要：** 没有 rubric，就很难把“看起来差不多”的答案和“真的更好”的答案区分开。Rubric 能支撑 200+ 离线评测集，也能支撑少量人工评测或 LLM-as-judge 评测。
 
 **当前项目可能的缺口：** 现有测试矩阵偏 case 驱动，还没有把评价维度系统化成评分 JSON schema，也没有明确各维度的分值或判断方式。
+
+**当前已有基础能力：** 仓库里已经有大量围绕路由、facet、证据、verifier、trace、latency 的回归测试，实际上构成了一套“隐式 rubric”；只是这些判断还散落在不同测试文件里，没有抽象成一份稳定的评分 schema，难以直接用于统一对比和展示。
 
 **建议的最小实现范围：** 定义评分 JSON schema，并明确至少包含 `route_correctness`、`facet_recall`、`facet_precision`、`target_resolution_correctness`、`tool_plan_correctness`、`evidence_grounding`、`unsupported_claim_rate`、`clarification_correctness`、`state_update_correctness`、`answer_helpfulness`、`latency_bucket`。
 
@@ -286,11 +308,15 @@ P18-P26 不改变现有 P0-P17 的优先级，不重写 `graph_builder`，不引
 
 ## P24 Context Packing / History Compression
 
+**状态更新：** 已有 `SessionContextSummary`、`conversation_continuity` 等基础对象，且当前新增了 context packing plan；这项现在更像“规则表完善”和“主链路接线”问题。
+
 **背景问题：** 多轮对话会让上下文快速膨胀。若所有历史都原样进入 prompt，不但成本高，还会污染当前 turn 的决策；但若压缩过度，又会丢掉引用消解、候选列表和证据回查所需的信息。
 
 **为什么对 Agent 开发重要：** Agent 的长期稳定性很大程度取决于上下文管理。Context packing 需要明确哪些历史进入 prompt，哪些只放 SessionState，哪些通过 `evidence_ref` 回查，才能既省 token 又保留推理连续性。
 
 **当前项目可能的缺口：** 目前还没有系统化定义结构化 SessionState、自然语言历史摘要、证据引用三者的分工，也没有把 `last_recommendation_list`、大工具结果、过期状态的压缩规则写成明确协议。
+
+**当前已有基础能力：** `domain/session_context_summary.py`、`engine/_compat.py` 里的 `build_conversation_continuity`，以及 trace / answer 侧对 `conversation_continuity` 的消费，已经把“会话压缩上下文”和“可读连续性提示”拆成了独立对象；因此这里更准确的缺口是缺少一张完整的 packing 规则表，而不是完全没有上下文分层。
 
 **建议的最小实现范围：** 保留结构化 SessionState 作为主要上下文；`last_recommendation_list` 只保留 `shop_id` / `rank` / `evidence_ref` / short reason；大型 tool_results 不直接塞 prompt，优先用 EvidencePack 摘要；超阈值自然语言历史做摘要化；过期状态按 TTL 清理。
 
@@ -317,11 +343,15 @@ P18-P26 不改变现有 P0-P17 的优先级，不重写 `graph_builder`，不引
 
 ## P25 Cancellation / Partial Result Policy
 
+**状态更新：** 取消态和部分结果在运行时/测试里已经有基础，当前新增了统一 cancellation policy schema；剩余问题主要是语义收口而非能力缺失。
+
 **背景问题：** Agent 运行过程中会遇到 client_disconnect、user_cancel、deadline_exceeded、tool_timeout、llm_timeout、partial_result_available 等事件。如果这些语义没有统一定义，就会出现“超时了到底是继续、降级还是停止”的歧义。
 
 **为什么对 Agent 开发重要：** 取消和部分结果语义是运行时稳定性的最后一层。它决定了超时后哪些节点可跳过，哪些必须 fallback，部分成功的工具结果如何进入 degrade answer，以及系统是否能给出可信的半成品结果。
 
 **当前项目可能的缺口：** 现有 P12 关注预算字段和降级，但还没有把运行时取消、部分结果、用户主动取消、客户端断开等事件单独成项，也没有定义这些事件与节点跳过策略之间的关系。
+
+**当前已有基础能力：** 运行时已经能识别取消态，并且现有 streaming / turn runtime 测试已经覆盖了用户取消、连接断开、继续/停止这些基础分支；但这些能力仍分散在会话与流式层，没有统一成一份“取消与部分结果语义规范”，因此超时、局部成功和降级答案之间的策略边界仍然不够清晰。
 
 **建议的最小实现范围：** 先定义事件语义，再定义动作语义。明确哪些事件可触发停止、哪些可触发 degrade、哪些必须 fallback；把工具部分成功、LLM 超时、用户取消三类情形写成测试建议。
 
@@ -334,6 +364,8 @@ P18-P26 不改变现有 P0-P17 的优先级，不重写 `graph_builder`，不引
 **与现有 P0-P17 的关系：** 这是对 P12/P17 的补充。P12 负责预算与时效字段，P17 负责图级错误边界；P25 负责运行时取消和部分结果语义，不替代预算逻辑。
 
 ## P26 Local-Life Long-Term Preference Memory
+
+**状态更新：** 已补轻量 `UserPreferenceMemory` / `MemoryReadContext` / `MemoryUpdatePlan` / `InMemoryPreferenceBackend` 骨架，已经能做显式偏好读写；后续再往主链路和更复杂的冲突处理接线。
 
 **背景问题：** 当前项目已经有结构化 `SessionState`，能处理会话级短期业务状态：
 

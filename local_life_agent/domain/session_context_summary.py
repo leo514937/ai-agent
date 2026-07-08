@@ -69,6 +69,9 @@ class SessionContextSummary(BaseModel):
     comparison_target_names: list[str] = Field(default_factory=list)
     """Up to 5 shop names from the comparison target list."""
 
+    preference_hints: list[str] = Field(default_factory=list)
+    """Compact user preference hints derived from memory-style session state."""
+
 
 def build_session_context_summary(
     session_state: SessionState | dict | None,
@@ -135,6 +138,24 @@ def build_session_context_summary(
         if len(comp_names) >= _MAX_NAME_LIST:
             break
 
+    preference_hints: list[str] = []
+    active_preferences = raw.get("active_preferences") or []
+    if isinstance(active_preferences, list):
+        for item in active_preferences:
+            if not isinstance(item, dict):
+                continue
+            value = str(item.get("value", "") or "").strip()
+            polarity = str(item.get("polarity", "") or "").strip()
+            pref_type = str(item.get("preference_type", "") or "").strip()
+            if not value and not pref_type:
+                continue
+            hint_parts = [part for part in (pref_type, polarity, value) if part]
+            hint = ":".join(hint_parts)
+            if hint and hint not in preference_hints:
+                preference_hints.append(hint)
+            if len(preference_hints) >= _MAX_NAME_LIST:
+                break
+
     last_task_type_raw = raw.get("last_task_type") or raw.get("task_type") or ""
     last_task_type = str(last_task_type_raw) if last_task_type_raw else None
 
@@ -145,6 +166,7 @@ def build_session_context_summary(
         or active_constraints
         or pending_type
         or comp_names
+        or preference_hints
     )
 
     return SessionContextSummary(
@@ -159,4 +181,5 @@ def build_session_context_summary(
         pending_clarification_type=pending_type,
         comparison_targets_count=len(comparison_targets),
         comparison_target_names=comp_names,
+        preference_hints=preference_hints,
     )

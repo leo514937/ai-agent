@@ -13,6 +13,7 @@ from .events import (
     make_tool_call_started,
     make_trace_started,
 )
+from .cancellation_policy import CancellationPolicy, DEFAULT_CANCELLATION_POLICY, decide_cancellation_action
 
 __all__ = [
     "StreamEventEnvelope",
@@ -26,4 +27,7 @@ __all__ = [
     "make_tool_call_finished",
     "make_tool_call_started",
     "make_trace_started",
+    "CancellationPolicy",
+    "DEFAULT_CANCELLATION_POLICY",
+    "decide_cancellation_action",
 ]

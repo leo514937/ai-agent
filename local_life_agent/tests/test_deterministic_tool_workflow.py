@@ -85,6 +85,51 @@ def test_missing_target_falls_back_without_tool_call():
     assert result["next_action"] in {"clarify", "fallback"}
 
 
+def test_distance_query_missing_origin_clarifies_before_tool_call(monkeypatch: pytest.MonkeyPatch):
+    from local_life_agent.engine.workflows.deterministic_tool_workflow import run_deterministic_tool_workflow
+
+    calls: list[str] = []
+
+    class _FakeResolveResult:
+        def __init__(self, payload: dict[str, object]):
+            self._payload = dict(payload)
+            self.trace = [{"mention": self._payload.get("shop_name", ""), "result": self._payload.get("status", "")}]
+
+        def model_dump(self) -> dict[str, object]:
+            return dict(self._payload)
+
+    def fake_dispatch(tool_name: str, args: dict) -> dict:
+        calls.append(tool_name)
+        return {"success": True, "result_status": "ok", "data": {}}
+
+    def fake_resolve_shop_entity(mention: str, **kwargs):
+        return _FakeResolveResult(
+            {
+                "status": "RESOLVED",
+                "shop_id": "900001",
+                "shop_name": mention or "海底捞(牡丹园店)",
+                "resolved_shop": {"shop_id": "900001", "shop_name": mention or "海底捞(牡丹园店)"},
+                "confidence": 0.99,
+                "reason": "resolved",
+            }
+        )
+
+    monkeypatch.setattr(
+        "local_life_agent.engine.workflows.deterministic_tool_workflow.resolve_shop_entity",
+        fake_resolve_shop_entity,
+    )
+
+    state = _single_shop_state("shop_distance", "distance_query", {"shop_id": "900001", "shop_name": "海底捞(牡丹园店)"})
+    state["raw_text"] = "海底捞(牡丹园店)多久能到？"
+    state["semantic_frame"]["merchant_mentions"] = ["海底捞(牡丹园店)"]
+    result = run_deterministic_tool_workflow(state, dispatch_tool_call=fake_dispatch)
+
+    assert calls == []
+    assert result["workflow_name"] == "clarification_fallback"
+    assert result["workflow_run_status"] in {"fallback", "clarify"}
+    assert "出发地" in str(result.get("draft_response", ""))
+
+
 def test_multi_target_does_not_pick_first_target():
     from local_life_agent.engine.workflows.deterministic_tool_workflow import run_deterministic_tool_workflow
 

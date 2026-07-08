@@ -36,7 +36,7 @@ class _FakeClient:
     def __exit__(self, exc_type, exc, tb):
         return False
 
-    def stream(self, method, url, headers=None, json=None):
+    def stream(self, method, url, headers=None, json=None, timeout=None):
         self.seen_payload = json
         assert method == "POST"
         assert json["stream"] is True
@@ -47,6 +47,31 @@ class _FakeClient:
                 "data: [DONE]",
             ]
         )
+
+
+class _FakeJSONResponse:
+    def __init__(self, content: str):
+        self._content = content
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return {"choices": [{"message": {"content": self._content}}]}
+
+
+class _CountingClient:
+    def __init__(self, timeout=None):
+        self.timeout = timeout
+        self.post_timeouts: list[float | None] = []
+        self.closed = False
+
+    def post(self, url, headers=None, json=None, timeout=None):
+        self.post_timeouts.append(timeout)
+        return _FakeJSONResponse("ok")
+
+    def close(self):
+        self.closed = True
 
 
 def test_openai_backend_streams_delta_chunks(monkeypatch):
@@ -106,7 +131,7 @@ def test_openai_backend_stops_streaming_when_user_cancels_midway(monkeypatch):
     registry.start_turn("session-mid", "turn-mid", "trace-mid")
 
     class _CancelAfterFirstChunkClient(_FakeClient):
-        def stream(self, method, url, headers=None, json=None):
+        def stream(self, method, url, headers=None, json=None, timeout=None):
             self.seen_payload = json
             assert method == "POST"
             assert json["stream"] is True
@@ -151,3 +176,38 @@ def test_openai_backend_stops_streaming_when_user_cancels_midway(monkeypatch):
 
     assert "user_stop" in str(exc_info.value).lower()
     assert chunks == ["川味"]
+
+
+def test_openai_backend_reuses_one_http_client(monkeypatch):
+    created_clients: list[_CountingClient] = []
+
+    def _client_factory(timeout=None):
+        client = _CountingClient(timeout=timeout)
+        created_clients.append(client)
+        return client
+
+    monkeypatch.setattr("local_life_agent.llm.openai_backend.httpx.Client", _client_factory)
+
+    backend = OpenAICompatibleBackend(
+        provider="openrouter",
+        model="test-model",
+        endpoint="https://example.com/v1/chat/completions",
+        api_key="test-key",
+        timeout_seconds=1,
+    )
+
+    first = backend(prompt="你好", system_prompt="系统", timeout_ms=1200)
+    second = backend(prompt="再来一次", system_prompt="系统", timeout_ms=2300)
+
+    assert first["content"] == "ok"
+    assert second["content"] == "ok"
+    assert len(created_clients) == 1
+    assert created_clients[0].post_timeouts == [1.2, 2.3]
+
+    backend.close()
+    assert created_clients[0].closed is True
+
+    third = backend(prompt="第三次", system_prompt="系统", timeout_ms=3400)
+    assert third["content"] == "ok"
+    assert len(created_clients) == 2
+    assert created_clients[1].post_timeouts == [3.4]

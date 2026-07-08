@@ -103,6 +103,8 @@ def test_run_agent_graph_exposes_turn_trace(monkeypatch):
     assert response.debug.turn_trace["ranking_preserved"] is True
     assert response.debug.turn_trace["state_update_plan"]["set_fields"]["current_shop"]["shop_name"] == "海底捞西直门店"
     assert response.debug.turn_trace["conversation_continuity"]["previous_focus"] == "海底捞(牡丹园店)"
+    assert "context_packing" in response.debug.turn_trace["conversation_continuity"]
+    assert response.debug.turn_trace["debug_bundle"]["final_response"] == "ok"
     assert response.debug.turn_trace["workflow_candidate_reason"] == "semantic_frame:explicit_shop"
 
 

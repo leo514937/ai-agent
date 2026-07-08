@@ -167,6 +167,7 @@ class TurnTrace:
     comparison_route_reason: str | None = None
     state_update_plan: dict[str, Any] = field(default_factory=dict)
     conversation_continuity: dict[str, Any] = field(default_factory=dict)
+    debug_bundle: dict[str, Any] = field(default_factory=dict)
     workflow_candidate_reason: str | None = None
     final_safety_status: str | None = None
     total_duration_ms: int | None = None
@@ -235,6 +236,7 @@ class TurnTrace:
         payload["workflow_name"] = self.workflow_name
         payload["route_task"] = self.route_task
         payload["response_mode"] = self.response_mode
+        payload["debug_bundle"] = dict(self.debug_bundle or {})
         return payload
 
 
@@ -509,6 +511,19 @@ def build_turn_trace(final_state: dict[str, Any], *, user_text: str = "", total_
     from ..engine._compat import _build_conversation_continuity
 
     conversation_continuity = _coerce_dict(_build_conversation_continuity(final_state))
+    from .debug_bundle import build_debug_bundle
+
+    debug_bundle = build_debug_bundle(
+        query=user_text or str(final_state.get("raw_text", "") or ""),
+        normalized_query=str(final_state.get("normalized_text", "") or user_text or ""),
+        final_state=final_state,
+        trace_spans=[span.to_dict() for span in events],
+        metadata={
+            "trace_id": trace_id,
+            "session_id": _coerce_optional_str(final_state.get("session_id")),
+            "turn_id": str(final_state.get("turn_id", "") or ""),
+        },
+    ).model_dump()
     grounding_result = _coerce_dict(final_state.get("grounding_result")) or {
         "status": target_resolution_status or target_resolve_status or grounding_status or "",
         "target_resolution": target_resolution,
@@ -615,6 +630,7 @@ def build_turn_trace(final_state: dict[str, Any], *, user_text: str = "", total_
         comparison_route_reason=comparison_route_reason,
         state_update_plan=state_update_plan,
         conversation_continuity=conversation_continuity,
+        debug_bundle=debug_bundle,
         workflow_candidate_reason=workflow_candidate_reason,
         final_safety_status=_coerce_optional_str(final_state.get("final_safety_status")),
         total_duration_ms=total_duration_ms,

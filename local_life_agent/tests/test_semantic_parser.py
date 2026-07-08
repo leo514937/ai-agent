@@ -556,6 +556,18 @@ class TestSessionContextSummary:
         assert summary.current_shop_name == "测试店"
         assert len(summary.last_recommendation_names) == 2
 
+    def test_preference_hints_make_context_visible(self):
+        from ..domain.state import SessionState
+
+        ss = SessionState(
+            active_preferences=[
+                {"preference_type": "budget", "polarity": "like", "value": "lower_price"},
+            ]
+        )
+        summary = build_session_context_summary(ss)
+        assert summary.has_context is True
+        assert summary.preference_hints == ["budget:like:lower_price"]
+
 
 # ===================================================================
 # refine_action normalization tests
@@ -701,3 +713,50 @@ class TestSessionContextInjection:
         prompt_text = calls[0]
         # SESSION_CONTEXT should be present with has_context=false (compact JSON)
         assert '"has_context":false' in prompt_text
+
+    def test_recommendation_follow_up_can_be_recovered_from_session_context(self):
+        def missing_task_backend(prompt, **kwargs):
+            return {
+                "ok": True,
+                "content": {
+                    "top_intent": "local_life",
+                    "task_type": None,
+                    "primary_task": "",
+                    "workflow_hint": "",
+                    "facets": [],
+                    "merchant_mentions": [],
+                    "brand_mentions": [],
+                    "branch_mentions": [],
+                    "reference_mentions": [],
+                    "comparison_targets": [],
+                    "ordinal_references": [],
+                    "deictic_references": [],
+                    "focused_facets": [],
+                    "comparison_focus": "",
+                    "hard_constraints": {},
+                    "soft_preferences": {},
+                    "ranking_signals": {},
+                    "follow_up": None,
+                    "confidence": 0.55,
+                    "need_context": True,
+                },
+                "raw": "",
+                "error_code": "",
+                "error_message": "",
+                "attempts": 1,
+            }
+
+        from ..domain.state import SessionState
+
+        ss = SessionState(last_recommendation_list=[{"shop_name": "A火锅店"}, {"shop_name": "B烧烤店"}])
+        result = parse_semantic_frame("便宜一点的呢", "local_life", llm_call=missing_task_backend, session_state=ss)
+
+        frame = result["semantic_frame"]
+        assert frame.task_type == TaskType.recommendation
+        assert frame.primary_task == "recommendation_refine"
+        assert frame.workflow_hint == "recommendation"
+        assert frame.need_context is True
+        assert frame.follow_up is not None
+        assert frame.follow_up.get("refine_action") == "cheaper"
+        assert frame.soft_preferences.get("price_preference") == "lower_price"
+        assert frame.ranking_signals.get("price_preference") == "lower_price"

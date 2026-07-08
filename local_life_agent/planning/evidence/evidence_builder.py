@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import re
 from typing import Any
 
 from ... import config
@@ -31,6 +32,40 @@ def _coerce_list_value(value: Any) -> list[Any]:
     if isinstance(value, (tuple, set)):
         return list(value)
     return [value]
+
+
+def _identity_text(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    return re.sub(r"\s+", "", text)
+
+
+def _candidate_identity_key(candidate: Any) -> tuple[Any, ...]:
+    data = _candidate_from_shop(candidate)
+    shop_name = _identity_text(data.get("shop_name") or data.get("name"))
+    address = _identity_text(data.get("address") or data.get("shop_address"))
+    branch = _identity_text(data.get("branch_name") or data.get("branch") or data.get("branch_name_full"))
+    lat = data.get("lat")
+    lng = data.get("lng")
+    try:
+        lat_text = f"{float(lat):.5f}" if lat is not None else ""
+        lng_text = f"{float(lng):.5f}" if lng is not None else ""
+    except Exception:
+        lat_text = ""
+        lng_text = ""
+
+    if shop_name and address:
+        return ("name_address", shop_name, address)
+    if shop_name and branch:
+        return ("name_branch", shop_name, branch)
+    if shop_name and lat_text and lng_text:
+        return ("name_coords", shop_name, lat_text, lng_text)
+    if shop_name:
+        return ("name", shop_name)
+
+    shop_id = _identity_text(data.get("shop_id"))
+    if shop_id:
+        return ("shop_id", shop_id)
+    return ("raw", tuple(sorted((str(key), str(value)) for key, value in data.items())))
 
 
 def _status_value(value: Any) -> str:
@@ -1391,18 +1426,23 @@ def _build_recommendation_evidence(
 ) -> dict[str, Any]:
     search_result_candidates = _search_result_candidates(tool_results, plan_calls)
     merged_candidates: list[Any] = []
-    seen_shop_ids: set[str] = set()
+    seen_candidate_keys: set[tuple[Any, ...]] = set()
     for candidate in (search_result_candidates or []) + (recommendation_candidates or []):
         candidate_dict = _candidate_from_shop(candidate)
-        shop_id = str(candidate_dict.get("shop_id", "")).strip()
-        if not shop_id or shop_id in seen_shop_ids:
+        identity_key = _candidate_identity_key(candidate_dict)
+        if identity_key in seen_candidate_keys:
             continue
-        seen_shop_ids.add(shop_id)
+        seen_candidate_keys.add(identity_key)
         merged_candidates.append(candidate)
     recommendation_candidates = merged_candidates
     candidates_by_shop_id: dict[str, dict[str, Any]] = {}
+    seen_candidate_identities: set[tuple[Any, ...]] = set()
     for raw_candidate in recommendation_candidates:
         candidate = _candidate_from_shop(raw_candidate)
+        identity_key = _candidate_identity_key(candidate)
+        if identity_key in seen_candidate_identities:
+            continue
+        seen_candidate_identities.add(identity_key)
         shop_id = str(candidate.get("shop_id", "")).strip()
         if shop_id:
             candidates_by_shop_id[shop_id] = candidate
@@ -1633,10 +1673,12 @@ def _build_recommendation_evidence(
 
     if not surviving_candidates:
         fallback_candidates = []
+        seen_fallback_identities: set[tuple[Any, ...]] = set()
         for candidate in search_result_candidates:
             candidate_dict = _candidate_from_shop(candidate)
-            shop_id = str(candidate_dict.get("shop_id", "")).strip()
-            if shop_id and not any(str(item.get("shop_id", "")).strip() == shop_id for item in fallback_candidates):
+            identity_key = _candidate_identity_key(candidate_dict)
+            if identity_key not in seen_fallback_identities:
+                seen_fallback_identities.add(identity_key)
                 fallback_candidates.append(candidate_dict)
         if fallback_candidates:
             surviving_candidates = fallback_candidates

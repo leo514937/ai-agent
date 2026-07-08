@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from typing import Any
 import pytest
 import json
@@ -336,6 +337,29 @@ def test_build_decision_plan_does_not_promote_snapshot_to_winner():
     assert plan.selected_targets == []
     assert plan.main_recommendation is None
     assert plan.overall_ranking == []
+
+
+def test_build_decision_plan_normalizes_blank_location_for_verifier():
+    answer_plan = {
+        "answer_type": "recommendation",
+        "location": "",
+    }
+    evidence = {
+        "last_recommendation_list": [
+            {
+                "shop_id": "shop_01",
+                "shop_name": "川味轩",
+            }
+        ]
+    }
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        plan = _build_decision_plan(answer_plan, evidence)
+        dumped = plan.model_dump()
+
+    assert dumped["location"] == {}
+    assert plan.location == {}
 
 
 def test_generator_unified_pipeline_comparison(monkeypatch: pytest.MonkeyPatch):

@@ -15,6 +15,7 @@ from ..answer.evidence_builder import build_evidence
 from ..answer.generator import generate_answer
 from ..answer.verifier import verify_answer
 from ..engine import graph_builder
+from ..planning.orchestration_router import normalize_route_task
 from ..domain.schemas import DecisionPlan
 from ..llm.client import _default_llm_backend, clear_llm_backend, set_llm_backend
 from ..session.store import get_session_store, reset_session_store
@@ -729,6 +730,27 @@ def test_after_comparison_second_item_reference_still_works(monkeypatch: pytest.
     assert third.debug is not None
     assert "get_coupon_list" in _tool_names(third)
     assert third.debug.session_state_after.get("current_shop") is not None
+
+
+def test_comparison_coupon_followup_prefers_comparison_context():
+    state = {
+        "raw_text": "第二家有券吗",
+        "normalized_text": "第二家有券吗",
+        "semantic_frame": {
+            "task_type": "coupon_query",
+            "primary_task": "coupon_query",
+            "workflow_hint": "single_shop_query",
+            "ordinal_references": ["第二家"],
+            "comparison_targets": [],
+            "facets": [{"name": "coupon", "required": True}],
+            "comparison_intent": False,
+        },
+        "comparison_targets": [SHOP_B, SHOP_A],
+        "session_state_before": {"comparison_targets": [SHOP_B, SHOP_A]},
+        "session_state": {"comparison_targets": [SHOP_B, SHOP_A]},
+    }
+
+    assert normalize_route_task(state) == "shop_coupon"
 
 
 def test_comparison_flow_does_not_enter_recommendation_flow(monkeypatch: pytest.MonkeyPatch):
